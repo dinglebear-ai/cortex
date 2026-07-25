@@ -856,7 +856,11 @@ fn command_status(command_args: &[String], fallback_shell_command: &str) -> Resu
 fn shell_command_status(command: &str) -> Result<ExitStatus> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     Command::new(shell)
-        .arg("-lc")
+        // The wrapper must not load a login profile. Apart from making a
+        // non-interactive command depend on unrelated user configuration,
+        // login profiles on persistent CI runners can contain stale absolute
+        // paths left by earlier jobs.
+        .arg("-c")
         .arg(command)
         .env("CORTEX_AGENT_COMMAND_WRAPPER", "1")
         .env_remove("CLAUDE_CODE_SHELL_PREFIX")

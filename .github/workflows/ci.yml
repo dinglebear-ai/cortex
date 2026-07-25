@@ -216,9 +216,13 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The JavaScript action requires a paid license for organization repos.
+      # Run the same official scanner directly, pinned to the v8.30.1
+      # multi-architecture image digest, so this remains a real required check.
+      - name: Scan repository for secrets
+        uses: docker://ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+        with:
+          args: detect --source=/github/workspace --redact --verbose --no-banner
 
   ci-gate:
     name: CI Gate
@@ -233,6 +237,7 @@ jobs:
       - coverage
       - deny
       - mcp-integration
+      - gitleaks
     steps:
       - name: Verify required jobs passed or were intentionally skipped
         run: |
@@ -253,12 +258,7 @@ jobs:
           require_success_or_skipped coverage "${{ needs.coverage.result }}"
           require_success_or_skipped deny "${{ needs.deny.result }}"
           require_success_or_skipped mcp-integration "${{ needs.mcp-integration.result }}"
-          # gitleaks is intentionally NOT in the required-jobs list: the
-          # gitleaks-action now requires a paid GITLEAKS_LICENSE secret this
-          # repo doesn't have configured, so it fails on every PR regardless
-          # of content. The job still runs and reports its own status as a
-          # non-blocking advisory check; re-add it to this gate once a
-          # license is configured (or the action is swapped/pinned).
+          require_success_or_skipped gitleaks "${{ needs.gitleaks.result }}"
 
   npm:
     name: npm launcher

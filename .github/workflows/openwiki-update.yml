@@ -18,10 +18,17 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Set up OpenWiki
-        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          install_args: node npm:openwiki
+          node-version: 22
+
+      - name: Install OpenWiki
+        run: |
+          set -euo pipefail
+          npm install --global --prefix "$RUNNER_TEMP/openwiki" \
+            --no-audit --no-fund openwiki@0.1.1
+          echo "$RUNNER_TEMP/openwiki/bin" >> "$GITHUB_PATH"
 
       - name: Connect Tailscale
         uses: tailscale/github-action@v4
