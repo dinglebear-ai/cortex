@@ -186,7 +186,14 @@ fn sessions_cli_add_reports_parse_errors_and_exits_nonzero() {
 
 fn run_command(db_path: &std::path::Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cortex"));
-    command.env("CORTEX_DB_PATH", db_path);
+    command
+        .env("CORTEX_DB_PATH", db_path)
+        // CI wrappers may force colored subprocess output. These assertions
+        // exercise the default plain-text layout, so isolate them from the
+        // runner's presentation environment.
+        .env("NO_COLOR", "1")
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE");
     command.args(args);
     command.output().expect("run syslog command")
 }
