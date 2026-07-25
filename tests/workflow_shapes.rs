@@ -41,6 +41,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "coverage",
         "deny",
         "mcp-integration",
+        "gitleaks",
     ] {
         assert!(
             gate.contains(&format!("require_success_or_skipped {job}")),
@@ -48,13 +49,11 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         );
     }
 
-    // gitleaks is intentionally excluded: gitleaks-action requires a paid
-    // GITLEAKS_LICENSE secret this repo doesn't have configured, so the job
-    // fails on every PR regardless of content. It still runs and reports its
-    // own status as a non-blocking advisory check.
     assert!(
-        !gate.contains("require_success_or_skipped gitleaks"),
-        "gitleaks is intentionally non-blocking until a license is configured"
+        workflow.contains(
+            "docker://ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+        ),
+        "secret scanning must use the pinned license-free Gitleaks CLI image"
     );
 }
 

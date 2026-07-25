@@ -879,16 +879,36 @@ fn agent_spool_malformed_line_with_multibyte_at_preview_boundary_no_panic() {
 #[test]
 #[serial]
 fn wrapper_preserves_command_exit_when_spool_append_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
     // `["true"]` is a single token, so the wrapper runs it via `$SHELL -c true`
-    // (see `command_status`). This must be `#[serial]` to exclude
+    // (see `command_status`). The fake shell rejects login-shell invocation:
+    // loading a persistent runner's profile made this test inherit stale
+    // absolute paths from unrelated repositories. This must be `#[serial]` to exclude
     // `wrapper_executes_multi_arg_commands_without_shell_reparse`, which mutates
     // the global `SHELL`/`CORTEX_TEST_ARG_OUT` env — overlapping would exec that
     // test's fake shell here and corrupt its output buffer (both tests fail).
     let dir = tempfile::tempdir().unwrap();
+    let fake_shell = dir.path().join("fake-shell");
+    std::fs::write(
+        &fake_shell,
+        "#!/bin/sh\n[ \"$1\" = \"-c\" ] || exit 98\nexec /bin/sh \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let previous_shell = std::env::var_os("SHELL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("SHELL", &fake_shell) };
 
     let exit_code =
         run_agent_command_wrapper(dir.path(), &["true".to_string()]).expect("wrapper runs command");
 
+    match previous_shell {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(value) => unsafe { std::env::set_var("SHELL", value) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("SHELL") },
+    }
     assert_eq!(exit_code, 0);
 }
 
