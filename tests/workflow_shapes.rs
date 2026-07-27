@@ -68,6 +68,29 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
 }
 
 #[test]
+fn workflows_default_to_read_only_github_token_permissions() {
+    for (name, workflow) in [
+        ("ci", include_str!("../.github/workflows/ci.yml")),
+        (
+            "docker-publish",
+            include_str!("../.github/workflows/docker-publish.yml"),
+        ),
+    ] {
+        assert!(
+            workflow.contains("permissions:\n  contents: read"),
+            "{name} must default GITHUB_TOKEN to read-only contents access"
+        );
+    }
+
+    let docker = include_str!("../.github/workflows/docker-publish.yml");
+    let publish = workflow_job_block(docker, "build-and-push");
+    assert!(
+        publish.contains("packages: write") && publish.contains("security-events: write"),
+        "the publish job must retain its explicit package and SARIF upload scopes"
+    );
+}
+
+#[test]
 fn release_please_opens_prs_and_fixes_up_regex_carriers() {
     let release_please = include_str!("../.github/workflows/release-please.yml");
     let release = include_str!("../.github/workflows/release.yml");
