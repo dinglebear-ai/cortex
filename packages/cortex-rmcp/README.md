@@ -1,154 +1,132 @@
-# cortex
+# Cortex
 
-[![crates.io](https://img.shields.io/crates/v/cortex)](https://crates.io/crates/cortex) [![ghcr.io](https://img.shields.io/badge/ghcr.io-jmagar%2Fcortex-blue?logo=docker)](https://github.com/jmagar/cortex/pkgs/container/cortex)
+[![CI](https://github.com/dinglebear-ai/cortex/actions/workflows/ci.yml/badge.svg)](https://github.com/dinglebear-ai/cortex/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dinglebear-ai/cortex)](https://github.com/dinglebear-ai/cortex/releases)
+[![npm](https://img.shields.io/npm/v/cortex-rmcp)](https://www.npmjs.com/package/cortex-rmcp)
+[![crates.io](https://img.shields.io/crates/v/cortex)](https://crates.io/crates/cortex)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Rust syslog receiver and MCP server for homelab log intelligence. Ingests syslog over UDP and TCP, stores it in SQLite with FTS5 full-text indexing, and exposes action-based log search, inventory, correlation, status, and analysis tools through MCP, REST, and CLI adapters backed by the shared service layer.
+**Cortex is a self-hosted observability and investigation system for homelabs and small fleets.** It collects logs and operational evidence, stores them in SQLite with FTS5 search, and exposes one shared intelligence layer through CLI, REST, MCP, and a bundled browser workspace.
 
-cortex also maintains derived projection tables for the investigation graph.
-Those graph tables connect source IPs, claimed hosts, apps, canonical
-services, containers, AI projects/sessions, and error signatures with
-evidence, but raw logs, heartbeats, inventory, signatures, and session rows
-remain the source of truth. The graph projection is rebuildable and
-intentionally has no ingest triggers. Graph rebuilds use staging tables plus
-a short serialized swap and record explicit projection status, source
-watermarks, row counts, runtime metrics, and degraded failure state.
+Cortex began as a syslog receiver. It now covers network logs, Docker, managed files, OpenTelemetry logs, host heartbeats, fleet inventory, shell and agent activity, and Claude, Codex, and Gemini transcripts. It correlates those sources into timelines, incidents, and an evidence-backed topology graph without making the graph a second source of truth.
 
-Service identity is resolver-backed: searching `plex` resolves the logical
-service first (`logical_service:plex`), then concrete service instances such
-as `service_instance:tootie/plex`. Cortex no longer treats `tootie:plex` or
-`tootie:plex:plex` as canonical service identities — those legacy shapes are
-rejected with `rejected_legacy_shape` (see
-`openwiki/inventory-graph.md`, "Canonical Resolver Proof: Plex").
+## At a glance
+
+| Area | What Cortex provides |
+| --- | --- |
+| Ingest | UDP/TCP syslog, OTLP/HTTP logs, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
+| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 43 sequential schema migrations |
+| Investigation | Search, filtering, context, timelines, patterns, anomaly comparison, cross-source correlation, recurring error signatures, deterministic incident bundles, and graph explanations |
+| Fleet intelligence | SSH and API inventory collectors, host state, service topology, container and route relationships, redacted evidence, and rebuildable graph projections |
+| AI operations | Claude, Codex, and Gemini session indexing; skill, MCP, and hook event extraction; incident clustering; and guarded local LLM assessments |
+| Interfaces | Native CLI, one action-dispatched MCP tool, authenticated REST APIs, MCP prompts and resources, an MCP Apps search widget, and a bundled investigation workspace |
+| Operations | Setup and repair, diagnostics, Compose control, backup, integrity checks, WAL checkpoints, vacuum, update workflows, agents, and health endpoints |
+
+> [!IMPORTANT]
+> Cortex is designed for a trusted homelab or small private fleet. It is not a clustered log warehouse, a general-purpose SIEM, or a safe place to expose unauthenticated administrative surfaces to the public internet.
 
 ## Contents
 
-- [Naming](#naming)
-- [Capabilities And Boundaries](#capabilities-and-boundaries)
-- [Install](#install)
-- [Quickstart](#quickstart)
-- [Client Configuration](#client-configuration)
-- [Runtime Surfaces](#runtime-surfaces)
-- [MCP Tool Reference](#mcp-tool-reference)
-- [CLI Reference](#cli-reference)
+- [Quick start](#quick-start)
+- [How Cortex is built](#how-cortex-is-built)
+- [Ingestion](#ingestion)
+- [Investigation and intelligence](#investigation-and-intelligence)
+- [Fleet inventory and graph](#fleet-inventory-and-graph)
+- [AI session intelligence](#ai-session-intelligence)
+- [Alerts and notifications](#alerts-and-notifications)
+- [Interfaces](#interfaces)
 - [Configuration](#configuration)
-- [Authentication](#authentication)
-- [Safety And Trust Model](#safety-and-trust-model)
-- [Architecture](#architecture)
-- [Distribution Contract](#distribution-contract)
-- [Development](#development)
-- [Verification](#verification)
-- [Deployment](#deployment)
-- [Troubleshooting](#troubleshooting)
+- [Authentication and trust boundaries](#authentication-and-trust-boundaries)
+- [Storage and maintenance](#storage-and-maintenance)
+- [Deployment and distribution](#deployment-and-distribution)
+- [Operations](#operations)
+- [Development and verification](#development-and-verification)
 - [Documentation](#documentation)
-- [Related Servers](#related-servers)
+- [Current boundaries](#current-boundaries)
 - [License](#license)
 
-## Naming
+## Quick start
 
-Cortex keeps its repo and CLI name as `cortex`. The npm package is
-`cortex-rmcp`, because Cortex is broader than only an MCP server. The MCP
-registry name is `tv.tootie/cortex`, and the Docker image is
-`ghcr.io/jmagar/cortex:v<version>`.
+### Install the CLI
 
-Most smaller Rust MCP servers in this workspace use the
-`<service>-rmcp` repo / `r<service>` binary / `<service>-rmcp` npm pattern.
-Cortex is the deliberate exception: repo `cortex`, CLI `cortex`, npm package
-`cortex-rmcp`.
-
-## Capabilities And Boundaries
-
-Cortex ingests syslog, OTLP, Docker, managed file-tail, inventory, heartbeat,
-and AI-session signals into SQLite, then exposes bounded investigation actions
-through MCP, REST, and CLI adapters backed by the same service layer.
-
-Primary capabilities:
-
-- UDP and TCP syslog receiver on port `1514`.
-- SQLite + FTS5 log storage with retention and storage-budget controls.
-- MCP action surface for search, filtering, timelines, errors, context,
-  inventory, graph, AI-session correlation, and incident evidence bundles.
-- REST and CLI adapters for operational workflows and local automation.
-- Optional MCP Apps query widget for MCP hosts that support UI resources.
-- Derived graph projection tables for topology and investigation workflows.
-
-**Not for:** replacing a SIEM, accepting arbitrary unaudited log mutations from
-agents, or exposing Docker/admin operations without a trusted deployment
-boundary. Cortex is a homelab log-intelligence service with bounded action
-surfaces and explicit admin gates.
-
-MCP callers never provide credentials, tokens, keys, or secrets as action
-arguments. Auth tokens, upstream notification secrets, file-tail roots, and API
-admin credentials live in server configuration or environment variables.
-
-## Install
-
-Use the npm launcher for local MCP clients and quick CLI access:
+The npm launcher is the fastest path for local CLI and stdio MCP use:
 
 ```bash
 npx -y cortex-rmcp --help
 npx -y cortex-rmcp mcp
 ```
 
-For a permanent command on `PATH`, install the launcher globally:
+Install it permanently with:
 
 ```bash
-npm i -g cortex-rmcp
+npm install --global cortex-rmcp
 cortex --version
 ```
 
-The package downloads the matching GitHub Release binary during `postinstall`.
-For source builds:
+The launcher requires Node.js 18 or newer. It downloads a checksum-verified native release binary and currently supports Linux x64 and Windows x64.
+
+Build from source with the current stable Rust toolchain:
 
 ```bash
-cargo build --release
+git clone https://github.com/dinglebear-ai/cortex.git
+cd cortex
+mise install       # optional, but pins the repository tools
+just build
+./.cache/cargo/debug/cortex --version
 ```
 
-## Quickstart
+### Start a local server
 
-The first-screen 30-second path is a stdio MCP client pointed at the launcher:
+The full daemon starts UDP and TCP syslog receivers plus the shared HTTP server. Use separate MCP and REST tokens:
+
+```bash
+mkdir -p "$HOME/.cortex/data"
+export CORTEX_DB_PATH="$HOME/.cortex/data/cortex.db"
+export CORTEX_TOKEN="$(openssl rand -hex 32)"
+export CORTEX_API_TOKEN="$(openssl rand -hex 32)"
+
+cortex serve mcp
+```
+
+Defaults:
+
+- Syslog: `0.0.0.0:1514` over UDP and TCP
+- HTTP: `127.0.0.1:3100`
+- MCP: `http://127.0.0.1:3100/mcp`
+- REST: `http://127.0.0.1:3100/api/*`
+- Investigation workspace: `http://127.0.0.1:3100/app`
+
+Verify it from another terminal:
+
+```bash
+curl -fsS http://127.0.0.1:3100/health
+logger -n 127.0.0.1 -P 1514 --tcp "cortex quickstart from $(hostname)"
+
+export CORTEX_API_TOKEN="the-same-api-token"
+cortex tail --limit 10
+```
+
+For a managed local deployment, `cortex setup repair` creates or repairs the Cortex home, Compose assets, data paths, and missing 64-character MCP and REST tokens without replacing existing token values.
+
+### Connect an MCP client
+
+Query-only stdio mode reads the configured local database and starts no network listeners:
 
 ```json
 {
   "mcpServers": {
     "cortex": {
       "command": "npx",
-      "args": ["-y", "cortex-rmcp", "mcp"]
+      "args": ["-y", "cortex-rmcp", "mcp"],
+      "env": {
+        "CORTEX_DB_PATH": "/absolute/path/to/cortex.db"
+      }
     }
   }
 }
 ```
 
-Then ask for a cheap read action first:
-
-```json
-{"action":"status"}
-```
-
-For an HTTP server with syslog listeners:
-
-```bash
-export CORTEX_API_TOKEN=change-me
-export CORTEX_TOKEN=change-me
-cortex serve mcp
-```
-
-## Client Configuration
-
-stdio launches a query-only MCP process that reads the configured Cortex
-database without starting network listeners:
-
-```json
-{
-  "mcpServers": {
-    "cortex": {
-      "command": "cortex",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-Streamable HTTP uses the persistent server on `/mcp`:
+Streamable HTTP mode connects to the persistent daemon:
 
 ```json
 {
@@ -156,1837 +134,763 @@ Streamable HTTP uses the persistent server on `/mcp`:
     "cortex": {
       "url": "http://127.0.0.1:3100/mcp",
       "headers": {
-        "Authorization": "Bearer ${CORTEX_TOKEN}"
+        "Authorization": "Bearer your-cortex-token"
       }
     }
   }
 }
 ```
 
-The plain JSON REST API is mounted under `/api/*` on the same HTTP listener and
-uses `CORTEX_API_TOKEN`, not `CORTEX_TOKEN`.
+A useful first call is:
 
-## Runtime Surfaces
+```json
+{"action":"status"}
+```
 
-| Surface | Status | Purpose |
-|---|---:|---|
-| Syslog | Required for daemon ingest | UDP/TCP `1514` receiver for network logs |
-| MCP | Required | `cortex` action-dispatched tool over stdio or Streamable HTTP |
-| CLI | Required | Operator commands, local query workflows, setup, and ingest management |
-| REST | Required for daemon mode | JSON API under `/api/*` with separate bearer auth |
-| MCP Apps | Optional | Query widget resource for UI-capable MCP hosts |
-| Web dashboard | Not shipped | Cortex does not serve a standalone browser app |
+Then narrow the investigation with `tail`, `errors`, `search`, `timeline`, or `context` before using broader analysis operations.
 
-## MCP Tool Reference
+## How Cortex is built
 
-Cortex exposes one MCP tool named `cortex`. The required `action` argument
-selects the operation; per-action validation happens in the handler and service
-layers.
+Cortex is one Rust binary with multiple operating modes. The same application and service layer backs the CLI, REST handlers, and MCP handlers, so validation, limits, identity resolution, redaction, and business rules do not belong to one transport alone.
 
-Common first-pass actions are `status`, `errors`, `tail`, `search`, `timeline`,
-and `context`. Expensive or write/admin actions should only be used once a query
-is scoped.
+```text
+                         INGESTION
 
-For the full action table and parameter reference, see
-[`docs/mcp/SCHEMA.md`](docs/mcp/SCHEMA.md). That document is curated from the
-runtime schema and protected by drift tests; the generated runtime schema and
-Rust `ACTION_SPECS` table are the source of truth when they disagree.
+  Syslog UDP/TCP       OTLP logs          Docker agent / pull
+  Managed file tails  Heartbeats         Claude / Codex / Gemini
+  Shell history       Agent commands     Fleet inventory
+          \               |                    /
+           \              |                   /
+            +---- bounded parsing and enrichment ----+
+                              |
+                    scrub, normalize, batch
+                              |
+                    SQLite WAL + FTS5
+                              |
+             +----------------+----------------+
+             |                                 |
+    authoritative records             derived accelerators
+    logs, heartbeats,                 rollups, signatures,
+    inventory, sessions              graph projections
+             |                                 |
+             +----------------+----------------+
+                              |
+                     shared service layer
+                              |
+          CLI       REST       MCP       Web workspace
+```
 
-## CLI Reference
+The daemon supervises its receivers and background services with cooperative cancellation. Shutdown drains HTTP requests, maintenance work, and ingest queues before checkpointing the WAL.
 
-The CLI mirrors the same service layer used by MCP and REST:
+Background services include:
+
+- Retention and storage-budget enforcement
+- WAL and FTS maintenance
+- Docker ingest supervision
+- File-tail supervision
+- Error-signature scanning
+- Notification evaluation, dispatch, and digest scheduling
+- Inventory refresh and backfill
+- Graph projection refresh
+- AI-session and timeline rollups
+- Database optimization and maintenance jobs
+
+Heavy analytical reads and maintenance jobs have separate concurrency controls so one expensive investigation cannot starve the ingest path.
+
+## Ingestion
+
+All log-like sources are normalized into the same durable log model, enriched where safe, scrubbed where configured, and written through bounded batch paths.
+
+### Syslog over UDP and TCP
+
+Cortex listens on the same configurable port for UDP and TCP syslog. It parses common RFC 3164 and RFC 5424 shapes, preserves the raw frame, records sender identity, normalizes severity and facility, and enriches known application formats.
+
+Relevant defaults:
+
+- Bind: `0.0.0.0:1514`
+- Maximum message: 8 KiB
+- Maximum concurrent TCP connections: 512
+- TCP idle timeout: 300 seconds
+- Writer batch: 100 records or 500 ms
+- Write queue capacity: 10,000 records
+
+Syslog has no application-layer authentication. Restrict senders with network controls and `CORTEX_ALLOWED_SOURCE_CIDRS` when the listener is reachable beyond a trusted network.
+
+Built-in enrichment recognizes useful signals from AdGuard, Authelia, Docker lifecycle events, fail2ban, Linux kernel and OOM events, SWAG, reverse-proxy logs, and host-local Cortex Docker agent metadata. Source gates can restrict enrichment that would otherwise trust a marker inside an unauthenticated syslog body.
+
+### OpenTelemetry logs
+
+Cortex accepts OTLP/HTTP log export requests at `POST /v1/logs` on the shared HTTP listener. Requests are bounded to 4 MiB and flow into the normal Cortex writer.
+
+Current OTLP scope is intentionally narrow:
+
+- Logs over HTTP are supported.
+- OTLP traces are not accepted.
+- OTLP metrics are not accepted.
+- OTLP/gRPC is not implemented.
+
+### Docker logs and events
+
+Cortex supports two Docker collection paths:
+
+1. **Host-local agent**, the preferred multi-host path. A Cortex agent reads the local Docker socket, converts logs and lifecycle events into bounded records, and forwards them to the server without changing Docker's daemon logging driver.
+2. **Central pull compatibility mode**, an optional server-side collector for explicitly configured Docker Engine or docker-socket-proxy HTTP endpoints. It records per-container checkpoints and reconnects with bounded exponential backoff.
+
+Central pull is disabled by default. The `CORTEX_DOCKER_HOSTS` shorthand expands hosts into insecure `http://host:2375` endpoints and should only be used on a tightly controlled private network. A hosts file supports explicit base URLs and safer endpoint configuration.
+
+### Managed file tails
+
+Managed file-tail sources are persisted in a registry and supervised by the daemon. Add, remove, list, and inspect sources through the CLI, REST, or the `file_tails` MCP admin action.
+
+The path policy rejects unsafe targets, including paths outside configured roots, symlink escapes, non-regular files, and sensitive mounts. Container deployments expose an explicit read-only file-tail root rather than the entire host filesystem.
+
+### Host heartbeats
+
+The host agent can post bounded JSON snapshots to `POST /v1/heartbeats`. Heartbeats include host state such as load, memory, disks, networking, processes, and container summaries. They power `host_state`, `fleet_state`, and `correlate_state`.
+
+Heartbeat request bodies are capped at 256 KiB. Heartbeat data has short operational retention separate from the main log-retention policy.
+
+### AI transcripts
+
+Cortex indexes local and forwarded transcript data from:
+
+- Claude Code projects under `~/.claude/projects`
+- Codex sessions and worktrees under `~/.codex/sessions` and `~/.codex/worktrees`
+- Gemini chat data under `~/.gemini/tmp`
+
+The scanner supports incremental checkpoints, parse-error records, bounded chunks, broad-path rejection, and safe recovery from changed files. It extracts normalized transcript rows plus dedicated skill, MCP tool-call, and hook events.
+
+A satellite agent can send already-parsed records to `POST /v1/ai-transcripts`, which prevents transcript collection from depending on the database living on the same host as the AI client.
+
+### Shell and agent activity
+
+Satellite agents can forward additional operational evidence to the shared server:
+
+- `POST /v1/agent-commands` for deduplicated agent command-spool records
+- `POST /v1/shell-history` for parsed Bash, Zsh extended-history, and Atuin records
+
+These records use the same storage and correlation model as the rest of Cortex, which makes an agent change or shell command visible beside the service failure that followed it.
+
+### Fleet inventory
+
+Inventory collection builds a redacted fleet snapshot from local files, SSH probes, Docker endpoints, and optional service APIs, then projects safe relationships into the investigation graph.
+
+## Investigation and intelligence
+
+Cortex exposes bounded workflows rather than a raw SQL console.
+
+### Search and context
+
+- FTS5 full-text search with host, app, severity, source, project, session, and time filters
+- Structured filter-only retrieval for indexed fields
+- Recent tails and single-row retrieval with raw-frame evidence
+- Surrounding context around a log ID or timestamp
+- Host, app, and source-IP inventories
+- Clock-skew measurement using event and receive timestamps
+
+### Time and volume analysis
+
+- Bucketed timelines
+- Ingest-rate and queue-pressure state
+- Near-duplicate message pattern clustering
+- Recent-versus-baseline anomaly detection
+- Side-by-side time-range comparison
+- Silent-host and silent-stream detection
+- Database, storage, and runtime statistics
+
+### Correlation
+
+- Cross-host correlation around a timestamp
+- AI-session anchor correlation against infrastructure logs
+- Topic resolution through the entity graph before timeline construction
+- Host-state correlation across logs, heartbeats, and inventory
+- Historical incident similarity using FTS5
+- Deterministic incident context bundles with bounded evidence
+
+### Recurring errors
+
+An optional background scanner groups repeating error signatures into durable records. Operators can inspect unaddressed signatures, acknowledge them, revoke acknowledgements, and correlate a signature with logs and graph evidence.
+
+Error detection is disabled by default. When enabled, it scans bounded batches, records lower-severity recurrences without paging, and can notify only above a configured severity floor.
+
+## Fleet inventory and graph
+
+### Inventory collectors
+
+The native inventory subsystem can collect and normalize evidence from:
+
+- Local Compose and reverse-proxy configuration
+- Local process, storage, project, and raw configuration inventories
+- SSH sessions to remote fleet hosts
+- Local and remote Docker endpoints
+- Tailscale
+- UniFi
+- Unraid
+- Media-stack services and related APIs
+
+SSH collection uses strict host-key verification, bounded concurrency, timeouts, and retry backoff. Sensitive fields are redacted before persistence.
+
+The cache lives under `~/.cortex/inventory` by default and includes:
+
+- `normalized/homelab.json`: the typed normalized fleet snapshot
+- `collection-state.json`: collector health, timing, and warning state
+- `raw/<run-id>/...`: raw-but-redacted supporting artifacts
+
+The `map` action reads the normalized cache. It does not trigger a collection run and does not return raw config bodies or credential-bearing URLs.
+
+### Derived investigation graph
+
+The graph connects canonical entities such as:
+
+- Hosts and source identities
+- Logical services and concrete service instances
+- Applications and containers
+- Domains, routes, and endpoints
+- AI projects and sessions
+- Error signatures and operational findings
+
+Relationships carry confidence, trust, reason codes, timestamps, and bounded evidence references. The graph supports entity resolution, neighborhoods, topology questions, evidence lookup, and explanation paths.
+
+The graph is a rebuildable projection. Raw logs, heartbeats, inventory records, error signatures, and AI session data remain authoritative. Projection rebuilds use staging tables and a short serialized swap, record watermarks and metrics, and preserve explicit degraded state when refresh fails.
+
+## AI session intelligence
+
+Cortex treats AI transcripts as operational evidence, not merely chat archives.
+
+### Deterministic session analysis
+
+The shared service layer can:
+
+- List and search sessions by project
+- Measure activity in five-hour usage blocks
+- Summarize project context
+- List observed tools and projects
+- Detect frustration or abuse signals
+- Group those signals into scored incidents
+- Correlate AI activity with non-AI infrastructure logs
+- Extract skill invocations
+- Extract MCP server and tool-call events
+- Extract hook configuration and runtime events
+- Build skill-first, MCP-first, and hook-first investigation bundles
+
+The deterministic query and incident workflows are available through CLI, REST, and MCP.
+
+### Guarded local assessments
+
+LLM-backed assessments are deliberately local-only. They run through `cortex assess` and are not exposed as MCP actions or REST routes because they spawn a local Gemini subprocess.
+
+The shared LLM runner enforces:
+
+- A global kill switch
+- Global and per-action concurrency limits
+- Per-minute and per-hour rate limits
+- Per-action circuit breakers and cooldowns
+- Invocation timeouts
+- Prompt and output byte caps
+- An explicit background-enrichment gate, disabled by default
+- Durable audit records for successes, failures, timeouts, and policy denials
+
+Default guard values allow one concurrent invocation, three per minute and thirty per hour per action, a 120-second timeout, a 1 MiB prompt cap, and a 256 KiB output cap.
+
+Prompt scrubbing is enabled by default. Skill, MCP, and hook event extraction happens before scrubbed transcript text is persisted, so structured operational signals are retained without requiring raw prompt storage.
+
+## Alerts and notifications
+
+Notifications are optional and disabled by default. When enabled, Cortex uses Apprise as the delivery bridge and a durable SQLite outbox for retry, deduplication, and dead-letter handling.
+
+Built-in evaluators cover:
+
+- OOM kills
+- Containers exiting nonzero
+- fail2ban bans
+- Authelia MFA failures
+- Disk-fill and storage guardrail pressure
+- Ingest queue pressure
+- Complete ingest silence
+- Heartbeat silence
+- Silence from previously active continuous streams
+
+The notification subsystem includes:
+
+- Configurable evaluator cadence
+- Per-rule toggles and thresholds
+- Deduplication windows
+- Outage-scoped silence keys
+- Bounded retry with dead-letter state
+- Recent-firing history
+- Test notifications
+- A scheduled daily digest
+
+By default, continuous stream-silence tracking covers UDP/TCP syslog, agent Docker, Docker stream and event records, and managed file tails. Sporadic sources such as transcripts and shell history are intentionally excluded.
+
+## Interfaces
+
+### CLI
+
+Run `cortex --help` and command-specific `--help` for the generated command tree.
+
+| Group | Purpose |
+| --- | --- |
+| `search`, `filter`, `tail` | Log retrieval |
+| `hosts`, `apps`, `entity`, `graph` | Discovery and topology |
+| `analysis`, `correlate`, `state`, `stats`, `timeline` | Investigation and analytics |
+| `sessions`, `assess` | AI-session queries and local guarded assessments |
+| `alerts` | Error signatures, acknowledgements, and notification history |
+| `ingest`, `heartbeat` | Collectors, agents, file tails, inventory, and heartbeats |
+| `serve`, `mcp` | Full daemon and query-only stdio MCP modes |
+| `doctor`, `status`, `db`, `compose` | Diagnostics and maintenance |
+| `setup`, `update`, `config`, `completions` | Lifecycle and operator tooling |
+
+Examples:
 
 ```bash
-cortex stats
-cortex status
-cortex search "error" --limit 20
+cortex search "oom killer" --host dookie --since 1h
+cortex filter --severity err --since 6h
+cortex timeline --since 24h
+cortex sessions search "migration failure"
+cortex graph explain --help
+cortex alerts errors list
 cortex ingest inventory refresh --json
 cortex ingest filetail list
-cortex setup repair
-cortex serve mcp
-cortex mcp
+cortex status
+cortex doctor
 ```
 
-Use `cortex --help` and subcommand help for the full command tree. The CLI is
-the preferred surface for local setup, repairs, and admin maintenance.
+The CLI supports direct/local operation and HTTP operation. REST-backed mode is the normal remote path and uses `CORTEX_URL` plus `CORTEX_API_TOKEN`.
 
-## Safety And Trust Model
+### MCP
 
-Cortex separates read, admin, and transport trust boundaries:
+Cortex exposes one MCP tool named `cortex`. Its required `action` field selects one of **56 live actions** from a single authoritative Rust registry.
 
-- MCP reads use `cortex:read`; admin mutations require `cortex:admin`.
-- HTTP MCP uses `CORTEX_TOKEN`.
-- REST uses `CORTEX_API_TOKEN`; REST admin mutations also require
-  `X-Cortex-Admin-Token: $CORTEX_API_ADMIN_TOKEN`.
-- Non-loopback MCP binds require bearer auth, OAuth, or an explicit trusted
-  gateway configuration.
-- File-tail management rejects sensitive mounts and requires allowlisted roots.
-- Inventory and graph actions return bounded, redacted evidence rather than raw
-  credential-bearing config bodies.
+The current scope split is:
 
-Generated runtime schemas and curated docs should stay aligned, but operational
-policy belongs in the Rust service layer, not in MCP-only glue.
+- 50 read actions requiring `cortex:read`
+- 5 admin actions requiring `cortex:admin`: `ack_error`, `unack_error`, `file_tails`, `notifications_test`, and `llm_invocations`
+- 1 informational action, `help`, which requires an authenticated context when authentication is mounted but no read/admin scope
 
-## Architecture
+#### Complete MCP action catalog
 
-The daemon listens on UDP/TCP syslog, normalizes input, writes through a batched
-SQLite writer, and exposes MCP/REST/CLI adapters over the shared Cortex service
-model. Derived graph projection tables are rebuildable from raw logs,
-heartbeats, inventory, signatures, and session rows; they are not the source of
-truth.
-
-The detailed architecture diagram and ingest notes continue in
-[Overview](#overview), [Homelab Inventory](#homelab-inventory), and the ingest
-sections below.
-
-## Distribution Contract
-
-The source of truth for release identity is the version shared by `Cargo.toml`,
-the lockfile, release metadata, package launcher metadata, plugin/registry
-metadata, and container image tags.
-
-Distribution/version invariants:
-
-- `cortex-rmcp` npm package version must match the GitHub Release binary it
-  downloads.
-- `server.json` must point at the current `ghcr.io/jmagar/cortex:v<version>`
-  image.
-- Plugin manifests stay versionless where the marketplace derives identity from
-  the commit SHA.
-- Generated runtime MCP schemas come from Rust source, not hand-written docs.
-- Curated README/docs content should point to source-of-truth docs instead of
-  duplicating every action parameter.
-
-Generated artifacts include the live MCP schema returned by the server and the
-schema resource exposed through MCP. Curated artifacts include this README and
-the human references in `docs/`.
-
-## Deployment
-
-Deploy daemon mode when Cortex should receive syslog and serve HTTP MCP/REST:
-
-```bash
-CORTEX_RECEIVER_HOST=0.0.0.0 \
-CORTEX_RECEIVER_PORT=1514 \
-CORTEX_HOST=0.0.0.0 \
-CORTEX_PORT=3100 \
-CORTEX_API_TOKEN=change-me \
-CORTEX_TOKEN=change-me \
-cortex serve mcp
-```
-
-Container and multi-host deployment notes are in [Installation](#installation),
-[Multi-Host Deployment](#multi-host-deployment), and
-[HTTPS / Reverse Proxy](#https--reverse-proxy).
-
-## Troubleshooting
-
-- `401` or `403` from `/mcp`: check `CORTEX_TOKEN`, OAuth, and trusted gateway
-  settings.
-- `/api/*` fails while `/mcp` works: check `CORTEX_API_TOKEN`; REST has its own
-  bearer token.
-- no syslog rows arrive: verify UDP/TCP `1514`, sender forwarding rules, and
-  `CORTEX_RECEIVER_HOST`.
-- `map` reports missing cache: run `cortex ingest inventory refresh --json`.
-- file-tail add fails: confirm the path is under `CORTEX_FILE_TAIL_ALLOWED_ROOTS`
-  and not a symlink or sensitive mount.
-- expensive actions are slow: start with `status`, `errors`, `tail`, or scoped
-  `search`, then narrow before `patterns`, `anomalies`, or `compose_doctor`.
-
-## npm / npx
-
-Run the stdio MCP server or CLI without a manual binary install:
-
-```bash
-npx -y cortex-rmcp --help
-```
-
-MCP clients can use the same launcher:
-
-```json
-{
-  "mcpServers": {
-    "cortex": {
-      "command": "npx",
-      "args": ["-y", "cortex-rmcp", "mcp"]
-    }
-  }
-}
-```
-
-The npm package downloads the `cortex` binary from GitHub Releases during `postinstall`. Cortex keeps its repo and CLI name as `cortex`; the npm package is `cortex-rmcp` because Cortex is broader than only an MCP server.
-
-## Rust MCP naming pattern
-
-Most Rust MCP servers use:
-
-- Repo: `<service>-rmcp`
-- CLI alias: `r<service>`
-- npm package: `<service>-rmcp`
-
-Cortex is the exception: repo `cortex`, CLI `cortex`, npm package `cortex-rmcp`.
-
-## Overview
-
-```
-                    ┌─────────────────────────────────┐
-  rsyslog/syslog-ng ─▶  UDP :1514 / TCP :1514          │
-  network devices   ─▶  ┌──────────────────────────┐   │
-                    │   │  parse → batch writer     │   │
-                    │   │  SQLite + FTS5 (WAL mode) │   │
-                    │   └──────────────────────────┘   │
-  Claude / MCP ◀──── ▶  RMCP HTTP :3100/mcp             │
-  local MCP client ◀──▶  syslog mcp query process       │
-                    └─────────────────────────────────┘
-```
-
-The daemon listens on a single port for both UDP and TCP syslog (default `1514`). All inbound messages are parsed, batched, and written to SQLite with full-text indexing. The MCP HTTP server runs on a separate port (default `3100`) and uses RMCP Streamable HTTP in stateless JSON-response mode. Local stdio-only MCP clients can launch `cortex mcp`, a query-only MCP process that reads the same SQLite database without starting syslog listeners or the HTTP server.
-
-MCP is an exposure surface, not the owner of log-intelligence business policy. Shared defaults, limits, validation, audit identity, correlation behavior, and safety gates should live in `SyslogService` or service-owned operation models so MCP, REST, and CLI remain consistent.
-
----
-
-## Tools
-
-One MCP tool, `cortex`, is exposed. Use the required `action` argument to run `search`, `filter`, `tail`, `errors`, `hosts`, `map`, `sessions`, `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `topic_correlate`, `usage_blocks`, `project_context`, `list_ai_tools`, `list_ai_projects`, `correlate`, `stats`, `status`, `apps`, `source_ips`, `timeline`, `patterns`, `context`, `get`, `ingest_rate`, `silent_hosts`, `clock_skew`, `anomalies`, `compare`, `compose_status`, `compose_doctor`, `unaddressed_errors`, `ack_error`, `unack_error`, `notifications_recent`, `notifications_test`, `llm_invocations`, `similar_incidents`, `incident_context`, `graph`, `skill_events`, `skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`, `mcp_investigate`, `hook_events`, `hook_incidents`, `hook_investigate`, or `help`.
-
-For the complete action-specific parameter reference, see [`docs/mcp/SCHEMA.md`](docs/mcp/SCHEMA.md). For correlation behavior and AI/non-AI inclusion rules, see [`docs/mcp/CORRELATION.md`](docs/mcp/CORRELATION.md).
-
-| Action | Purpose |
+| Domain | Actions |
 | --- | --- |
-| `search` | Full-text search with filters |
-| `filter` | Structured filter-only log retrieval |
-| `tail` | Recent log entries |
-| `errors` | Error/warning summary by host and severity |
-| `hosts` | Host registry with first/last seen |
-| `map` | Cached homelab inventory plus graph-backed topology answers |
-| `sessions` | AI transcript sessions by project |
-| `search_sessions` | Ranked grouped session search |
-| `abuse` | Abuse hits in AI transcripts with same-session context |
-| `abuse_incidents` | Groups abuse hits into scored incident candidates |
-| `abuse_investigate` | Expands incidents into deterministic evidence bundles |
-| `ai_correlate` | AI transcript anchors cross-referenced against non-AI logs |
-| `topic_correlate` | Resolve a topic to graph entities and correlate all related logs into a unified timeline |
-| `usage_blocks` | AI activity in 5-hour UTC windows |
-| `project_context` | Summary for one AI project path |
-| `list_ai_tools` | Distinct AI tools with counts |
-| `list_ai_projects` | Distinct AI projects with counts |
-| `correlate` | Cross-host event correlation in a time window; omit reference_time and pass query to derive the anchor from a matching AI session |
-| `stats` | Database statistics and storage health |
-| `status` | Lightweight runtime and DB health |
-| `apps` | Distinct application names with log and host counts |
-| `source_ips` | Distinct source identifiers with hostname breakdown |
-| `timeline` | Bucketed counts over time |
-| `patterns` | Near-duplicate message template clusters |
-| `context` | Surrounding logs around a log id or timestamp |
-| `get` | One log entry by id, including raw frame |
-| `ingest_rate` | Recent ingest throughput and write-block state |
-| `silent_hosts` | Hosts whose last_seen is older than a threshold |
-| `clock_skew` | Per-host received_at minus timestamp distribution |
-| `anomalies` | Recent vs baseline volume/error comparison |
-| `compare` | Side-by-side comparison of two time ranges |
-| `compose_status` | Redacted read-only Compose deployment diagnostics |
-| `compose_doctor` | Strict Compose deployment health diagnostics |
-| `unaddressed_errors` | Repeating unacknowledged error signatures |
-| `ack_error` | Acknowledge an error signature |
-| `unack_error` | Revoke an error acknowledgement |
-| `notifications_recent` | Recent notification firings |
-| `notifications_test` | Send a test notification via Apprise |
-| `llm_invocations` | Recent LLM invocation audit records (concurrency/rate-limit/circuit-breaker denials included) |
-| `similar_incidents` | FTS5 cluster search over historical system logs |
-| `incident_context` | Full context bundle for a known time window |
-| `graph` | Resolve graph entities, neighborhoods, and evidence-backed explanations |
-| `skill_events` | List extracted AI skill-invocation events |
-| `skill_incidents` | Groups negative-signal transcript hits following a skill invocation into scored incident candidates |
-| `skill_investigate` | Expands skill-usage incidents into deterministic evidence bundles, skill-first |
-| `mcp_events` | List extracted AI MCP tool-call events |
-| `mcp_incidents` | Groups negative-signal transcript hits following an MCP tool call into scored incident candidates |
-| `mcp_investigate` | Expands MCP-usage incidents into deterministic evidence bundles, server/tool-first |
-| `hook_events` | List extracted/collected AI hook events (runtime execution and config inventory) |
-| `hook_incidents` | Groups hook failures/timeouts and other negative signals into scored incident candidates |
-| `hook_investigate` | Expands hook-usage incidents into deterministic evidence bundles, hook-first |
-| `help` | Markdown reference for all actions |
+| Log retrieval | `search`, `filter`, `tail`, `errors`, `get`, `context` |
+| Discovery and health | `hosts`, `apps`, `source_ips`, `status`, `stats`, `ingest_rate`, `silent_hosts`, `clock_skew` |
+| Analytics and correlation | `timeline`, `patterns`, `anomalies`, `compare`, `correlate`, `topic_correlate`, `similar_incidents`, `incident_context` |
+| Fleet and topology | `map`, `host_state`, `fleet_state`, `correlate_state`, `graph`, `compose_status`, `compose_doctor` |
+| AI sessions | `sessions`, `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools`, `list_ai_projects` |
+| AI operational events | `skill_events`, `skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`, `mcp_investigate`, `hook_events`, `hook_incidents`, `hook_investigate` |
+| Errors and administration | `unaddressed_errors`, `ack_error`, `unack_error`, `notifications_recent`, `notifications_test`, `file_tails`, `llm_invocations` |
+| Reference | `help` |
 
-## Homelab Inventory
+The runtime schema contains per-action flags, defaults, examples, relative cost metadata, and validation. See [docs/mcp/SCHEMA.md](docs/mcp/SCHEMA.md) for the parameter reference.
 
-`cortex ingest inventory refresh --json` collects native Rust inventory into
-`~/.cortex/inventory` and writes:
+#### MCP prompts
 
-- `normalized/homelab.json` — typed `cortex.homelab_inventory.v1` cache
-- `collection-state.json` — per-collector status, warnings, timings, and artifact refs
-- `raw/<run_id>/*.txt` — raw-but-redacted Compose and reverse proxy artifacts
+Cortex ships twelve reusable infrastructure prompts:
 
-`cortex ingest inventory status --json` reports cache freshness and warnings without
-opening SQLite. The MCP `map` action is read-only: it reads the normalized cache
-and overlays bounded live Cortex host/heartbeat data, but never triggers refresh
-or returns raw artifact bodies.
+- `infra.incident-triage`
+- `infra.host-health`
+- `infra.service-outage`
+- `infra.security-auth-review`
+- `infra.noise-reduction`
+- `infra.agent-change-correlation`
+- `infra.docker-container-regression`
+- `infra.network-dns-failure`
+- `infra.storage-pressure`
+- `infra.auth-bruteforce`
+- `infra.syslog-forwarding-gap`
+- `infra.after-deploy-check`
 
-`map` defaults to the inventory snapshot. Graph-backed modes add a typed
-`graph_answer` envelope with `answer_status`, bounded topology `rows`, safe
-evidence samples, map follow-up queries, and graph proof queries:
+See [docs/mcp/PROMPTS.md](docs/mcp/PROMPTS.md) for arguments and output expectations.
 
-```json
-{"action":"map","mode":"host_services","host":"squirts"}
-{"action":"map","mode":"domain_routes","domain":"adguard.tootie.tv"}
-{"action":"map","mode":"service_dependencies","host":"squirts","service":"swag"}
-{"action":"map","mode":"findings","finding_types":["potential_public_route","risky_mounts","collector_health"]}
-```
+#### MCP resources and UI
 
-`mode=findings` returns bounded topology risk and hygiene findings derived from
-the graph plus normalized inventory/cache state. Findings include severity,
-confidence, reason code, affected entities, safe evidence IDs/excerpts, and
-remediation hints. They deliberately avoid raw config contents, raw artifact or
-cache paths, credential-bearing upstream URLs, and raw collector warning text;
-`potential_public_route` means configured reverse-proxy routing, not proof of
-unauthenticated public internet exposure.
+The MCP server exposes:
 
-When the server is running, inventory refresh also projects topology evidence
-into the investigation graph. The baseline refresh interval is 5 minutes, with
-local Compose/proxy config watchers as lower-latency refresh triggers. Remote
-Docker `events` streams over SSH are opt-in via
-`CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS=true`.
+| URI | Purpose |
+| --- | --- |
+| `cortex://schema/mcp-tool` | Live JSON schema for the action-dispatched tool |
+| `cortex://schema/prompt-output` | Schema for structured incident-style prompt output |
+| `ui://cortex/query-widget` | Self-contained MCP Apps search widget |
 
-On first run, before `normalized/homelab.json` exists, `map` and
-`cortex ingest inventory status --json` report `cache_status: "missing"`. Run
-`cortex ingest inventory refresh --json` to seed `~/.cortex/inventory` and clear that
-missing-cache state.
+The query widget is progressive enhancement. UI-capable MCP hosts can render it; ordinary MCP clients continue receiving the normal text and structured JSON result.
 
-## Prompts
+### REST
 
-The MCP server also exposes reusable prompts for common infrastructure debugging
-workflows: `infra.incident-triage`, `infra.host-health`,
-`infra.service-outage`, `infra.security-auth-review`,
-`infra.noise-reduction`, and `infra.agent-change-correlation`.
+Authenticated JSON routes live under `/api/*` on the shared HTTP listener. They cover the same major query domains as MCP and add operator workflows for session checkpoints, parse errors, database integrity jobs, backup, checkpoint, and vacuum.
 
-For the prompt catalog and argument reference, see
-[`docs/mcp/PROMPTS.md`](docs/mcp/PROMPTS.md).
+The versioned investigation API lives under `/api/v1/*` and provides Ask Cortex plus graph entity, neighborhood, explanation, and evidence endpoints for the bundled browser workspace.
 
-## MCP Apps query widget
+REST requires `CORTEX_API_TOKEN`. Privileged maintenance and file-tail workflows can also require `CORTEX_API_ADMIN_TOKEN`.
 
-cortex ships one interactive UI surface as **progressive enhancement**: a simple
-log-search widget for MCP hosts that support [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview)
-/ MCP-UI (`_meta.ui.resourceUri`). It is a single self-contained HTML resource —
-no browser build step, no external dependencies, no new server routes.
+See [docs/api.md](docs/api.md) for the route and response reference.
 
-- **Resource URI:** `ui://cortex/query-widget`
-- **MIME type:** `text/html;profile=mcp-app`
-- The `cortex` tool advertises it via `_meta.ui.resourceUri`; the widget calls the
-  same `cortex` tool with `action=search` over the host bridge and renders the
-  rows in a compact table.
-- It is a **simple search UI, not a dashboard** — query (FTS5) plus hostname,
-  severity, and limit filters.
+### Browser investigation workspace
 
-**Non-UI hosts are unaffected.** Plain MCP clients keep reading the normal
-text/JSON tool results; only hosts that detect `_meta.ui.resourceUri` fetch and
-render the `ui://` resource.
+The daemon serves a bundled workspace at `/app` and `/app/investigate`. It includes:
 
-Confirm the wire contract with raw JSON-RPC (no UI host required):
+- Runtime and schema status
+- Fleet and ingest summaries
+- Ask Cortex investigation requests
+- An interactive Cytoscape graph canvas
+- Evidence inspection
+- A recent-log timeline
 
-```bash
-# Widget resource is listed
-curl -s -X POST http://localhost:3100/mcp \
-  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}'
+The app is embedded into the Rust binary, has no external runtime dependency, uses a restrictive Content Security Policy, and keeps the entered REST bearer token in memory only. The current UI identifies itself as an investigation preview rather than a full general-purpose dashboard.
 
-# Widget HTML is served with the MCP Apps MIME type
-curl -s -X POST http://localhost:3100/mcp \
-  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"ui://cortex/query-widget"}}'
+### Health endpoints
 
-# Search returns both structuredContent (for UI rows) and text (for plain clients)
-curl -s -X POST http://localhost:3100/mcp \
-  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"cortex","arguments":{"action":"search","query":"error","limit":5}}}'
-```
-
-If `CORTEX_TOKEN` is set, add `-H "Authorization: Bearer $CORTEX_TOKEN"`.
-`scripts/smoke-test.sh` runs these same checks automatically. For the wire-format
-details see [`docs/mcp/MCPUI.md`](docs/mcp/MCPUI.md).
-
-### `cortex search`
-
-Full-text search across all syslog messages with optional filters. Uses SQLite FTS5 with porter stemming.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `query` | string | no | — | FTS5 search query (see [FTS5 query syntax](#fts5-query-syntax)) |
-| `host` | string | no | — | Exact hostname match. Use `cortex` with `action: "hosts"` to enumerate. |
-| `source` | string | no | — | Exact source identifier. Syslog entries use the verified network sender address (`IP:port`); OTLP rows use the verified peer IP; Docker ingest stream rows use `docker://host/container/stream`; Docker lifecycle event rows use `docker-event://host/container/action`. |
-| `severity` | string | no | — | One of: `emerg alert crit err warning notice info debug` |
-| `app` | string | no | — | Application name, e.g. `sshd`, `dockerd`, `kernel` |
-| `since` | string | no | — | Start of time range (relative like `1h`/`yesterday`, or ISO 8601 / RFC 3339, e.g. `2025-01-15T00:00:00Z`) |
-| `until` | string | no | — | End of time range (relative or ISO 8601) |
-| `limit` | integer | no | 100 | Max results (hard cap: 1000) |
-
-**Response**
-
-```json
-{
-  "count": 3,
-  "logs": [
-    {
-      "id": 12345,
-      "timestamp": "2025-01-15T14:30:00Z",
-      "hostname": "router",
-      "facility": "kern",
-      "severity": "err",
-      "app_name": "kernel",
-      "process_id": null,
-      "message": "kernel panic: unable to mount root",
-      "received_at": "2025-01-15T14:30:01.123Z",
-      "source_ip": "10.0.0.1:51234"
-    }
-  ]
-}
-```
-
-**FTS5 examples**
-
-```
-query: "kernel panic"           # implicit AND: both terms must appear
-query: "OOM AND killer"        # explicit AND
-query: "sshd OR pam"           # boolean OR
-query: "failed NOT sudo"       # boolean NOT
-query: '"connection refused"'  # exact phrase (bypasses stemming)
-query: "error*"                # prefix wildcard
-query: "restart*"              # matches restart, restarted, restarting
-```
-
-### `cortex filter`
-
-Structured filter-only retrieval for correlation workflows. This action rejects `query`; use `search` for FTS5 message-body search.
-
-Common filters match `search`: `host`, `source`, `severity`, `app`, `facility`, `exclude_facility`, `process_id`, `since`, `until`, `received_since`, `received_until`, and `limit`.
-
-Correlation aliases include `source_kind` (`docker-stream`, `docker-event`, `agent-command`, `shell-history`, `transcript`, `claude`, `codex`, `gemini`), plus `tool`, `project`, `session_id`, `container`, `docker_host`, `stream`, and `event_action`.
-`source_kind=file-tail` filters managed file-tail rows (`source_ip` prefix `file-tail://`).
-
----
-
-### `cortex tail`
-
-Return the N most recent log entries. Equivalent to `tail -f` across all hosts.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `host` | string | no | — | Filter to a specific host |
-| `source` | string | no | — | Filter to an exact source identifier. Syslog entries use the verified network sender address (`IP:port`); OTLP rows use the verified peer IP; Docker ingest stream rows use `docker://host/container/stream`; Docker lifecycle event rows use `docker-event://host/container/action`. |
-| `app` | string | no | — | Filter to a specific application |
-| `n` | integer | no | 50 | Number of recent entries (hard cap: 500) |
-
-**Response**
-
-Same structure as `cortex search`: `{ "count": N, "logs": [...] }`.
-
----
-
-### `cortex analysis errors`
-
-Summarize warnings and errors across all hosts in a time window. Groups by hostname and severity, showing counts. Use this for quick health assessments.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `since` | string | no | all time | Start of time range (ISO 8601) |
-| `until` | string | no | now | End of time range (ISO 8601) |
-
-Severities included: `emerg`, `alert`, `crit`, `err`, `warning`.
-
-**Response**
-
-```json
-{
-  "summary": [
-    { "hostname": "router",  "severity": "err",     "count": 42 },
-    { "hostname": "router",  "severity": "warning",  "count": 17 },
-    { "hostname": "storage", "severity": "crit",     "count":  3 }
-  ]
-}
-```
-
----
-
-### `cortex hosts`
-
-List all hosts that have sent syslog messages, with first/last seen timestamps and total log counts.
-
-**Parameters:** none
-
-**Response**
-
-```json
-{
-  "hosts": [
-    {
-      "hostname": "router",
-      "first_seen": "2025-01-01T00:00:00.000Z",
-      "last_seen":  "2025-01-15T14:30:00.000Z",
-      "log_count":  18432
-    }
-  ]
-}
-```
-
----
-
-### `cortex sessions`
-
-List AI transcript sessions grouped by project, tool, session, and host.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `project` | string | no | — | Exact project path, e.g. `/home/jmagar/workspace/cortex` |
-| `tool` | string | no | — | AI tool filter: `claude`, `codex`, or `gemini` |
-| `host` | string | no | — | Restrict to one host |
-| `since` | string | no | — | Start of time range (ISO 8601) |
-| `until` | string | no | — | End of time range (ISO 8601) |
-| `limit` | integer | no | 100 | Max sessions (hard cap: 1000) |
-
-**Response**
-
-```json
-{
-  "count": 1,
-  "sessions": [
-    {
-      "project": "/home/jmagar/workspace/cortex",
-      "tool": "codex",
-      "session_id": "019e1506-dc81-7881-9926-4d6d4efda1ac",
-      "hostname": "dookie",
-      "first_seen": "2026-05-11T03:13:51.745Z",
-      "last_seen": "2026-05-11T04:10:00.000Z",
-      "event_count": 42
-    }
-  ]
-}
-```
-
----
-
-### `cortex correlate events`
-
-Search for related events across multiple hosts within a ±N minute window around a reference timestamp. Useful for debugging cascading failures. Results are grouped by host and ordered by time.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `reference_time` | string | **yes** | — | Center timestamp (ISO 8601, e.g. `2025-01-15T14:30:00Z`) |
-| `window_minutes` | integer | no | 5 | Minutes before and after `reference_time` (max 60) |
-| `severity_min` | string | no | `warning` | Minimum severity to include. `warning` returns `warning/err/crit/alert/emerg`. `debug` returns everything. |
-| `host` | string | no | — | Limit correlation to one host |
-| `source` | string | no | — | Limit correlation to an exact source identifier. Syslog entries use the verified network sender address (`IP:port`); OTLP rows use the verified peer IP; Docker ingest stream rows use `docker://host/container/stream`; Docker lifecycle event rows use `docker-event://host/container/action`. |
-| `query` | string | no | — | FTS5 query to narrow results |
-| `limit` | integer | no | 500 | Max total events (hard cap: 999) |
-
-**Response**
-
-```json
-{
-  "reference_time": "2025-01-15T14:30:00Z",
-  "window_minutes": 5,
-  "window_from": "2025-01-15T14:25:00+00:00",
-  "window_to":   "2025-01-15T14:35:00+00:00",
-  "severity_min": "warning",
-  "total_events": 12,
-  "truncated": false,
-  "hosts_count": 3,
-  "hosts": [
-    {
-      "hostname": "router",
-      "event_count": 7,
-      "events": [...]
-    }
-  ]
-}
-```
-
-**Note on clock skew:** `cortex correlate events` uses the `timestamp` field from the syslog message, which reflects the sending device's clock. If a device clock is skewed, events may fall outside the correlation window. See [Time synchronization](#time-synchronization).
-
----
-
-### `cortex stats`
-
-Return database statistics including total logs, total hosts, time range covered, logical and physical DB size, free disk, configured thresholds, current write-block status, and runtime ingest observability.
-
-**Parameters:** none
-
-**Response**
-
-```json
-{
-  "total_logs": 284917,
-  "total_hosts": 12,
-  "oldest_log": "2024-10-15T00:00:01Z",
-  "newest_log": "2025-01-15T14:30:00Z",
-  "logical_db_size_mb": "312.45",
-  "physical_db_size_mb": "328.00",
-  "free_disk_mb": "14200.00",
-  "max_db_size_mb": 1024,
-  "min_free_disk_mb": 0,
-  "write_blocked": false,
-  "runtime_observability": {
-    "syslog_udp_packets_received": 280000,
-    "syslog_tcp_connections_active": 3,
-    "ingest_entries_enqueued": 284917,
-    "ingest_queue_depth": 0,
-    "ingest_queue_capacity": 10000,
-    "ingest_queue_utilization_pct": "0.00",
-    "writer_batches_flushed": 2850,
-    "writer_logs_written": 284917,
-    "writer_flush_failures": 0,
-    "writer_logs_retained": 0,
-    "writer_logs_discarded": 0,
-    "writer_storage_blocked": false,
-    "last_ingest_at": "2025-01-15T14:30:05.123Z",
-    "last_write_at": "2025-01-15T14:30:05.400Z",
-    "last_error_at": null
-  },
-  "otlp": {
-    "logs_received": 42,
-    "decode_errors": 0
-  }
-}
-```
-
-`write_blocked: true` means the storage budget is exceeded and new log ingestion is paused. See [Storage budget enforcement](#storage-budget-enforcement).
-
----
-
-### `cortex status`
-
-Return lightweight runtime status without the heavier DB statistics query. Use this for dashboards and doctor checks that need current queue depth, backpressure, writer failure/drop state, listener counters, and last activity timestamps.
-
-**Parameters:** none
-
----
-
-### `cortex help`
-
-Return markdown documentation for all tools in this toolset.
-
-**Parameters:** none
-
----
-
-The sections above document only the most common actions in detail. For the full 45-action surface with per-action parameters, see [`docs/mcp/SCHEMA.md`](docs/mcp/SCHEMA.md) or call `action=help` against a running server.
-
----
-
-## FTS5 Query Syntax
-
-The `cortex search` and `cortex correlate` actions use SQLite FTS5 with porter stemming (`tokenize='porter unicode61'`). Valid query forms:
-
-| Syntax | Example | Matches |
-|--------|---------|---------|
-| Single term | `panic` | Any message containing "panic" or stemmed variants |
-| Porter stemming | `restart` | restart, restarted, restarting, restarts |
-| AND (default) | `disk error` or `disk AND error` | Both terms present |
-| OR | `sshd OR pam` | Either term present |
-| NOT | `failed NOT sudo` | "failed" present, "sudo" absent |
-| Phrase | `"connection refused"` | Exact phrase in that order |
-| Prefix wildcard | `error*` | Any word starting with "error" |
-| Grouped | `(kernel OR oom) AND panic` | Grouped boolean logic |
-
-**Limits:** max 512 characters, max 16 whitespace-separated terms.
-
-**Porter stemming** means `connect`, `connected`, `connecting`, and `connection` all match the query `connect`. Phrase queries (`"..."`) bypass stemming and require exact token order.
-
----
-
-## Log Schema
-
-Each stored log entry has these fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | integer | Auto-increment primary key |
-| `timestamp` | text | Message timestamp (RFC 3339, UTC). From the syslog message header. |
-| `hostname` | text | Hostname from the syslog message (user-controlled, not verified) |
-| `facility` | text\|null | Syslog facility name (see facilities below) |
-| `severity` | text | Syslog severity level name |
-| `app_name` | text\|null | Application/process name from the syslog message |
-| `process_id` | text\|null | PID from the syslog message |
-| `message` | text | Log message body (FTS5-indexed) |
-| `received_at` | text | Server-side receipt timestamp (RFC 3339, UTC). Used for retention. |
-| `source_ip` | text | Source identifier. Syslog entries use the exact network sender address (`IP:port`) captured from the packet/connection peer. OTLP rows use the peer IP without the ephemeral source port. Docker ingest stream rows use `docker://host/container/stream`; Docker lifecycle event rows use `docker-event://host/container/action`. |
-| `ai_tool` | text\|null | AI tool name (e.g. `claude`, `codex`, `gemini`) |
-| `ai_project` | text\|null | AI project path |
-| `ai_session_id` | text\|null | AI session unique identifier |
-| `ai_transcript_path` | text\|null | Full path to the source transcript file |
-| `metadata_json` | text\|null | Source-specific JSON metadata. Syslog rows include parser/source provenance; OTLP rows include resource/log attributes plus trace/span ids; Docker rows include host/container/image/compose/action details; transcript rows include source kind, file path, line number, record key, and scrub status. |
-
-### AI transcript indexing
-
-`cortex sessions index` scans the default local transcript roots
-`~/.claude/projects`, `~/.codex/sessions`, and `~/.gemini/tmp`; `cortex sessions index --path PATH`
-can scan a known transcript directory or one explicit supported transcript file, and
-`cortex sessions add --file FILE` imports one file. Recursive scans are limited to
-`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini/tmp`, or their children; broad roots such
-as `/`, `$HOME`, and the current repo root are rejected before walking. The
-scanner skips symlinks, counts unsupported files without parsing them, and
-streams JSONL transcript files line-by-line in bounded SQLite chunks. Gemini
-chat files are imported from `~/.gemini/tmp/*/chats/session-*.json`; when a
-Gemini file has only `projectHash`, Cortex stores the project as
-`gemini://project/<hash>` so session inventory remains queryable. Use
-`--force` to reimport a transcript path from scratch after parser changes,
-`--since RFC3339` to scan only recently modified files, and
-`cortex sessions checkpoints --errors` plus `cortex sessions errors` to inspect structured
-scanner failures.
-
-For real-time local Claude/Codex/Gemini transcript ingestion, install the host-local
-watch service:
-
-```bash
-cortex setup sessionswatch install
-cortex setup sessionswatch check
-cortex setup sessionswatch remove
-```
-
-The watcher runs outside Docker because it needs host access to
-`~/.claude/projects`, `~/.codex/sessions`, and `~/.gemini/tmp`. It writes to the configured live
-SQLite DB and delegates every stable changed supported transcript file to the
-same scanner path used by `cortex sessions add --file FILE`; Gemini `session-*.json`
-chat files use the same checkpoint and duplicate-suppression path. Installing the watcher
-disables the older polling timer so both helpers do not scan the same files.
-
-**This writes to a local SQLite file.** It only reaches the fleet's shared cortex
-server if that server also runs on this same host. When the server runs elsewhere
-(the common case — the server typically runs on one dedicated host while Claude/Codex/
-Gemini run on dev workstations), enable AI-transcript forwarding on `cortex heartbeat
-agent` instead: `--ai-transcripts` / `CORTEX_AGENT_AI_TRANSCRIPTS=true`. This adds one
-more supervised stream (alongside `--docker`/`--journald`) that polls the same
-transcript roots every 15s and POSTs new lines to the server's `POST /v1/ai-transcripts`
-(bearer-authenticated, same token as heartbeats), using a local checkpoint file
-(`CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT`, default `<cortex home>/ai-transcript-forward-checkpoint.json`)
-so it never resends already-forwarded lines. Gemini sessions aren't supported by the
-forwarder yet (whole-file JSON, not line-based like Claude/Codex) — only Claude and
-Codex transcripts forward today. The local watch service and the agent forwarder can
-run at the same time without conflict; they only read the transcript files, never write them.
-
-The optional polling fallback is still available:
-
-```bash
-cortex setup sessionstimer install
-cortex setup sessionstimer check
-cortex setup sessionstimer remove
-```
-
-Both helpers are deliberately not inside the Docker container. Docker Compose
-owns only the server/query runtime.
-
-Imported AI transcript messages are scrubbed for known credential/token patterns
-before storage and FTS indexing. The rows still live in the main `logs` table,
-so raw actions such as `search`, `tail`, `context`, and `get` can return
-scrubbed transcript text and local `ai_transcript_path` values within seconds of
-the transcript write. Scrubbing is best-effort, not a compliance boundary.
-If storage guardrails cannot recover enough space, indexing fails before
-committing additional chunks.
-
-### Shell and agent command history
-
-Local command history can be correlated with system logs without introducing a
-separate table:
-
-```bash
-cortex ingest shell user index --path ~/.zsh_history --shell zsh
-cortex setup shell agent install
-export CLAUDE_CODE_SHELL_PREFIX="$HOME/.local/bin/cortex-agent-command-wrapper"
-cortex ingest shell agent index ~/.local/state/cortex/agent-command.jsonl
-```
-
-`cortex ingest shell agent index` also accepts `--server URL`/`--token TOKEN`
-to forward the spool to a remote Cortex's `POST /v1/agent-commands` endpoint
-instead of writing to the local database — the spool is only truncated after
-a successful forward. Removed spellings fail with canonical replacement
-guidance; there are no compatibility aliases.
-
-`cortex ingest shell user index` imports zsh extended history lines with timestamps and
-durations as `source_kind="shell-history"` rows. Plain untimestamped history is
-skipped because it cannot support time-window correlation.
-
-`cortex setup shell agent install` writes a small local wrapper for Claude
-Code's `CLAUDE_CODE_SHELL_PREFIX`. Claude Code invokes that prefix for spawned
-shell commands, including Bash tool calls, hook commands, and stdio MCP server
-startup commands. The wrapper preserves stdio and exit code, appends one
-scrubbed JSONL record under `~/.local/state/cortex/`, and
-`cortex ingest shell agent index` imports those records as
-`source_kind="agent-command"` rows, then truncates the locked spool after a
-successful import so repeated runs only process new commands. The wrapper
-records command text, cwd, duration, exit status, agent name, PID, host/user, and
-`CLAUDE_CODE_SESSION_ID` when present. It does not capture environment
-variables, stdout, or stderr by default.
-
-Both command import paths run the AI scrubber plus command-specific redaction
-for token flags, sensitive assignments, Authorization headers, URL userinfo,
-`curl -u`, and private-key blocks before storage. Scrubbing is best-effort, not
-a compliance boundary.
-
-**Important:** `hostname` is taken from the syslog message body, which any LAN device can set to an arbitrary value over UDP. For syslog entries, `source_ip` is the only trustworthy network identifier. For Docker log entries from the current host-local cortex agent, trust follows the deployed agent host and its local Docker socket access. For legacy central pull entries, `source_ip` identifies the configured Docker host/container/stream and should be trusted only as far as the explicit remote Docker Engine endpoint and network path are trusted. `metadata_json` preserves source-specific context for debugging and correlation, but it is not an authorization boundary. Retention cutoffs use `received_at` (server clock) so that devices with misconfigured clocks cannot cause premature or indefinite log retention.
-
-### Severity levels
-
-Ordered from most to least severe:
-
-| Level | Numeric | Meaning |
-|-------|---------|---------|
-| `emerg` | 0 | System is unusable |
-| `alert` | 1 | Action must be taken immediately |
-| `crit` | 2 | Critical conditions |
-| `err` | 3 | Error conditions |
-| `warning` | 4 | Warning conditions |
-| `notice` | 5 | Normal but significant condition |
-| `info` | 6 | Informational messages |
-| `debug` | 7 | Debug-level messages |
-
-### Facilities
-
-`kern`, `user`, `mail`, `daemon`, `auth`, `cortex`, `lpr`, `news`, `uucp`, `cron`, `authpriv`, `ftp`, `ntp`, `audit`, `alert`, `clock`, `local0`–`local7`.
-
----
-
-## Installation
-
-### One-line installer
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jmagar/cortex/main/install.sh | sh
-```
-
-The installer puts the host `cortex` binary in `~/.local/bin` and then runs
-`cortex setup`. Setup is idempotent and owns the shared host layout:
-
-- `~/.cortex/.env` — secrets, ports, Compose interpolation, runtime values
-- `~/.cortex/compose/docker-compose.yml` — Docker Compose deployment assets
-- `~/.cortex/data/cortex.db` — SQLite database and WAL/SHM sidecars
-
-Setup writes the compose project name used by the shared host deployment.
-Existing installations may still use the legacy `syslog-jmagar-lab` project
-name for container-label compatibility; prefer `cortex compose ...` commands
-because they resolve the live owner before mutating the stack.
-
-Useful installer controls:
-
-```bash
-CORTEX_INSTALL_DRY_RUN=1 ./install.sh
-CORTEX_INSTALL_PREFIX=/opt/cortex ./install.sh
-CORTEX_VERSION=<version> ./install.sh
-CORTEX_INSTALL_SKIP_SETUP=1 ./install.sh
-```
-
-Useful setup commands:
-
-```bash
-cortex setup          # first-run or normal repair
-cortex setup check    # inspect only; does not mutate files or start services
-cortex setup repair   # repair env/assets and restart the Docker stack
-cortex setup deploy preflight       # deployment preflight using setup assets
-cortex setup deploy local           # local Compose deploy/reconcile command
-cortex setup deploy local --dry-run # run the deploy preflight without mutating Docker
-cortex setup sessionswatch install  # host-local real-time transcript watcher
-cortex doctor binary  # check host/container binary freshness
-```
-
-### Claude Code plugin (recommended)
-
-Install as a Claude Code plugin. The plugin handles deployment automatically — you choose between server mode (this machine hosts the syslog receiver + MCP server) and client mode (connect to a remote server).
-
-**Prompted at install time** (via `userConfig`):
-
-| Field | Required | Default | Notes |
-|-------|----------|---------|-------|
-| `is_server` | yes | `true` | Server mode hosts the receiver; client mode connects to a remote server |
-| `server_url` | no | `http://localhost:3100` | Server mode: leave default. Client mode: remote host URL (e.g. `http://shart:3100`) |
-| `api_token` | yes | — | Bearer token used by the plugin MCP client. Server mode: this becomes the token the server enforces unless `no_auth=true`. Client mode: token from the server admin. Stored in the system keychain. |
-| `syslog_host` / `syslog_port` | no | `0.0.0.0` / `1514` | Syslog listener bind (server mode) |
-| `mcp_host` / `mcp_port` | no | `0.0.0.0` / `3100` | MCP HTTP server bind (server mode) |
-| `data_dir` | no | `~/.cortex/data` | Optional SQLite directory override; default shared setup data persists outside plugin cache |
-| `max_db_size_mb` | no | `8192` | DB size cap; oldest logs deleted when exceeded |
-| `retention_days` | no | `90` | `0` = keep forever |
-| `batch_size` | no | `100` | Number of parsed messages per SQLite batch |
-| `write_channel_capacity` | no | `10000` | Internal parsed-message queue capacity before listener backpressure |
-| `docker_ingest_enabled` | no | `false` | Legacy central pull compatibility mode for explicit remote Docker Engine endpoints; current deployments use the host-local agent |
-| `fleet_hosts` | no | — | SSH aliases of fleet hosts. Used for Docker ingest — when enabled, each becomes `http://<alias>:2375` |
-
-**SessionStart hook automation** (in server mode):
-
-- Ensures the host `cortex` binary is on `PATH`; the installer defaults to `~/.local/bin`
-- Exports plugin userConfig as `CORTEX_*` / `CORTEX_*` environment values
-- Runs `cortex setup repair`, the same setup path used by the one-line installer
-- Repairs shared assets under `~/.cortex` and removes stale user-level `cortex.service` units/drop-ins left by older plugin versions
-- All idempotent — safe to run on every session
-
-**Bundled skills** (all 13, from `plugins/cortex/skills/`):
-
-- `cortex` — primary log-intelligence skill: search, tail, errors, correlate, stats, and the rest of the MCP action surface
-- `frustration-assessment` — analyze an `abuse_investigate` evidence bundle into a frustration/abuse report
-- `mcp-friction-assessment` — analyze an `mcp_investigate` evidence bundle for MCP tool reliability issues
-- `hook-friction-assessment` — analyze a `hook_investigate` evidence bundle for hook reliability issues
-- `skill-improvement-assessment` — analyze a `skill_investigate` evidence bundle for skill-quality issues
-- `incidents` — triage unacknowledged error signatures, notifications, prior incidents, and incident context
-- `topology` — homelab topology and cross-host correlation via `map`/`host_state`/`fleet_state`/`correlate`/`graph`
-- `session-search` — search and explore AI transcript sessions
-- `logs` — Docker Compose service log tailing (the service's own stdout/stderr, not client syslog)
-- `redeploy` — re-run plugin setup after config or plugin changes
-- `report` — time-bounded homelab health/log-analysis markdown reports
-- `troubleshoot` — diagnose connection failures, missing logs, unhealthy containers, and restart loops
-- `version-check` — check whether the running Docker container matches the local Compose image; add `--pull` to pull first, otherwise checks only the local image cache
-
-The plugin deploys the server with Docker Compose through the same `cortex setup`
-path as the one-line installer. You can still build and run the binary locally
-for development, but automated deployment is Compose-only.
-
-`cortex setup deploy local` is the operator-facing name for the same local
-Compose-backed reconcile path. It exists so deploy workflows stay under the
-setup namespace without calling a command named `setup repair` directly.
-
-### Docker
-
-```bash
-git clone https://github.com/jmagar/cortex
-cd cortex
-cp .env.example .env
-# Edit .env — set CORTEX_TOKEN at minimum
-docker compose up -d
-```
-
-The container binds:
-- `UDP :1514` and `TCP :1514` for syslog ingestion (published on all interfaces — senders must reach it)
-- `TCP :3100` for the MCP HTTP API, published on `127.0.0.1` only by default. Set `CORTEX_MCP_BIND=0.0.0.0` (plus `CORTEX_TOKEN`) to expose it; containers on the same Docker network (e.g. the Labby gateway) reach `http://cortex:3100` either way.
-
-### Local build
-
-Requires Rust 1.86+.
-
-```bash
-cargo build --release
-./target/release/cortex serve mcp
-```
-
----
-
-## Authentication
-
-cortex supports two auth modes, selectable via `CORTEX_AUTH_MODE`.
-
-**Bearer-only (default)** — set `CORTEX_TOKEN` and all `/mcp` requests must present that token as `Authorization: Bearer <token>`. No OAuth routes are mounted.
-
-**Loopback no-auth** — set `CORTEX_NO_AUTH=true` only for local development on loopback binds.
-
-**Gateway-protected no-auth (TrustedGatewayUnscoped)** — on non-loopback binds, set both `CORTEX_NO_AUTH=true` and `CORTEX_TRUSTED_GATEWAY_NO_AUTH=true` only when an upstream gateway or reverse proxy enforces auth before traffic reaches cortex. This intentionally disables service-local MCP auth **and the read/admin scope gates** — every caller can run the write actions `ack_error`, `unack_error`, and `notifications_test`. **Never combine this mode with host-published ports**; keep `CORTEX_MCP_BIND=127.0.0.1` (the default) so only the gateway's Docker network path reaches cortex. See [docs/SECURITY.md](docs/SECURITY.md).
-
-**OAuth (Google)** — set `CORTEX_AUTH_MODE=oauth`, the OAuth provider env vars, and an allowlisted admin email. The server issues RS256 JWTs after users authenticate via Google. Bearer tokens and OAuth JWTs can coexist (OAuth mode disables the static token by default; set `CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH=false` or `disable_static_token_with_oauth = false` in `config.toml` for break-glass access).
-
-Both modes leave `/health` unauthenticated so health probes always work.
-
-See [docs/OAUTH.md](docs/OAUTH.md) for full setup instructions, architecture diagram, and operator FAQ.
-
----
+- `GET /health`: minimal unauthenticated liveness response for containers and proxies
+- `GET /health/full`: authenticated detailed health and ingest observability
 
 ## Configuration
 
-Configuration is loaded from three sources in priority order (highest wins):
+Cortex loads configuration in this order, with later layers winning:
 
-1. Environment variables
-2. `config.toml` (if present)
-3. Built-in defaults
+1. Built-in defaults
+2. A partial `config.toml` in the current working directory
+3. The managed `$CORTEX_HOME/.env` file, normally `~/.cortex/.env`
+4. Process environment variables
 
-### Environment variables
+### Important defaults
 
-#### MCP server
+| Setting | Default |
+| --- | ---: |
+| Syslog bind | `0.0.0.0:1514` UDP and TCP |
+| HTTP bind | `127.0.0.1:3100` |
+| Database path | `/data/cortex.db` unless setup or environment overrides it |
+| SQLite pool size | 8 connections |
+| SQLite page cache budget | 128 MiB total |
+| SQLite mmap target | 256 MiB |
+| Heavy-read concurrency | 1 |
+| WAL checkpoint threshold | 256 MiB |
+| Log retention | 90 days |
+| Logical database limit | 1,024 MiB |
+| Recovery threshold | 900 MiB, auto-adjusted when the limit is raised substantially |
+| Cleanup cadence | 60 seconds |
+| Notifications | Disabled |
+| Recurring-error scanner | Disabled |
+| Central Docker pull | Disabled |
+| Prompt scrubbing | Enabled |
+| Background LLM enrichment | Disabled |
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `CORTEX_TOKEN` | no | — | Bearer token for `/mcp`. Omit to disable auth (loopback binds only). Required when exposing port 3100 beyond loopback. |
-| `CORTEX_HOST` | no | `127.0.0.1` | Bind host for the MCP HTTP server (loopback by default) |
-| `CORTEX_PORT` | no | `3100` | Bind port for the MCP HTTP server |
-| `CORTEX_MCP_BIND` | no | `127.0.0.1` | Docker Compose only: host interface port 3100 is published on. Set `0.0.0.0` together with `CORTEX_TOKEN` to expose it. |
-| `CORTEX_ALLOWED_HOSTS` | no | — | Extra comma-separated Host header values accepted by RMCP Host validation |
-| `CORTEX_ALLOWED_ORIGINS` | no | — | Extra comma-separated browser origins accepted by RMCP Origin validation |
+Useful environment variables include:
 
-#### Non-MCP API
+| Variable | Purpose |
+| --- | --- |
+| `CORTEX_HOME` | Managed configuration and operational home |
+| `CORTEX_DB_PATH` | SQLite database path |
+| `CORTEX_RECEIVER_HOST`, `CORTEX_RECEIVER_PORT` | Syslog listener |
+| `CORTEX_ALLOWED_SOURCE_CIDRS` | Optional syslog sender allowlist |
+| `CORTEX_HOST`, `CORTEX_PORT` | Shared HTTP listener |
+| `CORTEX_TOKEN` | Static MCP, OTLP, heartbeat, and forwarding bearer token |
+| `CORTEX_API_TOKEN` | REST bearer token |
+| `CORTEX_API_ADMIN_TOKEN` | Additional REST admin token where required |
+| `CORTEX_AUTH_MODE` | Static-token or OAuth authentication mode |
+| `CORTEX_PUBLIC_URL` | Public URL used for OAuth and exposure validation |
+| `CORTEX_ALLOWED_HOSTS`, `CORTEX_ALLOWED_ORIGINS` | Host-header and CORS policy |
+| `CORTEX_RETENTION_DAYS` | Log retention |
+| `CORTEX_MAX_DB_SIZE_MB` | Logical database storage budget |
+| `CORTEX_MIN_FREE_DISK_MB` | Optional external free-space write guard |
+| `CORTEX_FILE_TAIL_ALLOWED_ROOTS` | Managed file-tail root allowlist |
+| `CORTEX_DOCKER_INGEST_ENABLED` | Enable central Docker pull compatibility mode |
+| `CORTEX_SCRUB_PROMPTS` | Best-effort AI prompt credential scrubbing |
+| `CORTEX_NOTIFICATIONS_ENABLED` | Enable notification services |
+| `CORTEX_LLM_ENABLED` | Global local-assessment kill switch |
+| `RUST_LOG` | Tracing filter |
 
-The plain JSON API is always mounted under `/api/*` on the same HTTP listener and requires its own bearer token — the server fails to start (on the server path) without it. `cortex setup repair` generates one if missing.
+See [docs/CONFIG.md](docs/CONFIG.md) for the complete reference and validation rules.
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `CORTEX_API_TOKEN` | yes | — | Bearer token for `/api/*` routes |
+## Authentication and trust boundaries
 
-#### Syslog listener
+Cortex intentionally separates transport credentials and capabilities.
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `CORTEX_RECEIVER_HOST` | no | `0.0.0.0` | Bind host for UDP + TCP syslog listeners |
-| `CORTEX_RECEIVER_PORT` | no | `1514` | Bind port for UDP + TCP syslog listeners |
-| `CORTEX_RECEIVER_HOST_PORT` | no | `1514` | Docker Compose host port published to container port `1514` |
-| `CORTEX_MAX_MESSAGE_SIZE` | no | `8192` | Max bytes per UDP datagram or newline-delimited TCP frame. Oversized newline-delimited TCP frames are dropped and the connection stays open; oversized unterminated frames are dropped and the connection is closed. |
-| `CORTEX_MAX_TCP_CONNECTIONS` | no | `512` | Maximum simultaneous TCP syslog connections |
-| `CORTEX_TCP_IDLE_TIMEOUT_SECS` | no | `300` | Idle timeout per TCP read before closing inactive connections |
-| `CORTEX_BATCH_SIZE` | no | `100` | Number of messages per batch write |
-| `CORTEX_FLUSH_INTERVAL` | no | `500` | Batch flush interval in milliseconds |
-| `CORTEX_WRITE_CHANNEL_CAPACITY` | no | `10000` | Internal parsed-message queue capacity |
+### MCP
 
-#### Docker log ingest
+- `CORTEX_TOKEN` authenticates static-token HTTP MCP calls.
+- Static-token callers receive `cortex:read` by default.
+- Set `CORTEX_STATIC_TOKEN_ADMIN=true` only when the token should also receive `cortex:admin`.
+- OAuth mode supports explicit read and admin scopes through the shared authentication layer.
+- Non-loopback unauthenticated binds are rejected unless an explicit trusted-gateway mode is configured.
 
-The current deployment path is the host-local cortex agent. Each deployed agent reads Docker logs from that host's local Docker socket (`unix:///var/run/docker.sock`) and forwards the normalized rows into cortex. This keeps Docker's normal local logging behavior intact, avoids daemon-level syslog drivers, and does not require exposing a Docker API endpoint on the network.
+### REST
 
-The `CORTEX_DOCKER_*` settings below remain as a legacy central pull compatibility mode for explicit remote Docker Engine HTTP endpoints. Use them for fixtures or transitional deployments where cortex itself should connect to a Docker-compatible API. Older deployments used `docker-socket-proxy` for this endpoint, but that is no longer the recommended homelab path.
+- `CORTEX_API_TOKEN` is separate from `CORTEX_TOKEN`.
+- REST refuses to mount without an API token.
+- Sensitive maintenance and file-tail operations can require `CORTEX_API_ADMIN_TOKEN` in addition to the normal REST bearer token.
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `CORTEX_DOCKER_INGEST_ENABLED` | no | `false` | Enable legacy central pull Docker log ingestion |
-| `CORTEX_DOCKER_HOSTS` | one of the two | — | Comma-separated hostnames; each becomes `http://<name>:2375` with `allow_insecure_http = true`. Takes priority over `CORTEX_DOCKER_HOSTS_FILE`. |
-| `CORTEX_DOCKER_HOSTS_FILE` | one of the two | — | Path to a TOML file with a `[[hosts]]` array (use when you need per-host `base_url` or TLS). If the file does not exist, a warning is logged and no hosts are loaded — the container will not crash. Mount the file into the container (e.g. under `/cortex-home` via `CORTEX_HOME_VOLUME`). |
-| `CORTEX_DOCKER_RECONNECT_INITIAL_MS` | no | `1000` | Initial reconnect delay after host stream failure |
-| `CORTEX_DOCKER_RECONNECT_MAX_MS` | no | `30000` | Maximum reconnect delay after repeated failures |
+### Ingest endpoints
 
-The hosts file uses this shape:
+- Syslog itself is unauthenticated. Use CIDR and network controls.
+- OTLP logs, heartbeats, AI transcripts, shell history, and agent-command forwarding use the Cortex bearer-token policy when configured.
+- Unauthenticated forwarding endpoints are loopback-only unless the operator explicitly establishes another trusted boundary.
 
-```toml
-[[hosts]]
-name = "edge-host-a"
-base_url = "http://edge-host-a:2375"
-allow_insecure_http = true
+### Data handling
 
-[[hosts]]
-name = "app-host-b"
-base_url = "http://app-host-b:2375"
-allow_insecure_http = true
-```
+- AI prompt scrubbing is enabled by default.
+- Inventory is redacted before it reaches the normalized cache.
+- MCP and REST return bounded evidence instead of raw credential-bearing config artifacts.
+- File tails are constrained to configured roots and reject path escapes.
+- Docker endpoints and SSH keys are treated as privileged infrastructure access.
+- Container examples mount a dedicated least-privilege SSH directory rather than a user's complete `~/.ssh`.
 
-If this legacy pull path points at `docker-socket-proxy`, the proxy side only needs read access to containers, events, ping, and version endpoints: `CONTAINERS=1`, `EVENTS=1`, `PING=1`, `VERSION=1`, `POST=0`. `CONTAINERS=1` exposes the broader read-only Docker container API to anything that can reach the proxy, so bind it only on a trusted private network, firewall it to cortex, or put it behind authenticated TLS. Plain `http://` endpoints require `allow_insecure_http = true` in the hosts file so that this trust decision is explicit.
+Read [docs/SECURITY.md](docs/SECURITY.md), [docs/GUARDRAILS.md](docs/GUARDRAILS.md), and [docs/OAUTH.md](docs/OAUTH.md) before exposing Cortex beyond loopback or a trusted gateway.
 
-Docker log ingest has two test boundaries: agent parity tests verify that deployed agents preserve local Docker socket streaming, and the legacy central pull client has a mocked Docker HTTP fixture. The default smoke test stays focused on live UDP/TCP syslog, MCP/REST actions, CLI parity, and managed file-tail ingest. For a full legacy pull integration check, run cortex with `CORTEX_DOCKER_INGEST_ENABLED=true` against a disposable Docker-compatible HTTP fixture, emit a unique line from a short-lived container, then verify it with `cortex search` or `mcporter call ... action=search`. Container stdout/stderr rows use `source_ip=docker://<host>/<container>/<stream>`. Container lifecycle rows for actions such as `create`, `start`, `restart`, `die`, `stop`, `destroy`, `rename`, `oom`, and `health_status:*` use `source_ip=docker-event://<host>/<container>/<sanitized-action>`, `facility=docker`, and preserve the raw Docker event JSON.
+## Storage and maintenance
 
-#### Managed file-tail ingest
+### SQLite model
 
-Cortex can tail local files directly without rsyslog `imfile` drop-ins. In
-Docker, mount the host log tree read-only at `/file-tail-root` with
-`CORTEX_FILE_TAIL_LOG_VOLUME` and register paths inside that mount. Sources are
-stored next to the SQLite database in `file-tails.json`, managed through
-`cortex ingest filetail ...`, REST `POST /api/file-tails` (requires
-`Authorization: Bearer $CORTEX_API_TOKEN` plus
-`X-Cortex-Admin-Token: $CORTEX_API_ADMIN_TOKEN`), or MCP action `file_tails`,
-and emitted as `source_kind="file-tail"` rows. Row metadata includes
-`file_tail_id`, `tag`, and `path_basename`, not the full filesystem path.
-The documented safe default is to keep managed tails inside `/file-tail-root`.
-Set `CORTEX_FILE_TAIL_ALLOWED_ROOTS` explicitly only when an operator has
-mounted and reviewed broader read-only roots such as `/var/log` or `/logs`.
-The Compose service also adds `CORTEX_FILE_TAIL_GROUP` (default `adm`) as a
-supplementary group so the non-root `cortex` process can read common
-group-owned logs such as `/var/log/auth.log`; set it to a numeric gid if your
-host uses a different log-reader group.
+Cortex uses SQLite with:
 
-```bash
-cortex ingest filetail add /file-tail-root/swag/log/nginx/access.log
-cortex ingest filetail add /file-tail-root/swag/log/nginx/error.log --severity warning
-cortex ingest filetail add /file-tail-root/swag/log/fail2ban/fail2ban.log --facility local5
-cortex ingest filetail add /file-tail-root/authelia/logs/authelia.log --facility local5
-cortex ingest filetail add /file-tail-root/adguard/var/data/querylog.json --facility local6
-```
+- WAL mode
+- A bounded r2d2 connection pool
+- FTS5 external-content indexing for log messages
+- Covering and composite indexes for common filters and timelines
+- Transactional batch writes
+- Durable source checkpoints and parse errors
+- Maintenance job tracking
+- Online backup support
+- Integrity checks, checkpoints, and vacuum workflows
 
-The file name supplies the default id and tag, the runtime supplies the default
-hostname, and tailing starts at EOF. Add overrides only when needed. Use
-`--from-start` only when you intentionally want to backfill the current file
-contents. After startup, Cortex checkpoints
-`dev`/`inode`/offset in `file-tails.json`, resumes from that cursor, and
-reopens files on rename/create rotation or truncation. Lines are bounded by
-`CORTEX_MAX_MESSAGE_SIZE`; oversized records are truncated before enqueue.
+The current schema history contains 43 sequential migrations.
 
-#### Storage
+### Authoritative and derived data
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `CORTEX_DB_PATH` | no | `/data/cortex.db` | SQLite database path |
-| `CORTEX_POOL_SIZE` | no | `8` | SQLite connection pool size. MCP/REST reads get `pool_size - 1` permits; one connection is reserved for the ingest writer. |
-| `CORTEX_SQLITE_PAGE_CACHE_MB` | no | `128` | Total SQLite page-cache budget across the pool; divided by `pool_size` before `PRAGMA cache_size`. |
-| `CORTEX_SQLITE_MMAP_MB` | no | `256` | Bounded SQLite mmap size. Resident mapped pages may still count toward cgroup memory. |
-| `CORTEX_HEAVY_READ_CONCURRENCY` | no | `1` | Shared service-layer limiter for expensive read actions. |
-| `CORTEX_WAL_CHECKPOINT_MB` | no | `256` | WAL size threshold for bounded PASSIVE checkpoint attempts. |
-| `CORTEX_RETENTION_DAYS` | no | `90` | Days to retain logs. `0` = keep forever. Purge runs hourly; err+ severities are exempt (see [Retention Policy](#retention-policy)). |
-| `CORTEX_MAX_DB_SIZE_MB` | no | `1024` | Logical DB size trigger: breach deletes oldest logs. `0` = disabled. |
-| `CORTEX_RECOVERY_DB_SIZE_MB` | no | `900` | Cleanup target after DB size trigger. Must be less than max. |
-| `CORTEX_MIN_FREE_DISK_MB` | no | `0` | Free disk threshold. **Disabled by default.** A breach blocks writes (it does not delete data). |
-| `CORTEX_RECOVERY_FREE_DISK_MB` | no | `0` | Hysteresis target before writes resume after a free-disk breach. Must be greater than min when enabled. |
-| `CORTEX_CLEANUP_INTERVAL_SECS` | no | `60` | Storage budget enforcement interval. Minimum `5`. |
-| `CORTEX_CLEANUP_CHUNK_SIZE` | no | `2000` | Rows deleted per enforcement chunk |
-| `CORTEX_ERR_FLOOR_WINDOW_HOURS` | no | `24` | err+ rows received within this window are protected from disk-pressure deletion. `0` = disable the floor. |
-| `CORTEX_ERR_FLOOR_PER_SOURCE_CAP` | no | `10000` | Max protected err+ rows per source IP within the window. `0` = disable the floor. |
+Authoritative records include:
 
-#### Container
+- Normalized logs and raw frames
+- Hosts and source identities
+- Transcript source, checkpoint, import, and parse-error records
+- Heartbeats and component snapshots
+- Inventory snapshots and collector state
+- Error signatures and acknowledgement events
+- Skill, MCP, and hook events
+- Notification outbox and firing history
+- LLM invocation audit records
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `CORTEX_UID` | no | `1000` | Container user ID for data volume ownership |
-| `CORTEX_GID` | no | `1000` | Container group ID for data volume ownership |
-| `CORTEX_DATA_VOLUME` | no | `cortex-data` | Docker volume name or bind-mount path |
-| `CORTEX_HOME_VOLUME` | no | `~/.cortex` | Shared cortex home (inventory cache, setup env) mounted at `/cortex-home` |
-| `CORTEX_SSH_VOLUME` | no | `~/.cortex/ssh` | Dedicated SSH key dir mounted read-only at `/home/cortex/.ssh`. Never point at `~/.ssh` — see Security Model |
-| `DOCKER_NETWORK` | no | `cortex` | Docker network name (must exist) |
-| `RUST_LOG` | no | `info` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
-| `TZ` | no | `UTC` | Container timezone |
+Derived accelerators include:
 
-### config.toml
+- AI session rollups
+- Hourly timeline rollups
+- Inventory statistics
+- Stream-last-seen state
+- Entity graph tables and evidence relationships
 
-Place `config.toml` next to the binary (or in the working directory). Environment variables override values set here.
+Derived data can be refreshed or rebuilt from authoritative evidence.
 
-```toml
-[syslog]
-host = "0.0.0.0"
-port = 1514
-max_message_size = 8192
-max_tcp_connections = 512
-tcp_idle_timeout_secs = 300
+### Storage guardrails
 
-[storage]
-db_path = "data/cortex.db"
-pool_size = 8
-sqlite_page_cache_mb = 128
-sqlite_mmap_mb = 256
-heavy_read_concurrency = 1
-wal_checkpoint_mb = 256
-retention_days = 90   # 0 = keep forever
-wal_mode = true
-max_db_size_mb = 1024
-recovery_db_size_mb = 900
-min_free_disk_mb = 0      # 0 = free-disk guard disabled (default)
-recovery_free_disk_mb = 0
-cleanup_interval_secs = 60
+The daemon enforces retention and a logical database budget in chunks. It can enter a write-block state before uncontrolled growth damages the host, then resume after recovery thresholds are met. An optional minimum-free-disk guard protects against pressure caused by data outside the Cortex database without deleting Cortex data merely because another application filled the filesystem.
 
-[mcp]
-host = "127.0.0.1"
-port = 3100
-server_name = "cortex"
-# api_token = "your-secret-token"
-
-[docker_ingest]
-enabled = false
-reconnect_initial_ms = 1000
-reconnect_max_ms = 30000
-
-[[docker_ingest.hosts]]
-name = "edge-host-a"
-base_url = "http://edge-host-a:2375"
-allow_insecure_http = true
-```
-
----
-
-## Security Model
-
-### Syslog ingest is unauthenticated by design
-
-The UDP and TCP syslog listeners (port 1514) accept log frames from **any reachable host** with no authentication. This matches the RFC 3164/5424 syslog protocol design and is intentional for homelab deployments where the network perimeter is the trust boundary.
-
-Consequences:
-- **`hostname` in stored records is caller-controlled** for vendor formats (CEF/UniFi). Any host on the network can claim any hostname. Use `source_ip` for trusted origin identification.
-- **Log injection is possible** from any host that can reach port 1514. Do not use cortex for security-critical audit trails without network-level access controls.
-- **Retention exemption**: `severity=err` and above are excluded from time-based purge. A host flooding with high-severity frames can exhaust disk space.
-
-**Mitigations**: Bind the syslog port to a specific interface, use a firewall rule to restrict sources, or set `CORTEX_ALLOWED_SOURCE_CIDRS` (comma-separated CIDR list) to allowlist sending hosts.
-
-### MCP API authentication
-
-The MCP query API (port 3100, default loopback) supports two auth modes:
-
-| Mode | Config | Effect |
-|------|--------|--------|
-| Bearer token | `CORTEX_TOKEN=<token>` | Static token grants `cortex:read` by default; set `CORTEX_STATIC_TOKEN_ADMIN=true` to also grant `cortex:admin` |
-| Google OAuth | `CORTEX_AUTH_MODE=oauth` | OAuth users authenticated via `CORTEX_AUTH_ADMIN_EMAIL` |
-
-**Important**: Admin actions such as `ack_error`, `unack_error`, `notifications_test`, and `llm_invocations` require `cortex:admin`. Static bearer tokens are read-only unless `CORTEX_STATIC_TOKEN_ADMIN=true` is explicitly set.
-
-The MCP port defaults to `127.0.0.1:3100` (loopback only), and the Docker Compose files publish container port 3100 on `127.0.0.1` by default (`CORTEX_MCP_BIND` overrides the host interface). The Labby gateway reaches cortex over the Docker network at `http://cortex:3100` regardless of the host publish address. To expose port 3100 on a network interface, set `CORTEX_MCP_BIND=0.0.0.0` (Compose) or `CORTEX_HOST=0.0.0.0` (bare binary), **set `CORTEX_TOKEN`**, and put a TLS-terminating reverse proxy in front of it.
-
-### SSH key exposure (inventory mount)
-
-The Compose files mount an SSH key directory read-only at `/home/cortex/.ssh` for the fleet inventory collectors. The default source is a **dedicated key dir, `~/.cortex/ssh`** (override with `CORTEX_SSH_VOLUME`). **Never point `CORTEX_SSH_VOLUME` at `~/.ssh`** — mounting your personal SSH directory gives the container every identity you own and creates a lateral-movement path across the fleet.
-
-Provision a least-privilege deploy key instead: generate a dedicated keypair in `~/.cortex/ssh`, write a minimal `config` listing only the hosts cortex should collect from, curate a `known_hosts` file (`ssh-keyscan`), and restrict the key on each fleet host with a `restrict,command="..."` `authorized_keys` entry under a low-privilege user. Full walkthrough: [docs/SECURITY.md](docs/SECURITY.md) "SSH Key Exposure".
-
----
-
-## Command modes
+Operational commands:
 
 ```bash
-cortex serve mcp  # UDP/TCP syslog ingest plus HTTP MCP on /mcp
-cortex mcp        # query-only MCP stdio transport
-cortex setup      # install/repair shared ~/.cortex Docker Compose setup
-cortex setup deploy preflight  # check deploy prerequisites without mutating Docker
-cortex setup deploy local      # reconcile local Compose deployment
-cortex stats      # query the SQLite DB directly from the CLI
-cortex db status  # inspect SQLite maintenance state
-cortex db backup  # create a WAL-safe SQLite backup
-cortex compose doctor          # diagnose live Compose/listener ownership
-cortex compose status --json   # inspect canonical cortex container/project
+cortex db status
+cortex db integrity
+cortex db checkpoint
+cortex db backup --help
+cortex db vacuum --help
 ```
 
-Both modes use the same config and environment variable loader. `cortex mcp` is for local child-process MCP clients that can read `CORTEX_DB_PATH`; it does not bind network ports or run retention/storage cleanup jobs.
+Maintenance operations are single-flight and separately limited from heavy read queries.
 
-The direct CLI uses the same shared service layer as the MCP tool, so results and validation match the MCP actions without needing an MCP client:
+## Deployment and distribution
+
+### Current identities
+
+| Artifact | Current identity |
+| --- | --- |
+| Canonical source repository | `dinglebear-ai/cortex` |
+| Native binary and CLI | `cortex` |
+| npm launcher | `cortex-rmcp` |
+| MCP Registry server name | `ai.dinglebear/cortex-rmcp` |
+| Published OCI image | `ghcr.io/jmagar/cortex:v<version>` |
+
+The source repository has moved to the `dinglebear-ai` organization. Some published release and container metadata still uses the legacy `jmagar` namespace. The table above reflects the repository's current distribution files rather than pretending that migration is already complete.
+
+### Native and npm
+
+- The repository ships Linux x86_64 and Windows x86_64 release installers.
+- The npm launcher supports `linux/x64` and `win32/x64` and verifies release checksums.
+- Source builds use Rust edition 2024 and the current stable toolchain in CI.
+
+### Docker Compose
+
+The repository includes:
+
+- `docker-compose.yml` for a local build from the checkout
+- `docker-compose.prod.yml` for the published image
+- `config/Dockerfile` for a non-root Debian runtime image
+
+Manual Compose deployment expects an external Docker network named `cortex` unless `DOCKER_NETWORK` overrides it:
 
 ```bash
-cortex search "oom killer"                 # bare query; default limit 50
-cortex tail dookie                         # bare positional → --host; default n=50
-cortex analysis errors                     # defaults to the last hour
-cortex state host tootie                   # bare positional → --host
-cortex search 'error AND nginx' --host proxy --limit 10
-cortex tail -n 20 --app kernel
-cortex analysis errors --since 2026-01-01T00:00:00Z
-cortex hosts
-cortex correlate events --reference-time 2026-01-01T12:00:00Z --window-minutes 10 --severity-min warning
-cortex entity host tootie
-cortex graph around host tootie --limit 25
-cortex graph explain host tootie --depth 2
-cortex stats --json
-cortex db integrity            # run PRAGMA integrity_check
-cortex db checkpoint full
-cortex db vacuum --pages 1000
-cortex compose pull            # pull image for resolved Compose project
-cortex compose up              # run docker compose up -d for resolved service
-cortex compose restart         # restart resolved service
-cortex compose logs --tail 20  # bounded compose logs
-cortex compose logs cortex --tail 20  # bounded logs for one service
-
-# Surface parity (2026-05-22) — each has a matching REST route documented below
-cortex hosts sources --limit 50
-cortex hosts silent --silent-minutes 60
-cortex state clockskew     --since 2026-05-20T00:00:00Z
-cortex analysis anomalies   --recent-minutes 30 --baseline-minutes 720
-cortex analysis compare     --a-from 2026-05-20T00:00:00Z --a-to 2026-05-20T23:59:59Z \
-                            --b-from 2026-05-21T00:00:00Z --b-to 2026-05-21T23:59:59Z
-cortex apps         --host dookie --limit 50
+docker network inspect cortex >/dev/null 2>&1 || docker network create cortex
+cp .env.example .env
+docker compose up -d
+curl -fsS http://127.0.0.1:3100/health
 ```
 
-### Skill, MCP, abuse, and hook assessment (`cortex assess`)
+The Compose files:
 
-`cortex assess` is the primary UX for LLM-guarded incident assessment. It
-runs through the LLM invocation guard (`LlmRunner` — rate-limited,
-circuit-breaker-protected, fully audited in `llm_invocations`) and, for
-`assess skill`/`assess mcp`/`assess hooks`, sources evidence from
-`investigate_ai_skill_incidents`/`investigate_ai_mcp_incidents`/
-`investigate_ai_hook_incidents` — purpose-built incident detectors, not a
-repurposed abuse-incident search.
+- Publish syslog on UDP/TCP 1514
+- Publish HTTP to host loopback by default
+- Persist the database in a stable named volume or configured bind mount
+- Run as a non-root UID/GID
+- Mount inventory SSH credentials and workspace data read-only
+- Mount a dedicated file-tail root read-only
+- Use a 2 GiB default memory limit, configurable per host
+- Include a health check and bounded container logs
+
+For managed installation and repair:
 
 ```bash
-# Assess the highest-priority incident touching a given skill
-cortex assess skill frustration-assessment
-
-# Narrow by tool/project/time window
-cortex assess skill frustration-assessment --since 7d --tool codex --project /home/jmagar/workspace/cortex
-
-# Assess every matching skill incident, not just the top one
-cortex assess skill frustration-assessment --all
-cortex assess skill frustration-assessment --limit 5
-
-# Filter by plugin instead of a single skill name
-cortex assess skill --plugin lavra --since 7d
-
-# Deterministic findings only — no Gemini call, safe to script/automate
-cortex assess skill frustration-assessment --no-llm
-
-# Assess the highest-priority incident touching a given MCP server/tool
-cortex assess mcp labby
-cortex assess mcp --tool-name mcp__labby__search --since 7d
-
-# Assess every matching MCP incident, not just the top one
-cortex assess mcp labby --all
-cortex assess mcp labby --no-llm
-
-# Abuse-incident assessment: auto-picks the top matching incident
-cortex assess abuse
-
-# Or assess a specific incident id
-cortex assess abuse --incident-id <id>
-
-# Hook assessment: auto-picks the top matching hook incident
-cortex assess hooks
-
-# Narrow to a known hook name / hook event
-cortex assess hooks --hook format-on-save --since 24h
-cortex assess hooks --hook-event PostToolUse --since 7d
-
-# Collect a fresh point-in-time hook config/trust-state inventory from the
-# local host BEFORE assessing (~/.claude/settings.json, ~/.codex/hooks.json,
-# ~/.codex/config.toml [hooks.state]) so config/trust evidence is available
-# alongside any runtime evidence
-cortex assess hooks --collect-config
-
-# Deterministic findings only
-cortex assess hooks --hook format-on-save --no-llm
+cortex setup check
+cortex setup repair
 ```
 
-`assess skill`, `assess mcp`, `assess abuse`, and `assess hooks` all run the
-guarded Gemini assessment step **by default** (matching `cortex sessions
-assess`'s existing behavior) — pass `--no-llm` to get deterministic
-findings only. The LLM step is **local-CLI-only**: `--http` mode is
-rejected unless `--no-llm` is also passed, since it spawns a Gemini
-subprocess on the local host via `LlmRunner`.
+### Host agents
 
-Hook assessment findings always include an `evidence_basis` field stating
-whether the incident is backed by proven `runtime_transcript` hook
-execution (Claude transcript `attachment.type = hook_*` rows) or only by
-`config_inventory`/`trusted_hash_state` evidence (configured/trusted hooks
-from `~/.claude/settings.json`, `~/.codex/hooks.json`, or
-`~/.codex/config.toml [hooks.state]`) — a configured hook is never treated
-as proof it executed. Codex has no observed runtime hook-execution shape
-yet, so Codex hook assessment is config/trust-state evidence only until a
-real structured runtime event shape is confirmed.
+Cortex includes setup and runtime support for satellite collection, including:
 
-Related commands:
-- `cortex sessions assess <incident_id>` — abuse-incident assessment by
-  explicit incident id (no auto-pick).
-- `cortex sessions skillassess <skill>` — same as `cortex assess skill`.
-- `cortex sessions skillinvestigate <skill>` — deterministic-only
-  skill-incident evidence command (no LLM step, ever); use this to inspect
-  evidence before deciding whether to spend an `assess skill` call.
-- `cortex sessions mcpassess <server-or-tool>` — same as `cortex assess mcp`.
-- `cortex sessions mcpinvestigate <server-or-tool>` — deterministic-only
-  MCP-incident evidence command (no LLM step, ever); use this to inspect
-  evidence before deciding whether to spend an `assess mcp` call.
-- `cortex sessions mcpevents` / `cortex sessions mcpincidents` — list raw
-  MCP tool-call events / grouped incident candidates without an evidence
-  bundle.
-- `cortex sessions hookevents [--hook NAME] [--hook-event EVENT]` —
-  list raw `ai_hook_events` rows (runtime + config inventory).
-- `cortex sessions hookincidents [HOOK]` / `cortex sessions hookinvestigate HOOK` —
-  list and investigate negative signals around hook execution.
-- `cortex sessions hooksbackfill [--since TIME] [--dry-run]` — bounded,
-  idempotent backfill of Claude runtime hook events from existing
-  transcript history (config-inventory rows are not backfilled — they are
-  a point-in-time host read via `--collect-config`).
+- Heartbeat agents
+- Docker stream agents
+- AI-session watch services and timers
+- Shell-history forwarding
+- Agent-command forwarding
+- Completion and debug wrappers
 
-### REST endpoints (2026-05-22 surface parity)
+Use `cortex setup --help`, `cortex ingest --help`, and `cortex heartbeat --help` for the exact platform-specific command tree.
 
-The 12 new routes mirror existing MCP actions one-for-one. All require the
-`CORTEX_API_TOKEN` bearer; AI endpoints with `terms[]=` parameters are served
-via `serde_qs` to handle repeated keys.
+## Operations
 
-```
-GET  /api/silent-hosts?silent_minutes=60
-GET  /api/clock-skew?since=<RFC3339>
-GET  /api/anomalies?recent_minutes=15&baseline_minutes=360
-GET  /api/compare?a_from=...&a_to=...&b_from=...&b_to=...
-GET  /api/apps?hostname=&from=&to=&limit=&offset=
-GET  /api/similar-incidents?query=...&window_minutes=30
-GET  /api/incident-context?from=...&to=...
-GET  /api/sessions/incidents?terms[]=foo&terms[]=bar
-GET  /api/sessions/investigate?correlation_window_minutes=30
-GET  /api/graph/entity?entity_type=host&key=tootie
-GET  /api/graph/around?entity_type=host&key=tootie&depth=1
-GET  /api/graph/explain?entity_type=host&key=tootie&depth=2
-GET  /api/compose/status
-GET  /api/compose/doctor
-```
-
-`/api/compose/status` is a redacted read-only projection and can report
-`runtime_state="docker_unavailable"` when Docker inspection is unavailable from
-inside the container. `/api/compose/doctor` is stricter: unready Docker,
-ownership, or runtime states return HTTP 503 with the same structured projection.
-
-`cortex compose` commands resolve the live Compose owner before mutation. They refuse ambiguous cwd fallback, stale Compose labels, listener conflicts, and destructive `down` without `--yes`.
-
-See [docs/CLI.md](docs/CLI.md) for the full direct CLI reference, including flags, JSON output, and how CLI commands map to MCP actions.
-
----
-
-## Syslog Forwarder Setup
-
-The server listens on port `1514` by default. Configure senders to forward to this port. If a device cannot use a non-privileged port, see [Exposing port 514](#exposing-port-514).
-
-### rsyslog
-
-Create `/etc/rsyslog.d/99-remote.conf` on each host:
-
-```conf
-# TCP (reliable, recommended for persistent connections)
-*.* @@CORTEX_SERVER:1514
-
-# UDP (lower overhead, no delivery guarantee)
-# *.* @CORTEX_SERVER:1514
-```
-
-Restart: `sudo systemctl restart rsyslog`
-
-For hosts running pure journald without rsyslog, first enable forwarding in `/etc/systemd/journald.conf`:
-
-```ini
-[Journal]
-ForwardToSyslog=yes
-```
-
-Then install and configure rsyslog as above.
-
-### syslog-ng
-
-Add to `/etc/syslog-ng/conf.d/remote.conf`:
-
-```conf
-destination d_remote_tcp {
-    network("CORTEX_SERVER"
-        port(1514)
-        transport("tcp")
-    );
-};
-
-destination d_remote_udp {
-    network("CORTEX_SERVER"
-        port(1514)
-        transport("udp")
-    );
-};
-
-log {
-    source(s_src);
-    destination(d_remote_tcp);
-};
-```
-
-Restart: `sudo systemctl restart syslog-ng`
-
-### WSL2 (systemd enabled)
-
-Enable systemd in `/etc/wsl.conf`:
-
-```ini
-[boot]
-systemd=true
-```
-
-Install rsyslog and use the rsyslog config above. Use the Tailscale IP of the cortex host — WSL has its own network namespace and cannot reach the Docker host IP directly.
-
-### UniFi Cloud Gateway
-
-Option A — via SSH:
+Common operator commands:
 
 ```bash
-ssh admin@<gateway-ip>
-# Create /etc/rsyslog.d/remote.conf (persists on newer firmware):
-echo "*.* @CORTEX_SERVER:1514" | sudo tee /etc/rsyslog.d/remote.conf
-sudo systemctl restart rsyslog
-```
-
-Option B — via UI (survives firmware updates):
-
-Settings → System → Advanced → Remote Syslog Server. Set host and port `1514`.
-
-### Routers and appliances (UDP-only devices)
-
-Set the syslog server address to your `CORTEX_SERVER` and port to `1514` in the device's syslog settings. Most consumer routers and network appliances expose this under Diagnostics or Logging settings.
-
-### Exposing port 514
-
-Syslog's privileged port 514 requires root or `CAP_NET_BIND_SERVICE`. The recommended approach is to redirect at the host with iptables:
-
-```bash
-# Redirect UDP and TCP 514 → 1514 on the host
-sudo iptables -t nat -A PREROUTING -p udp --dport 514 -j REDIRECT --to-port 1514
-sudo iptables -t nat -A PREROUTING -p tcp --dport 514 -j REDIRECT --to-port 1514
-
-# Persist across reboots (Debian/Ubuntu)
-sudo apt install iptables-persistent
-sudo netfilter-persistent save
-```
-
-For Docker Compose, set `CORTEX_RECEIVER_HOST_PORT=514` to publish host port `514` while the container keeps binding unprivileged port `1514`. On Unraid, map host port `514` to container port `1514` for both UDP and TCP in the Docker template (`514:1514/udp` and `514:1514/tcp`).
-
-### Firewall rules
-
-Open the syslog port on the Docker host firewall:
-
-```bash
-# ufw
-sudo ufw allow 1514/udp
-sudo ufw allow 1514/tcp
-
-# firewalld
-sudo firewall-cmd --permanent --add-port=1514/udp
-sudo firewall-cmd --permanent --add-port=1514/tcp
-sudo firewall-cmd --reload
-```
-
----
-
-## Heartbeats
-
-The heartbeat agent is a small host-local loop (the same `cortex` binary) that collects bounded system state (load, memory, disk, top processes) and POSTs it to the server's `POST /v1/heartbeats` endpoint on port 3100 every 30 seconds. Heartbeat rows feed the `host_state`, `fleet_state`, and `correlate_state` MCP actions and are retained for 14 days.
-
-Install it as a user systemd service on each fleet host:
-
-```bash
-cortex setup heartbeatagent install   # write + enable the systemd unit
-cortex setup heartbeatagent check     # inspect unit/env state
-cortex setup heartbeatagent remove    # remove the unit
-cortex heartbeat agent --once --emit   # one-shot foreground run for debugging
-```
-
-Configuration:
-
-- `CORTEX_HEARTBEAT_TARGET` — server base URL (default `http://127.0.0.1:3100`; falls back to `CORTEX_URL`)
-- `CORTEX_HEARTBEAT_TOKEN` — bearer token sent with each POST (falls back to `CORTEX_TOKEN`)
-
-When the server has `CORTEX_TOKEN` set, heartbeat POSTs must carry that token; on an unauthenticated loopback-only server no token is needed.
-
----
-
-## OTLP Ingest
-
-The shared HTTP listener on port 3100 also accepts OpenTelemetry logs at `POST /v1/logs` (logs only — `/v1/metrics` and `/v1/traces` return 404). The endpoint decodes **binary protobuf** (`ExportLogsServiceRequest`; OTLP/JSON is not supported) and enforces a **4 MiB** request body limit (413 responses include `Retry-After: 86400`).
-
-Auth matches MCP: when `CORTEX_TOKEN` is set, requests need `Authorization: Bearer <token>`. Exposing `/v1/logs` on a non-loopback bind without a static bearer token is blocked at startup (OAuth JWTs do not authorize OTLP ingest today).
-
-Minimal OpenTelemetry Collector exporter config:
-
-```yaml
-exporters:
-  otlphttp/cortex:
-    endpoint: http://CORTEX_SERVER:3100
-    encoding: proto
-    headers:
-      Authorization: "Bearer ${env:CORTEX_TOKEN}"
-
-service:
-  pipelines:
-    logs:
-      exporters: [otlphttp/cortex]
-```
-
----
-
-## Retention Policy
-
-Logs are retained for `CORTEX_RETENTION_DAYS` days (default `90`). Set to `0` to disable the global age-based purge (the AdGuard and heartbeat caps below still apply).
-
-The retention purge runs **hourly** (the separate storage-budget enforcement loop runs on `CORTEX_CLEANUP_INTERVAL_SECS`). It deletes logs in chunks of 10,000 rows, releasing the write lock between chunks so ingest can proceed. Retention cutoff uses `received_at` (the server-side ingestion timestamp), not the `timestamp` in the message. This prevents devices with misconfigured clocks from causing premature or indefinite retention.
-
-Severity-based exemptions and per-source caps:
-
-- **err+ exemption** — rows with `severity IN (err, crit, alert, emerg)` are never aged out by retention. They can still be deleted under DB-size pressure, but only outside the err+ floor (`CORTEX_ERR_FLOOR_WINDOW_HOURS=24`, `CORTEX_ERR_FLOOR_PER_SOURCE_CAP=10000`).
-- **AdGuard tags** — `adguard-allowed` / `adguard-query` / `adguard-rewrite` rows are hard-capped at **7 days** regardless of `retention_days` (DNS query volume would otherwise dominate the FTS index).
-- **Heartbeats** — heartbeat telemetry rows are capped at **14 days**.
-
-After large deletions, an incremental FTS5 merge runs to reclaim index space without long write-lock durations.
-
----
-
-## Storage Budget Enforcement
-
-Two independent guards protect against disk exhaustion:
-
-**DB size guard** (`CORTEX_MAX_DB_SIZE_MB`, default 1024 MB — enabled)
-
-When the logical SQLite DB size exceeds `max_db_size_mb`, the oldest logs are deleted in chunks of `CORTEX_CLEANUP_CHUNK_SIZE` rows until the size drops below `recovery_db_size_mb`. High-severity rows inside the err+ floor (`CORTEX_ERR_FLOOR_WINDOW_HOURS=24`, capped at `CORTEX_ERR_FLOOR_PER_SOURCE_CAP=10000` rows per source IP) are excluded from the deletable set.
-
-**Free disk guard** (`CORTEX_MIN_FREE_DISK_MB`, default 0 — **disabled**)
-
-Whole-filesystem free space is an external condition cortex cannot fix by deleting its own data, so a free-disk breach **blocks new writes** rather than self-trimming. Writes resume once free disk rises above `recovery_free_disk_mb` (hysteresis prevents oscillation). Enable by setting both `min_free_disk_mb` and a higher `recovery_free_disk_mb`.
-
-**Write-blocking behavior**
-
-If enforcement cannot free enough space (or the free-disk guard trips), the batch writer enters write-blocked state. New log messages accumulate in an in-memory buffer (`CORTEX_WRITE_CHANNEL_CAPACITY`, default 10,000 messages). Writes resume automatically when space recovers. The `write_blocked` field in `cortex stats` reflects the current state.
-
-Disable either guard by setting its trigger to `0` (also set the recovery target to `0`).
-
-### Heavy SQLite migrations
-
-Most schema setup runs automatically during startup. Heavy migrations, such as creating a new index on a populated multi-million-row `logs` table, can hold SQLite's write lock for several minutes before syslog listeners and `/health` are available. During that window TCP senders may back up and UDP packets may be dropped by kernel buffers.
-
-Before upgrading a populated database:
-
-1. Take a WAL-safe backup with `scripts/backup.sh` or `sqlite3 /data/cortex.db ".backup /data/syslog-pre-upgrade.db"`.
-2. Schedule a short ingest maintenance window for large databases.
-3. Start the new version and monitor logs for `Migration N: starting ...` and `Migration N: ... created`.
-4. Keep the previous image or binary available until `/health` returns `ok` and `cortex stats` reports sane counts.
-5. **Upgrading across migration 41 (canonical entity resolution):** the inventory graph projection is marked stale and legacy `service` entities are pruned. Run `cortex graph rebuild` (or wait for the projection scheduler when `CORTEX_GRAPH_REFRESH_INTERVAL_SECS > 0`) before expecting `topic_correlate` service results — until the rebuild, a resolved logical service with no instances reports `resolver_status: degraded` with an empty service timeline.
-
-See [docs/RELEASE.md](docs/RELEASE.md) for the current release and deploy
-gate checklist.
-
----
-
-## Batch Writer
-
-The batch writer improves throughput by collecting parsed syslog messages into batches before writing to SQLite.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CORTEX_BATCH_SIZE` | `100` | Write when this many messages are queued |
-| `CORTEX_FLUSH_INTERVAL` | `500` ms | Write every N ms even if batch is not full |
-| `CORTEX_WRITE_CHANNEL_CAPACITY` | `10000` | Parsed-message queue capacity before listener backpressure |
-
-Batches are written in a single SQLite transaction. If the DB is busy (locked), the writer retries up to 3 times with exponential backoff (25 ms, 100 ms, 250 ms). Batches that fail insertion are retained in memory and retried on the next flush cycle. If a retained batch grows beyond 1,000 entries, it is discarded to prevent unbounded memory growth.
-
-The internal write channel holds up to `CORTEX_WRITE_CHANNEL_CAPACITY` parsed messages. When the channel is full, backpressure is logged and further UDP/TCP receives block until space is available.
-
----
-
-## Multi-Host Deployment
-
-Point multiple hosts at the same cortex instance. Each sender's `hostname` field (from the syslog message) is recorded and indexed. Use `cortex hosts` to see all senders. Filter by `hostname` in `cortex search` and `cortex tail`. Use `cortex correlate events` to find related events across hosts within a time window.
-
-For large fleets, consider:
-- Increasing `CORTEX_POOL_SIZE` (default 8) for higher read concurrency
-- Increasing `CORTEX_BATCH_SIZE` and `CORTEX_FLUSH_INTERVAL` to reduce write overhead
-- Setting `CORTEX_RETENTION_DAYS` to balance history depth against disk cost
-
----
-
-## Time Synchronization
-
-All timestamps are stored in UTC. `cortex correlate events` uses the `timestamp` field from the syslog message, which reflects the sending device's clock. Devices with drifted clocks will have their events shifted relative to the correlation window. Run NTP on all senders to minimize skew. `received_at` (the server-side ingestion time) is unaffected by sender clock drift and is used for retention.
-
----
-
-## HTTPS / Reverse Proxy
-
-Add a SWAG proxy conf to expose the MCP API over TLS:
-
-```nginx
-# /config/nginx/proxy-confs/cortex.subdomain.conf
-server {
-    listen 443 ssl;
-    server_name cortex.*;
-
-    include /config/nginx/ssl.conf;
-
-    location / {
-        include /config/nginx/proxy.conf;
-        include /config/nginx/resolver.conf;
-
-        # RMCP Streamable HTTP in stateless JSON-response mode.
-        # Clients use POST /mcp; GET/DELETE /mcp are not supported.
-        proxy_http_version 1.1;
-
-        set $upstream_app cortex;
-        set $upstream_port 3100;
-        set $upstream_proto http;
-        proxy_pass $upstream_proto://$upstream_app:$upstream_port;
-    }
-}
-```
-
----
-
-## Development
-
-```bash
-just dev       # cargo run -- serve mcp
-just check     # cargo check
-just lint      # cargo clippy -- -D warnings
-just fmt       # cargo fmt
-just test      # cargo test
-just build     # cargo build
-just release   # cargo build --release
-```
-
-Docker:
-
-```bash
-just up        # docker compose up -d
-just logs      # docker compose logs -f
-just down      # docker compose down
-just restart   # docker compose restart
+# Health and diagnostics
+cortex status
+cortex doctor
+cortex doctor binary
+
+# Managed setup
+cortex setup check
+cortex setup repair
+
+# Database operations
+cortex db status
+cortex db integrity
+cortex db checkpoint
+cortex db backup --help
+cortex db vacuum --help
+
+# Compose lifecycle
+cortex compose status
 cortex compose doctor
-cortex compose status --json
-cortex compose logs --tail 20
+cortex compose pull
+cortex compose up
+cortex compose restart
+cortex compose logs
+
+# Collection and inventory
+cortex ingest inventory status --json
+cortex ingest inventory refresh --json
+cortex ingest filetail list
+cortex sessions doctor
+
+# Updates and configuration
+cortex update --help
+cortex config list
+cortex completions zsh
 ```
 
-Generate a bearer token:
+The daemon exposes minimal and full health responses, records database maintenance jobs, reports projection and collector degradation, and surfaces ingest queue and write-block state through CLI, REST, and MCP.
+
+## Development and verification
+
+### Tooling
+
+The repository uses:
+
+- Rust edition 2024
+- `mise` for pinned development tools
+- `just` for common workflows
+- `cargo-nextest` for the hermetic Rust suite
+- `cargo-llvm-cov` for coverage
+- `cargo-deny` for dependency policy
+- Lefthook and `cargo xtask` for local release and pre-push checks
+- A custom soldr-backed Rust compiler wrapper for fast local and CI builds
+
+### Common commands
 
 ```bash
-just gen-token   # openssl rand -hex 32
-```
-
----
-
-## Verification
-
-After deploying, verify the stack:
-
-```bash
-# Health probe (no auth required)
-curl -sf http://localhost:3100/health | jq .
-# → {"status":"ok"}
-
-# Send a test message from any Linux host
-logger -n CORTEX_SERVER -P 1514 --tcp "test from $(hostname)"
-
-# Tail recent logs via MCP (replace token if auth is enabled)
-curl -s -X POST http://localhost:3100/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-      "method": "tools/call",
-      "params": {
-      "name": "cortex",
-      "arguments": {"action": "tail", "n": 10}
-    }
-  }' | jq .
-
-# DB stats
-curl -s -X POST http://localhost:3100/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/call",
-    "params": {"name": "cortex", "arguments": {"action": "stats"}}
-  }' | jq .result.content[0].text | jq -r . | jq .
-```
-
-Run the full test suite:
-
-```bash
+mise install
+just dev
+just build
 just check
 just lint
+just fmt
 just test
+just test-doc
+just coverage
+just coverage-html
+just test-live
+just validate-plugin
+cargo xtask pre-push
 ```
 
-Run the live smoke test against a running server:
+`just test-live` is the canonical end-to-end smoke harness. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, MCP calls, CLI and REST parity, and managed file-tail behavior. Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
 
-```bash
-bash scripts/smoke-test.sh
-```
+CI gates include:
 
-The smoke test seeds UDP and TCP syslog messages and verifies MCP search/tail results. Docker log coverage is split by path: host-local agent parity is covered by agent deployment tests, the default live smoke covers file-tail/REST/CLI paths, and legacy central pull coverage uses the mocked Docker HTTP fixture or an explicit Docker-compatible endpoint.
+- Formatting
+- Clippy with warnings denied
+- Nextest and doctests
+- Version and distribution identity synchronization
+- MCP integration
+- npm launcher checks
+- Secret scanning
+- `cargo-deny`
+- Coverage generation
+- Repository module-size policy
 
----
-
-## Performance
-
-At typical homelab scale (1–20 hosts, thousands of messages per day):
-
-- SQLite with WAL mode handles concurrent reads and writes without contention
-- The batch writer sustains thousands of messages per second on commodity hardware
-- FTS5 with porter stemming adds minimal overhead over plain SQL queries
-- `PRAGMA cache_size=-64000` allocates ~64 MB page cache per connection
-- `PRAGMA synchronous=NORMAL` balances durability and throughput
-- Connection pool (default 8) satisfies concurrent MCP requests without blocking
-
-For higher ingest rates (IoT, high-traffic network devices):
-
-- Increase `CORTEX_BATCH_SIZE` (e.g. `500`) to reduce transaction overhead
-- Increase `CORTEX_FLUSH_INTERVAL` (e.g. `1000` ms) to widen batch windows
-- Increase `CORTEX_WRITE_CHANNEL_CAPACITY` (e.g. `100000`) to absorb bursts
-- Increase `CORTEX_POOL_SIZE` (e.g. `8`) for more read concurrency
-- Place the database on an SSD or tmpfs-backed volume
-
----
-
-## MCP Transport
-
-The daemon implements MCP through RMCP Streamable HTTP in stateless JSON-response mode.
-
-- `POST /mcp` — RMCP Streamable HTTP request/response endpoint
-- `GET /mcp` and `DELETE /mcp` — `405 Method Not Allowed` in stateless mode
-- `GET /health` — unauthenticated health probe
-- `cortex mcp` — local query-only stdio MCP mode for clients that launch MCP servers as child processes
-
-When `CORTEX_TOKEN` is set, `/mcp` requires:
-
-```
-Authorization: Bearer <token>
-```
-
-`/health` is always unauthenticated (required for Docker health checks and reverse-proxy probes).
-
-Stdio mode does not use bearer auth because it is local child-process access. It does require `CORTEX_DB_PATH` to point at the same SQLite database populated by the daemon:
-
-```json
-{
-  "mcpServers": {
-    "cortex": {
-      "command": "/path/to/cortex",
-      "args": ["mcp"],
-      "env": {
-        "CORTEX_DB_PATH": "/data/cortex.db",
-        "RUST_LOG": "warn"
-      }
-    }
-  }
-}
-```
-
-Use `mcp-remote` instead of direct stdio when the database is only reachable through the running HTTP daemon or a reverse proxy.
-
-The Docker image remains daemon-focused and exposes HTTP MCP via `cortex serve mcp`; use `cortex mcp` on a host that can read the SQLite DB for direct local stdio.
-
----
+See [tests/TEST_COVERAGE.md](tests/TEST_COVERAGE.md) and [docs/RELEASE.md](docs/RELEASE.md) for the split between hermetic CI and live-fleet verification.
 
 ## Documentation
 
-This README is curated for first-run orientation. Source-of-truth docs and code
-are split by responsibility:
+The code-owned registries and runtime schemas are authoritative for command names, actions, routes, scopes, defaults, and validation. Human documentation explains how to operate those surfaces.
 
-| File | Description |
-|------|-------------|
-| `Cargo.toml` | Crate metadata and dependency surface |
-| `config.toml` | Default runtime configuration |
-| `.env.example` | Canonical environment variable reference |
-| `docs/CONFIG.md` | Full configuration and environment reference |
-| `docs/mcp/SCHEMA.md` | Curated action reference backed by runtime schema drift tests |
-| `docs/mcp/CORRELATION.md` | Correlation behavior and AI/non-AI inclusion rules |
-| `docs/mcp/MCPUI.md` | MCP Apps query widget wire contract |
-| `docs/SETUP.md` | Per-device syslog forwarder setup notes |
-| `CHANGELOG.md` | Release history |
-| `config/Dockerfile` | Container image definition |
-| `docker-compose.yml` | Docker Compose stack |
-| `Justfile` | Development command shortcuts |
-| `src/main.rs` | `cortex` binary entrypoint for HTTP and stdio MCP modes |
-| `src/lib.rs` | Reusable library boundary |
-| `src/app/` | Shared typed log application service |
-| `src/runtime.rs` | Config, DB, syslog, and maintenance orchestration |
-| `src/api.rs` | Always-on non-MCP JSON API routes (`/api/*`, token-gated) |
-| `src/config.rs` | Configuration loading and validation |
-| `src/db.rs` + `src/db/` | SQLite schema, FTS5, retention, storage budget |
-| `src/syslog.rs` + `src/syslog/` | UDP/TCP listeners, syslog parser, batch writer |
-| `src/mcp.rs` + `src/mcp/` | MCP HTTP server, RMCP adapter, auth middleware, tools, health endpoint |
-| `.claude-plugin/plugin.json` | Claude plugin manifest |
+| Document | Purpose |
+| --- | --- |
+| [docs/README.md](docs/README.md) | Documentation index and authority map |
+| [docs/SETUP.md](docs/SETUP.md) | Installation and deployment walkthrough |
+| [docs/CONFIG.md](docs/CONFIG.md) | Complete configuration reference |
+| [docs/CLI.md](docs/CLI.md) | CLI reference |
+| [docs/api.md](docs/api.md) | REST API reference |
+| [docs/architecture.md](docs/architecture.md) | Runtime and data-flow architecture |
+| [docs/mcp/SCHEMA.md](docs/mcp/SCHEMA.md) | MCP action and parameter schema |
+| [docs/mcp/PROMPTS.md](docs/mcp/PROMPTS.md) | Prompt catalog |
+| [docs/SECURITY.md](docs/SECURITY.md) | Consolidated trust model |
+| [docs/OAUTH.md](docs/OAUTH.md) | OAuth configuration |
+| [docs/INVENTORY.md](docs/INVENTORY.md) | Component and surface inventory |
+| [docs/RELEASE.md](docs/RELEASE.md) | Release and verification gates |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 
----
+Design plans, runbooks, and session logs under `docs/plans`, `docs/runbooks`, and `docs/sessions` are valuable engineering history, but they are not the source of truth for the current public interface.
 
-## Related plugins
+## Current boundaries
 
-| Plugin | Category | Description |
-|--------|----------|-------------|
-| [homelab-core](https://github.com/jmagar/claude-homelab) | core | Core agents, commands, skills, and setup/health workflows for homelab management. |
-| [overseerr-mcp](https://github.com/jmagar/overseerr-mcp) | media | Search movies and TV shows, submit requests, and monitor failed requests via Overseerr. |
-| [unraid-rmcp](https://github.com/jmagar/unraid-rmcp) | infrastructure | Query, monitor, and manage Unraid servers: Docker, VMs, array, parity, and live telemetry. |
-| [unifi-rmcp](https://github.com/jmagar/unifi-rmcp) | infrastructure | Monitor and manage UniFi devices, clients, firewall rules, and network health. |
-| [gotify-rmcp](https://github.com/jmagar/gotify-rmcp) | utilities | Send and manage push notifications via a self-hosted Gotify server. |
-| [swag-mcp](https://github.com/jmagar/swag-mcp) | infrastructure | Create, edit, and manage SWAG nginx reverse proxy configurations. |
-| [synapse-rmcp](https://github.com/jmagar/synapse-rmcp) | infrastructure | Docker management (Flux) and SSH remote operations (Scout) across homelab hosts. |
-| [arcane-rmcp](https://github.com/jmagar/arcane-rmcp) | infrastructure | Manage Docker environments, containers, images, volumes, networks, and GitOps via Arcane. |
-| [plugin-lab](https://github.com/jmagar/plugin-lab) | dev-tools | Scaffold, review, align, and deploy homelab MCP plugins with agents and canonical templates. |
+Cortex is intentionally opinionated:
 
-## Related Servers
-
-- [soma](https://github.com/jmagar/soma) - RMCP runtime for provider-backed MCP servers.
-- [unifi-rmcp](https://github.com/jmagar/unifi-rmcp) - UniFi controller REST API bridge.
-- [tailscale-rmcp](https://github.com/jmagar/tailscale-rmcp) - Tailscale API bridge for devices, users, and tailnet operations.
-- [unraid-rmcp](https://github.com/jmagar/unraid-rmcp) - Unraid GraphQL bridge for NAS and server management.
-- [apprise-rmcp](https://github.com/jmagar/apprise-rmcp) - Apprise notification fan-out bridge for many delivery backends.
-- [gotify-rmcp](https://github.com/jmagar/gotify-rmcp) - Gotify push notification bridge for sends, messages, apps, and clients.
-- [arcane-rmcp](https://github.com/jmagar/arcane-rmcp) - Arcane Docker management bridge for containers and related resources.
-- [yarr](https://github.com/jmagar/yarr) - Media-stack bridge for Sonarr, Radarr, Prowlarr, Plex, and related services.
-- [ytdl-rmcp](https://github.com/jmagar/ytdl-rmcp) - Media download and metadata workflow server.
-- [synapse-rmcp](https://github.com/jmagar/synapse-rmcp) - Local Synapse workflow server for scout and flux actions.
-- [axon](https://github.com/jmagar/axon) - RAG, crawl, scrape, extract, and semantic search project.
-- [labby](https://github.com/jmagar/labby) - Homelab control plane and MCP gateway project.
-- [lumen](https://github.com/jmagar/lumen) - Local semantic code search MCP server.
+- It is a single-node SQLite service, not a distributed ingestion cluster.
+- OTLP support is logs-over-HTTP only. Traces, metrics, and OTLP/gRPC are outside the current implementation.
+- Syslog does not authenticate senders. Network and CIDR controls matter.
+- The graph is derived evidence, not authoritative configuration state.
+- MCP and REST expose bounded operations, not arbitrary SQL or unaudited log mutation.
+- LLM-backed assessments are local-only and require an operator-controlled Gemini environment.
+- Central Docker pull requires privileged read access to Docker endpoints and is disabled by default.
+- Inventory quality depends on collector access, SSH trust, optional API credentials, and cache freshness.
+- The bundled browser app is an investigation workspace preview, not a full monitoring dashboard.
+- Cortex is built for a homelab or small trusted fleet. Internet-facing or multi-tenant deployment requires additional isolation and policy outside the binary.
 
 ## License
 
-MIT
+Cortex is available under the [MIT License](LICENSE).
