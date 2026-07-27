@@ -19,24 +19,39 @@ patterns=(
   'x-syslog-action-metadata'
   'x-syslog-agent-guidance'
 )
+source_identity_patterns=(
+  'github.com/jmagar/cortex'
+  'raw.githubusercontent.com/jmagar/cortex'
+)
 
 tracked_current_files=()
+tracked_source_identity_files=()
 while IFS= read -r path; do
+  # Directory symlinks such as .beads and .lavra point outside this repository.
+  # Their targets are operational history, not current public product surfaces.
+  if [ -L "$path" ]; then
+    continue
+  fi
   case "$path" in
     scripts/check-public-identity.sh)
       continue
       ;;
-    docs/plans/*|docs/runbooks/*|docs/sessions/*|docs/superpowers/*|CHANGELOG.md)
-      # Archival/historical docs intentionally preserve old project names.
+    .beads/*|docs/plans/*|docs/runbooks/*|docs/sessions/*|docs/superpowers/*|CHANGELOG.md)
+      # Archival issue data and historical docs intentionally preserve old names.
       continue
       ;;
+    *)
+      tracked_source_identity_files+=("$path")
+      ;;
+  esac
+  case "$path" in
     CLAUDE.md|README.md|server.json|mcpb/manifest.json|config/*|scripts/*|.github/*|.claude-plugin/*|plugins/*|docs/*)
       tracked_current_files+=("$path")
       ;;
   esac
 done < <(git ls-files)
 
-if [ "${#tracked_current_files[@]}" -eq 0 ]; then
+if [ "${#tracked_current_files[@]}" -eq 0 ] || [ "${#tracked_source_identity_files[@]}" -eq 0 ]; then
   echo "[public-identity] FAIL — no tracked current files selected for scan" >&2
   exit 1
 fi
@@ -46,11 +61,17 @@ search_status_error=2
 search_current_files() {
   grep -nF -- "$1" "${tracked_current_files[@]}"
 }
+search_source_identity_files() {
+  grep -nF -- "$1" "${tracked_source_identity_files[@]}"
+}
 
 if command -v rg >/dev/null 2>&1; then
   search_name="rg"
   search_current_files() {
     rg -n --fixed-strings -- "$1" "${tracked_current_files[@]}"
+  }
+  search_source_identity_files() {
+    rg -n --fixed-strings -- "$1" "${tracked_source_identity_files[@]}"
   }
 fi
 
@@ -61,6 +82,23 @@ for pattern in "${patterns[@]}"; do
   set -e
   if [ "$search_status" -eq 0 ]; then
     echo "[public-identity] FAIL — stale identity token found: $pattern" >&2
+    status=1
+  elif [ "$search_status" -eq "$search_status_error" ]; then
+    echo "[public-identity] FAIL — $search_name failed while scanning for: $pattern" >&2
+    status=1
+  elif [ "$search_status" -ne 1 ]; then
+    echo "[public-identity] FAIL — unexpected $search_name exit $search_status while scanning for: $pattern" >&2
+    status=1
+  fi
+done
+
+for pattern in "${source_identity_patterns[@]}"; do
+  set +e
+  search_source_identity_files "$pattern"
+  search_status=$?
+  set -e
+  if [ "$search_status" -eq 0 ]; then
+    echo "[public-identity] FAIL — stale source repository identity found: $pattern" >&2
     status=1
   elif [ "$search_status" -eq "$search_status_error" ]; then
     echo "[public-identity] FAIL — $search_name failed while scanning for: $pattern" >&2

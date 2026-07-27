@@ -100,7 +100,7 @@ pub(crate) async fn run_sessions_watch_health_check_and_notify(
 fn doctor_service_unit(cortex_bin: &Path) -> io::Result<String> {
     let cortex_bin = setup_path_value(cortex_bin)?;
     Ok(format!(
-        "[Unit]\nDescription=cortex sessions-watch periodic health check\nDocumentation=https://github.com/jmagar/cortex\n\n[Service]\nType=oneshot\nExecStart={cortex_bin} setup sessionshealth --json\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=cortex sessions-watch periodic health check\nDocumentation=https://github.com/dinglebear-ai/cortex\n\n[Service]\nType=oneshot\nExecStart={cortex_bin} setup sessionshealth --json\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\n\n[Install]\nWantedBy=default.target\n"
     ))
 }
 

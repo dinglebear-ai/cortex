@@ -79,6 +79,22 @@ fn plugin_skill_changes_enable_skill_and_release_gates() {
 }
 
 #[test]
+fn launcher_and_installer_changes_enable_release_checks() {
+    for file in [
+        "packages/cortex-rmcp/package.json",
+        "install.sh",
+        "install.ps1",
+    ] {
+        let out = classify("pull_request", &[file]);
+        assert_eq!(
+            out["release"], "true",
+            "{file} should enable release checks"
+        );
+        assert_eq!(out["rust"], "false", "{file} should not force Rust tests");
+    }
+}
+
+#[test]
 fn workflow_router_changes_force_full_ci() {
     for file in [
         ".github/workflows/ci.yml",

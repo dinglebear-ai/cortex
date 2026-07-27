@@ -285,7 +285,7 @@ pub(crate) fn ai_watch_service_unit(
     let db_dir = setup_path_value(db_dir).expect("validated AI watch DB directory");
     let state_dir = setup_path_value(state_dir).expect("validated AI watch state directory");
     format!(
-        "[Unit]\nDescription=cortex real-time local AI transcript watch\nDocumentation=https://github.com/jmagar/cortex\nAfter=default.target\nStartLimitIntervalSec=600\nStartLimitBurst=20\n\n[Service]\nType=simple\nEnvironmentFile={env_path}\nEnvironment=PATH={user_local_bin}:{user_cargo_bin}:/usr/local/bin:/usr/bin:/bin\nEnvironment=CARGO_TARGET_DIR={cargo_target_dir}\nWorkingDirectory=/\nExecStart={cortex_bin} sessions watch --no-initial-scan --json\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nBindReadOnlyPaths=-{claude_root} -{codex_root} -{gemini_root}\nBindPaths={db_dir} {state_dir}\nReadWritePaths={db_dir} {state_dir}\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=cortex real-time local AI transcript watch\nDocumentation=https://github.com/dinglebear-ai/cortex\nAfter=default.target\nStartLimitIntervalSec=600\nStartLimitBurst=20\n\n[Service]\nType=simple\nEnvironmentFile={env_path}\nEnvironment=PATH={user_local_bin}:{user_cargo_bin}:/usr/local/bin:/usr/bin:/bin\nEnvironment=CARGO_TARGET_DIR={cargo_target_dir}\nWorkingDirectory=/\nExecStart={cortex_bin} sessions watch --no-initial-scan --json\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nBindReadOnlyPaths=-{claude_root} -{codex_root} -{gemini_root}\nBindPaths={db_dir} {state_dir}\nReadWritePaths={db_dir} {state_dir}\n\n[Install]\nWantedBy=default.target\n"
     )
 }
 

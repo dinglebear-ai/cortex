@@ -3,14 +3,14 @@
   "version": "3.11.1",
   "description": "Node launcher for Cortex, a Rust MCP/HTTP log aggregation and AI transcript correlation platform.",
   "license": "MIT",
-  "homepage": "https://github.com/jmagar/cortex#readme",
+  "homepage": "https://github.com/dinglebear-ai/cortex#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jmagar/cortex.git",
+    "url": "git+https://github.com/dinglebear-ai/cortex.git",
     "directory": "packages/cortex-rmcp"
   },
   "bugs": {
-    "url": "https://github.com/jmagar/cortex/issues"
+    "url": "https://github.com/dinglebear-ai/cortex/issues"
   },
   "bin": {
     "cortex-rmcp": "bin/cortex.js",

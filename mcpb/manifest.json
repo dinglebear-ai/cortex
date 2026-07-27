@@ -12,9 +12,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/jmagar/cortex"
+    "url": "https://github.com/dinglebear-ai/cortex"
   },
-  "documentation": "https://github.com/jmagar/cortex/tree/main/docs/mcp",
+  "documentation": "https://github.com/dinglebear-ai/cortex/tree/main/docs/mcp",
   "server": {
     "type": "binary",
     "entry_point": "server/cortex",

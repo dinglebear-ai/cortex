@@ -161,7 +161,7 @@ export RUST_LOG="${RUST_LOG:-warn}"
 
 pub(crate) fn ai_index_service_unit(bin_path: &Path) -> String {
     format!(
-        "[Unit]\nDescription=cortex local AI transcript index\nDocumentation=https://github.com/jmagar/cortex\n\n[Service]\nType=oneshot\nExecStart={}\n",
+        "[Unit]\nDescription=cortex local AI transcript index\nDocumentation=https://github.com/dinglebear-ai/cortex\n\n[Service]\nType=oneshot\nExecStart={}\n",
         bin_path.display()
     )
 }

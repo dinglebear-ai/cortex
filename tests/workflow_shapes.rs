@@ -16,6 +16,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "fmt",
         "clippy",
         "test",
+        "docs-contract",
         "coverage",
         "deny",
         "mcp-integration",
@@ -31,6 +32,14 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         );
     }
 
+    let docs_contract = workflow_job_block(workflow, "docs-contract");
+    assert!(
+        docs_contract.contains("needs.changes.outputs.docs == 'true'")
+            && docs_contract.contains("cargo test --lib --locked docs_tests::")
+            && docs_contract.contains("bash scripts/check-public-identity.sh"),
+        "docs-contract must run focused embedded-document tests for docs changes"
+    );
+
     let gate = workflow_job_block(workflow, "ci-gate");
     for job in [
         "changes",
@@ -38,6 +47,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "fmt",
         "clippy",
         "test",
+        "docs-contract",
         "coverage",
         "deny",
         "mcp-integration",

@@ -233,7 +233,7 @@ Current OTLP scope is intentionally narrow:
 
 Cortex supports two Docker collection paths:
 
-1. **Host-local agent**, the preferred multi-host path. A Cortex agent reads the local Docker socket, converts logs and lifecycle events into bounded records, and forwards them to the server without changing Docker's daemon logging driver.
+1. **Host-local agent**, the preferred multi-host path. The host-local cortex agent reads the local Docker socket, converts logs and lifecycle events into bounded records, and forwards them to the server without changing Docker's daemon logging driver.
 2. **Central pull compatibility mode**, an optional server-side collector for explicitly configured Docker Engine or docker-socket-proxy HTTP endpoints. It records per-container checkpoints and reconnects with bounded exponential backoff.
 
 Central pull is disabled by default. The `CORTEX_DOCKER_HOSTS` shorthand expands hosts into insecure `http://host:2375` endpoints and should only be used on a tightly controlled private network. A hosts file supports explicit base URLs and safer endpoint configuration.

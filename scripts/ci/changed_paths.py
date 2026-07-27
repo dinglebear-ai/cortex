@@ -74,10 +74,12 @@ def classify(event: str, paths: list[str]) -> dict[str, bool]:
     )
     release = rust or web or skills or any_match(
         paths,
-        lambda p: starts(p, "release/")
+        lambda p: starts(p, "release/", "packages/cortex-rmcp/")
         or p
         in {
             "CHANGELOG.md",
+            "install.sh",
+            "install.ps1",
             "server.json",
             "mcpb/manifest.json",
             "docker-compose.prod.yml",

@@ -269,7 +269,7 @@ Drop the following at `/etc/systemd/system/syslog-agent.service`:
 ```ini
 [Unit]
 Description=cortex agent
-Documentation=https://github.com/jmagar/cortex/blob/main/docs/contracts/forwarder-dropins.md
+Documentation=https://github.com/dinglebear-ai/cortex/blob/main/docs/contracts/forwarder-dropins.md
 After=network-online.target
 Wants=network-online.target
 
