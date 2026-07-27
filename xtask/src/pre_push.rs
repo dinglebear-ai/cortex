@@ -312,10 +312,18 @@ fn dedupe_plan(plan: Vec<PlanStep>) -> Vec<PlanStep> {
     out
 }
 
+fn configure_shell_command(command: &mut Command, step: &str) {
+    // Use a non-login shell so hook and CI callers keep their selected PATH,
+    // Cargo binary, compiler wrapper, and target directory. A login shell
+    // reloads the user profile and can silently replace those with soldr shims.
+    command.arg("-c").arg(step);
+}
+
 fn run_command(root: &Path, step: &PlanStep) -> Result<()> {
     println!("\n==> {}\n{}", step.name, step.command);
     let mut command = Command::new("bash");
-    command.arg("-lc").arg(step.command).current_dir(root);
+    configure_shell_command(&mut command, step.command);
+    command.current_dir(root);
     for (key, _) in std::env::vars() {
         if key.starts_with("CARGO_PROFILE_") {
             command.env_remove(key);
