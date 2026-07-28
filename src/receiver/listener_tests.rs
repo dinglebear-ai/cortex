@@ -142,6 +142,108 @@ async fn bounded_reader_drains_fragmented_oversize_line_and_resumes() {
     }
 }
 
+/// An at-limit payload terminated by CRLF must be accepted regardless of where
+/// the read boundary falls. Sizing the buffer so the fill ends exactly on the
+/// `\r` puts the `\n` at position 0 of the next chunk, which is the split that
+/// previously classified a legal frame as oversized based purely on TCP
+/// segmentation.
+#[tokio::test]
+async fn bounded_reader_accepts_at_limit_crlf_frame_split_on_the_carriage_return() {
+    let payload = "x".repeat(32);
+    let input = format!("{payload}\r\nnext\n");
+    let mut reader = BufReader::with_capacity(33, input.as_bytes());
+
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Line(line) => assert_eq!(line, payload),
+        other => panic!("expected at-limit CRLF frame to be accepted, got: {other:?}"),
+    }
+
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Line(line) => assert_eq!(line, "next"),
+        other => panic!("expected the following frame, got: {other:?}"),
+    }
+}
+
+/// One byte of payload past the limit is still oversized when the CRLF splits
+/// the same way — the extra accumulate byte is reserved for the terminator, not
+/// for payload.
+#[tokio::test]
+async fn bounded_reader_rejects_over_limit_crlf_frame_split_on_the_carriage_return() {
+    let input = format!("{}\r\nnext\n", "x".repeat(33));
+    let mut reader = BufReader::with_capacity(34, input.as_bytes());
+
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Oversize { terminated, .. } => assert!(terminated),
+        other => panic!("expected over-limit CRLF frame to be dropped, got: {other:?}"),
+    }
+
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Line(line) => assert_eq!(line, "next"),
+        other => panic!("expected the stream to resume, got: {other:?}"),
+    }
+}
+
+/// EOF part-way through a drain must report the frame as unterminated, not as
+/// a clean end of stream — otherwise a peer that truncates mid-flood is logged
+/// as `eof` and the abuse signal is lost.
+#[tokio::test]
+async fn bounded_reader_reports_unterminated_frame_when_eof_interrupts_a_drain() {
+    let input = [b'x'; 64];
+    let mut reader = BufReader::with_capacity(16, &input[..]);
+
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Oversize {
+            line_bytes,
+            terminated,
+        } => {
+            assert_eq!(line_bytes, 64);
+            assert!(!terminated, "EOF mid-drain must not report a terminator");
+        }
+        other => panic!("expected an unterminated oversized frame, got: {other:?}"),
+    }
+}
+
+/// The drain bound has two halves: an oversize run that terminates within the
+/// budget resumes the stream, and one that never terminates is cut off. Assert
+/// the property rather than an exact byte count — the budget is only checked on
+/// delimiter-free chunks, so a frame can overrun it by up to one chunk.
+#[tokio::test]
+async fn bounded_reader_resumes_within_the_drain_budget_and_cuts_off_beyond_it() {
+    let within = format!(
+        "{}\nvalid\n",
+        "x".repeat(32 * MAX_OVERSIZE_DRAIN_MULTIPLIER)
+    );
+    let mut reader = BufReader::with_capacity(16, within.as_bytes());
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Oversize { terminated, .. } => {
+            assert!(
+                terminated,
+                "a frame ending within the budget must terminate"
+            );
+        }
+        other => panic!("expected a terminated oversized frame, got: {other:?}"),
+    }
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Line(line) => assert_eq!(line, "valid"),
+        other => panic!("expected the stream to resume after the drain, got: {other:?}"),
+    }
+
+    let beyond = vec![b'x'; 32 * (MAX_OVERSIZE_DRAIN_MULTIPLIER + 4)];
+    let mut reader = BufReader::with_capacity(16, &beyond[..]);
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Oversize { terminated, .. } => {
+            assert!(!terminated, "an unterminated flood must be cut off");
+        }
+        other => panic!("expected the flood to be cut off, got: {other:?}"),
+    }
+}
+
+#[test]
+fn oversize_logging_backs_off_exponentially() {
+    let logged: Vec<u64> = (1..=1000).filter(|n| should_log_oversize(*n)).collect();
+    assert_eq!(logged, vec![1, 10, 100, 1000]);
+}
+
 #[test]
 fn cidr_open_policy_when_empty() {
     let ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();

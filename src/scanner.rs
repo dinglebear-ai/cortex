@@ -1517,6 +1517,19 @@ fn normalize_timestamp(timestamp: Option<&str>) -> Result<String> {
     }
 }
 
+/// Warn once per process when the hostname cannot be resolved. Rows filed under
+/// the literal `localhost` do not correspond to any fleet host, so correlation
+/// queries for the real host silently return nothing — worth one loud line.
+fn warn_unresolved_hostname() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            "could not resolve a hostname (gethostname failed and $HOSTNAME is unset); \
+             falling back to \"localhost\" — forwarded rows will be misattributed"
+        );
+    });
+}
+
 pub(crate) fn local_hostname() -> String {
     #[cfg(unix)]
     {
@@ -1531,7 +1544,10 @@ pub(crate) fn local_hostname() -> String {
                 }
             }
         }
-        std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string())
+        std::env::var("HOSTNAME").unwrap_or_else(|_| {
+            warn_unresolved_hostname();
+            "localhost".to_string()
+        })
     }
     #[cfg(not(unix))]
     {

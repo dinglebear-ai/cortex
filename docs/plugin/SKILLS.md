@@ -31,7 +31,7 @@ plugins/
         SKILL.md           # Error-signature ack/unack, notifications, prior incidents
       topology/
         SKILL.md           # map/host_state/fleet_state/correlate/graph queries
-      session-search/
+      searching-sessions/
         SKILL.md           # AI transcript search and exploration
       frustration-assessment/
         SKILL.md           # Analyze abuse_investigate evidence bundles
@@ -51,12 +51,11 @@ plugins/
 | `cortex` | Client-facing documentation for the cortex MCP tool and its action dispatch. |
 | `troubleshoot` | Narrow troubleshooting decision tree for MCP, ingest, service, and missing-host issues. |
 | `report` | Generate actionable 24-hour markdown reports from cortex MCP evidence. |
-| `redeploy` | Re-run the plugin setup hook and verify health plus runtime freshness. |
 | `logs` | Tail or follow cortex service logs from Docker Compose. |
 | `version-check` | Check whether the running container matches the local Compose image. `--pull` checks after refreshing the local image; without it, Docker checks only the local cache. |
 | `incidents` | Triage unacknowledged error signatures, review recent notifications, find prior incidents, and pull full incident context. |
 | `topology` | Answer homelab topology and cross-host correlation questions via `map`/`host_state`/`fleet_state`/`correlate`/`correlate_state`/`graph`. |
-| `session-search` | Search and explore AI transcript sessions (Claude Code/Codex/Gemini). |
+| `searching-sessions` | Search and explore AI transcript sessions (Claude Code/Codex/Gemini). |
 | `frustration-assessment` | Analyze an `abuse_investigate` evidence bundle into a frustration/abuse report. |
 | `mcp-friction-assessment` | Analyze an `mcp_investigate` evidence bundle for MCP tool reliability issues. |
 | `hook-friction-assessment` | Analyze a `hook_investigate` evidence bundle for hook reliability issues. |

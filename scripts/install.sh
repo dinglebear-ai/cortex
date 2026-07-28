@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-REPO="${CORTEX_RMCP_REPO:-jmagar/cortex}"
+REPO="${CORTEX_RMCP_REPO:-dinglebear-ai/cortex}"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 VERSION="${CORTEX_RMCP_VERSION:-latest}"
 RELEASE_BASE_URL="${CORTEX_RMCP_RELEASE_BASE_URL:-}"

@@ -67,20 +67,61 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
     );
 }
 
+/// Workflows that legitimately need a writable `GITHUB_TOKEN` at the top level.
+/// Everything else must declare read-only `contents`. Keeping this as an
+/// allowlist means a newly added workflow fails the test until it is either
+/// made read-only or consciously added here.
+const WRITE_SCOPED_WORKFLOWS: &[&str] = &["release.yml", "openwiki-update.yml"];
+
 #[test]
 fn workflows_default_to_read_only_github_token_permissions() {
-    for (name, workflow) in [
-        ("ci", include_str!("../.github/workflows/ci.yml")),
-        (
-            "docker-publish",
-            include_str!("../.github/workflows/docker-publish.yml"),
-        ),
-    ] {
+    // Read the directory at test time rather than `include_str!`ing a fixed
+    // list, so a new workflow with no top-level `permissions:` block is caught.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
+    let mut checked = 0;
+
+    for entry in std::fs::read_dir(&dir).expect("workflows directory must exist") {
+        let path = entry.expect("readable workflow entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if !name.ends_with(".yml") && !name.ends_with(".yaml") {
+            continue;
+        }
+        checked += 1;
+
+        let workflow = std::fs::read_to_string(&path).expect("readable workflow");
+        let permissions = workflow
+            .lines()
+            .position(|line| line.trim_end() == "permissions:")
+            .map(|idx| {
+                workflow
+                    .lines()
+                    .skip(idx + 1)
+                    .take_while(|line| line.starts_with("  ") || line.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+
+        let permissions = permissions.unwrap_or_else(|| {
+            panic!("{name} must declare an explicit top-level permissions block")
+        });
+
+        if WRITE_SCOPED_WORKFLOWS.contains(&name.as_str()) {
+            continue;
+        }
         assert!(
-            workflow.contains("permissions:\n  contents: read"),
+            permissions.contains("contents: read"),
             "{name} must default GITHUB_TOKEN to read-only contents access"
         );
     }
+
+    assert!(
+        checked > 0,
+        "no workflows were checked — is the path right?"
+    );
 
     let docker = include_str!("../.github/workflows/docker-publish.yml");
     let publish = workflow_job_block(docker, "build-and-push");

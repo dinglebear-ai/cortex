@@ -85,7 +85,7 @@ cortex/
 | Directory | Surface |
 | --- | --- |
 | `skills/` | Skill definition (SKILL.md) |
-| `hooks/` | Lifecycle hooks (sync-env, fix-perms, ignore-files) |
+| `scripts/` | Manual setup and diagnostic scripts (no Claude Code lifecycle hooks) |
 
 No agents, commands, channels, output styles, or schedules.
 

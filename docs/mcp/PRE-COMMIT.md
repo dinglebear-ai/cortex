@@ -12,14 +12,17 @@ Install the git hooks once per clone:
 lefthook install
 ```
 
-`lefthook.yml` pre-commit jobs (each wrapped in `scripts/with_timeout.sh`):
+`lefthook.yml` pre-commit jobs (most wrapped in `scripts/with_timeout.sh` — the
+`diff check` and `skills` jobs run unwrapped):
 
 | Job | Command | Purpose |
 | --- | --- | --- |
+| diff check | `git --no-pager diff --check --cached` | Rejects whitespace errors and conflict markers in staged content |
 | yaml parse | `python -c 'yaml.safe_load(...)'` | Rejects unparseable YAML in staged files |
 | rustfmt | `cargo fmt -- --check` | Formatting gate |
 | module size | `scripts/check-rust-module-size.sh --limit 500` | Caps Rust module line count |
 | version sync | `cargo xtask check-version-sync` | All version-bearing files agree |
+| skills | `just validate-skills` | Validates plugin/skill manifests and frontmatter (staged `plugins/cortex/skills/**`, `.claude-plugin/**`) |
 | env guard | `scripts/block-env-commits.sh` | Blocks commits containing env credential patterns |
 
 

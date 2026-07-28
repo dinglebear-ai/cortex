@@ -8,7 +8,7 @@ transcript: /home/jmagar/.claude/projects/-home-jmagar-workspace-cortex/633af915
 working directory: /home/jmagar/workspace/cortex
 worktree: /home/jmagar/workspace/cortex
 pr: 143 — fix: enforce repository contracts and reduce query module debt — https://github.com/dinglebear-ai/cortex/pull/143
-beads: syslog-mcp-iv50b (observed in progress; not modified this session)
+beads: syslog-mcp-iv50b (observed in progress; not modified), syslog-mcp-ex8z2 (created), syslog-mcp-3zevz (created)
 ---
 
 # Review-findings fixes verified and pushed
@@ -117,7 +117,10 @@ on.
   repo root. Local branches are `codex/address-review-findings` (current, active
   PR #143) and `main` (in sync with origin). No branch or worktree qualified for
   cleanup: the feature branch has an open PR and `main` is the protected base.
-  `origin/marketplace-no-mcp` is a protected long-lived ref and was left alone.
+  A stale `origin/marketplace-no-mcp` remote-tracking ref was visible locally,
+  but `git ls-remote --heads origin` confirms the branch no longer exists on the
+  remote — this PR retires its sync and drift-check workflows. The local ref is
+  pruneable with `git fetch --prune`; no branch deletion was performed.
 - **Stale docs.** No documentation was contradicted by this session's code
   changes. The `CLAUDE.md` version-bumping contract was consulted and found
   accurate against `cargo xtask check-version-sync` output.
@@ -217,20 +220,78 @@ on.
 - Does the full `cargo test --lib` suite pass on this host, and which tests make
   it exceed ten minutes?
 
+## Review Pass (PR #143)
+
+Four agents reviewed the full `origin/main...HEAD` diff in parallel:
+code-reviewer, pr-test-analyzer, silent-failure-hunter, and comment-analyzer.
+Three independently converged on the same latent framing bug, which is the most
+significant finding of the session.
+
+### Fixed
+
+| Severity | Finding | Fix |
+|---|---|---|
+| Critical | `deny.toml` still allowlisted `jmagar/lab`, so the required `deny` CI job would fail on the `lab-auth` source move | Allowlist updated to `dinglebear-ai/labby`; `cargo deny check sources` now reports `sources ok` |
+| Critical | At-limit CRLF frames were accepted or dropped based purely on TCP segmentation. The accumulate guard compared raw bytes (CR included) against `max_size` while the newline branch compared payload bytes. Production-reachable: 8 KiB `BufReader` with an 8192-byte default `max_message_size` | Accumulate limit raised to `max_size + 1`, reserving exactly one byte for a split CRLF terminator. This also makes the PR's `pos == 0` CR check load-bearing — it was previously unreachable and therefore inert |
+| High | The per-frame oversize `warn!` lost its only rate limiter. Before the drain change an oversized frame tore the connection down; now the connection survives, so a misconfigured forwarder emits one unrate-limited warn per frame at line rate, forever | Exponential log cadence (1st, 10th, 100th…) via `should_log_oversize`, with per-connection `oversize_count` / `oversize_bytes_total` in the closing summary. Unterminated frames still always warn |
+| High | The new `docs-contract` CI gate was skipped for exactly the files `check-public-identity.sh` scans (`server.json`, `mcpb/manifest.json`, `.claude-plugin/*`, `plugins/*`, `config/*`), and the aggregate gate counts skipped as success | Condition broadened to `docs \|\| rust \|\| release \|\| skills \|\| docker \|\| workflow` |
+| Important | `scripts/install.sh` defaulted `CORTEX_RMCP_REPO` to `jmagar/cortex` while `packages/cortex-rmcp/lib/platform.js` used `dinglebear-ai/cortex` — two halves of one download flow resolving different repos | `scripts/install.sh` aligned to `dinglebear-ai/cortex` |
+| Important | `src/db/queries_hosts.rs` had no sidecar test file; its six `dedupe_hosts` tests stayed in `queries_tests.rs`, forcing a `#[cfg(test)]` re-import in `queries.rs` purely to compile | Tests moved to `src/db/queries_hosts_tests.rs` with the standard `#[path]` hook; re-import deleted. `dedupe_hosts` is now fully private |
+| Important | `workflows_default_to_read_only_github_token_permissions` hardcoded two workflows, so a new workflow with no `permissions:` block was unasserted | Reads `.github/workflows/` at test time; every workflow must declare an explicit block, with `release.yml` / `openwiki-update.yml` as a named write-scoped allowlist |
+| Medium | `command_log_uses_the_shared_os_hostname_resolver` was tautological — it compared `hostname()` to the function it delegates to, and would pass against a full revert in Docker/CI where `$HOSTNAME` already equals the OS hostname | Replaced with a test that sets `$HOSTNAME` to a sentinel and asserts it is ignored |
+| Medium | `local_hostname()` silently returned the literal `localhost` when `gethostname` failed and `$HOSTNAME` was unset, misattributing every forwarded row | One-time `warn!` on that fallback path |
+| Low | `changed_paths.py` discarded git stderr, so CI silently fell back to running the full matrix with no explanation | `::warning::` emitted at all three fail-open points; direction unchanged |
+| Low | `check-public-identity.sh` behaved differently with and without `rg` on binary files — `grep` false-FAILs, `rg` silently misses | Both paths forced to text mode (`grep -a`, `rg --text`) |
+
+Documentation corrections: the `rmcp`/`xtask` dependency claim in `CLAUDE.md`
+(xtask does not depend on rmcp at all), a surviving `hooks/` row in
+`docs/repo/REPO.md` describing machinery `validate-marketplace.sh` now forbids,
+two stale skills in `docs/plugin/SKILLS.md` (`session-search` →
+`searching-sessions`, and a `redeploy` skill that no longer exists), two missing
+rows plus a false "each wrapped in `with_timeout.sh`" claim in
+`docs/mcp/PRE-COMMIT.md`, the matching `lefthook.yml` summary in `CLAUDE.md`, the
+`docs/repo/SCRIPTS.md` lede, the `MAX_OVERSIZE_DRAIN_MULTIPLIER` doc comment
+(the cutoff is approximate, not an exact 8×), and this log's own now-false claim
+about `origin/marketplace-no-mcp`.
+
+### Deliberately not fixed
+
+- **`syslog-mcp-ex8z2`** — a Gemini transcript that goes malformed and then stops
+  changing warns once per process and then goes dark, with no counter. Needs new
+  observability plumbing rather than a patch.
+- **`syslog-mcp-3zevz`** — `docker-publish.yml:148` advertises
+  `ghcr.io/jmagar/cortex` while pushing to `ghcr.io/${{ github.repository }}`.
+  `README.md:726` documents this namespace as a deliberately incomplete
+  migration, and changing `docker-compose.prod.yml` would break deployments until
+  a release publishes to the new namespace. This is a deployment decision.
+
+### Verified after the review fixes
+
+| command | result |
+|---|---|
+| `cargo fmt --check` | clean |
+| `cargo clippy --all-targets --all-features` | 0 warnings |
+| `cargo test --lib -- receiver::listener agent::ai_transcript command_log db::queries_hosts` | 62 passed, 0 failed |
+| `cargo test --test ci_changed_paths --test workflow_shapes` | 7 + 5 passed, 0 failed |
+| `cargo test --lib --locked docs_tests::` | 4 passed, 0 failed |
+| `cargo deny check sources` | `sources ok` |
+| `bash scripts/check-public-identity.sh` | OK |
+
 ## Next Steps
 
 Unfinished work from this session:
 
-1. Run `/pr-review-toolkit:review-pr` against this branch and address every issue
-   it surfaces — explicitly requested and not yet started.
-2. Update this session log with the review outcome, then land it on `main`.
+1. Land this session log on `main` (deferred through both pushes so `main`
+   receives one accurate log rather than two).
 
 Follow-on tasks not yet started:
 
-3. Identify the source of the mid-session `Cargo.toml` rewrite.
-4. Confirm PR #143's CI is green after this push, especially the `lab-auth`
-   fetch from its new source.
-5. Assess whether `syslog-mcp-iv50b` can be closed once the review pass lands.
+2. Identify the source of the mid-session `Cargo.toml` rewrite, and more
+   generally the concurrent agent session editing this same checkout.
+3. Confirm PR #143's CI is green, especially `deny` and the broadened
+   `docs-contract` gate.
+4. Work `syslog-mcp-ex8z2` and `syslog-mcp-3zevz`.
+5. Assess whether `syslog-mcp-iv50b` can be closed.
 
 Recommended immediate command:
 

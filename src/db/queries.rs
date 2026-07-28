@@ -453,8 +453,6 @@ fn get_error_summary_sql(
 }
 
 pub(crate) use super::queries_hosts::canonical_host_keys;
-#[cfg(test)]
-use super::queries_hosts::dedupe_hosts;
 pub use super::queries_hosts::list_hosts;
 
 /// List AI transcript sessions ordered by recency.

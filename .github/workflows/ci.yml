@@ -169,7 +169,18 @@ jobs:
     name: Docs Contract
     runs-on: [self-hosted, unraid]
     needs: [changes]
-    if: ${{ needs.changes.outputs.docs == 'true' || needs.changes.outputs.rust == 'true' }}
+    # check-public-identity.sh scans server.json, mcpb/manifest.json,
+    # .claude-plugin/*, plugins/*, config/* and scripts/* — none of which
+    # classify as `docs` or `rust`. Gating on those two alone let the most
+    # likely regression vectors skip the job entirely, and the aggregate gate
+    # counts a skipped job as success.
+    if: >-
+      ${{ needs.changes.outputs.docs == 'true'
+      || needs.changes.outputs.rust == 'true'
+      || needs.changes.outputs.release == 'true'
+      || needs.changes.outputs.skills == 'true'
+      || needs.changes.outputs.docker == 'true'
+      || needs.changes.outputs.workflow == 'true' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 

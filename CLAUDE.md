@@ -9,7 +9,7 @@ Rust binary: syslog receiver (UDP/TCP) + MCP server for homelab log intelligence
 | Remote | `git@github.com:dinglebear-ai/cortex.git` |
 | Cargo workspace | 2 members: the root `cortex` package (`[[bin]] cortex`, `src/main.rs`) and `xtask/` |
 | Edition / MSRV | `edition = "2024"`, `rust-version = "1.86"` |
-| MCP crate | `rmcp = "1.7"` (declared in both the root and `xtask` dependency tables) |
+| MCP crate | `rmcp = "1.7"` (root `[dependencies]` and `[dev-dependencies]`; `xtask` does not use it) |
 | Auth crate | `lab-auth`, pinned git dependency (see `Cargo.toml`) |
 | License | MIT |
 | Package layout | `autobins = false`; the single binary is declared explicitly |
@@ -300,7 +300,7 @@ RUST_LOG=info
 | `scripts/reset-db.sh` | WAL-safe backup + destructive DB reset helper for local/dev recovery |
 | `release/components.toml` | Declarative source of truth for version-bearing files; consumed by `cargo xtask` |
 | `xtask/` | `cargo xtask` workspace crate (2nd workspace member): `bump-version`, `sync-version`, `check-version-sync`, `check-release-versions`, `pre-push` |
-| `lefthook.yml` | Pre-commit gates: YAML parse, `cargo fmt --check`, Rust module-size limit (500 lines), `check-version-sync`, env-credential block. Install once with `lefthook install`. |
+| `lefthook.yml` | Pre-commit gates: staged-diff whitespace check, YAML parse, `cargo fmt --check`, Rust module-size limit (500 lines), `check-version-sync`, plugin/skill validation, env-credential block. Install once with `lefthook install`. |
 | `scripts/validate-marketplace.sh` | Plugin/marketplace manifest assertions (including "no `hooks` key", "no hooks dir") |
 | `release-please-config.json` / `.release-please-manifest.json` | release-please config — Conventional-Commits-driven version bump + changelog PRs (see "Version Bumping") |
 | `.github/workflows/release-please.yml` | Opens/updates the release PR on green CI; runs the `cargo xtask sync-version` fixup |

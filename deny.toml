@@ -80,5 +80,5 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
   # lab-auth is vendored from the private lab mono-repo at a pinned rev
-  "https://github.com/jmagar/lab.git",
+  "https://github.com/dinglebear-ai/labby.git",
 ]

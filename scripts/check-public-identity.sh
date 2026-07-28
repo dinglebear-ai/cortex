@@ -56,22 +56,27 @@ if [ "${#tracked_current_files[@]}" -eq 0 ] || [ "${#tracked_source_identity_fil
   exit 1
 fi
 
+# The scan set is every tracked non-archival file, which includes binaries and
+# LFS pointers. Force text mode in both implementations so the gate behaves the
+# same with and without rg: bare `grep -F` reports "Binary file X matches" and
+# exits 0 (a loud false FAIL), while bare `rg` skips binary content and exits 1
+# (a silent miss).
 search_name="grep"
 search_status_error=2
 search_current_files() {
-  grep -nF -- "$1" "${tracked_current_files[@]}"
+  grep -naF -- "$1" "${tracked_current_files[@]}"
 }
 search_source_identity_files() {
-  grep -nF -- "$1" "${tracked_source_identity_files[@]}"
+  grep -naF -- "$1" "${tracked_source_identity_files[@]}"
 }
 
 if command -v rg >/dev/null 2>&1; then
   search_name="rg"
   search_current_files() {
-    rg -n --fixed-strings -- "$1" "${tracked_current_files[@]}"
+    rg -n --text --fixed-strings -- "$1" "${tracked_current_files[@]}"
   }
   search_source_identity_files() {
-    rg -n --fixed-strings -- "$1" "${tracked_source_identity_files[@]}"
+    rg -n --text --fixed-strings -- "$1" "${tracked_source_identity_files[@]}"
   }
 fi
 

@@ -121,3 +121,7 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(dedupe_hosts(rows))
 }
+
+#[cfg(test)]
+#[path = "queries_hosts_tests.rs"]
+mod tests;

@@ -8,9 +8,39 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
 
+/// Pins the actual fix rather than the delegation: the old implementation read
+/// `$HOSTNAME` directly, so setting it to a sentinel must not change what
+/// `hostname()` reports. Comparing against `local_hostname()` alone would pass
+/// against a full revert in Docker and most CI runners, where `$HOSTNAME` is
+/// already the OS hostname.
+#[cfg(unix)]
 #[test]
-fn command_log_uses_the_shared_os_hostname_resolver() {
-    assert_eq!(hostname(), crate::scanner::local_hostname());
+#[serial]
+fn command_log_hostname_ignores_the_hostname_env_var() {
+    const SENTINEL: &str = "cortex-hostname-sentinel.invalid";
+
+    let previous = std::env::var("HOSTNAME").ok();
+    // SAFETY: edition 2024 requires unsafe for env mutation; `#[serial]` keeps
+    // this off any other thread reading the environment concurrently.
+    unsafe { std::env::set_var("HOSTNAME", SENTINEL) };
+
+    let resolved = hostname();
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var("HOSTNAME", value) },
+        None => unsafe { std::env::remove_var("HOSTNAME") },
+    }
+
+    if resolved == "localhost" {
+        // gethostname() genuinely failed on this host, so the env fallback is
+        // the documented behavior and there is nothing to assert.
+        return;
+    }
+    assert_ne!(
+        resolved, SENTINEL,
+        "hostname() must resolve via gethostname(), not $HOSTNAME"
+    );
+    assert_eq!(resolved, crate::scanner::local_hostname());
 }
 
 #[test]

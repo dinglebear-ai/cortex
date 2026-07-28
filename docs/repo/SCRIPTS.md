@@ -1,6 +1,7 @@
 # Scripts Reference -- cortex
 
-Scripts used for maintenance, hooks, and testing.
+Scripts used for maintenance, setup, and testing. The plugin ships no Claude
+Code lifecycle hooks; `plugin-setup.sh` is invoked manually.
 
 ## Maintenance scripts (`scripts/`)
 

@@ -110,8 +110,19 @@ def classify(event: str, paths: list[str]) -> dict[str, bool]:
     return result
 
 
+def warn_full_run(reason: str) -> None:
+    """Surface why path filtering fell back to running the full matrix.
+
+    Every fallback here deliberately fails open, which is the safe direction for
+    a routing gate but is otherwise invisible: CI silently runs everything and
+    nobody learns the base ref was broken.
+    """
+    print(f"::warning::changed-path filtering unavailable, running full CI: {reason}")
+
+
 def read_paths(path: Path) -> list[str]:
     if not path.exists():
+        warn_full_run(f"changed-files list {path} does not exist")
         return []
     return [line.strip() for line in path.read_text().splitlines() if line.strip()]
 
@@ -154,11 +165,13 @@ def resolve_paths(event: str) -> list[str]:
             base = ""
 
     if not base:
+        warn_full_run(f"no base ref resolved for event {event}")
         return []
 
     try:
         raw = git_output("diff", "--name-only", base, head)
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as exc:
+        warn_full_run(f"git diff {base}..{head} failed ({exc})")
         return []
 
     return [line.strip() for line in raw.splitlines() if line.strip()]
