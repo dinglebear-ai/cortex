@@ -36,7 +36,7 @@ fn reads_json_pointer_version() {
 
 #[test]
 fn reads_regex_version() {
-    let body = "image: ghcr.io/jmagar/cortex:v1.22.0\n";
+    let body = "image: ghcr.io/dinglebear-ai/cortex:v1.22.0\n";
     assert_eq!(
         read_regex_version(body, Some(r"cortex:v(\d+\.\d+\.\d+)")).unwrap(),
         "1.22.0"
@@ -166,7 +166,7 @@ version_files = [
     .unwrap();
     fs::write(
         root.join("server.json"),
-        "{\n  \"version\": \"1.2.3\",\n  \"image\": \"ghcr.io/jmagar/cortex:v1.2.3\"\n}\n",
+        "{\n  \"version\": \"1.2.3\",\n  \"image\": \"ghcr.io/dinglebear-ai/cortex:v1.2.3\"\n}\n",
     )
     .unwrap();
     fs::write(
@@ -234,7 +234,7 @@ version_files = [
     .unwrap();
     fs::write(
         root.join("server.json"),
-        "{\n  \"version\": \"1.2.3\",\n  \"image\": \"ghcr.io/jmagar/cortex:v1.2.3\"\n}\n",
+        "{\n  \"version\": \"1.2.3\",\n  \"image\": \"ghcr.io/dinglebear-ai/cortex:v1.2.3\"\n}\n",
     )
     .unwrap();
     fs::write(

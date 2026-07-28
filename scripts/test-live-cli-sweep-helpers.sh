@@ -50,7 +50,7 @@ if [[ "${MOCK_RUNTIME_OK:-true}" != "true" ]]; then
 fi
 cat <<OUT
 mode       docker
-image      ghcr.io/jmagar/cortex:3.6.5
+image      ghcr.io/dinglebear-ai/cortex:3.6.5
 running_image_id sha256:current
 local_image_id sha256:current
 repo_version 3.6.5

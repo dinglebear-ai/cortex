@@ -54,7 +54,7 @@ truth for hermetic and live release gates.
 
 - [ ] `server.json` for MCP registry is valid JSON with correct version
 - [ ] `mcpb/manifest.json` is valid JSON with matching package metadata
-- [ ] OCI image published to `ghcr.io/jmagar/cortex`
+- [ ] OCI image published to `ghcr.io/dinglebear-ai/cortex`
 - [ ] Crate published to crates.io (if applicable)
 - [ ] DNS verification for `tv.tootie/cortex`
 

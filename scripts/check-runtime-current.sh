@@ -28,7 +28,7 @@ Options:
   --compose-dir DIR       Docker compose project dir (default: ~/.cortex/compose)
   --allow-legacy          Permit a running container from a non-canonical
                           Compose working directory.
-  --allow-local-image     Permit arbitrary non-ghcr.io/jmagar/cortex
+  --allow-local-image     Permit arbitrary non-ghcr.io/dinglebear-ai/cortex
                           images. The repo-supported cortex:local-debug
                           image is accepted by default.
 EOF
@@ -207,9 +207,9 @@ check_docker() {
     return 1
   fi
 
-  if [[ "$ALLOW_LOCAL_IMAGE" != "true" && "$is_local_image" != "true" && "$image" != ghcr.io/jmagar/cortex:* ]]; then
+  if [[ "$ALLOW_LOCAL_IMAGE" != "true" && "$is_local_image" != "true" && "$image" != ghcr.io/dinglebear-ai/cortex:* ]]; then
     echo "FAIL: running container uses unsupported image: $image"
-    echo "fix: use ghcr.io/jmagar/cortex:<version>, cortex:local-debug, or rerun with --allow-local-image for an intentional custom deployment"
+    echo "fix: use ghcr.io/dinglebear-ai/cortex:<version>, cortex:local-debug, or rerun with --allow-local-image for an intentional custom deployment"
     return 1
   fi
 

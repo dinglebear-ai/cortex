@@ -54,7 +54,7 @@ chmod +x "${tmpdir}/docker"
 # canonical-dir guard only applies to supported registry images (local/dev
 # images are exempt, exercised below).
 set +e
-out="$(CORTEX_TEST_IMAGE=ghcr.io/jmagar/cortex:0.1.0 PATH="${tmpdir}:${PATH}" "${CHECKER}" --mode docker 2>&1)"
+out="$(CORTEX_TEST_IMAGE=ghcr.io/dinglebear-ai/cortex:0.1.0 PATH="${tmpdir}:${PATH}" "${CHECKER}" --mode docker 2>&1)"
 status=$?
 set -e
 [[ "${status}" -eq 1 ]] || fail "legacy compose dir exit=${status}, want 1; output=${out}"
@@ -107,7 +107,7 @@ trap 'rm -rf "${tmpdir}" "${envtmp}"' EXIT
 mkdir -p "${envtmp}/compose"
 printf 'CORTEX_VERSION=main\n' >"${envtmp}/.env"
 # shellcheck disable=SC2016  # the ${CORTEX_VERSION} is literal compose YAML
-printf 'services:\n  cortex:\n    image: ghcr.io/jmagar/cortex:${CORTEX_VERSION:-0.28.2}\n' \
+printf 'services:\n  cortex:\n    image: ghcr.io/dinglebear-ai/cortex:${CORTEX_VERSION:-0.28.2}\n' \
   >"${envtmp}/compose/docker-compose.yml"
 
 cat >"${envtmp}/docker" <<SH
@@ -128,19 +128,19 @@ case "$*" in
     done
     ver="0.28.2"
     [[ -n "$envf" && -f "$envf" ]] && ver="$(awk -F= '/^CORTEX_VERSION=/{print $2; exit}' "$envf")"
-    echo "ghcr.io/jmagar/cortex:${ver}"
+    echo "ghcr.io/dinglebear-ai/cortex:${ver}"
     ;;
   *"config --images"*)
     # No --env-file: compose default tag.
-    echo "ghcr.io/jmagar/cortex:0.28.2"
+    echo "ghcr.io/dinglebear-ai/cortex:0.28.2"
     ;;
   *"ps -q cortex"*) echo cid ;;
   "inspect cid --format {{ index .Config.Labels \"com.docker.compose.project.working_dir\" }}"*)
     echo "${CORTEX_FAKE_COMPOSE_DIR}" ;;
-  "inspect cid --format {{.Config.Image}}"*) echo "ghcr.io/jmagar/cortex:main" ;;
+  "inspect cid --format {{.Config.Image}}"*) echo "ghcr.io/dinglebear-ai/cortex:main" ;;
   "inspect cid --format {{.Image}}"*) echo sha256:running ;;
-  "image inspect ghcr.io/jmagar/cortex:main --format {{.Id}}"*) echo sha256:running ;;
-  "image inspect ghcr.io/jmagar/cortex:main --format {{join .RepoDigests \", \"}}"*) echo "" ;;
+  "image inspect ghcr.io/dinglebear-ai/cortex:main --format {{.Id}}"*) echo sha256:running ;;
+  "image inspect ghcr.io/dinglebear-ai/cortex:main --format {{join .RepoDigests \", \"}}"*) echo "" ;;
   "exec cid cortex --version"*) echo "cortex ${REPO_VERSION}" ;;
   *) echo "unexpected docker args: $*" >&2; exit 9 ;;
 esac
@@ -150,10 +150,10 @@ chmod +x "${envtmp}/docker"
 # Direct functional check: run config --images both with and without env-file
 # resolution to prove the mock distinguishes the two (sanity for the e2e below).
 got_default="$(cd "${envtmp}/compose" && PATH="${envtmp}:${PATH}" docker compose config --images)"
-[[ "${got_default}" == "ghcr.io/jmagar/cortex:0.28.2" ]] \
+[[ "${got_default}" == "ghcr.io/dinglebear-ai/cortex:0.28.2" ]] \
   || fail "mock default tag wrong: ${got_default}"
 got_envfile="$(cd "${envtmp}/compose" && PATH="${envtmp}:${PATH}" docker compose --env-file "${envtmp}/.env" config --images)"
-[[ "${got_envfile}" == "ghcr.io/jmagar/cortex:main" ]] \
+[[ "${got_envfile}" == "ghcr.io/dinglebear-ai/cortex:main" ]] \
   || fail "mock env-file tag wrong: ${got_envfile}"
 
 # End-to-end: the checker must pass --env-file and therefore report CURRENT.

@@ -721,9 +721,11 @@ Maintenance operations are single-flight and separately limited from heavy read 
 | Native binary and CLI | `cortex` |
 | npm launcher | `cortex-rmcp` |
 | MCP Registry server name | `ai.dinglebear/cortex-rmcp` |
-| Published OCI image | `ghcr.io/jmagar/cortex:v<version>` |
+| Published OCI image | `ghcr.io/dinglebear-ai/cortex:v<version>` |
 
-The source repository has moved to the `dinglebear-ai` organization. Some published release and container metadata still uses the legacy `jmagar` namespace. The table above reflects the repository's current distribution files rather than pretending that migration is already complete.
+The source repository and its published artifacts both live under the `dinglebear-ai` organization. The legacy `jmagar` namespace is retired: `scripts/check-public-identity.sh` fails the build on any tracked file that reintroduces it, and the release workflow derives the MCP Registry OCI identifier from the same `REGISTRY`/`IMAGE_NAME` it pushes to, so the two cannot drift apart again.
+
+Container images published before the move remain readable under the legacy namespace for older pinned deployments, but nothing new is pushed there.
 
 ### Native and npm
 

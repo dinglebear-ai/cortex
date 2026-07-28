@@ -19,7 +19,12 @@ patterns=(
   'x-syslog-action-metadata'
   'x-syslog-agent-guidance'
 )
+# A bare 'jmagar/cortex' covers every carrier of the legacy namespace at once:
+# github.com/, raw.githubusercontent.com/, ghcr.io/, and the plain owner/name
+# form used by CORTEX_RMCP_REPO and CORTEX_INSTALL_REPO. The two prefixed
+# patterns are kept for message clarity when the bare one fires.
 source_identity_patterns=(
+  'jmagar/cortex'
   'github.com/jmagar/cortex'
   'raw.githubusercontent.com/jmagar/cortex'
 )

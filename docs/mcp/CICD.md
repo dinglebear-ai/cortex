@@ -50,7 +50,7 @@ jobs:
       - uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ghcr.io/jmagar/cortex:${{ github.ref_name }}
+          tags: ghcr.io/dinglebear-ai/cortex:${{ github.ref_name }}
 ```
 
 ### publish-crates.yml -- crates.io Publishing

@@ -536,11 +536,11 @@ esac
     assert!(!log.contains(":/opt/cortex/bin"));
     assert!(!log.contains("ubuntu:24.04"));
     assert!(log.contains(&format!(
-        "docker pull ghcr.io/jmagar/cortex:{}",
+        "docker pull ghcr.io/dinglebear-ai/cortex:{}",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(log.contains(&format!(
-        "ghcr.io/jmagar/cortex:{}",
+        "ghcr.io/dinglebear-ai/cortex:{}",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(log.contains("--user 0:0"));

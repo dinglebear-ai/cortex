@@ -264,7 +264,7 @@ raw collector warnings, raw frames, or `metadata_json` are returned.
 
 | Component | Value |
 | --- | --- |
-| Image | `ghcr.io/jmagar/cortex:latest` |
+| Image | `ghcr.io/dinglebear-ai/cortex:latest` |
 | Syslog port | `1514/udp`, `1514/tcp` |
 | MCP port | `3100/tcp` |
 | Health endpoint | `GET /health` (unauthenticated) |

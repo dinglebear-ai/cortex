@@ -82,7 +82,7 @@ fn compose_runs_baked_image_with_host_network_and_private_id_path() {
     // Runs the published image with the binary baked in — no host binary is
     // staged or bind-mounted. Only the host-id data dir is mounted.
     assert!(compose.contains(&format!(
-        "image: ghcr.io/jmagar/cortex:{}",
+        "image: ghcr.io/dinglebear-ai/cortex:{}",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(compose.contains("user: \"0:0\""));

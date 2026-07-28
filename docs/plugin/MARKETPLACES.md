@@ -50,7 +50,7 @@ Example registry entry:
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/cortex:vX.Y.Z"
+      "identifier": "ghcr.io/dinglebear-ai/cortex:vX.Y.Z"
     }
   ]
 }
@@ -62,8 +62,8 @@ cortex uses OCI (Docker) images as the primary distribution package, not PyPI or
 
 | Registry | Image |
 | --- | --- |
-| GHCR | `ghcr.io/jmagar/cortex:latest` |
-| GHCR (versioned) | `ghcr.io/jmagar/cortex:vX.Y.Z` |
+| GHCR | `ghcr.io/dinglebear-ai/cortex:latest` |
+| GHCR (versioned) | `ghcr.io/dinglebear-ai/cortex:vX.Y.Z` |
 
 Additionally published to crates.io for `cargo install` usage.
 

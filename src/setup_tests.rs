@@ -377,13 +377,13 @@ fn write_compose_assets_writes_installed_compose_and_dockerfile() {
 #[test]
 fn installed_compose_asset_uses_published_image_only() {
     // COMPOSE_ASSET is now docker-compose.prod.yml — the publishable template.
-    assert!(COMPOSE_ASSET.contains("image: ghcr.io/jmagar/cortex:"));
+    assert!(COMPOSE_ASSET.contains("image: ghcr.io/dinglebear-ai/cortex:"));
     assert!(!COMPOSE_ASSET.contains("syslog-setup-build-stanza"));
     assert!(!COMPOSE_ASSET.contains("\n    build:\n"));
 
     let compose = installed_compose_asset();
     assert_ne!(compose, COMPOSE_ASSET);
-    assert!(compose.contains("image: ghcr.io/jmagar/cortex:"));
+    assert!(compose.contains("image: ghcr.io/dinglebear-ai/cortex:"));
     assert!(compose.contains("      - path: ../.env\n"));
     // env_file path is rewritten — source pattern must not survive.
     assert!(!compose.contains("      - path: .env\n"));
