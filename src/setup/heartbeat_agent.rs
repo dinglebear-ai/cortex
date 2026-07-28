@@ -274,7 +274,7 @@ fn heartbeat_agent_unit(
     let env_path = setup_path_value(env_path)?;
     let host_id_path = setup_path_value(host_id_path)?;
     Ok(format!(
-        "[Unit]\nDescription=cortex heartbeat agent\nDocumentation=https://github.com/jmagar/cortex\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nEnvironmentFile={env_path}\nExecStart={cortex_bin} heartbeat agent --host-id-path {host_id_path}\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths={}\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=cortex heartbeat agent\nDocumentation=https://github.com/dinglebear-ai/cortex\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nEnvironmentFile={env_path}\nExecStart={cortex_bin} heartbeat agent --host-id-path {host_id_path}\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths={}\n\n[Install]\nWantedBy=default.target\n",
         read_write_paths
     ))
 }

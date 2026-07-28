@@ -85,7 +85,7 @@ setup:
 gen-token:
     openssl rand -hex 32
 
-# Validate plugin manifests, MCP config, hooks, and skill frontmatter
+# Validate plugin manifests, MCP config, and skill frontmatter
 validate-plugin:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -96,7 +96,7 @@ validate-plugin:
     plugin = json.loads(Path(".claude-plugin/plugin.json").read_text())
     if "version" in plugin:
         raise SystemExit("FORBIDDEN: .claude-plugin/plugin.json version")
-    for key in ["mcpServers", "hooks", "skills"]:
+    for key in ["mcpServers", "skills"]:
         value = plugin.get(key)
         if not value:
             raise SystemExit(f"MISSING: .claude-plugin/plugin.json {key}")
@@ -109,22 +109,8 @@ validate-plugin:
     if "cortex" not in mcp.get("mcpServers", {}):
         raise SystemExit(f"MISSING: cortex server in {mcp_path}")
 
-    hooks_path = Path(plugin["hooks"])
-    hooks = json.loads(hooks_path.read_text()).get("hooks", {})
-    for event in ["SessionStart", "ConfigChange"]:
-        entries = hooks.get(event)
-        if not entries:
-            raise SystemExit(f"MISSING: {event} hook in {hooks_path}")
-        for entry in entries:
-            for hook in entry.get("hooks", []):
-                command = hook.get("command", "")
-                if command.startswith("${CLAUDE_PLUGIN_ROOT}/"):
-                    # The command may carry arguments (e.g. "bin/cortex setup
-                    # plugin-hook") — validate only the executable path token.
-                    executable = command.split()[0]
-                    command_path = Path(executable.removeprefix("${CLAUDE_PLUGIN_ROOT}/"))
-                    if not command_path.exists():
-                        raise SystemExit(f"MISSING: hook command {command_path}")
+    if "hooks" in plugin:
+        raise SystemExit("FORBIDDEN: .claude-plugin/plugin.json hooks")
     PY
     found=0
     for dir in plugins/cortex/skills/*; do

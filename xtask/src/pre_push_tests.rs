@@ -42,6 +42,18 @@ fn hook_change_tests_router() {
 }
 
 #[test]
+fn pre_push_steps_preserve_the_callers_toolchain_environment() {
+    let mut command = std::process::Command::new("bash");
+    configure_shell_command(&mut command, "cargo --version");
+
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(args, vec!["-c", "cargo --version"]);
+}
+
+#[test]
 fn full_mode_keeps_the_old_expensive_suite_available() {
     let plan = plan_for(&["README.md"], true);
     assert!(plan.contains(&"version-sync"));

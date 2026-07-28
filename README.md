@@ -229,11 +229,13 @@ Current OTLP scope is intentionally narrow:
 - OTLP metrics are not accepted.
 - OTLP/gRPC is not implemented.
 
+`POST /v1/logs` authenticates with **`CORTEX_TOKEN`** — the same static MCP bearer token that guards `POST /mcp`, read from the managed `~/.cortex/.env` on a deployed host. It is **not** `CORTEX_API_TOKEN` (REST `/api/*`) and **not** `CORTEX_API_ADMIN_TOKEN`. Loopback and trusted-gateway policies skip the check. An OAuth-only deployment with no static token denies OTLP outright, because machine exporters have no OAuth flow — so a non-loopback OAuth-only `/v1/logs` exposure is rejected at startup unless `CORTEX_TOKEN` is set.
+
 ### Docker logs and events
 
 Cortex supports two Docker collection paths:
 
-1. **Host-local agent**, the preferred multi-host path. A Cortex agent reads the local Docker socket, converts logs and lifecycle events into bounded records, and forwards them to the server without changing Docker's daemon logging driver.
+1. **Host-local agent**, the preferred multi-host path. The host-local cortex agent reads the local Docker socket, converts logs and lifecycle events into bounded records, and forwards them to the server without changing Docker's daemon logging driver.
 2. **Central pull compatibility mode**, an optional server-side collector for explicitly configured Docker Engine or docker-socket-proxy HTTP endpoints. It records per-container checkpoints and reconnects with bounded exponential backoff.
 
 Central pull is disabled by default. The `CORTEX_DOCKER_HOSTS` shorthand expands hosts into insecure `http://host:2375` endpoints and should only be used on a tightly controlled private network. A hosts file supports explicit base URLs and safer endpoint configuration.
@@ -536,6 +538,22 @@ The daemon serves a bundled workspace at `/app` and `/app/investigate`. It inclu
 - A recent-log timeline
 
 The app is embedded into the Rust binary, has no external runtime dependency, uses a restrictive Content Security Policy, and keeps the entered REST bearer token in memory only. The current UI identifies itself as an investigation preview rather than a full general-purpose dashboard.
+
+### Claude Code plugin
+
+`.claude-plugin/plugin.json` packages Cortex as a Claude Code plugin. It declares exactly three surfaces plus configuration:
+
+| Key | Points at |
+| --- | --- |
+| `mcpServers` | `plugins/cortex/mcp.json` — HTTP transport to `${user_config.server_url}/mcp` with a `Bearer ${user_config.api_token}` header |
+| `skills` | `plugins/cortex/skills/` — twelve skills |
+| `userConfig` | Server-vs-client mode, `server_url`, `api_token`, auth mode and OAuth fields, syslog/MCP bind host and port, retention and storage budgets, Docker ingest, and fleet hosts |
+
+The twelve skills are `cortex`, `frustration-assessment`, `hook-friction-assessment`, `incidents`, `logs`, `mcp-friction-assessment`, `report`, `searching-sessions`, `skill-improvement-assessment`, `topology`, `troubleshoot`, and `version-check`.
+
+The plugin registers **no Claude Code lifecycle hooks** — there is no `hooks` key and no `hooks.json`. Setup is explicit: run `cortex setup pluginhook` (or the `plugins/cortex/scripts/plugin-setup.sh` adapter) after installing, upgrading, or reconfiguring. `just validate-plugin` and `scripts/validate-marketplace.sh` assert the `hooks` key stays absent, and `cargo xtask check-version-sync` asserts the manifest carries no top-level `version`.
+
+See [docs/plugin/HOOKS.md](docs/plugin/HOOKS.md) for the setup lifecycle and [docs/plugin/PLUGINS.md](docs/plugin/PLUGINS.md) for the manifest reference.
 
 ### Health endpoints
 

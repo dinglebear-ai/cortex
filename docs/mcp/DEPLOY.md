@@ -30,7 +30,7 @@ The installed binary is `cortex`. Use `cortex mcp` for local MCP clients that re
 ## One-line installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jmagar/cortex/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.sh | sh
 ```
 
 The installer installs the `cortex` binary to `~/.local/bin/cortex`, then runs

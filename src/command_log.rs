@@ -1404,10 +1404,7 @@ fn rfc3339(value: DateTime<Utc>) -> String {
 }
 
 fn hostname() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "localhost".to_string())
+    crate::scanner::local_hostname()
 }
 
 fn username() -> Option<String> {

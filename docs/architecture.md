@@ -6,9 +6,9 @@ SQLite database and a service layer:
 1. **Log intelligence core** — syslog UDP/TCP ingest, OTLP `/v1/logs`,
    host-local agent Docker log ingest, legacy central pull Docker compatibility,
    AI transcript indexing, FTS5 search, and the
-   45-action `cortex` MCP tool plus the `/api/*` REST mirror. Source: `src/syslog/`,
-   `src/otlp.rs`, `src/docker_ingest/`, `src/db/`, `src/mcp/`, `src/api.rs`,
-   `src/app/`.
+   56-action `cortex` MCP tool plus the `/api/*` REST mirror. Source: `src/receiver/`,
+   `src/ingest.rs`, `src/otlp.rs`, `src/agent/`, `src/docker_ingest/`, `src/db/`,
+   `src/mcp/`, `src/api.rs`, `src/app/`.
 2. **Fleet SSH inventory / investigation graph** — SSH- and API-based homelab
    inventory collection into `~/.cortex/inventory`, the normalized
    `homelab.json` cache, heartbeat telemetry, and the rebuildable graph
@@ -25,8 +25,8 @@ SQLite database and a service layer:
 | `config.rs` | all | Layered config: defaults → `config.toml` → `~/.cortex/.env` → process env; startup validation (non-loopback auth gate) |
 | `runtime.rs` + `runtime/` | all | `RuntimeCore`: wires pool, ingest, auth policy; spawns the maintenance tasks below |
 | `app/` | core | `CortexService` service layer — shared limits/validation for MCP, REST, and CLI |
-| `db/` | core | SQLite pool + 31 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
-| `syslog/` (`receiver/`, parser) | core | UDP + TCP listeners (supervised with restart + backoff), RFC 3164/5424 + CEF parsing |
+| `db/` | core | SQLite pool + 43 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
+| `receiver/` + `receiver.rs` | core | UDP + TCP listeners (supervised with restart + backoff), RFC 3164/5424 + CEF parsing |
 | `ingest.rs` | core | mpsc channel + batch writer (one pool connection reserved for this writer) |
 | `otlp.rs` | core | OTLP/HTTP `POST /v1/logs` (protobuf, 4 MiB cap) |
 | `agent/`, `heartbeat_agent.rs` | inventory | Host-local cortex agent, including Docker log streaming from the local socket |

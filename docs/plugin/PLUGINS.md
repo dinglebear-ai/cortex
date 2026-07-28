@@ -18,8 +18,8 @@ release versions live in `Cargo.toml`, `server.json`, and `mcpb/manifest.json`.
 | --- | --- | --- |
 | `.claude-plugin/plugin.json` | Claude Code | Current plugin manifest |
 | `plugins/cortex/mcp.json` | Claude Code | MCP server template referenced by the manifest |
-| `plugins/cortex/hooks/hooks.json` | Claude Code | SessionStart and ConfigChange hook registration |
 | `plugins/cortex/skills/` | Claude Code | Plugin skill surfaces |
+| `plugins/cortex/scripts/` | Claude Code | Manual setup / diagnostic scripts (not hooks) |
 
 This repo does not currently ship tracked Codex or Gemini manifest files. It
 does ship `server.json` for MCP Registry metadata. Do not copy older Codex or
@@ -33,7 +33,6 @@ The current manifest declares:
 | Field | Purpose |
 | --- | --- |
 | `mcpServers` | Points Claude Code at `./plugins/cortex/mcp.json` |
-| `hooks` | Runs `plugins/cortex/hooks/hooks.json` |
 | `skills` | Exposes repo-local plugin skills |
 | `userConfig.server_url` | Base HTTP URL for the running cortex server |
 | `userConfig.api_token` | Required Bearer token used by the plugin MCP client; enforced by the server unless `no_auth=true` |
@@ -61,6 +60,6 @@ enforce that convention.
 ## See also
 
 - [CONFIG.md](CONFIG.md) -- plugin settings and userConfig fields
-- [HOOKS.md](HOOKS.md) -- plugin hook behavior
+- [HOOKS.md](HOOKS.md) -- plugin setup lifecycle (no Claude Code hooks)
 - [SKILLS.md](SKILLS.md) -- plugin skills
 - [../mcp/PUBLISH.md](../mcp/PUBLISH.md) -- publishing and transport notes

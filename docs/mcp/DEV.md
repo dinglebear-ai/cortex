@@ -5,7 +5,7 @@ Day-to-day development guide for the cortex server.
 ## Quick start
 
 ```bash
-git clone https://github.com/jmagar/cortex.git
+git clone https://github.com/dinglebear-ai/cortex.git
 cd cortex
 cp .env.example .env
 chmod 600 .env

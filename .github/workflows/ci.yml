@@ -10,6 +10,8 @@ on:
   schedule:
     - cron: "43 6 * * 1"
 
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -163,6 +165,37 @@ jobs:
         # matches the previous `cargo test` invocation.
         run: cargo test --doc --locked
 
+  docs-contract:
+    name: Docs Contract
+    runs-on: [self-hosted, unraid]
+    needs: [changes]
+    # check-public-identity.sh scans server.json, mcpb/manifest.json,
+    # .claude-plugin/*, plugins/*, config/* and scripts/* — none of which
+    # classify as `docs` or `rust`. Gating on those two alone let the most
+    # likely regression vectors skip the job entirely, and the aggregate gate
+    # counts a skipped job as success.
+    if: >-
+      ${{ needs.changes.outputs.docs == 'true'
+      || needs.changes.outputs.rust == 'true'
+      || needs.changes.outputs.release == 'true'
+      || needs.changes.outputs.skills == 'true'
+      || needs.changes.outputs.docker == 'true'
+      || needs.changes.outputs.workflow == 'true' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust + soldr
+        uses: ./.github/actions/setup-rust-soldr
+
+      - name: Verify documentation contracts
+        # These focused tests compile docs embedded with include_str!, catching
+        # drift in README and current operator docs without running the full suite.
+        run: |
+          env -u CORTEX_API_TOKEN -u NO_AUTH cargo test --lib --locked docs_tests::
+
+      - name: Verify public identity
+        run: bash scripts/check-public-identity.sh
+
   coverage:
     name: Coverage
     runs-on: [self-hosted, unraid]
@@ -219,6 +252,7 @@ jobs:
       - fmt
       - clippy
       - test
+      - docs-contract
       - coverage
       - deny
       - mcp-integration
@@ -239,6 +273,7 @@ jobs:
           require_success_or_skipped fmt "${{ needs.fmt.result }}"
           require_success_or_skipped clippy "${{ needs.clippy.result }}"
           require_success_or_skipped test "${{ needs.test.result }}"
+          require_success_or_skipped docs-contract "${{ needs.docs-contract.result }}"
           require_success_or_skipped coverage "${{ needs.coverage.result }}"
           require_success_or_skipped deny "${{ needs.deny.result }}"
           require_success_or_skipped mcp-integration "${{ needs.mcp-integration.result }}"

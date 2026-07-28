@@ -4,7 +4,7 @@
   "author": {
     "name": "jmagar"
   },
-  "repository": "https://github.com/jmagar/cortex",
+  "repository": "https://github.com/dinglebear-ai/cortex",
   "license": "MIT",
   "keywords": [
     "cortex",
@@ -13,7 +13,6 @@
     "homelab"
   ],
   "mcpServers": "./plugins/cortex/mcp.json",
-  "hooks": "./plugins/cortex/hooks/hooks.json",
   "skills": "./plugins/cortex/skills",
   "userConfig": {
     "is_server": {

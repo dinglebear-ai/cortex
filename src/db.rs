@@ -23,6 +23,7 @@ mod models;
 pub(crate) mod notifications;
 mod pool;
 mod queries;
+mod queries_hosts;
 mod queries_service_instances;
 mod skill_events;
 mod skill_incident_evidence;

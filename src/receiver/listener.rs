@@ -19,6 +19,16 @@ enum TcpFrame {
     Eof,
 }
 
+/// Drain a delimited oversized frame without buffering the excess so the
+/// connection can continue at the next frame. A sender that never terminates
+/// the frame is cut off once the drain passes this multiple of the max message
+/// size, to avoid pinning a TCP slot indefinitely.
+///
+/// The cutoff is approximate, not an exact byte cap: the budget is only checked
+/// on chunks containing no delimiter, so a frame may overrun it by up to one
+/// `fill_buf` chunk. Tests should assert the property, not an exact byte count.
+const MAX_OVERSIZE_DRAIN_MULTIPLIER: usize = 8;
+
 /// Returns true if `addr` matches any CIDR in `allowed`, or `allowed` is empty
 /// (open policy).
 ///
@@ -218,6 +228,8 @@ pub(super) async fn handle_tcp_connection(
     let mut backpressure = false;
     let mut line_count: u64 = 0;
     let mut total_bytes: usize = 0;
+    let mut oversize_count: u64 = 0;
+    let mut oversize_bytes_total: usize = 0;
     let mut peer_hostname: Option<String> = None;
     let started = Instant::now();
     let close_reason = loop {
@@ -299,14 +311,24 @@ pub(super) async fn handle_tcp_connection(
                 terminated,
             })) => {
                 observability.record_tcp_line_dropped_oversize();
-                warn!(
-                    peer = %addr,
-                    line_count,
-                    line_bytes,
-                    max_message_size = max_size,
-                    terminated,
-                    "Dropping oversized TCP syslog line"
-                );
+                oversize_count += 1;
+                oversize_bytes_total = oversize_bytes_total.saturating_add(line_bytes);
+                // A terminated oversize frame no longer tears the connection
+                // down, so a misconfigured forwarder can emit these at line
+                // rate. Log on an exponential cadence instead of per frame; the
+                // per-connection totals ride the closing summary and the exact
+                // count stays available via the observability counter.
+                if !terminated || should_log_oversize(oversize_count) {
+                    warn!(
+                        peer = %addr,
+                        line_count,
+                        line_bytes,
+                        oversize_count,
+                        max_message_size = max_size,
+                        terminated,
+                        "Dropping oversized TCP syslog line"
+                    );
+                }
                 if terminated {
                     continue;
                 }
@@ -329,10 +351,25 @@ pub(super) async fn handle_tcp_connection(
         close_reason,
         line_count,
         total_bytes,
+        oversize_count,
+        oversize_bytes_total,
         elapsed_ms = started.elapsed().as_millis(),
         "TCP syslog connection closed"
     );
     observability.record_tcp_connection_closed();
+}
+
+/// Exponential log cadence for repeated oversize drops on one connection:
+/// the 1st, 10th, 100th, ... drop is logged, the rest are counted only.
+fn should_log_oversize(oversize_count: u64) -> bool {
+    let mut threshold = 1u64;
+    while threshold < oversize_count {
+        threshold = threshold.saturating_mul(10);
+        if threshold == u64::MAX {
+            return false;
+        }
+    }
+    threshold == oversize_count
 }
 
 async fn read_bounded_line<R>(reader: &mut R, max_size: usize) -> std::io::Result<TcpFrame>
@@ -340,10 +377,26 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut line = Vec::with_capacity(max_size.min(8192));
+    let mut oversize_bytes = None;
+    // Accumulate one byte past `max_size` so a CRLF terminator split across two
+    // `fill_buf` chunks does not misclassify an at-limit payload. A frame of
+    // exactly `max_size` payload bytes ending in CRLF must be accepted whether
+    // or not the read boundary falls between the `\r` and the `\n`; the newline
+    // branch below subtracts the trailing `\r` before comparing to `max_size`.
+    let max_accumulate_bytes = max_size.saturating_add(1);
+    let max_drain_bytes = max_size
+        .saturating_mul(MAX_OVERSIZE_DRAIN_MULTIPLIER)
+        .max(max_accumulate_bytes);
 
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
+            if let Some(line_bytes) = oversize_bytes {
+                return Ok(TcpFrame::Oversize {
+                    line_bytes,
+                    terminated: false,
+                });
+            }
             return if line.is_empty() {
                 Ok(TcpFrame::Eof)
             } else {
@@ -353,11 +406,27 @@ where
 
         if let Some(pos) = available.iter().position(|byte| *byte == b'\n') {
             let take = pos + 1;
+            if let Some(discarded) = oversize_bytes {
+                let total = discarded.saturating_add(take);
+                reader.consume(take);
+                return Ok(TcpFrame::Oversize {
+                    line_bytes: total,
+                    terminated: true,
+                });
+            }
+
             let total = line.len().saturating_add(take);
+            // CRLF can straddle a `fill_buf` boundary: when `\n` opens this
+            // chunk the `\r` is the last byte already accumulated in `line`.
+            let has_cr = if pos > 0 {
+                available[pos - 1] == b'\r'
+            } else {
+                line.last() == Some(&b'\r')
+            };
             let payload_bytes = line
                 .len()
                 .saturating_add(pos)
-                .saturating_sub(usize::from(pos > 0 && available[pos - 1] == b'\r'));
+                .saturating_sub(usize::from(has_cr));
             if payload_bytes > max_size {
                 reader.consume(take);
                 return Ok(TcpFrame::Oversize {
@@ -371,17 +440,22 @@ where
         }
 
         let available_len = available.len();
-        let total = line.len().saturating_add(available_len);
-        if total > max_size {
-            let remaining = max_size.saturating_sub(line.len());
-            if remaining > 0 {
-                line.extend_from_slice(&available[..remaining]);
-            }
+        let total = oversize_bytes
+            .unwrap_or(line.len())
+            .saturating_add(available_len);
+
+        if oversize_bytes.is_some() || total > max_accumulate_bytes {
             reader.consume(available_len);
-            return Ok(TcpFrame::Oversize {
-                line_bytes: total,
-                terminated: false,
-            });
+            // Nothing accumulated so far can be part of a deliverable frame.
+            line = Vec::new();
+            if total > max_drain_bytes {
+                return Ok(TcpFrame::Oversize {
+                    line_bytes: total,
+                    terminated: false,
+                });
+            }
+            oversize_bytes = Some(total);
+            continue;
         }
 
         line.extend_from_slice(available);

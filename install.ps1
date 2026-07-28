@@ -3,14 +3,14 @@
 # Windows mirror of install.sh. All prerequisite checks happen inside `cortex setup`.
 #
 # Environment controls:
-#   CORTEX_INSTALL_REPO        GitHub repo (default: jmagar/cortex)
+#   CORTEX_INSTALL_REPO        GitHub repo (default: dinglebear-ai/cortex)
 #   CORTEX_VERSION             Release version tag, e.g. v1.16.1 (default: latest)
 #   CORTEX_INSTALL_PREFIX      Install prefix (default: $HOME\.local)
 #   CORTEX_INSTALL_DRY_RUN     Set to 1 to print what would happen without doing it
 #   CORTEX_INSTALL_SKIP_SETUP  Set to 1 to skip running `cortex setup` after install
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/jmagar/cortex/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.ps1 | iex
 #
 # Pinned version:
 #   $env:CORTEX_VERSION='v1.16.1'; irm .../install.ps1 | iex
@@ -22,7 +22,7 @@
 param()
 $ErrorActionPreference = 'Stop'
 
-$Repo      = if ($env:CORTEX_INSTALL_REPO)   { $env:CORTEX_INSTALL_REPO }   else { 'jmagar/cortex' }
+$Repo      = if ($env:CORTEX_INSTALL_REPO)   { $env:CORTEX_INSTALL_REPO }   else { 'dinglebear-ai/cortex' }
 $Version   = if ($env:CORTEX_VERSION)        { $env:CORTEX_VERSION }        else { 'latest' }
 $Prefix    = if ($env:CORTEX_INSTALL_PREFIX) { $env:CORTEX_INSTALL_PREFIX } else { Join-Path $HOME '.local' }
 $BinDir    = Join-Path $Prefix 'bin'

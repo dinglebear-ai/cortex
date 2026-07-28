@@ -1,6 +1,6 @@
 [Unit]
 Description=cortex local server auto-deploy
-Documentation=https://github.com/jmagar/cortex
+Documentation=https://github.com/dinglebear-ai/cortex
 After=network-online.target docker.service
 Wants=network-online.target
 

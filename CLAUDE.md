@@ -2,6 +2,20 @@
 
 Rust binary: syslog receiver (UDP/TCP) + MCP server for homelab log intelligence. Receives RFC 3164/5424 syslog from all homelab hosts, stores in SQLite with FTS5, exposes a single `cortex` MCP tool (with action dispatch) for AI agents.
 
+## Repo facts
+
+| Fact | Value |
+|------|-------|
+| Remote | `git@github.com:dinglebear-ai/cortex.git` |
+| Cargo workspace | 2 members: the root `cortex` package (`[[bin]] cortex`, `src/main.rs`) and `xtask/` |
+| Edition / MSRV | `edition = "2024"`, `rust-version = "1.86"` |
+| MCP crate | `rmcp = "1.7"` (root `[dependencies]` and `[dev-dependencies]`; `xtask` does not use it) |
+| Auth crate | `lab-auth`, pinned git dependency (see `Cargo.toml`) |
+| License | MIT |
+| Package layout | `autobins = false`; the single binary is declared explicitly |
+
+Convention: modules use sibling `foo.rs` next to `foo/`, never `foo/mod.rs`. Unit tests live in sidecar `*_tests.rs` files.
+
 ## Commands
 
 ```bash
@@ -28,15 +42,32 @@ cortex assess skill <skill> [--since 7d] [--tool codex] [--all|--limit N] [--no-
 cortex assess abuse [--incident-id ID] [--no-llm]  # unified assess namespace; see README "Skill and abuse assessment"
 ```
 
+Recipes in `Justfile` (run `just --list` for the full set):
+
 ```bash
 just dev                         # cargo run alias
-just test                        # cargo test alias
+just build / just release        # debug / release build
+just check / just lint / just fmt  # cargo check, clippy, fmt
+just test                        # hermetic suite (cargo-nextest)
+just test-doc                    # doctests
+just test-live                   # canonical live end-to-end smoke harness
+just coverage / just coverage-html # cargo-llvm-cov
+just up / just down / just restart / just logs  # docker compose lifecycle
+just docker-build                # build the image
 just health                      # curl /health | jq (server must be running)
-just gen-token                   # openssl rand -hex 32 (generate API token)
+just setup                       # cp -n .env.example .env
+just gen-token                   # openssl rand -hex 32 (generate a bearer token)
+just validate-plugin             # plugin manifest + skill frontmatter checks
+just validate-skills             # alias for validate-plugin
 just build-plugin                # release build → installs binary to bin/ (Linux; requires git lfs install)
-just publish [major|minor|patch] # bump version, tag, push (triggers CI)
+just build-mcpb                  # build the MCP Bundle
+just install / just link-bin     # install or symlink the binary locally
 just generate-cli                # build standalone CLI (server must be running)
+just runtime-current / just sync-container  # container-vs-local image checks
+just clean
 ```
+
+There is **no `just publish`** — versioning and releases are driven by release-please (see "Version Bumping"), not by a local recipe.
 
 ## Architecture
 
@@ -62,7 +93,17 @@ Tests: unit tests live in sidecar files beside their source modules (e.g. `src/d
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 1514 | UDP + TCP | Syslog receiver (not 514 — avoids `CAP_NET_BIND_SERVICE`) |
-| 3100 | TCP | Shared HTTP listener for MCP (`POST /mcp`, `GET /health`) and OTLP HTTP ingest (`POST /v1/logs`); non-loopback OAuth-only `/v1/logs` exposure is blocked at startup unless `CORTEX_TOKEN` is set |
+| 3100 | TCP | Shared HTTP listener: MCP (`POST /mcp`), health (`GET /health`), OTLP logs (`POST /v1/logs`), REST (`/api/*`, `/api/v1/*`), and the browser workspace (`/app`) |
+
+**Token map for port 3100** — three distinct env vars, do not conflate them:
+
+| Env var | Config field | Guards |
+|---------|--------------|--------|
+| `CORTEX_TOKEN` | `mcp.api_token` | `POST /mcp` **and OTLP `POST /v1/logs`**, plus heartbeat/forwarding ingest |
+| `CORTEX_API_TOKEN` | `api.api_token` | REST `/api/*` only — required at startup because `/api/*` is always mounted |
+| `CORTEX_API_ADMIN_TOKEN` | `api.admin_token` | Privileged REST maintenance / file-tail routes |
+
+OTLP `/v1/logs` authenticates with **`CORTEX_TOKEN`** — read from the managed `~/.cortex/.env` on a deployed host. It is **not** `CORTEX_API_TOKEN` and **not** `CORTEX_API_ADMIN_TOKEN`. Loopback and trusted-gateway auth policies skip the check entirely; an OAuth-only deployment with no static token **denies** OTLP, because machine exporters have no OAuth flow — so non-loopback OAuth-only `/v1/logs` exposure is blocked at startup unless `CORTEX_TOKEN` is set. See `src/otlp/auth.rs`.
 
 ## MCP Tools
 
@@ -131,9 +172,24 @@ Scope taxonomy: every action requires `cortex:read` except the five **admin** ac
 
 ## Plugin Skills
 
-Skills ship with the Claude Code plugin — see `plugins/cortex/skills/<skill>/SKILL.md` for each:
+Twelve skills ship with the Claude Code plugin — one directory each under `plugins/cortex/skills/<skill>/SKILL.md`:
 
-`cortex` (primary log-intelligence skill), `frustration-assessment` (analyze `abuse_investigate` evidence bundles), `hook-friction-assessment` (analyze `hook_investigate` evidence bundles), `incidents` (unaddressed errors, notifications, similar/prior incidents, incident context), `logs` (Compose service log tailing), `mcp-friction-assessment` (analyze `mcp_investigate` evidence bundles), `redeploy` (re-run plugin setup hook), `report` (time-bounded markdown health reports), `session-search` (AI transcript search and exploration), `skill-improvement-assessment` (analyze `skill_investigate` evidence bundles), `topology` (map/host_state/fleet_state/correlate/graph queries), `troubleshoot` (connection/ingest failure triage), `version-check` (running container vs local Compose image).
+| Skill | Purpose |
+|-------|---------|
+| `cortex` | Primary log-intelligence skill |
+| `frustration-assessment` | Analyze `abuse_investigate` evidence bundles |
+| `hook-friction-assessment` | Analyze `hook_investigate` evidence bundles |
+| `incidents` | Unaddressed errors, notifications, similar/prior incidents, incident context |
+| `logs` | Compose service log tailing |
+| `mcp-friction-assessment` | Analyze `mcp_investigate` evidence bundles |
+| `report` | Time-bounded markdown health reports |
+| `searching-sessions` | AI transcript search and exploration |
+| `skill-improvement-assessment` | Analyze `skill_investigate` evidence bundles |
+| `topology` | `map` / `host_state` / `fleet_state` / `correlate` / `graph` queries |
+| `troubleshoot` | Connection / ingest failure triage |
+| `version-check` | Running container vs local Compose image |
+
+The plugin also ships `plugins/cortex/scripts/` (`plugin-setup.sh`, `check-runtime-current.sh`, `smoke-test.sh`). These are **manual** — the plugin registers no Claude Code lifecycle hooks (see "Plugin setup").
 
 ## OpenWiki
 
@@ -171,7 +227,7 @@ CORTEX_ALLOWED_ORIGINS=https://app  # optional; comma-separated extra Origin all
 CORTEX_WIDGET_EMBED=false           # opt-in: also embed the query widget (~16 KiB, audience=user) in search/filter/tail/errors tool results, for hosts whose connection path lacks resources/read (e.g. claude.ai connector proxy)
 
 # Storage
-CORTEX_DB_PATH=data/cortex.db
+CORTEX_DB_PATH=/data/cortex.db    # built-in default is the absolute container path /data/cortex.db
 CORTEX_POOL_SIZE=8                # MCP reads get pool_size - 1 permits (1 reserved for writer)
 CORTEX_SQLITE_PAGE_CACHE_MB=128   # total SQLite page-cache budget across pool
 CORTEX_SQLITE_MMAP_MB=256         # bounded mmap; resident mapped pages may count toward cgroup memory
@@ -243,7 +299,9 @@ RUST_LOG=info
 | `scripts/backup.sh` | WAL-safe SQLite backup script (checkpoint + `.backup` method) |
 | `scripts/reset-db.sh` | WAL-safe backup + destructive DB reset helper for local/dev recovery |
 | `release/components.toml` | Declarative source of truth for version-bearing files; consumed by `cargo xtask` |
-| `xtask/` | `cargo xtask` workspace crate: `bump-version`, `sync-version`, `check-version-sync`, `check-release-versions` |
+| `xtask/` | `cargo xtask` workspace crate (2nd workspace member): `bump-version`, `sync-version`, `check-version-sync`, `check-release-versions`, `pre-push` |
+| `lefthook.yml` | Pre-commit gates: staged-diff whitespace check, YAML parse, `cargo fmt --check`, Rust module-size limit (500 lines), `check-version-sync`, plugin/skill validation, env-credential block. Install once with `lefthook install`. |
+| `scripts/validate-marketplace.sh` | Plugin/marketplace manifest assertions (including "no `hooks` key", "no hooks dir") |
 | `release-please-config.json` / `.release-please-manifest.json` | release-please config — Conventional-Commits-driven version bump + changelog PRs (see "Version Bumping") |
 | `.github/workflows/release-please.yml` | Opens/updates the release PR on green CI; runs the `cargo xtask sync-version` fixup |
 | `cortex db status\|integrity\|checkpoint\|vacuum\|backup` | Direct SQLite maintenance commands for the configured DB |
@@ -387,6 +445,7 @@ cargo xtask check-version-sync               # all files agree (CI gate, every P
 cargo xtask check-release-versions           # sync + CHANGELOG entry (release gate)
 cargo xtask sync-version                     # re-apply the canonical version to every other file (release-please fixup step)
 cargo xtask bump-version patch|minor|major   # manual escape hatch — bump every file by hand, e.g. for a hotfix outside the normal PR flow
+cargo xtask pre-push                         # local pre-push gate (see xtask/src/pre_push.rs)
 ```
 
 **Version-bearing files (declared in `release/components.toml`):**
@@ -415,8 +474,10 @@ heading) runs as part of the release-please fixup.
 PAT expires silently; prefer a GitHub App installation token, or set a
 calendar reminder to rotate it.
 
-## Plugin setup hooks
+## Plugin setup
 
-Plugin setup is owned by the binary. Keep `scripts/plugin-setup.sh` as a thin adapter that maps `CLAUDE_PLUGIN_OPTION_*` values to environment variables, prepares appdata, ensures `cortex` is on `PATH`, and then calls `cortex setup pluginhook "$@"`.
+**The plugin ships no Claude Code lifecycle hooks.** There is no `plugins/cortex/hooks/` directory and `.claude-plugin/plugin.json` declares no `hooks` key — only `mcpServers`, `skills`, and `userConfig`. Nothing runs automatically at `SessionStart` or on `ConfigChange`; `just validate-plugin` and `scripts/validate-marketplace.sh` both assert the `hooks` key stays absent.
 
-`cortex setup check` is read-only, `cortex setup repair` is idempotent, and `cortex setup pluginhook --no-repair` is audit mode. Do not add Docker Compose, systemd, or service bootstrap logic back into the hook script.
+Setup is operator-driven and owned by the binary. Keep `scripts/plugin-setup.sh` (mirrored at `plugins/cortex/scripts/plugin-setup.sh`) as a thin adapter that maps `CLAUDE_PLUGIN_OPTION_*` values to environment variables, prepares appdata, ensures `cortex` is on `PATH`, and then calls `cortex setup pluginhook "$@"`.
+
+`cortex setup check` is read-only, `cortex setup repair` is idempotent, and `cortex setup pluginhook --no-repair` is audit mode. Do not add Docker Compose, systemd, or service bootstrap logic back into the adapter script, and do not reintroduce a `hooks.json`. See `docs/plugin/HOOKS.md`.

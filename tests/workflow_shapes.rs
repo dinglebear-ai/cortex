@@ -16,6 +16,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "fmt",
         "clippy",
         "test",
+        "docs-contract",
         "coverage",
         "deny",
         "mcp-integration",
@@ -31,6 +32,14 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         );
     }
 
+    let docs_contract = workflow_job_block(workflow, "docs-contract");
+    assert!(
+        docs_contract.contains("needs.changes.outputs.docs == 'true'")
+            && docs_contract.contains("cargo test --lib --locked docs_tests::")
+            && docs_contract.contains("bash scripts/check-public-identity.sh"),
+        "docs-contract must run focused embedded-document tests for docs changes"
+    );
+
     let gate = workflow_job_block(workflow, "ci-gate");
     for job in [
         "changes",
@@ -38,10 +47,10 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "fmt",
         "clippy",
         "test",
+        "docs-contract",
         "coverage",
         "deny",
         "mcp-integration",
-        "gitleaks",
     ] {
         assert!(
             gate.contains(&format!("require_success_or_skipped {job}")),
@@ -49,11 +58,76 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         );
     }
 
+    // The dedicated gitleaks job was retired in favour of the CodeQL/secret
+    // scanning already running on the repository; assert it stays gone rather
+    // than leaving a stale contract for a job that no longer exists.
     assert!(
-        workflow.contains(
-            "docker://ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
-        ),
-        "secret scanning must use the pinned license-free Gitleaks CLI image"
+        !workflow.contains("gitleaks"),
+        "the redundant gitleaks job was retired — re-adding it needs a deliberate contract update"
+    );
+}
+
+/// Workflows that legitimately need a writable `GITHUB_TOKEN` at the top level.
+/// Everything else must declare read-only `contents`. Keeping this as an
+/// allowlist means a newly added workflow fails the test until it is either
+/// made read-only or consciously added here.
+const WRITE_SCOPED_WORKFLOWS: &[&str] = &["release.yml", "openwiki-update.yml"];
+
+#[test]
+fn workflows_default_to_read_only_github_token_permissions() {
+    // Read the directory at test time rather than `include_str!`ing a fixed
+    // list, so a new workflow with no top-level `permissions:` block is caught.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
+    let mut checked = 0;
+
+    for entry in std::fs::read_dir(&dir).expect("workflows directory must exist") {
+        let path = entry.expect("readable workflow entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if !name.ends_with(".yml") && !name.ends_with(".yaml") {
+            continue;
+        }
+        checked += 1;
+
+        let workflow = std::fs::read_to_string(&path).expect("readable workflow");
+        let permissions = workflow
+            .lines()
+            .position(|line| line.trim_end() == "permissions:")
+            .map(|idx| {
+                workflow
+                    .lines()
+                    .skip(idx + 1)
+                    .take_while(|line| line.starts_with("  ") || line.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+
+        let permissions = permissions.unwrap_or_else(|| {
+            panic!("{name} must declare an explicit top-level permissions block")
+        });
+
+        if WRITE_SCOPED_WORKFLOWS.contains(&name.as_str()) {
+            continue;
+        }
+        assert!(
+            permissions.contains("contents: read"),
+            "{name} must default GITHUB_TOKEN to read-only contents access"
+        );
+    }
+
+    assert!(
+        checked > 0,
+        "no workflows were checked — is the path right?"
+    );
+
+    let docker = include_str!("../.github/workflows/docker-publish.yml");
+    let publish = workflow_job_block(docker, "build-and-push");
+    assert!(
+        publish.contains("packages: write") && publish.contains("security-events: write"),
+        "the publish job must retain its explicit package and SARIF upload scopes"
     );
 }
 

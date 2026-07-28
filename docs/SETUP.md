@@ -18,7 +18,7 @@ Step-by-step instructions to get cortex running locally, in Docker, or as a Clau
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/jmagar/cortex.git
+git clone https://github.com/dinglebear-ai/cortex.git
 cd cortex
 ```
 

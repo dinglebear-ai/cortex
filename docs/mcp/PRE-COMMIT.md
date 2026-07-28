@@ -1,36 +1,50 @@
 # Pre-commit Hook Configuration -- cortex
 
-Hooks run as Claude Code lifecycle hooks via `hooks/hooks.json`.
+Pre-commit checks run through [lefthook](https://github.com/evilmartians/lefthook),
+configured in `lefthook.yml` at the repo root. cortex ships **no Claude Code
+lifecycle hooks** — see [../plugin/HOOKS.md](../plugin/HOOKS.md).
 
 ## Hook configuration
 
-Hooks are defined in `hooks/hooks.json` and enforced by Claude Code during sessions:
+Install the git hooks once per clone:
 
-| Hook | Script | Purpose |
+```bash
+lefthook install
+```
+
+`lefthook.yml` pre-commit jobs (most wrapped in `scripts/with_timeout.sh` — the
+`diff check` and `skills` jobs run unwrapped):
+
+| Job | Command | Purpose |
 | --- | --- | --- |
-| `sync-env` | `hooks/scripts/sync-env.sh` | Ensures `.env.example` documents all variables read by the server |
-| `fix-env-perms` | `hooks/scripts/fix-env-perms.sh` | Sets `.env` to `chmod 600` if present |
+| diff check | `git --no-pager diff --check --cached` | Rejects whitespace errors and conflict markers in staged content |
+| yaml parse | `python -c 'yaml.safe_load(...)'` | Rejects unparseable YAML in staged files |
+| rustfmt | `cargo fmt -- --check` | Formatting gate |
+| module size | `scripts/check-rust-module-size.sh --limit 500` | Caps Rust module line count |
+| version sync | `cargo xtask check-version-sync` | All version-bearing files agree |
+| skills | `just validate-skills` | Validates plugin/skill manifests and frontmatter (staged `plugins/cortex/skills/**`, `.claude-plugin/**`) |
+| env guard | `scripts/block-env-commits.sh` | Blocks commits containing env credential patterns |
 
 
 ## Manual checks
 
-Run checks manually outside of Claude Code:
+Run the same gates by hand:
 
 ```bash
-# Plugin manifest validation
-just check-contract
+# Plugin manifest + skill frontmatter validation
+just validate-plugin
 
-# Docker security check
+# Marketplace manifest assertions
+bash scripts/validate-marketplace.sh
 
+# Version-bearing files agree
+cargo xtask check-version-sync
 
-# No baked env vars in Docker image
+# Env credential scan
+bash scripts/block-env-commits.sh
 
-
-# Outdated dependencies
-
-
-# Ignore file patterns
-
+# Dependency policy
+cargo deny check
 ```
 
 ## Rust-specific checks
@@ -38,14 +52,15 @@ just check-contract
 Before committing, run:
 
 ```bash
-just lint        # cargo clippy -- -D warnings
 just fmt         # cargo fmt
-just test        # cargo test
+just lint        # cargo clippy -- -D warnings
+just test        # hermetic suite via cargo-nextest
 ```
 
-These are not automated as git hooks but are enforced in CI.
+`cargo xtask pre-push` bundles the heavier pre-push gate. All of these are also enforced in CI.
 
 ## See also
 
 - [CICD.md](CICD.md) -- CI workflow enforces lint and test
-- [../GUARDRAILS.md](../GUARDRAILS.md) -- security patterns enforced by hooks
+- [../plugin/HOOKS.md](../plugin/HOOKS.md) -- plugin setup lifecycle (no Claude Code hooks)
+- [../GUARDRAILS.md](../GUARDRAILS.md) -- security patterns

@@ -24,9 +24,6 @@ cortex/
 │   ├── runbooks/                # Operational runbooks
 │   ├── sessions/                # Development session notes
 │   └── superpowers/             # Superpowers plans
-├── hooks/
-│   ├── hooks.json               # Hook definitions
-│   └── scripts/                 # Hook scripts (sync-env, fix-perms, ignore-files)
 ├── scripts/
 │   ├── smoke-test.sh            # Live smoke test
 │   ├── backup.sh                # WAL-safe SQLite backup
@@ -88,7 +85,7 @@ cortex/
 | Directory | Surface |
 | --- | --- |
 | `skills/` | Skill definition (SKILL.md) |
-| `hooks/` | Lifecycle hooks (sync-env, fix-perms, ignore-files) |
+| `scripts/` | Manual setup and diagnostic scripts (no Claude Code lifecycle hooks) |
 
 No agents, commands, channels, output styles, or schedules.
 
