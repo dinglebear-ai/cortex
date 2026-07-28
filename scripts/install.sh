@@ -11,7 +11,7 @@ Install cortex from GitHub Releases.
 Environment:
   INSTALL_DIR Destination directory (default: ~/.local/bin)
   CORTEX_RMCP_VERSION Release tag such as v3.8.0 (default: latest)
-  CORTEX_RMCP_REPO GitHub repo owner/name (default: jmagar/cortex)
+  CORTEX_RMCP_REPO GitHub repo owner/name (default: dinglebear-ai/cortex)
 USAGE
 }
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi

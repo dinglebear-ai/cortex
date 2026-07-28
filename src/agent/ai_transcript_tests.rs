@@ -89,9 +89,13 @@ fn checkpoint_round_trips_through_disk() {
     let checkpoint_path = dir.path().join("checkpoint.json");
     let mut checkpoint = Checkpoint::default();
     checkpoint.files.insert("/tmp/foo.jsonl".to_string(), 42);
-    checkpoint
-        .gemini_parse_failures
-        .insert("/tmp/bad-gemini.json".to_string(), 99);
+    checkpoint.gemini_parse_failures.insert(
+        "/tmp/bad-gemini.json".to_string(),
+        GeminiParseFailure {
+            fingerprint: 99,
+            last_warned: Instant::now(),
+        },
+    );
     save_checkpoint(&checkpoint_path, &checkpoint).unwrap();
 
     let loaded = load_checkpoint(&checkpoint_path);
@@ -106,19 +110,76 @@ fn checkpoint_round_trips_through_disk() {
 fn gemini_parse_failure_warns_once_per_content_revision() {
     let mut checkpoint = Checkpoint::default();
     let key = "/tmp/bad-gemini.json";
+    let now = Instant::now();
 
     assert!(should_warn_gemini_parse_failure(
         &mut checkpoint,
         key,
-        "{not-json"
+        "{not-json",
+        now
     ));
     assert!(
-        !should_warn_gemini_parse_failure(&mut checkpoint, key, "{not-json"),
+        !should_warn_gemini_parse_failure(&mut checkpoint, key, "{not-json", now),
         "unchanged malformed content must not warn every poll"
     );
     assert!(
-        should_warn_gemini_parse_failure(&mut checkpoint, key, "{still-not-json"),
+        should_warn_gemini_parse_failure(&mut checkpoint, key, "{still-not-json", now),
         "a changed malformed revision should warn once again"
+    );
+}
+
+/// The failure mode content-only suppression creates: a transcript that goes
+/// malformed and then stops changing would otherwise warn once and go silent
+/// for the process lifetime while its data is never forwarded.
+#[test]
+fn gemini_parse_failure_rewarns_after_the_interval_even_when_content_is_unchanged() {
+    let mut checkpoint = Checkpoint::default();
+    let key = "/tmp/stuck-gemini.json";
+    let start = Instant::now();
+
+    assert!(should_warn_gemini_parse_failure(
+        &mut checkpoint,
+        key,
+        "{not-json",
+        start
+    ));
+
+    let just_before = start + GEMINI_REWARN_INTERVAL - Duration::from_secs(1);
+    assert!(
+        !should_warn_gemini_parse_failure(&mut checkpoint, key, "{not-json", just_before),
+        "must stay quiet until the re-warn interval elapses"
+    );
+
+    let after = start + GEMINI_REWARN_INTERVAL;
+    assert!(
+        should_warn_gemini_parse_failure(&mut checkpoint, key, "{not-json", after),
+        "a persistently malformed transcript must not go dark forever"
+    );
+    assert!(
+        !should_warn_gemini_parse_failure(&mut checkpoint, key, "{not-json", after),
+        "the re-warn must reset the clock, not latch on"
+    );
+}
+
+#[test]
+fn gemini_parse_failures_are_evicted_for_files_that_no_longer_exist() {
+    let mut checkpoint = Checkpoint::default();
+    let now = Instant::now();
+    should_warn_gemini_parse_failure(&mut checkpoint, "/tmp/gone.json", "{bad", now);
+    should_warn_gemini_parse_failure(&mut checkpoint, "/tmp/still-here.json", "{bad", now);
+
+    let present: HashSet<String> = ["/tmp/still-here.json".to_string()].into_iter().collect();
+    evict_missing_gemini_failures(&mut checkpoint, &present);
+
+    assert!(
+        !checkpoint
+            .gemini_parse_failures
+            .contains_key("/tmp/gone.json")
+    );
+    assert!(
+        checkpoint
+            .gemini_parse_failures
+            .contains_key("/tmp/still-here.json")
     );
 }
 

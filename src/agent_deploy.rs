@@ -378,7 +378,7 @@ const UNRAID_ENV: &str = "/mnt/user/appdata/cortex/heartbeat-agent.env";
 /// (no bind-mounted host binary), pinned to this deploying binary's version so
 /// server and agents stay in lockstep. Requires the matching tag to be present
 /// on the registry before deploy.
-const CORTEX_IMAGE_REPO: &str = "ghcr.io/jmagar/cortex";
+const CORTEX_IMAGE_REPO: &str = "ghcr.io/dinglebear-ai/cortex";
 const UNRAID_HOST_ID: &str = "/mnt/user/appdata/cortex/heartbeat-host-id";
 const UNRAID_CONTAINER: &str = "cortex-heartbeat-agent";
 const UNRAID_HOST_SYSLOG: &str = "/var/log/syslog";

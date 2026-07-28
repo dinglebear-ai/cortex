@@ -134,7 +134,7 @@ fn labelled_container() -> ContainerInfo {
         name: "cortex".into(),
         status: Some("Up".into()),
         health: Some("healthy".into()),
-        image: Some("ghcr.io/jmagar/cortex:latest".into()),
+        image: Some("ghcr.io/dinglebear-ai/cortex:latest".into()),
         image_id: Some("sha256:abc".into()),
         labels,
         mounts: vec![MountInfo {
@@ -177,7 +177,7 @@ fn mcp_projection_omits_host_paths_and_image_ids() {
         container_id: Some("container-id".into()),
         status: Some("Up 1 minute".into()),
         health: Some("healthy".into()),
-        image: Some("ghcr.io/jmagar/cortex:latest".into()),
+        image: Some("ghcr.io/dinglebear-ai/cortex:latest".into()),
         image_id: Some("sha256:secret-image-id".into()),
         compose_project: Some("syslog-jmagar-lab".into()),
         compose_working_dir: Some(PathBuf::from("/home/jmagar/private")),
@@ -216,7 +216,7 @@ fn mcp_projection_treats_lowercase_docker_exited_as_stopped() {
         container_id: Some("container-id".into()),
         status: Some("exited".into()),
         health: None,
-        image: Some("ghcr.io/jmagar/cortex:latest".into()),
+        image: Some("ghcr.io/dinglebear-ai/cortex:latest".into()),
         image_id: Some("sha256:secret-image-id".into()),
         compose_project: Some("syslog-jmagar-lab".into()),
         compose_working_dir: None,
@@ -240,7 +240,7 @@ fn mcp_projection_degrades_hard_diagnostics() {
         container_id: Some("container-id".into()),
         status: Some("running".into()),
         health: Some("healthy".into()),
-        image: Some("ghcr.io/jmagar/cortex:latest".into()),
+        image: Some("ghcr.io/dinglebear-ai/cortex:latest".into()),
         image_id: None,
         compose_project: Some("syslog-jmagar-lab".into()),
         compose_working_dir: None,
@@ -303,7 +303,7 @@ fn inspect_json_extracts_compose_fields_ports_and_mounts() {
             "Health": {"Status": "healthy"}
         },
         "Config": {
-            "Image": "ghcr.io/jmagar/cortex:latest",
+            "Image": "ghcr.io/dinglebear-ai/cortex:latest",
             "Labels": {
                 "com.docker.compose.project": "syslog-jmagar-lab",
                 "com.docker.compose.service": "cortex",
@@ -327,7 +327,10 @@ fn inspect_json_extracts_compose_fields_ports_and_mounts() {
     assert_eq!(info.name, "cortex");
     assert_eq!(info.status.as_deref(), Some("running"));
     assert_eq!(info.health.as_deref(), Some("healthy"));
-    assert_eq!(info.image.as_deref(), Some("ghcr.io/jmagar/cortex:latest"));
+    assert_eq!(
+        info.image.as_deref(),
+        Some("ghcr.io/dinglebear-ai/cortex:latest")
+    );
     assert_eq!(info.image_id.as_deref(), Some("sha256:image-id"));
     assert_eq!(info.mounts[0].target, "/data");
     assert_eq!(info.ports.len(), 2);

@@ -73,7 +73,7 @@ MCP Registry metadata at repo root:
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/cortex:vX.Y.Z"
+      "identifier": "ghcr.io/dinglebear-ai/cortex:vX.Y.Z"
     }
   ]
 }
@@ -100,7 +100,7 @@ After publishing, verify:
 cargo install cortex --version X.Y.Z
 
 # Docker
-docker pull ghcr.io/jmagar/cortex:vX.Y.Z
+docker pull ghcr.io/dinglebear-ai/cortex:vX.Y.Z
 
 # GitHub Release
 gh release view vX.Y.Z

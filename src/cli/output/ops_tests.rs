@@ -149,7 +149,7 @@ fn human_compose_outputs_accept_status_doctor_dry_run_and_executed_payloads() {
         container_id: Some("abc".to_string()),
         status: Some("running".to_string()),
         health: Some("healthy".to_string()),
-        image: Some("ghcr.io/jmagar/cortex:latest".to_string()),
+        image: Some("ghcr.io/dinglebear-ai/cortex:latest".to_string()),
         image_id: Some("sha256:abc".to_string()),
         compose_project: Some("cortex".to_string()),
         compose_working_dir: Some(PathBuf::from("/opt/cortex")),

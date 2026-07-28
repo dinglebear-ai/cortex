@@ -333,7 +333,7 @@ fn heartbeat_agent_compose(
     // binary is staged or bind-mounted. `user: "0:0"` overrides the image's
     // unprivileged server user (the agent reads root-owned host files), and the
     // image's server health probe is disabled (the agent runs no HTTP server).
-    let image = format!("ghcr.io/jmagar/cortex:{}", env!("CARGO_PKG_VERSION"));
+    let image = format!("ghcr.io/dinglebear-ai/cortex:{}", env!("CARGO_PKG_VERSION"));
     let env_path = setup_path_value(env_path)?;
     let host_id_path = setup_path_value(host_id_path)?;
     let data_dir = setup_path_value(data_dir)?;

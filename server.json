@@ -107,7 +107,7 @@
       "distribution": {
         "npm": "cortex-rmcp@3.11.1",
         "nodePackage": "cortex-rmcp",
-        "ociImage": "ghcr.io/jmagar/cortex:v3.11.1"
+        "ociImage": "ghcr.io/dinglebear-ai/cortex:v3.11.1"
       },
       "buildInfo": {
         "version": "3.11.1",

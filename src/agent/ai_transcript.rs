@@ -18,13 +18,13 @@
 //! reliability bar of the other agent streams, which all tolerate
 //! multi-second latency already.
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -68,12 +68,29 @@ impl AiTranscriptForwardConfig {
 struct Checkpoint {
     /// Canonical path string -> lines already forwarded.
     files: HashMap<String, usize>,
-    /// In-process malformed Gemini revisions already warned about. This is
-    /// deliberately not persisted: one warning per bad content revision per
-    /// agent process is enough to surface the problem without feeding the
-    /// same warning back through journald every poll cycle.
+    /// In-process record of malformed Gemini transcripts, keyed by canonical
+    /// path. Deliberately not persisted: a restart should re-warn rather than
+    /// inherit suppression from a previous process.
+    ///
+    /// Suppression is bounded in both directions. Warning on every poll cycle
+    /// floods journald, but warning only once per content revision lets a file
+    /// that goes malformed and then stops changing — a truncated write, a
+    /// crashed session, on-disk corruption — go silent for the lifetime of the
+    /// agent while its data is never forwarded. So a warning repeats when the
+    /// content changes *or* when [`GEMINI_REWARN_INTERVAL`] has elapsed.
     #[serde(skip)]
-    gemini_parse_failures: HashMap<String, u64>,
+    gemini_parse_failures: HashMap<String, GeminiParseFailure>,
+}
+
+/// How long a persistently malformed Gemini transcript stays quiet between
+/// warnings. Long enough not to be noise, short enough that an operator
+/// scanning a day of logs cannot miss it.
+const GEMINI_REWARN_INTERVAL: Duration = Duration::from_secs(3600);
+
+#[derive(Debug, Clone)]
+struct GeminiParseFailure {
+    fingerprint: u64,
+    last_warned: Instant,
 }
 
 fn load_checkpoint(path: &Path) -> Checkpoint {
@@ -99,12 +116,41 @@ fn gemini_content_fingerprint(raw: &str) -> u64 {
     hasher.finish()
 }
 
-fn should_warn_gemini_parse_failure(checkpoint: &mut Checkpoint, key: &str, raw: &str) -> bool {
+/// Returns true when this parse failure should be logged: the content changed
+/// since the last warning, or the re-warn interval has elapsed. `now` is a
+/// parameter so tests can advance the clock without sleeping.
+fn should_warn_gemini_parse_failure(
+    checkpoint: &mut Checkpoint,
+    key: &str,
+    raw: &str,
+    now: Instant,
+) -> bool {
     let fingerprint = gemini_content_fingerprint(raw);
+    let warn = match checkpoint.gemini_parse_failures.get(key) {
+        Some(previous) => {
+            previous.fingerprint != fingerprint
+                || now.duration_since(previous.last_warned) >= GEMINI_REWARN_INTERVAL
+        }
+        None => true,
+    };
+    if warn {
+        checkpoint.gemini_parse_failures.insert(
+            key.to_string(),
+            GeminiParseFailure {
+                fingerprint,
+                last_warned: now,
+            },
+        );
+    }
+    warn
+}
+
+/// Drop records for transcripts that no longer exist, so a long-lived agent
+/// with rotating sessions does not accumulate entries for deleted files.
+fn evict_missing_gemini_failures(checkpoint: &mut Checkpoint, present: &HashSet<String>) {
     checkpoint
         .gemini_parse_failures
-        .insert(key.to_string(), fingerprint)
-        != Some(fingerprint)
+        .retain(|key, _| present.contains(key));
 }
 
 /// Recursively collect supported transcript files under `root` (mirrors
@@ -222,6 +268,13 @@ async fn scan_and_forward(
     for root in &config.roots {
         collect_files(root, &mut files);
     }
+    evict_missing_gemini_failures(
+        checkpoint,
+        &files
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+    );
 
     let mut records = Vec::new();
     let mut new_totals: HashMap<String, usize> = HashMap::new();
@@ -263,8 +316,13 @@ async fn scan_and_forward(
                     parsed
                 }
                 Err(error) => {
-                    if should_warn_gemini_parse_failure(checkpoint, &key, &raw) {
-                        tracing::warn!(path = %path.display(), error = format!("{error:#}"), "ai transcript forwarder failed to parse gemini file");
+                    if should_warn_gemini_parse_failure(checkpoint, &key, &raw, Instant::now()) {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = format!("{error:#}"),
+                            unparseable_transcripts = checkpoint.gemini_parse_failures.len(),
+                            "ai transcript forwarder failed to parse gemini file — its data is not being forwarded"
+                        );
                     }
                     continue;
                 }
