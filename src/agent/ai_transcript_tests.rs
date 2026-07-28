@@ -89,10 +89,37 @@ fn checkpoint_round_trips_through_disk() {
     let checkpoint_path = dir.path().join("checkpoint.json");
     let mut checkpoint = Checkpoint::default();
     checkpoint.files.insert("/tmp/foo.jsonl".to_string(), 42);
+    checkpoint
+        .gemini_parse_failures
+        .insert("/tmp/bad-gemini.json".to_string(), 99);
     save_checkpoint(&checkpoint_path, &checkpoint).unwrap();
 
     let loaded = load_checkpoint(&checkpoint_path);
     assert_eq!(loaded.files.get("/tmp/foo.jsonl"), Some(&42));
+    assert!(
+        loaded.gemini_parse_failures.is_empty(),
+        "parse-warning suppression is process-local and must not be persisted"
+    );
+}
+
+#[test]
+fn gemini_parse_failure_warns_once_per_content_revision() {
+    let mut checkpoint = Checkpoint::default();
+    let key = "/tmp/bad-gemini.json";
+
+    assert!(should_warn_gemini_parse_failure(
+        &mut checkpoint,
+        key,
+        "{not-json"
+    ));
+    assert!(
+        !should_warn_gemini_parse_failure(&mut checkpoint, key, "{not-json"),
+        "unchanged malformed content must not warn every poll"
+    );
+    assert!(
+        should_warn_gemini_parse_failure(&mut checkpoint, key, "{still-not-json"),
+        "a changed malformed revision should warn once again"
+    );
 }
 
 #[tokio::test]
@@ -277,6 +304,65 @@ async fn scan_and_forward_scrubs_credentials_before_sending() {
         "raw API key must not reach the network: {body_str}"
     );
     assert!(body_str.contains("REDACTED"), "got: {body_str}");
+}
+
+#[tokio::test]
+async fn scan_and_forward_clears_gemini_parse_failure_after_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let gemini_dir = dir.path().join(".gemini/tmp/abc123/chats");
+    fs::create_dir_all(&gemini_dir).unwrap();
+    let session_path = gemini_dir.join("session-1.json");
+    write_file(&session_path, "{not-json");
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"accepted": 1})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+    let key = session_path.to_string_lossy().to_string();
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(checkpoint.gemini_parse_failures.contains_key(&key));
+
+    write_file(
+        &session_path,
+        &serde_json::json!({
+            "sessionId": "gemini-sess-1",
+            "cwd": "/home/jmagar/workspace/cortex",
+            "messages": [
+                {"id": "m1", "timestamp": "2026-07-09T00:00:00Z", "content": "recovered"},
+            ]
+        })
+        .to_string(),
+    );
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(!checkpoint.gemini_parse_failures.contains_key(&key));
 }
 
 #[tokio::test]

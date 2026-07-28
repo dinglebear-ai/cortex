@@ -1,8 +1,8 @@
 //! Plugin-hook environment preparation, ported from
 //! `plugins/cortex/scripts/plugin-setup.sh`.
 //!
-//! The SessionStart / ConfigChange hooks invoke `cortex setup pluginhook`
-//! directly (no bash wrapper). Before the check/repair phases run, we adapt the
+//! Operators invoke `cortex setup pluginhook` directly (no bash wrapper, and no
+//! Claude Code lifecycle hook). Before the check/repair phases run, we adapt the
 //! Claude Code plugin `CLAUDE_PLUGIN_OPTION_*` settings into the `CORTEX_*`
 //! environment the binary reads, mirroring the bash script exactly:
 //!

@@ -9,6 +9,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::*;
 
 #[test]
+fn command_log_uses_the_shared_os_hostname_resolver() {
+    assert_eq!(hostname(), crate::scanner::local_hostname());
+}
+
+#[test]
 fn parses_zsh_extended_history_line() {
     let parsed = parse_zsh_extended_history_line(": 1716500000:3;cargo test").unwrap();
 

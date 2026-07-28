@@ -2,9 +2,12 @@
 //! them into the existing cortex ingest pipeline. Logs only — `/v1/traces`
 //! returns 404 (deferred) and `/v1/metrics` returns 404 (deferred).
 //!
-//! Mounted on the same axum server as MCP. Body limit: 4 MiB. Optional Bearer
-//! auth via the same `CORTEX_TOKEN` as MCP (`CORTEX_API_TOKEN` is
-//! accepted as a deprecated alias).
+//! Mounted on the same axum server as MCP. Body limit: 4 MiB. Bearer auth uses
+//! the same static MCP token as `/mcp` — `config.mcp.api_token`, set via
+//! `CORTEX_TOKEN`. It is NOT `CORTEX_API_TOKEN` (that is `config.api.api_token`,
+//! the separate REST `/api/*` token) and NOT `CORTEX_API_ADMIN_TOKEN`.
+//! Loopback / trusted-gateway policies skip the check; OAuth-only deployments
+//! with no static token deny OTLP outright (no OAuth flow for exporters).
 //!
 //! Request → response wiring lives here; `AnyValue`/`LogBatchEntry`
 //! conversion is in [`entries`] and the bearer-token gate is in [`auth`].

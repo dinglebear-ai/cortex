@@ -56,7 +56,7 @@ async fn tcp_connection_allows_multiple_lines_beyond_connection_total_size() {
 }
 
 #[tokio::test]
-async fn tcp_connection_closes_oversized_unterminated_line_without_enqueueing() {
+async fn tcp_connection_closes_oversized_unterminated_line_after_bounded_drain() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::db::LogBatchEntry>(16);
     let ingest = crate::ingest::IngestTx::from_sender_for_test(tx);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -69,7 +69,10 @@ async fn tcp_connection_closes_oversized_unterminated_line_without_enqueueing() 
 
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    client.write_all(&[b'x'; 128]).await.unwrap();
+    client
+        .write_all(&vec![b'x'; 32 * MAX_OVERSIZE_DRAIN_MULTIPLIER + 1])
+        .await
+        .unwrap();
 
     let mut buf = [0u8; 1];
     let read = tokio::time::timeout(std::time::Duration::from_secs(1), client.read(&mut buf))
@@ -115,6 +118,28 @@ async fn tcp_connection_drops_oversized_delimited_line_and_keeps_later_frames() 
     assert!(entry.raw.contains("valid"));
 
     accept_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn bounded_reader_drains_fragmented_oversize_line_and_resumes() {
+    let input = format!("{}\nvalid\n", "x".repeat(64));
+    let mut reader = BufReader::with_capacity(16, input.as_bytes());
+
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Oversize {
+            line_bytes,
+            terminated,
+        } => {
+            assert_eq!(line_bytes, 65);
+            assert!(terminated);
+        }
+        other => panic!("expected fragmented oversized frame, got: {other:?}"),
+    }
+
+    match read_bounded_line(&mut reader, 32).await.unwrap() {
+        TcpFrame::Line(line) => assert_eq!(line, "valid"),
+        other => panic!("expected valid frame after oversized frame, got: {other:?}"),
+    }
 }
 
 #[test]

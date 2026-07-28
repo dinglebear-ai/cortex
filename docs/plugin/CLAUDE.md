@@ -15,7 +15,7 @@ Index for the `plugin/` documentation subdirectory. These docs cover every Claud
 | --- | --- |
 | `CHANNELS.md` | Channel integration (none) |
 | `CONFIG.md` | Plugin settings: userConfig, settings.json |
-| `HOOKS.md` | Lifecycle hooks: SessionStart/ConfigChange → `bin/cortex setup pluginhook` |
+| `HOOKS.md` | Plugin setup lifecycle — no Claude Code hooks; run `cortex setup pluginhook` manually |
 | `MARKETPLACES.md` | Marketplace publishing: Claude, Codex, Gemini, MCP Registry |
 | `OUTPUT-STYLES.md` | Output style definitions (none) |
 | `PLUGINS.md` | Plugin manifest reference: .claude-plugin, .codex-plugin, gemini-extension |

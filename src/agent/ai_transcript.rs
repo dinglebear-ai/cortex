@@ -19,7 +19,9 @@
 //! multi-second latency already.
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -66,6 +68,12 @@ impl AiTranscriptForwardConfig {
 struct Checkpoint {
     /// Canonical path string -> lines already forwarded.
     files: HashMap<String, usize>,
+    /// In-process malformed Gemini revisions already warned about. This is
+    /// deliberately not persisted: one warning per bad content revision per
+    /// agent process is enough to surface the problem without feeding the
+    /// same warning back through journald every poll cycle.
+    #[serde(skip)]
+    gemini_parse_failures: HashMap<String, u64>,
 }
 
 fn load_checkpoint(path: &Path) -> Checkpoint {
@@ -83,6 +91,20 @@ fn save_checkpoint(path: &Path, checkpoint: &Checkpoint) -> Result<()> {
     let bytes = serde_json::to_vec(checkpoint)?;
     fs::write(path, bytes)
         .with_context(|| format!("failed to write checkpoint file {}", path.display()))
+}
+
+fn gemini_content_fingerprint(raw: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    raw.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn should_warn_gemini_parse_failure(checkpoint: &mut Checkpoint, key: &str, raw: &str) -> bool {
+    let fingerprint = gemini_content_fingerprint(raw);
+    checkpoint
+        .gemini_parse_failures
+        .insert(key.to_string(), fingerprint)
+        != Some(fingerprint)
 }
 
 /// Recursively collect supported transcript files under `root` (mirrors
@@ -236,9 +258,14 @@ async fn scan_and_forward(
                 }
             };
             let parsed = match scanner::gemini::parse_file(&raw, path) {
-                Ok(parsed) => parsed,
+                Ok(parsed) => {
+                    checkpoint.gemini_parse_failures.remove(&key);
+                    parsed
+                }
                 Err(error) => {
-                    tracing::warn!(path = %path.display(), error = format!("{error:#}"), "ai transcript forwarder failed to parse gemini file");
+                    if should_warn_gemini_parse_failure(checkpoint, &key, &raw) {
+                        tracing::warn!(path = %path.display(), error = format!("{error:#}"), "ai transcript forwarder failed to parse gemini file");
+                    }
                     continue;
                 }
             };

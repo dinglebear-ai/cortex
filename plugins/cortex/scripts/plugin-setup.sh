@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart / ConfigChange hook for cortex.
+# Manual setup adapter for cortex (not a Claude Code lifecycle hook).
 # Adapts plugin settings to env and delegates setup to an installed cortex binary.
 set -euo pipefail
 

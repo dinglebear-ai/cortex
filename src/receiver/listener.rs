@@ -19,6 +19,11 @@ enum TcpFrame {
     Eof,
 }
 
+/// Drain a delimited oversized frame without buffering it so the connection
+/// can continue. A sender that never terminates the frame is cut off at this
+/// bounded multiple to avoid pinning a TCP slot indefinitely.
+const MAX_OVERSIZE_DRAIN_MULTIPLIER: usize = 8;
+
 /// Returns true if `addr` matches any CIDR in `allowed`, or `allowed` is empty
 /// (open policy).
 ///
@@ -340,10 +345,20 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut line = Vec::with_capacity(max_size.min(8192));
+    let mut oversize_bytes = None;
+    let max_drain_bytes = max_size
+        .saturating_mul(MAX_OVERSIZE_DRAIN_MULTIPLIER)
+        .max(max_size.saturating_add(1));
 
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
+            if let Some(line_bytes) = oversize_bytes {
+                return Ok(TcpFrame::Oversize {
+                    line_bytes,
+                    terminated: false,
+                });
+            }
             return if line.is_empty() {
                 Ok(TcpFrame::Eof)
             } else {
@@ -353,11 +368,25 @@ where
 
         if let Some(pos) = available.iter().position(|byte| *byte == b'\n') {
             let take = pos + 1;
+            if let Some(discarded) = oversize_bytes {
+                let total = discarded.saturating_add(take);
+                reader.consume(take);
+                return Ok(TcpFrame::Oversize {
+                    line_bytes: total,
+                    terminated: true,
+                });
+            }
+
             let total = line.len().saturating_add(take);
+            let has_cr = if pos > 0 {
+                available[pos - 1] == b'\r'
+            } else {
+                line.last() == Some(&b'\r')
+            };
             let payload_bytes = line
                 .len()
                 .saturating_add(pos)
-                .saturating_sub(usize::from(pos > 0 && available[pos - 1] == b'\r'));
+                .saturating_sub(usize::from(has_cr));
             if payload_bytes > max_size {
                 reader.consume(take);
                 return Ok(TcpFrame::Oversize {
@@ -371,17 +400,20 @@ where
         }
 
         let available_len = available.len();
-        let total = line.len().saturating_add(available_len);
-        if total > max_size {
-            let remaining = max_size.saturating_sub(line.len());
-            if remaining > 0 {
-                line.extend_from_slice(&available[..remaining]);
-            }
+        let total = oversize_bytes
+            .unwrap_or(line.len())
+            .saturating_add(available_len);
+
+        if oversize_bytes.is_some() || total > max_size {
             reader.consume(available_len);
-            return Ok(TcpFrame::Oversize {
-                line_bytes: total,
-                terminated: false,
-            });
+            if total > max_drain_bytes {
+                return Ok(TcpFrame::Oversize {
+                    line_bytes: total,
+                    terminated: false,
+                });
+            }
+            oversize_bytes = Some(total);
+            continue;
         }
 
         line.extend_from_slice(available);
