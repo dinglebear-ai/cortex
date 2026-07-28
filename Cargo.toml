@@ -88,7 +88,7 @@ toml = "0.8"
 toml_edit = "0.22"
 
 # OAuth + JWT (shared with lab via parameterizable lab-auth crate)
-lab-auth = { git = "https://github.com/jmagar/lab.git", rev = "87cec3241f9baef22335de9cc8629ebbcd8ba047", package = "lab-auth" }
+lab-auth = { git = "https://github.com/dinglebear-ai/labby.git", rev = "87cec3241f9baef22335de9cc8629ebbcd8ba047", package = "lab-auth" }
 url = "2"
 
 # Errors
