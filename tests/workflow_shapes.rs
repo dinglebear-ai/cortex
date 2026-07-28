@@ -51,7 +51,6 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "coverage",
         "deny",
         "mcp-integration",
-        "gitleaks",
     ] {
         assert!(
             gate.contains(&format!("require_success_or_skipped {job}")),
@@ -59,11 +58,12 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         );
     }
 
+    // The dedicated gitleaks job was retired in favour of the CodeQL/secret
+    // scanning already running on the repository; assert it stays gone rather
+    // than leaving a stale contract for a job that no longer exists.
     assert!(
-        workflow.contains(
-            "docker://ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
-        ),
-        "secret scanning must use the pinned license-free Gitleaks CLI image"
+        !workflow.contains("gitleaks"),
+        "the redundant gitleaks job was retired — re-adding it needs a deliberate contract update"
     );
 }
 
