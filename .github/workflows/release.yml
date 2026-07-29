@@ -29,7 +29,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  SOLDR_CACHE_DIR: ${{ github.workspace }}/../.soldr-cache
 
 jobs:
   cortex-linux:
@@ -38,8 +37,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
 
       - name: cargo build --release --bin cortex
         run: cargo build --release --locked --bin cortex
@@ -62,10 +61,10 @@ jobs:
   cortex-windows:
     name: build cortex (windows)
     runs-on: windows-latest
-    # GitHub-hosted Windows job runs bare cargo (no soldr). Blank the repo's
+    # GitHub-hosted Windows job runs bare cargo (no kache). Blank the repo's
     # .cargo/config.toml rustc-wrapper here — it's a Linux bash sccache shim
     # that can't execute as a rustc wrapper on Windows. The self-hosted Linux
-    # jobs route through soldr instead, so this disabler is scoped to just this
+    # jobs route through kache instead, so this disabler is scoped to just this
     # job now rather than the whole workflow.
     env:
       CARGO_BUILD_RUSTC_WRAPPER: ""
