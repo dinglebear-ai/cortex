@@ -8,10 +8,11 @@ use lab_auth::AuthContext;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams, GetPromptResult,
+        Annotations, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        EmbeddedResource, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
         Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, Meta,
-        PaginatedRequestParams, RawResource, ReadResourceRequestParams, ReadResourceResult,
-        Resource, ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+        ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -64,7 +65,7 @@ impl ServerHandler for CortexRmcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let tool_name = request.name.to_string();
 
         // Extract action for scope check before any DB work fires.
@@ -102,7 +103,7 @@ impl ServerHandler for CortexRmcpServer {
                 if should_embed_widget(&action, widget_embed_enabled()) {
                     call_result.content.push(embedded_widget_content());
                 }
-                Ok(call_result)
+                Ok(call_result.into())
             }
             // Mirror api.rs::respond(): every ServiceError variant maps to a
             // distinct client-visible class so MCP clients can tell retryable
@@ -123,10 +124,11 @@ impl ServerHandler for CortexRmcpServer {
                         error_class = "retryable",
                         "MCP tool execution hit transient contention"
                     );
-                    Ok(CallToolResult::error(vec![Content::text(format!(
+                    Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Action '{action}' is temporarily unavailable (database busy). \
                          Retry shortly."
-                    ))]))
+                    ))])
+                    .into())
                 }
                 ToolErrorClass::NotFound => {
                     tracing::warn!(
@@ -137,9 +139,10 @@ impl ServerHandler for CortexRmcpServer {
                     );
                     // NotFound messages are client-safe by construction
                     // (e.g. "log id 42 not found") — see ServiceError docs.
-                    Ok(CallToolResult::error(vec![Content::text(format!(
+                    Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Not found: {error}"
-                    ))]))
+                    ))])
+                    .into())
                 }
                 ToolErrorClass::Conflict => {
                     tracing::warn!(
@@ -148,9 +151,10 @@ impl ServerHandler for CortexRmcpServer {
                         error_class = "conflict",
                         "MCP tool execution hit a constraint conflict"
                     );
-                    Ok(CallToolResult::error(vec![Content::text(format!(
+                    Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Conflict: {error}"
-                    ))]))
+                    ))])
+                    .into())
                 }
                 ToolErrorClass::Internal => {
                     tracing::error!(
@@ -159,10 +163,11 @@ impl ServerHandler for CortexRmcpServer {
                         error_class = "tool_execution",
                         "MCP tool execution failed"
                     );
-                    Ok(CallToolResult::error(vec![Content::text(format!(
+                    Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Tool execution failed for action '{action}'. \
                          Check server logs for details."
-                    ))]))
+                    ))])
+                    .into())
                 }
             },
         }
@@ -188,7 +193,7 @@ impl ServerHandler for CortexRmcpServer {
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         require_auth_context(&self.state, &context)?;
         match request.uri.as_str() {
             SCHEMA_RESOURCE_URI => {
@@ -199,7 +204,8 @@ impl ServerHandler for CortexRmcpServer {
                 Ok(ReadResourceResult::new(vec![
                     ResourceContents::text(text, SCHEMA_RESOURCE_URI)
                         .with_mime_type("application/json"),
-                ]))
+                ])
+                .into())
             }
             PROMPT_OUTPUT_SCHEMA_RESOURCE_URI => {
                 let text =
@@ -209,9 +215,12 @@ impl ServerHandler for CortexRmcpServer {
                 Ok(ReadResourceResult::new(vec![
                     ResourceContents::text(text, PROMPT_OUTPUT_SCHEMA_RESOURCE_URI)
                         .with_mime_type("application/schema+json"),
-                ]))
+                ])
+                .into())
             }
-            QUERY_WIDGET_RESOURCE_URI => Ok(ReadResourceResult::new(vec![query_widget_contents()])),
+            QUERY_WIDGET_RESOURCE_URI => {
+                Ok(ReadResourceResult::new(vec![query_widget_contents()]).into())
+            }
             _ => Err(ErrorData::invalid_params(
                 format!("unknown resource: {}", request.uri),
                 None,
@@ -237,7 +246,7 @@ impl ServerHandler for CortexRmcpServer {
         &self,
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, ErrorData> {
+    ) -> Result<GetPromptResponse, ErrorData> {
         require_auth_context(&self.state, &context)?;
         let Some((description, messages)) = get_prompt(&request.name, request.arguments.as_ref())
         else {
@@ -247,7 +256,9 @@ impl ServerHandler for CortexRmcpServer {
             ));
         };
         tracing::info!(prompt = %request.name, "MCP prompt rendered");
-        Ok(GetPromptResult::new(messages).with_description(description))
+        Ok(GetPromptResult::new(messages)
+            .with_description(description)
+            .into())
     }
 
     fn get_info(&self) -> ServerInfo {
@@ -267,7 +278,7 @@ impl ServerHandler for CortexRmcpServer {
 
 pub fn streamable_http_config(config: &McpConfig) -> StreamableHttpServerConfig {
     StreamableHttpServerConfig::default()
-        .with_stateful_mode(false)
+        .with_legacy_session_mode(false)
         .with_json_response(true)
         .with_allowed_hosts(allowed_hosts(config))
         .with_allowed_origins(allowed_origins(config))
@@ -290,36 +301,25 @@ pub(super) const QUERY_WIDGET_RESOURCE_URI: &str = "ui://cortex/query-widget";
 pub(super) const MCP_APP_HTML_MIME_TYPE: &str = "text/html;profile=mcp-app";
 
 fn schema_resource() -> Resource {
-    Resource::new(
-        RawResource::new(SCHEMA_RESOURCE_URI, "cortex tool schema")
-            .with_description("JSON schema for the cortex MCP tool and its action-based parameters")
-            .with_mime_type("application/json"),
-        None,
-    )
+    Resource::new(SCHEMA_RESOURCE_URI, "cortex tool schema")
+        .with_description("JSON schema for the cortex MCP tool and its action-based parameters")
+        .with_mime_type("application/json")
 }
 
 fn prompt_output_schema_resource() -> Resource {
     Resource::new(
-        RawResource::new(
-            PROMPT_OUTPUT_SCHEMA_RESOURCE_URI,
-            "cortex prompt output schema",
-        )
-        .with_description(
-            "JSON schema for structured incident-style outputs from cortex MCP prompts",
-        )
-        .with_mime_type("application/schema+json"),
-        None,
+        PROMPT_OUTPUT_SCHEMA_RESOURCE_URI,
+        "cortex prompt output schema",
     )
+    .with_description("JSON schema for structured incident-style outputs from cortex MCP prompts")
+    .with_mime_type("application/schema+json")
 }
 
 fn query_widget_resource() -> Resource {
-    Resource::new(
-        RawResource::new(QUERY_WIDGET_RESOURCE_URI, "cortex query widget")
-            .with_title("Syslog Query")
-            .with_description("Interactive MCP Apps widget for querying cortex logs")
-            .with_mime_type(MCP_APP_HTML_MIME_TYPE),
-        None,
-    )
+    Resource::new(QUERY_WIDGET_RESOURCE_URI, "cortex query widget")
+        .with_title("Syslog Query")
+        .with_description("Interactive MCP Apps widget for querying cortex logs")
+        .with_mime_type(MCP_APP_HTML_MIME_TYPE)
 }
 
 fn prompt_output_schema() -> Value {
@@ -447,15 +447,17 @@ fn widget_embed_enabled() -> bool {
 
 /// The query widget as an embedded resource content block, annotated
 /// `audience: ["user"]` so audience-aware hosts keep it out of model context.
-fn embedded_widget_content() -> Content {
-    Content::resource(
-        ResourceContents::text(
-            include_str!("ui/query_widget.html"),
-            QUERY_WIDGET_RESOURCE_URI,
+fn embedded_widget_content() -> ContentBlock {
+    ContentBlock::Resource(
+        EmbeddedResource::new(
+            ResourceContents::text(
+                include_str!("ui/query_widget.html"),
+                QUERY_WIDGET_RESOURCE_URI,
+            )
+            .with_mime_type(MCP_APP_HTML_MIME_TYPE),
         )
-        .with_mime_type(MCP_APP_HTML_MIME_TYPE),
+        .with_annotations(Annotations::default().with_audience(vec![Role::User])),
     )
-    .with_audience(vec![Role::User])
 }
 
 fn cortex_tool_meta() -> Meta {
@@ -517,7 +519,7 @@ fn tool_result_from_json(value: Value) -> Result<CallToolResult, ErrorData> {
         ErrorData::internal_error(format!("serialization error: {error}"), None)
     })?;
     let mut result = CallToolResult::structured(value);
-    result.content = vec![Content::text(text)];
+    result.content = vec![ContentBlock::text(text)];
     Ok(result)
 }
 
@@ -771,10 +773,10 @@ pub(super) fn allowed_origins(config: &McpConfig) -> Vec<String> {
     // When CORTEX_PUBLIC_URL is set, add its origin (scheme + host + port
     // if non-default) so browser preflight from the configured public URL is
     // accepted by the CORS layer.
-    if let Some(public_url) = config.auth.public_url.as_deref() {
-        if let Some(origin) = extract_origin(public_url) {
-            origins.push(origin);
-        }
+    if let Some(public_url) = config.auth.public_url.as_deref()
+        && let Some(origin) = extract_origin(public_url)
+    {
+        origins.push(origin);
     }
     origins.sort();
     origins.dedup();

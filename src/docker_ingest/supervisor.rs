@@ -204,10 +204,10 @@ async fn follow_container_events(
     while let Some(event) = events.next().await {
         let event = event?;
         runtime.observability.record_docker_ingest_event();
-        if let Some(entry) = docker_event_to_entry(&runtime.host.name, &event)? {
-            if runtime.ingest.send(entry).await.is_err() {
-                anyhow::bail!("Docker ingest channel closed");
-            }
+        if let Some(entry) = docker_event_to_entry(&runtime.host.name, &event)?
+            && runtime.ingest.send(entry).await.is_err()
+        {
+            anyhow::bail!("Docker ingest channel closed");
         }
         let action = event.action.unwrap_or_default();
         let Some(actor) = event.actor else {
@@ -221,10 +221,10 @@ async fn follow_container_events(
         match policy {
             DockerEventTaskPolicy::EnsureLogTask | DockerEventTaskPolicy::ReplaceLogTask => {
                 prune_finished_tasks(log_tasks);
-                if policy == DockerEventTaskPolicy::ReplaceLogTask {
-                    if let Some(handle) = log_tasks.remove(&id) {
-                        handle.abort();
-                    }
+                if policy == DockerEventTaskPolicy::ReplaceLogTask
+                    && let Some(handle) = log_tasks.remove(&id)
+                {
+                    handle.abort();
                 }
                 let containers = runtime.client.list_containers().await?;
                 for container in containers.into_iter().filter(|c| {
@@ -249,10 +249,10 @@ fn prune_finished_tasks(tasks: &mut HashMap<String, JoinHandle<()>>) {
         if !handle.is_finished() {
             return true;
         }
-        if let Some(Err(ref e)) = handle.now_or_never() {
-            if e.is_panic() {
-                tracing::error!(container_id = %container_id, "container log task panicked");
-            }
+        if let Some(Err(ref e)) = handle.now_or_never()
+            && e.is_panic()
+        {
+            tracing::error!(container_id = %container_id, "container log task panicked");
         }
         false
     });

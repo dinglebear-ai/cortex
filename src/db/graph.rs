@@ -1789,44 +1789,43 @@ fn extract_user_device_row(
         let mut parts = rest.split('/');
         let host = parts.next().and_then(normalized_value);
         let user = parts.next().and_then(normalized_value);
-        if let (Some(host), Some(user)) = (host, user) {
-            if user != "unknown" {
-                let user_key = format!("{}:{}", normalize_key(host), normalize_key(user));
-                let user_id = ensure_entity_memoized(
+        if let (Some(host), Some(user)) = (host, user)
+            && user != "unknown"
+        {
+            let user_key = format!("{}:{}", normalize_key(host), normalize_key(user));
+            let user_id = ensure_entity_memoized(
+                conn,
+                memo,
+                ENTITY_TYPE_USER,
+                &user_key,
+                &user_key,
+                SOURCE_KIND_LOG,
+                &source_id,
+                TRUST_CLAIMED,
+                Some(&row.timestamp),
+                Some(&row.timestamp),
+            )?;
+            if let Some(host_id) = ensure_host_entity(conn, memo, host, &source_id, &row.timestamp)?
+            {
+                ensure_relationship_with_evidence(
                     conn,
-                    memo,
-                    ENTITY_TYPE_USER,
-                    &user_key,
-                    &user_key,
-                    SOURCE_KIND_LOG,
-                    &source_id,
+                    user_id,
+                    host_id,
+                    REL_ACCESSED,
+                    REASON_SHELL_HISTORY_USER,
                     TRUST_CLAIMED,
-                    Some(&row.timestamp),
-                    Some(&row.timestamp),
-                )?;
-                if let Some(host_id) =
-                    ensure_host_entity(conn, memo, host, &source_id, &row.timestamp)?
-                {
-                    ensure_relationship_with_evidence(
-                        conn,
-                        user_id,
-                        host_id,
-                        REL_ACCESSED,
+                    0.7,
+                    identity_evidence(
+                        row,
+                        &source_id,
                         REASON_SHELL_HISTORY_USER,
-                        TRUST_CLAIMED,
+                        "shell history attributes commands to a user on this host",
                         0.7,
-                        identity_evidence(
-                            row,
-                            &source_id,
-                            REASON_SHELL_HISTORY_USER,
-                            "shell history attributes commands to a user on this host",
-                            0.7,
-                            TRUST_CLAIMED,
-                            &user_key,
-                            "logs.source_ip (shell-history)",
-                        ),
-                    )?;
-                }
+                        TRUST_CLAIMED,
+                        &user_key,
+                        "logs.source_ip (shell-history)",
+                    ),
+                )?;
             }
         }
         return Ok(());
@@ -1885,48 +1884,44 @@ fn extract_user_device_row(
     }
 
     // Authelia → user authenticated_as host.
-    if app == "authelia" {
-        if let Some(username) =
+    if app == "authelia"
+        && let Some(username) =
             metadata_text(meta, &["username", "authelia.username"]).and_then(normalized_value)
-        {
-            if let Some(host) = normalized_value(&row.hostname) {
-                let user_key = format!("{}:{}", normalize_key(host), normalize_key(username));
-                let user_id = ensure_entity_memoized(
-                    conn,
-                    memo,
-                    ENTITY_TYPE_USER,
-                    &user_key,
-                    &user_key,
-                    SOURCE_KIND_LOG,
+        && let Some(host) = normalized_value(&row.hostname)
+    {
+        let user_key = format!("{}:{}", normalize_key(host), normalize_key(username));
+        let user_id = ensure_entity_memoized(
+            conn,
+            memo,
+            ENTITY_TYPE_USER,
+            &user_key,
+            &user_key,
+            SOURCE_KIND_LOG,
+            &source_id,
+            TRUST_CLAIMED,
+            Some(&row.timestamp),
+            Some(&row.timestamp),
+        )?;
+        if let Some(host_id) = ensure_host_entity(conn, memo, host, &source_id, &row.timestamp)? {
+            ensure_relationship_with_evidence(
+                conn,
+                user_id,
+                host_id,
+                REL_AUTHENTICATED_AS,
+                REASON_AUTHELIA_AUTH,
+                TRUST_CLAIMED,
+                0.8,
+                identity_evidence(
+                    row,
                     &source_id,
+                    REASON_AUTHELIA_AUTH,
+                    "authelia auth event links a user to this host",
+                    0.8,
                     TRUST_CLAIMED,
-                    Some(&row.timestamp),
-                    Some(&row.timestamp),
-                )?;
-                if let Some(host_id) =
-                    ensure_host_entity(conn, memo, host, &source_id, &row.timestamp)?
-                {
-                    ensure_relationship_with_evidence(
-                        conn,
-                        user_id,
-                        host_id,
-                        REL_AUTHENTICATED_AS,
-                        REASON_AUTHELIA_AUTH,
-                        TRUST_CLAIMED,
-                        0.8,
-                        identity_evidence(
-                            row,
-                            &source_id,
-                            REASON_AUTHELIA_AUTH,
-                            "authelia auth event links a user to this host",
-                            0.8,
-                            TRUST_CLAIMED,
-                            &user_key,
-                            "metadata_json.username",
-                        ),
-                    )?;
-                }
-            }
+                    &user_key,
+                    "metadata_json.username",
+                ),
+            )?;
         }
     }
     Ok(())
@@ -2244,10 +2239,10 @@ fn infer_project_from_cwd(cwd: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
-    if let Some(pos) = segments.iter().position(|s| *s == "workspace") {
-        if let Some(name) = segments.get(pos + 1) {
-            return normalized_value(name).map(str::to_string);
-        }
+    if let Some(pos) = segments.iter().position(|s| *s == "workspace")
+        && let Some(name) = segments.get(pos + 1)
+    {
+        return normalized_value(name).map(str::to_string);
     }
     segments
         .last()
@@ -3104,10 +3099,8 @@ fn metadata_text<'a>(meta: Option<&'a Value>, paths: &[&str]) -> Option<&'a str>
                 break;
             }
         }
-        if found {
-            if let Some(text) = current.as_str().and_then(normalized_value) {
-                return Some(text);
-            }
+        if found && let Some(text) = current.as_str().and_then(normalized_value) {
+            return Some(text);
         }
     }
     None

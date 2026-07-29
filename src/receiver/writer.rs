@@ -85,7 +85,7 @@ pub(crate) async fn batch_writer(
                                 queue_capacity = rx.max_capacity(),
                                 "Queued parsed syslog entry"
                             );
-                            if requires_durable_ack || (!batch.is_empty() && batch.len() % batch_size == 0) {
+                            if requires_durable_ack || (!batch.is_empty() && batch.len().is_multiple_of(batch_size)) {
                                 break;
                             }
                         }
@@ -176,32 +176,32 @@ pub(super) async fn flush_batch(
     let started = Instant::now();
     debug!(count, "Attempting batch flush");
     let enforcement = context.storage_state.lock().clone();
-    if let Some(state) = enforcement {
-        if state.write_blocked {
-            let err = anyhow::anyhow!(
-                "storage budget exceeded: logical_db_size_bytes={}, free_disk_bytes={:?}",
-                state.metrics.logical_db_size_bytes,
-                state.metrics.free_disk_bytes
+    if let Some(state) = enforcement
+        && state.write_blocked
+    {
+        let err = anyhow::anyhow!(
+            "storage budget exceeded: logical_db_size_bytes={}, free_disk_bytes={:?}",
+            state.metrics.logical_db_size_bytes,
+            state.metrics.free_disk_bytes
+        );
+        if !*storage_blocked {
+            error!(
+                error = %err,
+                count,
+                retained_batch = batch_to_write.len(),
+                elapsed_ms = started.elapsed().as_millis(),
+                max_db_size_mb = context.storage.max_db_size_mb,
+                min_free_disk_mb = context.storage.min_free_disk_mb,
+                "Storage budget exceeded — retaining batch until space recovers"
             );
-            if !*storage_blocked {
-                error!(
-                    error = %err,
-                    count,
-                    retained_batch = batch_to_write.len(),
-                    elapsed_ms = started.elapsed().as_millis(),
-                    max_db_size_mb = context.storage.max_db_size_mb,
-                    min_free_disk_mb = context.storage.min_free_disk_mb,
-                    "Storage budget exceeded — retaining batch until space recovers"
-                );
-                *storage_blocked = true;
-            }
-            context
-                .observability
-                .record_writer_retained(batch_to_write.len(), true);
-            *batch = batch_to_write;
-            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-            return;
+            *storage_blocked = true;
         }
+        context
+            .observability
+            .record_writer_retained(batch_to_write.len(), true);
+        *batch = batch_to_write;
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+        return;
     }
     match tokio::task::spawn_blocking(move || {
         match insert_envelopes_batch(&pool, &batch_to_write) {

@@ -81,10 +81,10 @@ fn normalize_host(host_alias: &str, body: &str, out: &mut CollectorOutput) {
             if let Some(summary) = parse_storage(host_alias, value) {
                 storage.push(summary);
             }
-        } else if let Some((key, value)) = line.split_once('=') {
-            if !value.trim().is_empty() {
-                facts.insert(key.to_string(), value.trim().to_string());
-            }
+        } else if let Some((key, value)) = line.split_once('=')
+            && !value.trim().is_empty()
+        {
+            facts.insert(key.to_string(), value.trim().to_string());
         }
     }
     for ip in facts

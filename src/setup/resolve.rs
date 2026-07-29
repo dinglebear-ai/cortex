@@ -42,16 +42,15 @@ pub fn cortex_home_dir() -> io::Result<PathBuf> {
     if home_candidate.join(".env").is_file() || home_candidate.is_dir() {
         return validate_absolute_home(home_candidate);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_candidate) = cortex_home_dir_from_exe_path(&exe) {
-            if exe_candidate.join(".env").is_file() || exe_candidate.is_dir() {
-                tracing::debug!(
-                    candidate = %exe_candidate.display(),
-                    "cortex_home_dir: using exe-derived home (HOME candidate absent)"
-                );
-                return validate_absolute_home(exe_candidate);
-            }
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_candidate) = cortex_home_dir_from_exe_path(&exe)
+        && (exe_candidate.join(".env").is_file() || exe_candidate.is_dir())
+    {
+        tracing::debug!(
+            candidate = %exe_candidate.display(),
+            "cortex_home_dir: using exe-derived home (HOME candidate absent)"
+        );
+        return validate_absolute_home(exe_candidate);
     }
     validate_absolute_home(home_candidate)
 }
@@ -163,10 +162,10 @@ fn looks_like_debug_build_path(path: &Path) -> bool {
 }
 
 pub(crate) fn resolve_ai_watch_db_path(setup_home: &Path, user_home: &Path) -> io::Result<PathBuf> {
-    if let Ok(value) = std::env::var("CORTEX_DB_PATH") {
-        if !value.trim().is_empty() {
-            return validate_db_path(PathBuf::from(value));
-        }
+    if let Ok(value) = std::env::var("CORTEX_DB_PATH")
+        && !value.trim().is_empty()
+    {
+        return validate_db_path(PathBuf::from(value));
     }
     if let Some(path) = db_path_from_setup_env(&setup_home.join(".env"))? {
         return validate_db_path(path);
@@ -209,10 +208,11 @@ pub(crate) fn db_path_from_setup_env(env_path: &Path) -> io::Result<Option<PathB
         Err(error) => return Err(error),
     };
     let values = firstrun::parse_env(&raw);
-    if let Some(db_path) = values.get("CORTEX_DB_PATH") {
-        if !db_path.trim().is_empty() && db_path != "/data/cortex.db" {
-            return Ok(Some(PathBuf::from(db_path)));
-        }
+    if let Some(db_path) = values.get("CORTEX_DB_PATH")
+        && !db_path.trim().is_empty()
+        && db_path != "/data/cortex.db"
+    {
+        return Ok(Some(PathBuf::from(db_path)));
     }
     let uses_container_db_path = values
         .get("CORTEX_DB_PATH")

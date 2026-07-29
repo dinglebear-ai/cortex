@@ -78,11 +78,11 @@ pub(super) fn cef_ext_value(extensions: &str, key: &str) -> Option<String> {
     while i < bytes.len() {
         if bytes[i] == b' ' {
             let after = &rest[i + 1..];
-            if let Some(eq) = after.find('=') {
-                if !after[..eq].contains(' ') {
-                    end = i;
-                    break;
-                }
+            if let Some(eq) = after.find('=')
+                && !after[..eq].contains(' ')
+            {
+                end = i;
+                break;
             }
         }
         i += 1;
@@ -209,16 +209,17 @@ pub(super) fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
                 "CEF heuristic triggered but all fields are None — malformed CEF body, using raw fallback"
             );
         }
-        if let Some(ref cef_host) = cef.hostname {
-            if !raw_hostname.is_empty() && cef_host != &raw_hostname {
-                debug!(
-                    cef_hostname = %cef_host,
-                    syslog_header_hostname = %raw_hostname,
-                    source_ip = %source_ip,
-                    "CEF hostname differs from syslog-header hostname; \
-                     CEF value is from message content and is not network-verified"
-                );
-            }
+        if let Some(ref cef_host) = cef.hostname
+            && !raw_hostname.is_empty()
+            && cef_host != &raw_hostname
+        {
+            debug!(
+                cef_hostname = %cef_host,
+                syslog_header_hostname = %raw_hostname,
+                source_ip = %source_ip,
+                "CEF hostname differs from syslog-header hostname; \
+                 CEF value is from message content and is not network-verified"
+            );
         }
         (
             truncate(&cef.hostname.unwrap_or_else(|| raw_hostname.clone()), 255).to_string(),

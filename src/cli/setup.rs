@@ -370,14 +370,14 @@ fn systemd_backup_phase(mode: SetupMode) -> SetupPhase {
         }
 
         // Copy timer unit
-        if timer_src.exists() {
-            if let Err(e) = std::fs::copy(&timer_src, &timer_dest) {
-                return SetupPhase {
-                    name: "systemd-backup",
-                    status: SetupStatus::Error,
-                    detail: format!("failed to copy timer unit: {}", e),
-                };
-            }
+        if timer_src.exists()
+            && let Err(e) = std::fs::copy(&timer_src, &timer_dest)
+        {
+            return SetupPhase {
+                name: "systemd-backup",
+                status: SetupStatus::Error,
+                detail: format!("failed to copy timer unit: {}", e),
+            };
         }
 
         // Reload systemd and enable the timer

@@ -50,14 +50,14 @@ fn log_window_filter_tail(
         sql.push_str(" AND l.timestamp <= ?");
         bindings.push(rusqlite::types::Value::Text(until.to_string()));
     }
-    if let Some(kinds) = source_kinds {
-        if !kinds.is_empty() {
-            let kind_strs: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
-            let ph = bind_in_list(&mut bindings, &kind_strs);
-            sql.push_str(&format!(
-                " AND json_extract(l.metadata_json, '$.source_kind') IN ({ph})"
-            ));
-        }
+    if let Some(kinds) = source_kinds
+        && !kinds.is_empty()
+    {
+        let kind_strs: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
+        let ph = bind_in_list(&mut bindings, &kind_strs);
+        sql.push_str(&format!(
+            " AND json_extract(l.metadata_json, '$.source_kind') IN ({ph})"
+        ));
     }
     (sql, bindings)
 }

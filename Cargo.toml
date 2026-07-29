@@ -2,11 +2,15 @@
 members = ["xtask"]
 resolver = "2"
 
+[workspace.lints.clippy]
+# Enforce the foo.rs-sibling module style; forbid foo/mod.rs.
+mod_module_files = "deny"
+
 [package]
 name = "cortex"
 version = "3.11.1"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.97.1"
 categories = ["command-line-utilities", "development-tools"]
 keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
 repository = "https://github.com/dinglebear-ai/cortex"
@@ -41,7 +45,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 axum = "0.8"
 # Declared bound matches what Cargo.lock actually resolves (1.7.x) so docs,
 # lockfile, and code agree (full-review BM2).
-rmcp = { version = "1.7", default-features = false, features = [
+rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
   "server",
   "macros",
   "transport-streamable-http-server",
@@ -134,6 +138,9 @@ notify = "8.2.0"
 libc = "0.2"
 rustix = { version = "1", features = ["fs"] }
 
+[lints]
+workspace = true
+
 [features]
 test-support = []
 
@@ -159,7 +166,7 @@ serial_test = "3"
 # tests so backoff sleeps advance instantly instead of in real time.
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
-rmcp = { version = "1.7", default-features = false, features = [
+rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
   "client",
   "transport-child-process",
 ] }

@@ -92,11 +92,11 @@ impl EnrichmentPipeline {
         let container = extract_container_name(meta_ref);
         if let Some(c) = container.as_deref() {
             let canon = container_to_canonical(c);
-            if !canon.is_empty() {
-                if let Some(&parser) = self.by_name.get(canon) {
-                    self.apply(entry, parser, meta_ref);
-                    return;
-                }
+            if !canon.is_empty()
+                && let Some(&parser) = self.by_name.get(canon)
+            {
+                self.apply(entry, parser, meta_ref);
+                return;
             }
         }
 
@@ -108,10 +108,10 @@ impl EnrichmentPipeline {
                 return;
             }
             // Debug-log unknown app_names once per unique value.
-            if let Ok(mut lru) = self.unknown_apps.lock() {
-                if lru.put(app.to_string(), ()).is_none() {
-                    tracing::debug!(app_name = app, "enrich: no parser registered for app_name");
-                }
+            if let Ok(mut lru) = self.unknown_apps.lock()
+                && lru.put(app.to_string(), ()).is_none()
+            {
+                tracing::debug!(app_name = app, "enrich: no parser registered for app_name");
             }
         }
     }

@@ -1588,7 +1588,10 @@ fn embedded_widget_content_matches_resource_declaration() {
 
     let content = super::embedded_widget_content();
     assert_eq!(
-        content.audience(),
+        content
+            .as_resource()
+            .and_then(|embedded| embedded.annotations.as_ref())
+            .and_then(|annotations| annotations.audience.as_ref()),
         Some(&vec![Role::User]),
         "widget block must be user-audience so audience-aware hosts keep it out of model context"
     );

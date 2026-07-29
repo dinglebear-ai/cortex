@@ -212,22 +212,22 @@ pub(crate) fn parse_toml_key(key: &str) -> Result<Vec<String>> {
 }
 
 pub(crate) fn parse_user_value(raw: &str) -> Result<toml_edit::Value> {
-    if let Ok(item) = format!("__x = {raw}").parse::<toml_edit::DocumentMut>() {
-        if let Some(value) = item.get("__x").and_then(|i| i.as_value()).cloned() {
-            return Ok(value);
-        }
+    if let Ok(item) = format!("__x = {raw}").parse::<toml_edit::DocumentMut>()
+        && let Some(value) = item.get("__x").and_then(|i| i.as_value()).cloned()
+    {
+        return Ok(value);
     }
     let trimmed = raw.trim();
     // Bracket/brace shorthand must be valid TOML — refuse to silently coerce
     // `[a, b]` or `{ a = 1 }` to a string when the user clearly intended an
     // array or inline table.
-    if let Some(first) = trimmed.chars().next() {
-        if matches!(first, '[' | '{') {
-            bail!(
-                "value `{raw}` looks like a TOML array/inline-table but failed to parse; \
+    if let Some(first) = trimmed.chars().next()
+        && matches!(first, '[' | '{')
+    {
+        bail!(
+            "value `{raw}` looks like a TOML array/inline-table but failed to parse; \
                  quote each element (e.g. `[\"a\", \"b\"]`) or pass it as a quoted string"
-            );
-        }
+        );
     }
     match trimmed.to_ascii_lowercase().as_str() {
         "true" => return Ok(toml_edit::Value::from(true)),
@@ -237,10 +237,10 @@ pub(crate) fn parse_user_value(raw: &str) -> Result<toml_edit::Value> {
     if let Ok(n) = trimmed.parse::<i64>() {
         return Ok(toml_edit::Value::from(n));
     }
-    if let Ok(n) = trimmed.parse::<f64>() {
-        if n.is_finite() {
-            return Ok(toml_edit::Value::from(n));
-        }
+    if let Ok(n) = trimmed.parse::<f64>()
+        && n.is_finite()
+    {
+        return Ok(toml_edit::Value::from(n));
     }
     Ok(toml_edit::Value::from(raw))
 }
@@ -265,11 +265,12 @@ pub(crate) fn format_value(value: &toml_edit::Value) -> String {
 
 pub(crate) fn write_toml_file(path: &std::path::Path, contents: &str) -> Result<()> {
     use std::io::Write;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow!("failed to create {}: {e}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("failed to create {}: {e}", parent.display()))?;
     }
     let temp_path = atomic_write_path(path);
     let mut options = std::fs::OpenOptions::new();

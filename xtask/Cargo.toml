@@ -2,8 +2,11 @@
 name = "xtask"
 version = "3.11.1"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.97.1"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = "1"

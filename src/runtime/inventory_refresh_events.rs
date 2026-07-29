@@ -91,7 +91,7 @@ pub(super) struct EventStreamFailureLog {
 impl EventStreamFailureLog {
     pub(super) fn record(&mut self, host: &str, error: &str) {
         self.failures = self.failures.saturating_add(1);
-        if self.failures == 1 || self.failures % 6 == 0 {
+        if self.failures == 1 || self.failures.is_multiple_of(6) {
             tracing::warn!(
                 host,
                 failures = self.failures,

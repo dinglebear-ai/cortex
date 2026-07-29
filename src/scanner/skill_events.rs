@@ -88,12 +88,11 @@ impl ExtractedSkillEvent {
         // string (locked behavior — do not fabricate this split when
         // plugin/skill came from separate source fields, e.g. Claude's
         // attributionSkill/attributionPlugin).
-        if self.skill_plugin.is_none() {
-            if let Some((plugin, _rest)) = trimmed_name.split_once(':') {
-                if !plugin.is_empty() {
-                    self.skill_plugin = Some(plugin.to_string());
-                }
-            }
+        if self.skill_plugin.is_none()
+            && let Some((plugin, _rest)) = trimmed_name.split_once(':')
+            && !plugin.is_empty()
+        {
+            self.skill_plugin = Some(plugin.to_string());
         }
         self.skill_name = clamp_chars(trimmed_name, MAX_SKILL_FIELD_CHARS);
         self.skill_plugin = self.skill_plugin.and_then(|plugin| {

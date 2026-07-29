@@ -203,10 +203,10 @@ fn prepare_oauth_env() -> Result<()> {
     let mut redirects = std::env::var("CORTEX_AUTH_ALLOWED_REDIRECT_URIS").unwrap_or_default();
     redirects = append_csv_unique(&redirects, "https://claude.ai/api/mcp/auth_callback");
     redirects = append_csv_unique(&redirects, "https://claudeai.ai/api/mcp/auth_callback");
-    if let Some(codex_callback) = codex_oauth_callback_url() {
-        if !codex_callback.is_empty() {
-            redirects = append_csv_unique(&redirects, &codex_callback);
-        }
+    if let Some(codex_callback) = codex_oauth_callback_url()
+        && !codex_callback.is_empty()
+    {
+        redirects = append_csv_unique(&redirects, &codex_callback);
     }
     // SAFETY (edition 2021): early single-threaded plugin-hook path.
     // TODO: Audit that the environment access only happens in single-threaded code.

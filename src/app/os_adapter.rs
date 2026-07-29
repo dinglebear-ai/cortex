@@ -148,12 +148,12 @@ impl OsAdapter for SystemOsAdapter {
 /// process environment. `XDG_RUNTIME_DIR` is always set when the bus address
 /// is inferred — it is not independently guarded.
 fn apply_dbus_env(command: &mut Command) {
-    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
-        if let Some((runtime_dir, bus_address)) = inferred_user_bus_env() {
-            command
-                .env("XDG_RUNTIME_DIR", runtime_dir)
-                .env("DBUS_SESSION_BUS_ADDRESS", bus_address);
-        }
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none()
+        && let Some((runtime_dir, bus_address)) = inferred_user_bus_env()
+    {
+        command
+            .env("XDG_RUNTIME_DIR", runtime_dir)
+            .env("DBUS_SESSION_BUS_ADDRESS", bus_address);
     }
 }
 

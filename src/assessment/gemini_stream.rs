@@ -41,10 +41,10 @@ impl GeminiStreamState {
         if value.get("status").and_then(Value::as_str) != Some("success") {
             bail!("Gemini headless returned unsuccessful result: {value}");
         }
-        if let Some(text) = value.get("response").and_then(Value::as_str) {
-            if !text.trim().is_empty() {
-                self.result_text = Some(text.to_string());
-            }
+        if let Some(text) = value.get("response").and_then(Value::as_str)
+            && !text.trim().is_empty()
+        {
+            self.result_text = Some(text.to_string());
         }
         self.saw_success = true;
         Ok(())
@@ -93,10 +93,10 @@ impl GeminiStreamState {
         if !self.saw_success {
             bail!("Gemini headless stream ended without a success result");
         }
-        if let Some(result) = self.result_text {
-            if !result.trim().is_empty() {
-                return Ok(result);
-            }
+        if let Some(result) = self.result_text
+            && !result.trim().is_empty()
+        {
+            return Ok(result);
         }
         if !self.text.trim().is_empty() {
             return Ok(self.text);

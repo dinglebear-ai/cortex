@@ -215,10 +215,10 @@ fn read_env_kv(path: &std::path::Path, key: &str) -> Result<Option<String>> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if let Some((k, v)) = trimmed.split_once('=') {
-            if k.trim() == key {
-                return Ok(Some(v.trim().to_string()));
-            }
+        if let Some((k, v)) = trimmed.split_once('=')
+            && k.trim() == key
+        {
+            return Ok(Some(v.trim().to_string()));
         }
     }
     Ok(None)
@@ -228,11 +228,11 @@ fn write_env_value(path: &std::path::Path, key: &str, value: &str) -> Result<()>
     if value.contains('\n') || value.contains('\r') {
         bail!("env values cannot contain newlines");
     }
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow!("failed to create {}: {e}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("failed to create {}: {e}", parent.display()))?;
     }
     let original = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -250,13 +250,13 @@ fn write_env_value(path: &std::path::Path, key: &str, value: &str) -> Result<()>
             out.push('\n');
             continue;
         }
-        if let Some((k, _)) = trimmed.split_once('=') {
-            if k.trim() == key {
-                out.push_str(&format!("{key}={value}"));
-                out.push('\n');
-                replaced = true;
-                continue;
-            }
+        if let Some((k, _)) = trimmed.split_once('=')
+            && k.trim() == key
+        {
+            out.push_str(&format!("{key}={value}"));
+            out.push('\n');
+            replaced = true;
+            continue;
         }
         out.push_str(line);
         out.push('\n');
@@ -291,11 +291,11 @@ fn remove_env_value(path: &std::path::Path, key: &str) -> Result<Option<String>>
             out.push('\n');
             continue;
         }
-        if let Some((k, v)) = trimmed.split_once('=') {
-            if k.trim() == key {
-                removed = Some(v.trim().to_string());
-                continue;
-            }
+        if let Some((k, v)) = trimmed.split_once('=')
+            && k.trim() == key
+        {
+            removed = Some(v.trim().to_string());
+            continue;
         }
         out.push_str(line);
         out.push('\n');

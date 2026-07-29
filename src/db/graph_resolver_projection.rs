@@ -306,37 +306,36 @@ fn project_resolver_decisions(
     for (instance_key, instance_id) in instance_ids {
         if let Some((_, service)) =
             crate::db::entity_resolution::split_service_instance_key(&instance_key)
+            && let Some(logical_id) = logical_ids.get(service)
         {
-            if let Some(logical_id) = logical_ids.get(service) {
-                graph::ensure_relationship_with_evidence(
-                    conn,
-                    instance_id,
-                    *logical_id,
-                    graph::REL_INSTANCE_OF,
-                    graph::REASON_RESOLVER_INSTANCE_OF,
-                    graph::TRUST_VERIFIED,
-                    1.0,
-                    EvidenceInput {
-                        evidence_key: graph::evidence_bucket_key(
-                            "log",
-                            row.id,
-                            graph::REASON_RESOLVER_INSTANCE_OF,
-                            &row.timestamp,
-                        ),
-                        source_kind: graph::SOURCE_KIND_LOG,
-                        source_id: &source_id,
-                        source_log_id: Some(row.id),
-                        source_heartbeat_id: None,
-                        source_signature_hash: None,
-                        observed_at: &row.timestamp,
-                        reason_text: Some("resolver linked service instance to logical service"),
-                        confidence_delta: 1.0,
-                        trust_level: graph::TRUST_VERIFIED,
-                        safe_excerpt: Some(&instance_key),
-                        metadata_path: Some("metadata_json.agent_docker"),
-                    },
-                )?;
-            }
+            graph::ensure_relationship_with_evidence(
+                conn,
+                instance_id,
+                *logical_id,
+                graph::REL_INSTANCE_OF,
+                graph::REASON_RESOLVER_INSTANCE_OF,
+                graph::TRUST_VERIFIED,
+                1.0,
+                EvidenceInput {
+                    evidence_key: graph::evidence_bucket_key(
+                        "log",
+                        row.id,
+                        graph::REASON_RESOLVER_INSTANCE_OF,
+                        &row.timestamp,
+                    ),
+                    source_kind: graph::SOURCE_KIND_LOG,
+                    source_id: &source_id,
+                    source_log_id: Some(row.id),
+                    source_heartbeat_id: None,
+                    source_signature_hash: None,
+                    observed_at: &row.timestamp,
+                    reason_text: Some("resolver linked service instance to logical service"),
+                    confidence_delta: 1.0,
+                    trust_level: graph::TRUST_VERIFIED,
+                    safe_excerpt: Some(&instance_key),
+                    metadata_path: Some("metadata_json.agent_docker"),
+                },
+            )?;
         }
     }
     Ok(())
