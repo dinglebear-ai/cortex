@@ -67,7 +67,12 @@ just runtime-current / just sync-container  # container-vs-local image checks
 just clean
 ```
 
-There is **no `just publish`** — versioning and releases are driven by release-please (see "Version Bumping"), not by a local recipe.
+Two release paths exist, and they are not interchangeable:
+
+- **release-please (the normal path)** — Conventional-Commits-driven; opens a release PR on green CI. See "Version Bumping". Prefer this.
+- **`just publish [major|minor|patch]`** (`Justfile:276`) — a manual local escape hatch. Requires `main` and a clean tree, then runs `cargo xtask bump-version`, `check-release-versions`, the test/lint gates, and commits + tags + pushes `release: vX.Y.Z` itself.
+
+Do not use `just publish` for routine releases; it bypasses the release PR and the review that comes with it.
 
 ## Architecture
 
@@ -190,17 +195,6 @@ Twelve skills ship with the Claude Code plugin — one directory each under `plu
 | `version-check` | Running container vs local Compose image |
 
 The plugin also ships `plugins/cortex/scripts/` (`plugin-setup.sh`, `check-runtime-current.sh`, `smoke-test.sh`). These are **manual** — the plugin registers no Claude Code lifecycle hooks (see "Plugin setup").
-
-## OpenWiki
-
-This repository has documentation located in the /openwiki directory.
-
-Start here:
-- [OpenWiki quickstart](openwiki/quickstart.md)
-
-OpenWiki includes repository overview, architecture notes, workflows, domain concepts, operations, integrations, testing guidance, and source maps.
-
-When working in this repository, read the OpenWiki quickstart first, then follow its links to the relevant architecture, workflow, domain, operation, and testing notes.
 
 ## Config
 
@@ -378,7 +372,6 @@ cargo run -- mcp
 
 `cortex compose` commands resolve the live Compose owner before mutation. They refuse ambiguous cwd fallback, stale Compose labels, listener conflicts, and destructive `down` without `--yes`.
 
-
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
@@ -425,7 +418,6 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
-
 
 ## Version Bumping
 

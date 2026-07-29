@@ -4,4 +4,3 @@
 node = "lts"
 "cargo:cargo-nextest" = "0.9.140"
 "cargo:cargo-llvm-cov" = "0.8.7"
-"npm:openwiki" = "0.1.1"
