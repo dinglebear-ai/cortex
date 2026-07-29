@@ -1095,12 +1095,10 @@ pub(crate) async fn run_ai_llm_invocations(
 /// also passed (mirrors `run_ai_assess`'s guard exactly).
 pub(crate) async fn run_assess_skill(mode: &CliMode, args: AssessSkillArgs) -> Result<()> {
     let run_llm = !args.no_llm;
-    if run_llm {
-        if let CliMode::Http(_) = mode {
-            bail!(
-                "cortex assess skill spawns Gemini CLI on the local host; omit --http or pass --no-llm"
-            );
-        }
+    if run_llm && let CliMode::Http(_) = mode {
+        bail!(
+            "cortex assess skill spawns Gemini CLI on the local host; omit --http or pass --no-llm"
+        );
     }
     let req = SkillAssessRequest {
         skill: args.skill.clone(),
@@ -1190,12 +1188,10 @@ pub(crate) async fn run_assess_skill(mode: &CliMode, args: AssessSkillArgs) -> R
 /// (mirrors `run_assess_skill`'s guard exactly).
 pub(crate) async fn run_assess_mcp(mode: &CliMode, args: AssessMcpArgs) -> Result<()> {
     let run_llm = !args.no_llm;
-    if run_llm {
-        if let CliMode::Http(_) = mode {
-            bail!(
-                "cortex assess mcp spawns Gemini CLI on the local host; omit --http or pass --no-llm"
-            );
-        }
+    if run_llm && let CliMode::Http(_) = mode {
+        bail!(
+            "cortex assess mcp spawns Gemini CLI on the local host; omit --http or pass --no-llm"
+        );
     }
     // The bare positional `target` resolves to `mcp_server` unless a
     // `--tool-name` was given (in which case the positional is ambiguous
@@ -1291,12 +1287,10 @@ pub(crate) async fn run_assess_mcp(mode: &CliMode, args: AssessMcpArgs) -> Resul
 /// only), so config/trust evidence is available alongside runtime evidence.
 pub(crate) async fn run_assess_hooks(mode: &CliMode, args: AssessHooksArgs) -> Result<()> {
     let run_llm = !args.no_llm;
-    if run_llm {
-        if let CliMode::Http(_) = mode {
-            bail!(
-                "cortex assess hooks spawns Gemini CLI on the local host; omit --http or pass --no-llm"
-            );
-        }
+    if run_llm && let CliMode::Http(_) = mode {
+        bail!(
+            "cortex assess hooks spawns Gemini CLI on the local host; omit --http or pass --no-llm"
+        );
     }
 
     // Optional live config-inventory collect-then-assess. Config inventory is a

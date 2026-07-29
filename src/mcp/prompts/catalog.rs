@@ -1,4 +1,4 @@
-use rmcp::model::{Prompt, PromptArgument, PromptMessage, PromptMessageRole};
+use rmcp::model::{Prompt, PromptArgument, PromptMessage, Role};
 use serde_json::Map;
 
 #[derive(Clone, Copy)]
@@ -226,6 +226,6 @@ pub(in crate::mcp) fn get_prompt(
     let text = (spec.body)(args);
     Some((
         spec.description.to_string(),
-        vec![PromptMessage::new_text(PromptMessageRole::User, text)],
+        vec![PromptMessage::new_text(Role::User, text)],
     ))
 }

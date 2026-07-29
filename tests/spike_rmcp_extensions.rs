@@ -32,8 +32,8 @@ use axum::{
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, Content, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -88,7 +88,7 @@ impl ServerHandler for SpikeServer {
         &self,
         _request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         // Pattern (a): rmcp injects http::request::Parts into request extensions.
         // Axum middleware extensions live inside Parts.extensions.
         let parts = context
@@ -108,10 +108,11 @@ impl ServerHandler for SpikeServer {
 
         *self.observed.0.lock().unwrap() = Some(auth.clone());
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "subject={} scopes={:?}",
             auth.subject, auth.scopes
-        ))]))
+        ))])
+        .into())
     }
 
     fn get_info(&self) -> ServerInfo {
@@ -131,7 +132,7 @@ async fn auth_middleware(mut req: Request, next: Next) -> Response {
 
 fn build_router(observed: Observed, stateful: bool) -> Router {
     let config = StreamableHttpServerConfig::default()
-        .with_stateful_mode(stateful)
+        .with_legacy_session_mode(stateful)
         .with_json_response(true)
         .with_sse_keep_alive(None);
 

@@ -34,11 +34,11 @@ impl Parser for DockerEventParser {
         for m in ATTR_RE.captures_iter(&caps["attrs"]) {
             let key = m[1].to_string();
             let val = m[2].to_string();
-            if key == "exit_code" {
-                if let Ok(n) = val.parse::<i32>() {
-                    metadata.insert(key, json!(n));
-                    continue;
-                }
+            if key == "exit_code"
+                && let Ok(n) = val.parse::<i32>()
+            {
+                metadata.insert(key, json!(n));
+                continue;
             }
             metadata.insert(key, Value::String(val));
         }

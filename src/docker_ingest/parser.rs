@@ -181,10 +181,10 @@ fn docker_event_timestamp(event: &EventMessage) -> String {
         }
     }
 
-    if let Some(secs) = event.time {
-        if let Some(timestamp) = chrono::Utc.timestamp_opt(secs, 0).single() {
-            return timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        }
+    if let Some(secs) = event.time
+        && let Some(timestamp) = chrono::Utc.timestamp_opt(secs, 0).single()
+    {
+        return timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     }
 
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)

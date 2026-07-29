@@ -177,18 +177,16 @@ pub(crate) fn enrich_entry(mut entry: LogBatchEntry, config: &EnrichmentConfig) 
 
     if matches_app(&entry, "authelia")
         && source_ip_matches(&entry, config.authelia_source_ip.as_deref())
+        && let Some(level_severity) = extract_authelia_level(&entry.message)
     {
-        if let Some(level_severity) = extract_authelia_level(&entry.message) {
-            entry.severity = level_severity.to_string();
-        }
+        entry.severity = level_severity.to_string();
     }
 
     if matches_app(&entry, "adguard-query")
         && source_ip_matches(&entry, config.adguard_source_ip.as_deref())
+        && let Some(new_app) = classify_adguard(&entry.message)
     {
-        if let Some(new_app) = classify_adguard(&entry.message) {
-            entry.app_name = Some(new_app.to_string());
-        }
+        entry.app_name = Some(new_app.to_string());
     }
 
     if config.scrub_prompts && entry.app_name.as_deref().is_some_and(is_ai_source) {
@@ -547,10 +545,11 @@ pub(crate) fn scrub_ai_message(message: &str, api_token: Option<&str>) -> String
             out = Cow::Owned(replaced);
         }
     }
-    if let Some(token) = api_token {
-        if !token.is_empty() && out.contains(token) {
-            out = Cow::Owned(out.replace(token, "[REDACTED]"));
-        }
+    if let Some(token) = api_token
+        && !token.is_empty()
+        && out.contains(token)
+    {
+        out = Cow::Owned(out.replace(token, "[REDACTED]"));
     }
     out.into_owned()
 }

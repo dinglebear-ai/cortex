@@ -57,15 +57,15 @@ fn extract_message(value: &Value) -> String {
     if let Some(text) = value.pointer("/message/content").and_then(Value::as_str) {
         return text.to_string();
     }
-    if let Some(items) = value.get("content").and_then(Value::as_array) {
-        if let Some(content) = join_content_items(items) {
-            return content;
-        }
+    if let Some(items) = value.get("content").and_then(Value::as_array)
+        && let Some(content) = join_content_items(items)
+    {
+        return content;
     }
-    if let Some(items) = value.pointer("/message/content").and_then(Value::as_array) {
-        if let Some(content) = join_content_items(items) {
-            return content;
-        }
+    if let Some(items) = value.pointer("/message/content").and_then(Value::as_array)
+        && let Some(content) = join_content_items(items)
+    {
+        return content;
     }
     String::new()
 }

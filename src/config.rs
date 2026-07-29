@@ -1023,17 +1023,18 @@ impl Config {
         // where the variable is set to a host filesystem path that was never
         // bind-mounted into the container, producing a cryptic "Permission denied"
         // error deep in SQLite pool initialisation.
-        if check_db_path && std::env::var_os("CORTEX_DB_PATH").is_some() {
-            if let Some(parent) = config.storage.db_path.parent() {
-                if !parent.as_os_str().is_empty() && !parent.exists() {
-                    anyhow::bail!(
-                        "CORTEX_DB_PATH parent directory does not exist: {}\n\
+        if check_db_path
+            && std::env::var_os("CORTEX_DB_PATH").is_some()
+            && let Some(parent) = config.storage.db_path.parent()
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            anyhow::bail!(
+                "CORTEX_DB_PATH parent directory does not exist: {}\n\
                          In Docker: mount the data directory at /data and set\n\
                          CORTEX_DB_PATH=/data/cortex.db",
-                        parent.display()
-                    );
-                }
-            }
+                parent.display()
+            );
         }
         env_override_parse("CORTEX_POOL_SIZE", &mut config.storage.pool_size)?;
         env_override_parse(
@@ -1241,30 +1242,27 @@ impl Config {
                         );
                     }
                 }
-            } else if let Ok(path) = std::env::var("CORTEX_DOCKER_HOSTS_FILE") {
-                if !path.is_empty() {
-                    match std::fs::read_to_string(&path) {
-                        Ok(contents) => {
-                            let parsed: DockerHostsFile =
-                                toml::from_str(&contents).map_err(|e| {
-                                    anyhow::anyhow!(
-                                        "Failed to parse CORTEX_DOCKER_HOSTS_FILE={path}: {e}"
-                                    )
-                                })?;
-                            config.docker_ingest.hosts = parsed.hosts;
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            tracing::warn!(
-                                path = %path,
-                                "CORTEX_DOCKER_HOSTS_FILE not found — no docker hosts loaded. \
-                                 Create the file or use CORTEX_DOCKER_HOSTS instead."
-                            );
-                        }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "Failed to read CORTEX_DOCKER_HOSTS_FILE={path}: {e}"
-                            ));
-                        }
+            } else if let Ok(path) = std::env::var("CORTEX_DOCKER_HOSTS_FILE")
+                && !path.is_empty()
+            {
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => {
+                        let parsed: DockerHostsFile = toml::from_str(&contents).map_err(|e| {
+                            anyhow::anyhow!("Failed to parse CORTEX_DOCKER_HOSTS_FILE={path}: {e}")
+                        })?;
+                        config.docker_ingest.hosts = parsed.hosts;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        tracing::warn!(
+                            path = %path,
+                            "CORTEX_DOCKER_HOSTS_FILE not found — no docker hosts loaded. \
+                             Create the file or use CORTEX_DOCKER_HOSTS instead."
+                        );
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "Failed to read CORTEX_DOCKER_HOSTS_FILE={path}: {e}"
+                        ));
                     }
                 }
             }
@@ -1352,16 +1350,15 @@ fn load_setup_env_file() {
             tracing::trace!(key, "load_setup_env_file: process env already set");
             continue;
         }
-        if key == "CORTEX_DB_PATH" {
-            if let Some(suffix) = value.strip_prefix("/data/") {
-                if let Some(data_volume) = data_volume.as_deref() {
-                    value = PathBuf::from(data_volume)
-                        .join(suffix)
-                        .display()
-                        .to_string();
-                    tracing::trace!(value, "load_setup_env_file: rewrote CORTEX_DB_PATH");
-                }
-            }
+        if key == "CORTEX_DB_PATH"
+            && let Some(suffix) = value.strip_prefix("/data/")
+            && let Some(data_volume) = data_volume.as_deref()
+        {
+            value = PathBuf::from(data_volume)
+                .join(suffix)
+                .display()
+                .to_string();
+            tracing::trace!(value, "load_setup_env_file: rewrote CORTEX_DB_PATH");
         }
         tracing::trace!(key, "load_setup_env_file: setting env entry");
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -1430,26 +1427,26 @@ fn is_agent_docker_prefix_shape(prefix: &str) -> bool {
 // --- Env var helpers ---
 
 fn env_override_str(key: &str, target: &mut String) {
-    if let Ok(v) = std::env::var(key) {
-        if !v.is_empty() {
-            *target = v;
-        }
+    if let Ok(v) = std::env::var(key)
+        && !v.is_empty()
+    {
+        *target = v;
     }
 }
 
 fn env_override_opt_str(key: &str, target: &mut Option<String>) {
-    if let Ok(v) = std::env::var(key) {
-        if !v.is_empty() {
-            *target = Some(v);
-        }
+    if let Ok(v) = std::env::var(key)
+        && !v.is_empty()
+    {
+        *target = Some(v);
     }
 }
 
 fn env_override_path(key: &str, target: &mut PathBuf) {
-    if let Ok(v) = std::env::var(key) {
-        if !v.is_empty() {
-            *target = PathBuf::from(v);
-        }
+    if let Ok(v) = std::env::var(key)
+        && !v.is_empty()
+    {
+        *target = PathBuf::from(v);
     }
 }
 
@@ -1738,12 +1735,12 @@ fn env_override_parse<T: std::str::FromStr>(key: &str, target: &mut T) -> anyhow
 where
     T::Err: std::fmt::Display,
 {
-    if let Ok(v) = std::env::var(key) {
-        if !v.is_empty() {
-            *target = v
-                .parse()
-                .map_err(|e| anyhow::anyhow!("Invalid value for {key}={v}: {e}"))?;
-        }
+    if let Ok(v) = std::env::var(key)
+        && !v.is_empty()
+    {
+        *target = v
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid value for {key}={v}: {e}"))?;
     }
     Ok(())
 }

@@ -113,12 +113,12 @@ impl CortexService {
         req: models::AckErrorRequest,
         actor: impl Into<RequestActor>,
     ) -> ServiceResult<models::AckErrorResponse> {
-        if let Some(ref n) = req.notes {
-            if n.len() > 4096 {
-                return Err(ServiceError::InvalidInput(
-                    "notes exceeds 4096 chars".into(),
-                ));
-            }
+        if let Some(ref n) = req.notes
+            && n.len() > 4096
+        {
+            return Err(ServiceError::InvalidInput(
+                "notes exceeds 4096 chars".into(),
+            ));
         }
         let hash = req.signature_hash.clone();
         let notes = req.notes.clone();
@@ -183,12 +183,12 @@ impl CortexService {
         req: models::UnackErrorRequest,
         actor: impl Into<RequestActor>,
     ) -> ServiceResult<models::UnackErrorResponse> {
-        if let Some(ref r) = req.reason {
-            if r.len() > 4096 {
-                return Err(ServiceError::InvalidInput(
-                    "reason exceeds 4096 chars".into(),
-                ));
-            }
+        if let Some(ref r) = req.reason
+            && r.len() > 4096
+        {
+            return Err(ServiceError::InvalidInput(
+                "reason exceeds 4096 chars".into(),
+            ));
         }
         let hash = req.signature_hash.clone();
         let reason = req.reason.clone();

@@ -967,10 +967,10 @@ pub(crate) fn resolve_token(token_override: Option<String>) -> Result<String> {
     if let Some(t) = token_override.filter(|s| !s.trim().is_empty()) {
         return Ok(t);
     }
-    if let Ok(t) = env::var("CORTEX_API_TOKEN") {
-        if !t.trim().is_empty() {
-            return Ok(t);
-        }
+    if let Ok(t) = env::var("CORTEX_API_TOKEN")
+        && !t.trim().is_empty()
+    {
+        return Ok(t);
     }
     bail!(
         "CORTEX_API_TOKEN not set in environment. \

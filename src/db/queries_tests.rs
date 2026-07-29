@@ -2838,7 +2838,7 @@ fn bench_seed_rows(pool: &DbPool, n: usize) {
                 let host = format!("host{:02}", x % 25);
                 let app = format!("app{:02}", x % 60);
                 let msg = format!("synthetic log line {x} some error retry connection text");
-                let is_ai = x % 5 == 0;
+                let is_ai = x.is_multiple_of(5);
                 let (tool, proj, sess, tpath): (
                     Option<String>,
                     Option<String>,
@@ -2846,7 +2846,12 @@ fn bench_seed_rows(pool: &DbPool, n: usize) {
                     Option<String>,
                 ) = if is_ai {
                     let proj = format!("/proj/{}", x % 40);
-                    let tool = if x % 2 == 0 { "codex" } else { "claude" }.to_string();
+                    let tool = if x.is_multiple_of(2) {
+                        "codex"
+                    } else {
+                        "claude"
+                    }
+                    .to_string();
                     // ~20k distinct sessions => realistic group cardinality.
                     let sess = format!("sess-{}", x % 20_000);
                     let tpath = format!("{proj}/{sess}.jsonl");

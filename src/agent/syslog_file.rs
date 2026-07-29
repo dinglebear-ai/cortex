@@ -201,10 +201,11 @@ fn strip_rfc3164_timestamp(line: &str) -> Option<&str> {
 }
 
 fn parse_tag(tag: &str) -> (&str, &str) {
-    if let Some(open) = tag.rfind('[') {
-        if tag.ends_with(']') && open > 0 {
-            return (&tag[..open], &tag[open + 1..tag.len() - 1]);
-        }
+    if let Some(open) = tag.rfind('[')
+        && tag.ends_with(']')
+        && open > 0
+    {
+        return (&tag[..open], &tag[open + 1..tag.len() - 1]);
     }
     (tag, "-")
 }

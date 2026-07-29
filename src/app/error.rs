@@ -51,10 +51,10 @@ impl ServiceError {
         match error.downcast::<ServiceError>() {
             Ok(service_error) => service_error,
             Err(error) => {
-                if let Some(sqlite) = error.downcast_ref::<rusqlite::Error>() {
-                    if is_retryable_sqlite_error(sqlite) {
-                        return ServiceError::Busy("database_busy".to_string());
-                    }
+                if let Some(sqlite) = error.downcast_ref::<rusqlite::Error>()
+                    && is_retryable_sqlite_error(sqlite)
+                {
+                    return ServiceError::Busy("database_busy".to_string());
                 }
 
                 if let Some(pool_error) = error.downcast_ref::<r2d2::Error>() {

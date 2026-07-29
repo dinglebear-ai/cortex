@@ -95,10 +95,10 @@ fn parse_access(caps: regex::Captures) -> Result<ParserOutput, ParserError> {
     if let Some(xff) = caps.name("xff") {
         metadata.insert("forwarded_for".into(), json!(xff.as_str()));
     }
-    if let Some(rt) = caps.name("rt") {
-        if let Ok(secs) = rt.as_str().parse::<f64>() {
-            metadata.insert("latency_ms".into(), json!((secs * 1000.0) as i32));
-        }
+    if let Some(rt) = caps.name("rt")
+        && let Ok(secs) = rt.as_str().parse::<f64>()
+    {
+        metadata.insert("latency_ms".into(), json!((secs * 1000.0) as i32));
     }
 
     Ok(ParserOutput {

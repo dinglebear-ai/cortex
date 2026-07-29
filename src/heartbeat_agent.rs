@@ -1561,10 +1561,10 @@ fn bounded_probe_error(name: &str, error: &anyhow::Error) -> String {
 }
 
 fn hostname() -> String {
-    if let Ok(hostname) = std::env::var("HOSTNAME") {
-        if !hostname.is_empty() {
-            return hostname;
-        }
+    if let Ok(hostname) = std::env::var("HOSTNAME")
+        && !hostname.is_empty()
+    {
+        return hostname;
     }
     match std::fs::read_to_string("/proc/sys/kernel/hostname") {
         Ok(name) => {

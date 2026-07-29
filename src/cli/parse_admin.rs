@@ -9,12 +9,12 @@ use super::{
     DbVacuumArgs, PluginHookArgs, ServiceLogsArgs, SetupArgs, SetupCommand,
 };
 pub(crate) fn parse_stats(args: &[String]) -> Result<CliCommand> {
-    if let Some((subcommand, rest)) = args.split_first() {
-        if subcommand == "ingestrate" {
-            return Ok(CliCommand::Stats(StatsCommand::IngestRate(
-                super::parse_logs::parse_ingest_rate_args(rest)?,
-            )));
-        }
+    if let Some((subcommand, rest)) = args.split_first()
+        && subcommand == "ingestrate"
+    {
+        return Ok(CliCommand::Stats(StatsCommand::IngestRate(
+            super::parse_logs::parse_ingest_rate_args(rest)?,
+        )));
     }
     Ok(CliCommand::Stats(StatsCommand::Summary(parse_output_args(
         "stats", args,
@@ -102,10 +102,10 @@ pub(crate) fn parse_db_status(args: &[String]) -> Result<CliCommand> {
 pub(crate) fn parse_db_integrity(args: &[String]) -> Result<CliCommand> {
     // `db integrity status <id>` polls a background job; everything else runs
     // (or starts) a check.
-    if let Some((first, rest)) = args.split_first() {
-        if first == "status" {
-            return parse_db_integrity_status(rest);
-        }
+    if let Some((first, rest)) = args.split_first()
+        && first == "status"
+    {
+        return parse_db_integrity_status(rest);
     }
     let mut parsed = DbIntegrityArgs::default();
     let mut flags = FlagCursor::new(args);

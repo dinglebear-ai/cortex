@@ -262,25 +262,25 @@ async fn scan_and_forward(
         }
     }
 
-    if records.len() < MAX_BATCH_RECORDS {
-        if let Some(path) = &config.atuin_db_path {
-            let remaining = MAX_BATCH_RECORDS - records.len();
-            match scan_atuin(
-                path,
-                &config.hostname,
-                checkpoint.atuin_timestamp_ns,
-                &checkpoint.atuin_id,
-                remaining,
-            ) {
-                Ok((mut atuin_records, last_ts, last_id)) => {
-                    if last_ts != checkpoint.atuin_timestamp_ns || last_id != checkpoint.atuin_id {
-                        new_atuin_cursor = Some((last_ts, last_id));
-                    }
-                    records.append(&mut atuin_records);
+    if records.len() < MAX_BATCH_RECORDS
+        && let Some(path) = &config.atuin_db_path
+    {
+        let remaining = MAX_BATCH_RECORDS - records.len();
+        match scan_atuin(
+            path,
+            &config.hostname,
+            checkpoint.atuin_timestamp_ns,
+            &checkpoint.atuin_id,
+            remaining,
+        ) {
+            Ok((mut atuin_records, last_ts, last_id)) => {
+                if last_ts != checkpoint.atuin_timestamp_ns || last_id != checkpoint.atuin_id {
+                    new_atuin_cursor = Some((last_ts, last_id));
                 }
-                Err(error) => {
-                    tracing::warn!(path = %path.display(), error = format!("{error:#}"), "shell history forwarder failed to read atuin history");
-                }
+                records.append(&mut atuin_records);
+            }
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = format!("{error:#}"), "shell history forwarder failed to read atuin history");
             }
         }
     }

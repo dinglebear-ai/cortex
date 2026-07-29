@@ -98,15 +98,15 @@ pub(crate) fn cleanup_legacy_systemd() -> SetupPhase {
     for name in ["cortex.service", "mnemo-index.service", "mnemo-index.timer"] {
         let unit = home.join(".config/systemd/user").join(name);
         let dropins = home.join(".config/systemd/user").join(format!("{name}.d"));
-        if let Err(error) = std::fs::remove_file(&unit) {
-            if error.kind() != ErrorKind::NotFound {
-                failures.push(format!("remove {}: {error}", unit.display()));
-            }
+        if let Err(error) = std::fs::remove_file(&unit)
+            && error.kind() != ErrorKind::NotFound
+        {
+            failures.push(format!("remove {}: {error}", unit.display()));
         }
-        if let Err(error) = std::fs::remove_dir_all(&dropins) {
-            if error.kind() != ErrorKind::NotFound {
-                failures.push(format!("remove {}: {error}", dropins.display()));
-            }
+        if let Err(error) = std::fs::remove_dir_all(&dropins)
+            && error.kind() != ErrorKind::NotFound
+        {
+            failures.push(format!("remove {}: {error}", dropins.display()));
         }
     }
     match super::systemd::run_systemctl_user(&["daemon-reload"]) {

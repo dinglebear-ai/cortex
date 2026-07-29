@@ -2,11 +2,19 @@
 members = ["xtask"]
 resolver = "2"
 
+[workspace.package]
+
+# Fleet edition (ADR-0002). Members inherit via edition.workspace = true.
+edition = "2024"
+# Fleet MSRV — the floor this repo supports. A separate promise from
+# rust-toolchain.toml's channel, which is what we BUILD with. Both are
+# 1.97.1 as of 2026-07-29 (ADR-0001 toolchain, ADR-0024 MSRV).
+rust-version = "1.97.1"
 [package]
 name = "cortex"
 version = "3.11.1"
-edition = "2024"
-rust-version = "1.86"
+edition.workspace = true
+rust-version.workspace = true
 categories = ["command-line-utilities", "development-tools"]
 keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
 repository = "https://github.com/dinglebear-ai/cortex"
@@ -39,9 +47,9 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 # HTTP / MCP transport
 axum = "0.8"
-# Declared bound matches what Cargo.lock actually resolves (1.7.x) so docs,
-# lockfile, and code agree (full-review BM2).
-rmcp = { version = "1.7", default-features = false, features = [
+# Exact pin: a caret range is how this repo silently drifted off its declared
+# version before (full-review BM2). `=` keeps Cargo.toml and Cargo.lock honest.
+rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
   "server",
   "macros",
   "transport-streamable-http-server",
@@ -159,7 +167,7 @@ serial_test = "3"
 # tests so backoff sleeps advance instantly instead of in real time.
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
-rmcp = { version = "1.7", default-features = false, features = [
+rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
   "client",
   "transport-child-process",
 ] }

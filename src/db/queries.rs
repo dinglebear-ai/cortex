@@ -85,7 +85,7 @@ fn lint_fts_query(query: &str) -> Result<()> {
                 .to_string(),
         )));
     }
-    if query.matches('"').count() % 2 != 0 {
+    if !query.matches('"').count().is_multiple_of(2) {
         return Err(anyhow::Error::new(crate::app::ServiceError::InvalidInput(
             "unbalanced quote in search query; wrap phrases in matching double quotes".to_string(),
         )));
@@ -325,28 +325,30 @@ fn tail_logs_sql(
     // a bounded index walk, and the outer sort covers at most
     // severities × n ≤ 8 × 500 rows. `n` is server-clamped, so interpolating
     // it is safe.
-    if hostname.is_none() && source_ip.is_none() && app_name.is_none() {
-        if let Some(levels) = severity_in.filter(|levels| !levels.is_empty()) {
-            const COLS: &str = "id, timestamp, hostname, facility, severity, \
+    if hostname.is_none()
+        && source_ip.is_none()
+        && app_name.is_none()
+        && let Some(levels) = severity_in.filter(|levels| !levels.is_empty())
+    {
+        const COLS: &str = "id, timestamp, hostname, facility, severity, \
                  app_name, process_id, message, received_at, source_ip, \
                  ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json";
-            let mut bindings: Vec<rusqlite::types::Value> = Vec::with_capacity(levels.len());
-            let arms = levels
-                .iter()
-                .enumerate()
-                .map(|(i, lvl)| {
-                    bindings.push(rusqlite::types::Value::Text(lvl.clone()));
-                    format!(
-                        "SELECT * FROM (SELECT {COLS} FROM logs WHERE severity = ?{} \
+        let mut bindings: Vec<rusqlite::types::Value> = Vec::with_capacity(levels.len());
+        let arms = levels
+            .iter()
+            .enumerate()
+            .map(|(i, lvl)| {
+                bindings.push(rusqlite::types::Value::Text(lvl.clone()));
+                format!(
+                    "SELECT * FROM (SELECT {COLS} FROM logs WHERE severity = ?{} \
                          ORDER BY timestamp DESC LIMIT {n})",
-                        i + 1
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" UNION ALL ");
-            let sql = format!("{arms} ORDER BY timestamp DESC LIMIT {n}");
-            return (sql, bindings);
-        }
+                    i + 1
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        let sql = format!("{arms} ORDER BY timestamp DESC LIMIT {n}");
+        return (sql, bindings);
     }
 
     let mut sql = String::from(
@@ -371,17 +373,17 @@ fn tail_logs_sql(
         bindings.push(rusqlite::types::Value::Text(a.to_string()));
         idx += 1;
     }
-    if let Some(levels) = severity_in {
-        if !levels.is_empty() {
-            let placeholders: Vec<String> =
-                (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
-            sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
-            for lvl in levels {
-                bindings.push(rusqlite::types::Value::Text(lvl.clone()));
-                idx += 1;
-            }
-            debug_assert_eq!(bindings.len() + 1, idx);
+    if let Some(levels) = severity_in
+        && !levels.is_empty()
+    {
+        let placeholders: Vec<String> =
+            (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
+        sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
+        for lvl in levels {
+            bindings.push(rusqlite::types::Value::Text(lvl.clone()));
+            idx += 1;
         }
+        debug_assert_eq!(bindings.len() + 1, idx);
     }
 
     sql.push_str(" ORDER BY timestamp DESC");
@@ -725,10 +727,11 @@ pub fn refresh_ai_session_rollup_if_stale(pool: &DbPool) -> Result<RollupRefresh
                 },
             )
             .optional()?;
-        if let Some((Some(_refreshed_at), src_count, src_max_id)) = stored {
-            if src_count == cur_count && src_max_id == cur_max_id {
-                return Ok(RollupRefresh::Skipped);
-            }
+        if let Some((Some(_refreshed_at), src_count, src_max_id)) = stored
+            && src_count == cur_count
+            && src_max_id == cur_max_id
+        {
+            return Ok(RollupRefresh::Skipped);
         }
     }
     let row_count = refresh_ai_session_rollup(pool)?;
@@ -1522,10 +1525,10 @@ pub fn search_logs_from_graph_related_entities(
             super::graph::ENTITY_TYPE_AI_PROJECT => ai_projects.push(entity.canonical_key.clone()),
             super::graph::ENTITY_TYPE_AI_SESSION => {
                 // `project:tool:session` — the session id is the 3rd segment.
-                if let Some(session) = entity.canonical_key.splitn(3, ':').nth(2) {
-                    if !session.is_empty() {
-                        ai_sessions.push(session.to_string());
-                    }
+                if let Some(session) = entity.canonical_key.splitn(3, ':').nth(2)
+                    && !session.is_empty()
+                {
+                    ai_sessions.push(session.to_string());
                 }
             }
             _ => {}
@@ -1569,14 +1572,14 @@ pub fn search_logs_from_graph_related_entities(
         where_sql.push_str(" AND l.timestamp <= ?");
         bindings.push(rusqlite::types::Value::Text(until.to_string()));
     }
-    if let Some(kinds) = source_kinds {
-        if !kinds.is_empty() {
-            let kind_strs: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
-            let ph = bind_in_list(&mut bindings, &kind_strs);
-            where_sql.push_str(&format!(
-                " AND json_extract(l.metadata_json, '$.source_kind') IN ({ph})"
-            ));
-        }
+    if let Some(kinds) = source_kinds
+        && !kinds.is_empty()
+    {
+        let kind_strs: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
+        let ph = bind_in_list(&mut bindings, &kind_strs);
+        where_sql.push_str(&format!(
+            " AND json_extract(l.metadata_json, '$.source_kind') IN ({ph})"
+        ));
     }
     bindings.push(rusqlite::types::Value::Integer(limit as i64));
 
@@ -2921,18 +2924,18 @@ fn append_filters(
         bindings.push(rusqlite::types::Value::Text(s.clone()));
         *idx += 1;
     }
-    if let Some(ref levels) = params.severity_in {
-        if !levels.is_empty() {
-            let placeholders: Vec<String> = levels
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("?{}", *idx + i))
-                .collect();
-            sql.push_str(&format!(" AND l.severity IN ({})", placeholders.join(", ")));
-            for level in levels {
-                bindings.push(rusqlite::types::Value::Text(level.clone()));
-                *idx += 1;
-            }
+    if let Some(ref levels) = params.severity_in
+        && !levels.is_empty()
+    {
+        let placeholders: Vec<String> = levels
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", *idx + i))
+            .collect();
+        sql.push_str(&format!(" AND l.severity IN ({})", placeholders.join(", ")));
+        for level in levels {
+            bindings.push(rusqlite::types::Value::Text(level.clone()));
+            *idx += 1;
         }
     }
     if let Some(ref a) = params.app {

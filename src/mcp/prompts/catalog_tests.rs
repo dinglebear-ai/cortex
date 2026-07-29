@@ -12,8 +12,10 @@ fn prompt_catalog_names_are_unique() {
 fn rendered_prompts_reference_cortex_tool_actions() {
     for spec in PROMPTS {
         let (_description, messages) = get_prompt(spec.name, None).unwrap();
+        // rmcp 3.0 replaced PromptMessageContent with ContentBlock, so the text
+        // variant is now a tuple variant wrapping TextContent.
         let text = match &messages[0].content {
-            rmcp::model::PromptMessageContent::Text { text } => text,
+            rmcp::model::ContentBlock::Text(text) => &text.text,
             _ => panic!("expected text prompt"),
         };
         assert!(text.contains("cortex"));
@@ -100,7 +102,7 @@ fn rendered_prompt_texts() -> Vec<(&'static str, String)> {
         .map(|spec| {
             let (_description, messages) = get_prompt(spec.name, None).unwrap();
             let text = match &messages[0].content {
-                rmcp::model::PromptMessageContent::Text { text } => text.clone(),
+                rmcp::model::ContentBlock::Text(text) => text.text.clone(),
                 _ => panic!("expected text prompt"),
             };
             (spec.name, text)

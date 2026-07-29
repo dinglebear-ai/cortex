@@ -120,10 +120,10 @@ fn parse_mac_collision(msg: &str) -> Result<ParserOutput, ParserError> {
     let mut metadata = Map::new();
     metadata.insert("interface".into(), json!(&caps["if"]));
     metadata.insert("colliding_mac".into(), json!(&caps["mac"]));
-    if let Some(vlan) = caps.name("vlan") {
-        if let Ok(v) = vlan.as_str().parse::<i32>() {
-            metadata.insert("vlan".into(), json!(v));
-        }
+    if let Some(vlan) = caps.name("vlan")
+        && let Ok(v) = vlan.as_str().parse::<i32>()
+    {
+        metadata.insert("vlan".into(), json!(v));
     }
     Ok(ParserOutput {
         event_action: Some("mac_collision".into()),

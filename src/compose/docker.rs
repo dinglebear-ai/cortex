@@ -52,10 +52,10 @@ impl DockerInspect for CliDockerInspect {
         let names = String::from_utf8_lossy(&output.stdout);
         let mut found = Vec::new();
         for name in names.lines().take(10) {
-            if name == container_name || name.contains(service) {
-                if let Some(info) = self.inspect_container(name)? {
-                    found.push(info);
-                }
+            if (name == container_name || name.contains(service))
+                && let Some(info) = self.inspect_container(name)?
+            {
+                found.push(info);
             }
         }
         Ok(found)
@@ -197,17 +197,16 @@ pub(super) fn run_inspector_command(
         && !output.status.success()
         && std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none()
         && systemctl_needs_user_bus_fallback(&output)
+        && let Some((runtime_dir, bus_address)) = inferred_user_bus_env()
     {
-        if let Some((runtime_dir, bus_address)) = inferred_user_bus_env() {
-            let mut retry_args = vec!["-k", "1s", &timeout_secs, program];
-            retry_args.extend(args);
-            return std::process::Command::new("timeout")
-                .env("XDG_RUNTIME_DIR", runtime_dir)
-                .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
-                .args(retry_args)
-                .output()
-                .map_err(|e| anyhow!("failed to run {program} inspector command: {e}"));
-        }
+        let mut retry_args = vec!["-k", "1s", &timeout_secs, program];
+        retry_args.extend(args);
+        return std::process::Command::new("timeout")
+            .env("XDG_RUNTIME_DIR", runtime_dir)
+            .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
+            .args(retry_args)
+            .output()
+            .map_err(|e| anyhow!("failed to run {program} inspector command: {e}"));
     }
     Ok(output)
 }

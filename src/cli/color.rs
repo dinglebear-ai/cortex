@@ -52,13 +52,13 @@ pub(crate) fn install_color_from_args(args: &mut Vec<String>) -> Result<()> {
         }
         if arg == "--color" {
             // `--color VALUE` if a recognized value follows, else bare `--color` ⇒ always.
-            if let Some(next) = args.get(i + 1).map(String::as_str) {
-                if matches!(next, "always" | "never" | "auto") {
-                    color_policy::install_color_choice(parse_color_value(next)?);
-                    args.remove(i + 1);
-                    args.remove(i);
-                    continue;
-                }
+            if let Some(next) = args.get(i + 1).map(String::as_str)
+                && matches!(next, "always" | "never" | "auto")
+            {
+                color_policy::install_color_choice(parse_color_value(next)?);
+                args.remove(i + 1);
+                args.remove(i);
+                continue;
             }
             color_policy::install_color_choice(ColorChoice::Always);
             args.remove(i);

@@ -162,10 +162,10 @@ fn write_heartbeat_agent_env(env_path: &Path) -> io::Result<SetupPhase> {
         ));
     }
     for key in heartbeat_agent::OPTIONAL_ENV_KEYS {
-        if let Ok(value) = std::env::var(key) {
-            if !value.trim().is_empty() {
-                body.push_str(&format!("{key}={}\n", shell_safe_value(&value)?));
-            }
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            body.push_str(&format!("{key}={}\n", shell_safe_value(&value)?));
         }
     }
     write_private_file(env_path, &body)?;
@@ -260,14 +260,12 @@ fn heartbeat_agent_unit(
     // without this, `ProtectHome=read-only` blocks it from ever opening the
     // spool for the truncate-after-forward step.
     let mut read_write_paths_set = vec![read_write_dir.clone(), read_write_bin_dir.clone()];
-    if let Ok(spool_path) = super::default_agent_command_spool_path() {
-        if let Some(spool_dir) = spool_path.parent() {
-            if let Ok(spool_dir) = setup_path_value(spool_dir) {
-                if !read_write_paths_set.contains(&spool_dir) {
-                    read_write_paths_set.push(spool_dir);
-                }
-            }
-        }
+    if let Ok(spool_path) = super::default_agent_command_spool_path()
+        && let Some(spool_dir) = spool_path.parent()
+        && let Ok(spool_dir) = setup_path_value(spool_dir)
+        && !read_write_paths_set.contains(&spool_dir)
+    {
+        read_write_paths_set.push(spool_dir);
     }
     let read_write_paths = read_write_paths_set.join(" ");
     let cortex_bin = setup_path_value(cortex_bin)?;

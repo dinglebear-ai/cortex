@@ -693,14 +693,14 @@ pub fn timeline(
         bindings.push(Box::new(a.to_string()));
         idx += 1;
     }
-    if let Some(levels) = severity_in {
-        if !levels.is_empty() {
-            let placeholders: Vec<String> =
-                (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
-            sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
-            for lvl in levels {
-                bindings.push(Box::new(lvl.clone()));
-            }
+    if let Some(levels) = severity_in
+        && !levels.is_empty()
+    {
+        let placeholders: Vec<String> =
+            (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
+        sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
+        for lvl in levels {
+            bindings.push(Box::new(lvl.clone()));
         }
     }
 
@@ -802,14 +802,14 @@ fn timeline_from_rollup(
         bindings.push(Box::new(a.to_string()));
         idx += 1;
     }
-    if let Some(levels) = severity_in {
-        if !levels.is_empty() {
-            let placeholders: Vec<String> =
-                (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
-            sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
-            for lvl in levels {
-                bindings.push(Box::new(lvl.clone()));
-            }
+    if let Some(levels) = severity_in
+        && !levels.is_empty()
+    {
+        let placeholders: Vec<String> =
+            (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
+        sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
+        for lvl in levels {
+            bindings.push(Box::new(lvl.clone()));
         }
     }
 
@@ -935,15 +935,15 @@ fn pattern_rows_sql(
         bindings.push(rusqlite::types::Value::Text(a.to_string()));
         idx += 1;
     }
-    if let Some(levels) = severity_in {
-        if !levels.is_empty() {
-            let placeholders: Vec<String> =
-                (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
-            sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
-            for lvl in levels {
-                bindings.push(rusqlite::types::Value::Text(lvl.clone()));
-                idx += 1;
-            }
+    if let Some(levels) = severity_in
+        && !levels.is_empty()
+    {
+        let placeholders: Vec<String> =
+            (0..levels.len()).map(|i| format!("?{}", idx + i)).collect();
+        sql.push_str(&format!(" AND severity IN ({})", placeholders.join(", ")));
+        for lvl in levels {
+            bindings.push(rusqlite::types::Value::Text(lvl.clone()));
+            idx += 1;
         }
     }
     // Cap rows scanned to bound CPU/memory — we ask for one extra to detect truncation.

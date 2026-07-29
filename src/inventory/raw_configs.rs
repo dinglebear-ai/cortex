@@ -203,10 +203,11 @@ fn parse_compose_project(path: &Path, body: &str) -> ComposeProject {
         if in_services && !line.starts_with(' ') && !trimmed.is_empty() {
             in_services = false;
         }
-        if let Some(port_indent) = ports_indent {
-            if !trimmed.is_empty() && indent <= port_indent {
-                ports_indent = None;
-            }
+        if let Some(port_indent) = ports_indent
+            && !trimmed.is_empty()
+            && indent <= port_indent
+        {
+            ports_indent = None;
         }
         if in_services
             && line.starts_with("  ")
@@ -221,10 +222,11 @@ fn parse_compose_project(path: &Path, body: &str) -> ComposeProject {
         {
             domains.extend(extract_domainish(trimmed));
         }
-        if ports_indent.is_some() && trimmed.starts_with('-') {
-            if let Some(port) = parse_port_line(trimmed) {
-                ports.push(port);
-            }
+        if ports_indent.is_some()
+            && trimmed.starts_with('-')
+            && let Some(port) = parse_port_line(trimmed)
+        {
+            ports.push(port);
         }
     }
     ComposeProject {
@@ -308,14 +310,14 @@ fn expand_files(paths: &[PathBuf], extensions: &[&str]) -> Vec<PathBuf> {
     for path in paths {
         if path.is_file() {
             out.push(path.clone());
-        } else if path.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(path) {
-                out.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {
-                    path.extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| extensions.contains(&ext))
-                }));
-            }
+        } else if path.is_dir()
+            && let Ok(entries) = std::fs::read_dir(path)
+        {
+            out.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| extensions.contains(&ext))
+            }));
         }
     }
     out.sort();

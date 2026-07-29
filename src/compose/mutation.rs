@@ -252,19 +252,17 @@ impl<I: DockerInspect, R> ComposeService<I, R> {
 
             // Guard: if the running container has an unexpected /data mount,
             // refuse Up to prevent silently switching SQLite files.
-            if matches!(mutation, ComposeMutation::Up) {
-                if let Some(info) = &target_container {
-                    if let Some(mount) = info.mounts.iter().find(|m| m.target == "/data") {
-                        if let Err(diagnostic) = data_mount_diagnostic(target, mount) {
-                            return Err(anyhow!(
-                                "refusing up: {}\nFix: recreate with the intended \
+            if matches!(mutation, ComposeMutation::Up)
+                && let Some(info) = &target_container
+                && let Some(mount) = info.mounts.iter().find(|m| m.target == "/data")
+                && let Err(diagnostic) = data_mount_diagnostic(target, mount)
+            {
+                return Err(anyhow!(
+                    "refusing up: {}\nFix: recreate with the intended \
                                  CORTEX_DATA_VOLUME/CORTEX_VOLUME_NAME, or update the \
                                  env file if this mount is intentional.",
-                                diagnostic.message
-                            ));
-                        }
-                    }
-                }
+                    diagnostic.message
+                ));
             }
 
             let target_container_id = target_container.as_ref().map(|info| info.id.as_str());
@@ -493,10 +491,10 @@ fn expected_data_mount(target: &ResolvedComposeTarget) -> ExpectedDataMount {
         if path.is_absolute() {
             return ExpectedDataMount::Bind(normalize_path(path));
         }
-        if value.starts_with("./") || value.starts_with("../") {
-            if let Some(project_dir) = &target.compose_working_dir {
-                return ExpectedDataMount::Bind(normalize_path(project_dir.join(path)));
-            }
+        if (value.starts_with("./") || value.starts_with("../"))
+            && let Some(project_dir) = &target.compose_working_dir
+        {
+            return ExpectedDataMount::Bind(normalize_path(project_dir.join(path)));
         }
         return ExpectedDataMount::Volume(value);
     }
@@ -656,10 +654,11 @@ fn listener_belongs_to_target<I: DockerInspect>(
     // Any other named process definitively owns the port and is not our target.
     // When running without root, ss omits process info (no users: field), so we
     // fall through to the docker ps ownership check below.
-    if let Some(process) = listener.process.as_deref() {
-        if process.contains("users:") && !process.contains("docker-proxy") {
-            return Ok(false);
-        }
+    if let Some(process) = listener.process.as_deref()
+        && process.contains("users:")
+        && !process.contains("docker-proxy")
+    {
+        return Ok(false);
     }
     // Use docker ps --filter publish=PORT to confirm ownership. This works without
     // root privileges, unlike ss process inspection, and handles the common
@@ -690,21 +689,21 @@ fn validate_requested_selectors(
     requested: &ComposeTarget,
     target: &ResolvedComposeTarget,
 ) -> Result<()> {
-    if let Some(project_name) = &requested.project_name {
-        if target.target.project_name.as_ref() != Some(project_name) {
-            return Err(anyhow!(
-                "requested project_name {project_name:?} does not match resolved compose project {:?}",
-                target.target.project_name
-            ));
-        }
+    if let Some(project_name) = &requested.project_name
+        && target.target.project_name.as_ref() != Some(project_name)
+    {
+        return Err(anyhow!(
+            "requested project_name {project_name:?} does not match resolved compose project {:?}",
+            target.target.project_name
+        ));
     }
-    if let Some(service) = &requested.service {
-        if &target.target.service != service {
-            return Err(anyhow!(
-                "requested service {service:?} does not match resolved compose service {:?}",
-                target.target.service
-            ));
-        }
+    if let Some(service) = &requested.service
+        && &target.target.service != service
+    {
+        return Err(anyhow!(
+            "requested service {service:?} does not match resolved compose service {:?}",
+            target.target.service
+        ));
     }
     Ok(())
 }

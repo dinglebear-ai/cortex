@@ -1587,14 +1587,19 @@ fn embedded_widget_content_matches_resource_declaration() {
     use rmcp::model::{ResourceContents, Role};
 
     let content = super::embedded_widget_content();
-    assert_eq!(
-        content.audience(),
-        Some(&vec![Role::User]),
-        "widget block must be user-audience so audience-aware hosts keep it out of model context"
-    );
     let embedded = content
         .as_resource()
         .expect("widget block must be an embedded resource");
+    // rmcp 3.0 dropped ContentBlock::audience(); annotations now hang off the
+    // individual content-block variant (here EmbeddedResource).
+    assert_eq!(
+        embedded
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.audience.as_ref()),
+        Some(&vec![Role::User]),
+        "widget block must be user-audience so audience-aware hosts keep it out of model context"
+    );
     let ResourceContents::TextResourceContents {
         uri,
         mime_type,

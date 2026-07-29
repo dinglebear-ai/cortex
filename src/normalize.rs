@@ -70,22 +70,22 @@ pub(crate) fn normalize_template(msg: &str) -> String {
         }
 
         // IPv4 / IPv4:port
-        if b.is_ascii_digit() {
-            if let Some(end) = ipv4_end(bytes, i) {
-                out.push_str("<ip>");
-                i = end;
-                if i < bytes.len() && bytes[i] == b':' {
-                    let mut j = i + 1;
-                    while j < bytes.len() && bytes[j].is_ascii_digit() {
-                        j += 1;
-                    }
-                    if j > i + 1 {
-                        out.push_str(":<n>");
-                        i = j;
-                    }
+        if b.is_ascii_digit()
+            && let Some(end) = ipv4_end(bytes, i)
+        {
+            out.push_str("<ip>");
+            i = end;
+            if i < bytes.len() && bytes[i] == b':' {
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
                 }
-                continue;
+                if j > i + 1 {
+                    out.push_str(":<n>");
+                    i = j;
+                }
             }
+            continue;
         }
 
         // Long hex run (>= 8 chars)

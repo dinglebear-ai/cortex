@@ -972,9 +972,10 @@ async fn collect_ai_section() -> DoctorSection {
                     .await
                 {
                     Ok(health) => {
-                        if let Some(start) = process_start_time.as_deref() {
-                            if health.schema_drift_detected {
-                                phases.push(DoctorPhase::new(
+                        if let Some(start) = process_start_time.as_deref()
+                            && health.schema_drift_detected
+                        {
+                            phases.push(DoctorPhase::new(
                                     SetupStatus::Error,
                                     "ai_watch_schema_drift",
                                     format!(
@@ -982,7 +983,6 @@ async fn collect_ai_section() -> DoctorSection {
                                         health.schema_drift_migrations.len()
                                     ),
                                 ));
-                            }
                         }
                         if health.recent_failure_count > 0 || health.recent_schema_error_count > 0 {
                             phases.push(DoctorPhase::new(
@@ -1240,13 +1240,13 @@ fn runtime_current_script_path() -> Option<std::path::PathBuf> {
     }
 
     let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("scripts/check-runtime-current.sh"));
-            candidates.push(exe_dir.join("../scripts/check-runtime-current.sh"));
-            candidates.push(exe_dir.join("../../scripts/check-runtime-current.sh"));
-            candidates.push(exe_dir.join("../../../scripts/check-runtime-current.sh"));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("scripts/check-runtime-current.sh"));
+        candidates.push(exe_dir.join("../scripts/check-runtime-current.sh"));
+        candidates.push(exe_dir.join("../../scripts/check-runtime-current.sh"));
+        candidates.push(exe_dir.join("../../../scripts/check-runtime-current.sh"));
     }
     candidates.push(std::path::PathBuf::from("scripts/check-runtime-current.sh"));
 

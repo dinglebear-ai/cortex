@@ -71,12 +71,11 @@ impl Parser for AdguardParser {
         if let Some(r) = rule {
             metadata.insert("rule".into(), Value::String(r));
         }
-        if let Some(e) = elapsed {
-            if let Some(stripped) = e.strip_suffix('s') {
-                if let Ok(secs) = stripped.parse::<f64>() {
-                    metadata.insert("elapsed_ms".into(), json!(secs * 1000.0));
-                }
-            }
+        if let Some(e) = elapsed
+            && let Some(stripped) = e.strip_suffix('s')
+            && let Ok(secs) = stripped.parse::<f64>()
+        {
+            metadata.insert("elapsed_ms".into(), json!(secs * 1000.0));
         }
         if let Some(c) = cached {
             metadata.insert("cached".into(), json!(c));
