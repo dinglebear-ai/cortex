@@ -17,7 +17,7 @@ permissions:
 jobs:
   container:
     name: Build, verify, and publish amd64 image
-    uses: dinglebear-ai/workflows/.github/workflows/hosted-container-release.yml@2650efa9e06ec76992d82022f15b7bfd276166a2
+    uses: dinglebear-ai/workflows/.github/workflows/hosted-container-release.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
     with:
       checkout-ref: ${{ github.event.release.tag_name }}
       image: ghcr.io/${{ github.repository }}
@@ -33,6 +33,7 @@ jobs:
     name: Publish MCP Registry metadata
     needs: [container]
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:

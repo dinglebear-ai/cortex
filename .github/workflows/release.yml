@@ -1,207 +1,73 @@
-name: release
+name: Release artifacts
 
-# Triggered when release-please merges a release PR and pushes the resulting
-# version tag (e.g. v1.16.1) — see .github/workflows/release-please.yml.
-# Builds cortex for Linux + Windows, packages with SHA256 checksums, and
-# attaches the artifacts to the GitHub Release release-please already created
-# for that tag.
-#
-# Manual workflow_dispatch defaults to a dry-run that builds everything but skips
-# artifact attachment. Pass publish=true only when intentionally publishing
-# from an already-tagged ref.
-#
-# NOTE: cortex uses target-dir = ".cache/cargo" in .cargo/config.toml so all
-# artifact paths use .cache/cargo/release/ instead of target/release/.
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: "Publish a GitHub Release for the tagged ref instead of dry-run only"
-        required: false
-        default: false
-        type: boolean
+  release:
+    types: [published]
 
 permissions:
-  contents: write   # required to create releases
+  contents: write
+  attestations: write
+  id-token: write
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
+concurrency:
+  group: release-artifacts-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
 
 jobs:
-  cortex-linux:
-    name: build cortex (linux)
-    runs-on: [self-hosted, unraid]
+  metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Install Rust and kache
-        uses: ./.github/actions/setup-rust-kache
-
-      - name: cargo build --release --bin cortex
-        run: cargo build --release --locked --bin cortex
-
-      - name: Package
+      - id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          cd .cache/cargo/release
-          tar -czf cortex-linux-x86_64.tar.gz cortex
-          sha256sum cortex-linux-x86_64.tar.gz > cortex-linux-x86_64.tar.gz.sha256
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$ ]]
+          printf 'version=%s\n' "${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cortex-linux-x86_64
-          path: |
-            .cache/cargo/release/cortex-linux-x86_64.tar.gz
-            .cache/cargo/release/cortex-linux-x86_64.tar.gz.sha256
-          if-no-files-found: error
+  artifacts:
+    name: Build hosted x86_64 artifacts
+    uses: dinglebear-ai/workflows/.github/workflows/hosted-rust-platform-release.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    with:
+      checkout-ref: ${{ github.event.release.tag_name }}
+      toolchain: "1.97.1"
+      targets-json: >-
+        [{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},
+         {"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]
+      build-command: cargo build --release --locked --target "$TARGET" --bin cortex
+      package-command: |
+        set -euo pipefail
+        mkdir -p dist
+        if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
+          7z a "dist/cortex-windows-x86_64.zip" ".cache/cargo/$TARGET/release/cortex.exe"
+          (cd dist && sha256sum cortex-windows-x86_64.zip > cortex-windows-x86_64.zip.sha256)
+        else
+          tar -C ".cache/cargo/$TARGET/release" -czf "dist/cortex-linux-x86_64.tar.gz" cortex
+          (cd dist && sha256sum cortex-linux-x86_64.tar.gz > cortex-linux-x86_64.tar.gz.sha256)
+        fi
+      artifact-path: dist/*
+      artifact-prefix: cortex
 
-  cortex-windows:
-    name: build cortex (windows)
-    runs-on: windows-latest
-    # GitHub-hosted Windows job runs bare cargo (no kache). Blank the repo's
-    # .cargo/config.toml rustc-wrapper here — it's a Linux bash sccache shim
-    # that can't execute as a rustc wrapper on Windows. The self-hosted Linux
-    # jobs route through kache instead, so this disabler is scoped to just this
-    # job now rather than the whole workflow.
-    env:
-      CARGO_BUILD_RUSTC_WRAPPER: ""
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: release-cortex-windows
-          cache-directories: .cache/cargo
-
-      - name: cargo build --release --bin cortex
-        run: cargo build --release --locked --bin cortex
-
-      - name: Package
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Push-Location .cache/cargo/release
-          Compress-Archive -Path cortex.exe -DestinationPath cortex-windows-x86_64.zip -Force
-          $hash = (Get-FileHash cortex-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  cortex-windows-x86_64.zip" | Out-File -Encoding ascii cortex-windows-x86_64.zip.sha256
-          Pop-Location
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cortex-windows-x86_64
-          path: |
-            .cache/cargo/release/cortex-windows-x86_64.zip
-            .cache/cargo/release/cortex-windows-x86_64.zip.sha256
-          if-no-files-found: error
-
-  publish:
-    name: publish github release
-    needs: [cortex-linux, cortex-windows]
-    runs-on: [self-hosted, unraid]
-    # Tag pushes publish automatically. workflow_dispatch stays dry-run unless
-    # a human explicitly passes publish=true on a tagged ref.
-    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event.inputs.publish == 'true')
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: List artifacts
-        run: ls -la dist/
-
-      # release-please already created the GitHub Release for this tag (with
-      # its own changelog-derived notes) before this workflow's push-tag
-      # trigger fired. Deliberately omit generate_release_notes here — it
-      # would overwrite that body with GitHub's generic auto-generated notes.
-      # This step only attaches the built artifacts to the existing release
-      # (or creates one, for a manual workflow_dispatch on an untagged ref).
-      - name: Attach artifacts to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/cortex-linux-x86_64.tar.gz
-            dist/cortex-linux-x86_64.tar.gz.sha256
-            dist/cortex-windows-x86_64.zip
-            dist/cortex-windows-x86_64.zip.sha256
-          fail_on_unmatched_files: true
+  github-release:
+    name: Attach verified artifacts
+    needs: [artifacts]
+    uses: dinglebear-ai/workflows/.github/workflows/github-release.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    with:
+      release-tag: ${{ github.event.release.tag_name }}
+      artifact-pattern: cortex-*
 
   npm:
-    name: publish npm launcher
-    needs: publish
-    runs-on: [self-hosted, unraid]
-    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event.inputs.publish == 'true')
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Verify npm package version matches release tag
-        id: npm-version
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="${{ github.ref_name }}"
-          version="$(node -p "require('./packages/cortex-rmcp/package.json').version")"
-          if [[ "$tag" != "v${version}" ]]; then
-            echo "::error::release tag ${tag} does not match packages/cortex-rmcp/package.json version ${version}"
-            exit 1
-          fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Test npm launcher
-        run: npm test --prefix packages/cortex-rmcp
-      - name: Check npm launcher syntax
-        run: npm run check --prefix packages/cortex-rmcp
-      - name: Dry-run npm package
-        run: npm pack --dry-run --json ./packages/cortex-rmcp
-
-      - name: Check whether npm version is already published
-        id: published
-        shell: bash
-        run: |
-          set -euo pipefail
-          if npm view "cortex-rmcp@${{ steps.npm-version.outputs.version }}" version >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish npm package
-        if: steps.published.outputs.exists == 'false'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public ./packages/cortex-rmcp
-
-      - name: Smoke published npm launcher
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ steps.npm-version.outputs.version }}"
-          package="cortex-rmcp@${version}"
-          for attempt in {1..18}; do
-            cache="$(mktemp -d)"
-            if npm view "$package" version >/dev/null 2>&1 && npm_config_cache="$cache" npx -y "$package" --version; then
-              rm -rf "$cache"
-              exit 0
-            fi
-            rm -rf "$cache"
-            if [[ "$attempt" == "18" ]]; then
-              npm view "$package" version
-              npm_config_cache="$(mktemp -d)" npx -y "$package" --version
-              exit 1
-            fi
-            sleep 10
-          done
+    name: Publish npm launcher
+    needs: [metadata, github-release]
+    uses: dinglebear-ai/workflows/.github/workflows/npm-trusted-publish.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    with:
+      checkout-ref: ${{ github.event.release.tag_name }}
+      expected-version: ${{ needs.metadata.outputs.version }}
+      working-directory: packages/cortex-rmcp
+      enable-cache: false
+      install-command: ""
+      verify-command: npm test && npm run check && npm pack --dry-run --json

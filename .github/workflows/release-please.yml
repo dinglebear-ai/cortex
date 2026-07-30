@@ -60,7 +60,8 @@ concurrency:
 jobs:
   release-please:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-ops]
+    timeout-minutes: 10
     permissions:
       contents: write       # required to create release commits and tags
       pull-requests: write  # required to create and update release PRs
@@ -82,7 +83,8 @@ jobs:
   release-pr-fixup:
     needs: release-please
     if: ${{ needs.release-please.outputs.prs_created == 'true' }}
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-rust]
+    timeout-minutes: 20
     permissions:
       contents: write  # required to push the fixup commit to the release PR branch
     steps:
