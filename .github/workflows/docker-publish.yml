@@ -1,161 +1,73 @@
-name: Build and Push Docker Image
+name: Container and MCP Registry Release
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: container-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  CARGO_INCREMENTAL: "0"
+  packages: write
+  attestations: write
+  id-token: write
 
 jobs:
-  # Gate: run CI checks before pushing an image for tag releases.
-  # On branch/PR pushes the Docker build also runs (for image smoke testing),
-  # but it skips `cargo publish`-equivalent ops. The check job is a no-op for
-  # non-tag pushes (it still runs, ensuring we never ship a broken image on tags).
-  check:
-    name: Pre-publish CI gate
-    runs-on: [self-hosted, unraid]
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+  container:
+    name: Build, verify, and publish amd64 image
+    uses: dinglebear-ai/workflows/.github/workflows/hosted-container-release.yml@2650efa9e06ec76992d82022f15b7bfd276166a2
+    with:
+      checkout-ref: ${{ github.event.release.tag_name }}
+      image: ghcr.io/${{ github.repository }}
+      release-tag: ${{ github.event.release.tag_name }}
+      dockerfile: config/Dockerfile
+      smoke-command: docker run --rm "$IMAGE_REF" --help
+      cache-scope: cortex-container-release
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Rust and kache
-        uses: ./.github/actions/setup-rust-kache
-        with:
-          components: rustfmt, clippy
-
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-
-      - name: Install nextest
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
-        with:
-          tool: cargo-nextest
-
-      - name: Run tests
-        # nextest isolates env-mutating tests per-process (matches `just test`).
-        run: env -u CORTEX_API_TOKEN -u NO_AUTH cargo nextest run --locked
-
-      - name: Run doctests
-        run: cargo test --doc --locked
-
-  build-and-push:
-    runs-on: [self-hosted, unraid]
-    needs: [check]
+  mcp-registry:
+    name: Publish MCP Registry metadata
+    needs: [container]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: write
-      security-events: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Publish ghcr:<version> on main pushes, read from Cargo.toml, in addition
-      # to the `type=semver` tags below (which fire on the `v*` tag push that
-      # release-please creates when its release PR is merged — release-please
-      # uses a PAT, not the default GITHUB_TOKEN, so that tag push does trigger
-      # this workflow, unlike the old auto-tag.yml it replaced). Reading
-      # Cargo.toml directly on the main-branch push means the versioned image
-      # (e.g. ghcr:3.8.0) is already published the moment the release PR
-      # merges, without waiting on release-please's separate tag push.
-      - name: Read crate version
-        id: crate
-        run: echo "version=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')" >> "$GITHUB_OUTPUT"
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern=v{{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=${{ steps.crate.outputs.version }},enable={{is_default_branch}}
-            type=raw,value=v${{ steps.crate.outputs.version }},enable={{is_default_branch}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
-        with:
-          context: .
-          file: config/Dockerfile
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          sbom: true
-          provenance: mode=max
-
-      - name: Scan image for vulnerabilities
-        if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy scan results to GitHub Security
-        if: github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
 
       - name: Install mcp-publisher
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          curl -fsSL \
+            "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" |
+            tar xz mcp-publisher
 
-      - name: Set version in server.json
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Set release metadata
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          # Derive the published identifier from the same REGISTRY/IMAGE_NAME the
-          # build step pushes to. Hardcoding it here is how the registry entry
-          # drifted to a namespace that no longer receives images.
-          jq --arg v "$VERSION" --arg img "${REGISTRY}/${IMAGE_NAME}:v${VERSION}" '
-            .version = $v |
-            .packages = [.packages[] | if .registryType == "oci" then .identifier = $img else . end]
-          ' server.json > server.tmp && mv server.tmp server.json
+          VERSION="${RELEASE_TAG#v}"
+          jq \
+            --arg version "$VERSION" \
+            --arg image "ghcr.io/${GITHUB_REPOSITORY}:${RELEASE_TAG}" \
+            '
+              .version = $version |
+              .packages = [
+                .packages[] |
+                if .registryType == "oci" then .identifier = $image else . end
+              ]
+            ' server.json > server.tmp
+          mv server.tmp server.json
 
       - name: Authenticate to MCP Registry
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: ./mcp-publisher login dns --domain tootie.tv --private-key ${{ secrets.MCP_PRIVATE_KEY }}
+        run: ./mcp-publisher login dns --domain tootie.tv --private-key "$MCP_PRIVATE_KEY"
+        env:
+          MCP_PRIVATE_KEY: ${{ secrets.MCP_PRIVATE_KEY }}
 
       - name: Publish to MCP Registry
-        if: startsWith(github.ref, 'refs/tags/v')
         run: ./mcp-publisher publish
