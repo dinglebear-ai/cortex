@@ -1,3 +1,9 @@
+---
+title: "Direct CLI Reference -- cortex"
+created: 2026-05-07
+updated: 2026-07-30
+---
+
 # Direct CLI Reference -- cortex
 
 The `cortex` binary includes direct query and deployment-lifecycle commands for

@@ -1,3 +1,9 @@
+---
+title: "MCP Tools Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # MCP Tools Reference -- cortex
 
 ## Design Philosophy

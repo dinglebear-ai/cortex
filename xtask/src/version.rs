@@ -13,7 +13,7 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 
-type ReleaseResult<T> = std::result::Result<T, ReleaseVersionError>;
+type ReleaseResult<T> = Result<T, ReleaseVersionError>;
 
 macro_rules! release_bail {
     ($($arg:tt)*) => {
@@ -26,7 +26,7 @@ macro_rules! release_bail {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReleaseVersionError {
+pub(crate) struct ReleaseVersionError {
     message: String,
 }
 
@@ -51,7 +51,7 @@ trait ReleaseContext<T> {
     fn with_release_context(self, message: impl FnOnce() -> String) -> ReleaseResult<T>;
 }
 
-impl<T, E> ReleaseContext<T> for std::result::Result<T, E>
+impl<T, E> ReleaseContext<T> for Result<T, E>
 where
     E: std::fmt::Display,
 {
@@ -124,7 +124,7 @@ enum VersionKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum BumpLevel {
+pub(crate) enum BumpLevel {
     Patch,
     Minor,
     Major,
@@ -135,12 +135,12 @@ pub enum BumpLevel {
 // ---------------------------------------------------------------------------
 
 /// Verify all version-bearing files agree with the canonical source.
-pub fn check_sync(root: &Path) -> ReleaseResult<()> {
+pub(crate) fn check_sync(root: &Path) -> ReleaseResult<()> {
     run_parity(root, false)
 }
 
 /// Release gate: version sync plus a CHANGELOG entry for the current version.
-pub fn check_release(root: &Path) -> ReleaseResult<()> {
+pub(crate) fn check_release(root: &Path) -> ReleaseResult<()> {
     run_parity(root, true)
 }
 
@@ -180,7 +180,7 @@ fn run_parity(root: &Path, require_changelog: bool) -> ReleaseResult<()> {
 }
 
 /// Bump every version-bearing file to the next patch/minor/major version.
-pub fn bump(root: &Path, level: BumpLevel) -> ReleaseResult<()> {
+pub(crate) fn bump(root: &Path, level: BumpLevel) -> ReleaseResult<()> {
     let manifest = load_manifest(root)?;
     let component = sole_component(&manifest)?;
 
@@ -206,7 +206,7 @@ pub fn bump(root: &Path, level: BumpLevel) -> ReleaseResult<()> {
 /// it can't reach the `regex_version` carriers (server.json's image tag,
 /// docker-compose.prod.yml's default tag), so this syncs those — and
 /// re-verifies everything else, idempotently — to match.
-pub fn sync_version(root: &Path) -> ReleaseResult<()> {
+pub(crate) fn sync_version(root: &Path) -> ReleaseResult<()> {
     let manifest = load_manifest(root)?;
     let component = sole_component(&manifest)?;
     let version = read_version(root, &component.version_source)?;
@@ -540,11 +540,30 @@ fn read_cargo_package_version(content: &str, package: Option<&str>) -> ReleaseRe
             release_bail!("expected package {expected}, found {name}");
         }
     }
-    package_table
+    if let Some(version) = package_table
         .get("version")
         .and_then(|value| value.as_str())
+    {
+        return Ok(version.to_owned());
+    }
+    let inherits_workspace_version = package_table
+        .get("version")
+        .and_then(|value| value.as_table())
+        .and_then(|table| table.get("workspace"))
+        .and_then(|value| value.as_bool())
+        == Some(true);
+    if !inherits_workspace_version {
+        release_bail!("missing package.version");
+    }
+    value
+        .get("workspace")
+        .and_then(|value| value.as_table())
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(|value| value.as_table())
+        .and_then(|package| package.get("version"))
+        .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
-        .release_context("missing package.version")
+        .release_context("missing workspace.package.version")
 }
 
 fn read_cargo_lock_package_version(content: &str, package: Option<&str>) -> ReleaseResult<String> {
@@ -603,18 +622,32 @@ fn replace_cargo_package_version(
     next: &str,
 ) -> ReleaseResult<String> {
     read_cargo_package_version(content, package)?;
-    let mut in_package = false;
+    let parsed: toml::Value = toml::from_str(content).release_context("invalid TOML")?;
+    let package_inherits = parsed
+        .get("package")
+        .and_then(|value| value.as_table())
+        .and_then(|package| package.get("version"))
+        .and_then(|value| value.as_table())
+        .and_then(|version| version.get("workspace"))
+        .and_then(|value| value.as_bool())
+        == Some(true);
+    let target_table = if package_inherits {
+        "[workspace.package]"
+    } else {
+        "[package]"
+    };
+    let mut in_target = false;
     let mut replaced = false;
     let mut output = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed == "[package]" {
-            in_package = true;
-        } else if in_package && trimmed.starts_with('[') {
-            in_package = false;
+        if trimmed == target_table {
+            in_target = true;
+        } else if in_target && trimmed.starts_with('[') {
+            in_target = false;
         }
         let mut next_line = line.to_owned();
-        if in_package
+        if in_target
             && trimmed.starts_with("version")
             && extract_toml_string_assignment(trimmed).is_some()
         {
@@ -625,7 +658,7 @@ fn replace_cargo_package_version(
         output.push(next_line);
     }
     if !replaced {
-        release_bail!("missing Cargo package version");
+        release_bail!("missing Cargo version in {target_table}");
     }
     Ok(preserve_trailing_newline(content, output.join("\n")))
 }

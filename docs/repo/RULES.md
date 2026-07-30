@@ -1,3 +1,9 @@
+---
+title: "Coding Rules -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Coding Rules -- cortex
 
 Standards and conventions enforced across the repository.

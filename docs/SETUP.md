@@ -1,3 +1,9 @@
+---
+title: "Setup Guide -- cortex"
+created: 2026-04-04
+updated: 2026-07-30
+---
+
 # Setup Guide -- cortex
 
 Step-by-step instructions to get cortex running locally, in Docker, or as a Claude Code plugin.

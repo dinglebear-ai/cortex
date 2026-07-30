@@ -20,7 +20,7 @@ env:
 jobs:
   changes:
     name: Changes
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-ops]
     outputs:
       all: ${{ steps.classify.outputs.all }}
       docs: ${{ steps.classify.outputs.docs }}
@@ -79,7 +79,7 @@ jobs:
 
   version-sync:
     name: Version Sync
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-ops]
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.skills == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.workflow == 'true' }}
     steps:
@@ -104,7 +104,7 @@ jobs:
 
   fmt:
     name: Formatting
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-rust]
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
@@ -120,7 +120,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-rust]
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
@@ -136,7 +136,7 @@ jobs:
 
   test:
     name: Tests
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-rust]
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
@@ -166,7 +166,7 @@ jobs:
 
   docs-contract:
     name: Docs Contract
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-ops]
     needs: [changes]
     # check-public-identity.sh scans server.json, mcpb/manifest.json,
     # .claude-plugin/*, plugins/*, config/* and scripts/* — none of which
@@ -197,7 +197,7 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-rust]
     needs: [changes, test]
     if: ${{ needs.changes.outputs.rust == 'true' && needs.test.result == 'success' }}
     steps:
@@ -218,7 +218,7 @@ jobs:
 
   deny:
     name: Dependency Check (cargo-deny)
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-rust]
     needs: [changes]
     if: ${{ needs.changes.outputs.security == 'true' }}
     steps:
@@ -231,7 +231,7 @@ jobs:
 
   mcp-integration:
     name: MCP Integration Tests
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-system]
     needs: [changes, test]
     if: ${{ needs.test.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.mcp == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
@@ -243,7 +243,7 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-ops]
     if: always()
     needs:
       - changes
@@ -279,7 +279,7 @@ jobs:
 
   npm:
     name: npm launcher
-    runs-on: [self-hosted, unraid]
+    runs-on: [self-hosted, ci-pool-typescript]
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' }}
     steps:

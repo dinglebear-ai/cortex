@@ -1,3 +1,9 @@
+---
+title: "Retention & Eviction Policy"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # Retention & Eviction Policy
 
 **Status:** Contract — source of truth

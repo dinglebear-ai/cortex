@@ -1,3 +1,9 @@
+---
+title: "Web MCP Integration -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Web MCP Integration -- cortex
 
 Browser-accessible MCP endpoints and CORS configuration.

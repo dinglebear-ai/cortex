@@ -11,7 +11,7 @@ use rmcp::{
 };
 use tower::util::ServiceExt;
 
-const INIT_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"rmcp-compat","version":"1.0"}}}"#;
+const INIT_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"rmcp-compat","version":"1.0"}}}"#;
 const ACCEPT_STREAMABLE_HTTP: &str = "application/json, text/event-stream";
 
 #[derive(Clone)]

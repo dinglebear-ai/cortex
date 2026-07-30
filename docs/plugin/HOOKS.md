@@ -1,3 +1,9 @@
+---
+title: "Plugin Setup -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 <!--
 SPDX-License-Identifier: MIT
 Author: jmagar

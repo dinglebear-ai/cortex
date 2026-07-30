@@ -1,3 +1,9 @@
+---
+title: "Credentials Inventory"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # Credentials Inventory
 
 **Status:** Contract — source of truth

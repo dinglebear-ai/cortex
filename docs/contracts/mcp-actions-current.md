@@ -1,3 +1,9 @@
+---
+title: "MCP Actions Contract -- Current Production Surface"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # MCP Actions Contract -- Current Production Surface
 
 ## Purpose

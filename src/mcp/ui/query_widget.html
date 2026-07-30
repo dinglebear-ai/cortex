@@ -401,7 +401,7 @@
       rpcRequest("ui/initialize", {
         appInfo: { name: "cortex-query-widget", version: "1.0.0" },
         appCapabilities: {},
-        protocolVersion: "2025-11-21"
+        protocolVersion: "2025-11-25"
       }, 3000).then(function () {
         rpcReady = true;
         rpcPost({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });

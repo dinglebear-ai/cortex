@@ -1,8 +1,11 @@
 [package]
 name = "xtask"
-version = "3.11.1"
-edition = "2024"
-rust-version = "1.97.1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [lints]

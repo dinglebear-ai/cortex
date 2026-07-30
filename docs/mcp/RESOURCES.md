@@ -1,3 +1,9 @@
+---
+title: "MCP Resources Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # MCP Resources Reference -- cortex
 
 ## Overview

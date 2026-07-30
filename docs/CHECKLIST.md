@@ -1,3 +1,9 @@
+---
+title: "Release Audit Checklist -- cortex"
+created: 2026-04-04
+updated: 2026-07-30
+---
+
 # Release Audit Checklist -- cortex
 
 Supplemental pre-release audit checklist. `docs/RELEASE.md` is the source of

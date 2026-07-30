@@ -1,3 +1,9 @@
+---
+title: "Component Inventory -- cortex"
+created: 2026-04-04
+updated: 2026-07-30
+---
+
 # Component Inventory -- cortex
 
 Complete listing of all plugin components.

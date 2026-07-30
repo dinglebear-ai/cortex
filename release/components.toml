@@ -3,7 +3,7 @@
 # sync-version, check-version-sync, check-release-versions).
 #
 # cortex ships exactly one component. The `version_source` is the canonical
-# version (Cargo.toml `[package]`); every entry in `version_files` must agree
+# version (Cargo.toml `[workspace.package]`); every entry in `version_files` must agree
 # with it. To add a new version carrier, add a row here — no code changes.
 #
 # release-please (.github/workflows/release-please.yml) owns Cargo.toml,

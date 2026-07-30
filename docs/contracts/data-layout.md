@@ -1,3 +1,9 @@
+---
+title: "Data Directory Layout Contract (V1)"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # Data Directory Layout Contract (V1)
 
 ## 1. Purpose & status

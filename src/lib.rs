@@ -1,3 +1,8 @@
+//! Cortex log aggregation, investigation, and MCP/CLI/REST runtime.
+//!
+//! This crate contains the shared ingestion, storage, analysis, and transport
+//! layers used by the `cortex` binary.
+
 #![recursion_limit = "512"]
 
 pub mod agent;

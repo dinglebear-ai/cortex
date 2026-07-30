@@ -10,6 +10,15 @@ fn reads_cargo_package_version() {
 }
 
 #[test]
+fn reads_inherited_workspace_package_version() {
+    let toml = "[workspace.package]\nversion = \"1.2.3\"\n\n[package]\nname = \"cortex\"\nversion.workspace = true\n";
+    assert_eq!(
+        read_cargo_package_version(toml, Some("cortex")).unwrap(),
+        "1.2.3"
+    );
+}
+
+#[test]
 fn cargo_package_wrong_name_errors() {
     let toml = "[package]\nname = \"other\"\nversion = \"1.2.3\"\n";
     assert!(read_cargo_package_version(toml, Some("cortex")).is_err());
@@ -53,6 +62,13 @@ fn replace_cargo_package_only_touches_package_table() {
     assert!(out.contains("[dependencies]\nversion = \"0.1\""));
 }
 
+#[test]
+fn replace_cargo_package_updates_inherited_workspace_version() {
+    let toml = "[workspace.package]\nversion = \"1.2.3\"\n\n[package]\nname = \"cortex\"\nversion.workspace = true\n";
+    let out = replace_cargo_package_version(toml, Some("cortex"), "2.0.0").unwrap();
+    assert!(out.contains("[workspace.package]\nversion = \"2.0.0\""));
+    assert!(out.contains("[package]\nname = \"cortex\"\nversion.workspace = true"));
+}
 #[test]
 fn replace_cargo_lock_targets_named_package() {
     let lock = "[[package]]\nname = \"foo\"\nversion = \"9.9.9\"\n\n[[package]]\nname = \"cortex\"\nversion = \"1.2.3\"\n";

@@ -1,3 +1,9 @@
+---
+title: "cortex REST API"
+created: 2026-05-18
+updated: 2026-07-30
+---
+
 # cortex REST API
 
 > Canonical reference for the always-on `/api/*` surface introduced by

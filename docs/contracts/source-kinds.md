@@ -1,3 +1,9 @@
+---
+title: "`source_kind` Enumeration & `source_ip` URI Scheme Contract"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # `source_kind` Enumeration & `source_ip` URI Scheme Contract
 
 **Status:** Contract — source of truth

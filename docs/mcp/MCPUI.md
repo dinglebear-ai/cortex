@@ -1,3 +1,9 @@
+---
+title: "MCP UI Patterns -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # MCP UI Patterns -- cortex
 
 Protocol-level UI hints for MCP servers to improve client-side rendering of tools and results.

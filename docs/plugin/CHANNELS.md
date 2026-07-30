@@ -1,3 +1,9 @@
+---
+title: "Channel Integration -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Channel Integration -- cortex
 
 cortex does not use channels. It does not send or receive messages from external messaging platforms.
