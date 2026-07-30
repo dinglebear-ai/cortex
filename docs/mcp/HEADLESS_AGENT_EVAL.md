@@ -1,3 +1,9 @@
+---
+title: "Headless Agent Prompt Evaluation"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Headless Agent Prompt Evaluation
 
 cortex already ingests Claude, Codex, and Gemini sessions, so prompt

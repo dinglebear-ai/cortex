@@ -1,3 +1,9 @@
+---
+title: "Pre-commit Hook Configuration -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Pre-commit Hook Configuration -- cortex
 
 Pre-commit checks run through [lefthook](https://github.com/evilmartians/lefthook),

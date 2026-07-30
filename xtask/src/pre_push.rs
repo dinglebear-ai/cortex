@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[derive(Debug, Parser)]
-pub struct PrePushArgs {
+pub(crate) struct PrePushArgs {
     /// Print the selected plan without running commands.
     #[arg(long)]
-    pub dry_run: bool,
+    pub(crate) dry_run: bool,
     /// Read changed paths from a file instead of diffing git.
     #[arg(long)]
-    pub changed_files: Option<PathBuf>,
+    pub(crate) changed_files: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -63,7 +63,7 @@ struct PlanStep {
     command: &'static str,
 }
 
-pub fn run(root: &Path, args: PrePushArgs) -> Result<()> {
+pub(crate) fn run(root: &Path, args: PrePushArgs) -> Result<()> {
     let full = truthy(std::env::var("CORTEX_FULL_PRE_PUSH").ok().as_deref());
     let paths = if let Some(path) = args.changed_files {
         read_changed_files(&path)?

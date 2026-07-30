@@ -1,3 +1,9 @@
+---
+title: "Memory Files -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Memory Files -- cortex
 
 Claude Code memory system for persistent knowledge across sessions.

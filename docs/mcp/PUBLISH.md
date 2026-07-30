@@ -1,3 +1,9 @@
+---
+title: "Publishing Strategy -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Publishing Strategy -- cortex
 
 Versioning and release workflow.

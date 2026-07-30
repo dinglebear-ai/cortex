@@ -43,7 +43,7 @@ fn hook_change_tests_router() {
 
 #[test]
 fn pre_push_steps_preserve_the_callers_toolchain_environment() {
-    let mut command = std::process::Command::new("bash");
+    let mut command = Command::new("bash");
     configure_shell_command(&mut command, "cargo --version");
 
     let args = command

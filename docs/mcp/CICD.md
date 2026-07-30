@@ -1,3 +1,9 @@
+---
+title: "CI/CD Workflows -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # CI/CD Workflows -- cortex
 
 GitHub Actions configuration for cortex.

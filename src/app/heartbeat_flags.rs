@@ -14,7 +14,7 @@
 //! | `network_error_pressure` | any interface `rx_errors + tx_errors > 0` |
 //! | `container_unhealthy` | any container runtime reports `unhealthy > 0` |
 //! | `heartbeat_late` | no accepted heartbeat for `> 2.5 × agent interval` |
-//! | `clock_skew` | `|sampled_at − received_at| > 30 s` |
+//! | `clock_skew` | Absolute difference between `sampled_at` and `received_at` exceeds 30 seconds |
 
 use serde_json::Value;
 

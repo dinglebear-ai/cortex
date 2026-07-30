@@ -360,7 +360,7 @@ async fn rmcp_initialize_advertises_prompts_capability() {
             13,
             "initialize",
             Some(json!({
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": "2025-11-25",
                 "capabilities": {},
                 "clientInfo": {"name": "syslog-test", "version": "1.0"}
             })),

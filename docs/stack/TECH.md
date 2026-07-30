@@ -1,3 +1,9 @@
+---
+title: "Technology Choices -- cortex"
+created: 2026-04-04
+updated: 2026-07-30
+---
+
 # Technology Choices -- cortex
 
 Technology stack reference and rationale.

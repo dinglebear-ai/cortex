@@ -1,3 +1,9 @@
+---
+title: "Scheduled Tasks -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Scheduled Tasks -- cortex
 
 cortex does not use Claude Code scheduled tasks (triggers). Internal scheduled operations are handled by the Rust binary itself.

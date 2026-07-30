@@ -1,3 +1,9 @@
+---
+title: "MCP Prompts Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # MCP Prompts Reference -- cortex
 
 cortex exposes reusable MCP prompts for common infrastructure debugging

@@ -1,3 +1,9 @@
+---
+title: "Design: Authenticated Bidirectional WebSocket Agent Channel"
+created: 2026-06-21
+updated: 2026-07-30
+---
+
 # Design: Authenticated Bidirectional WebSocket Agent Channel
 
 **Status:** Proposed

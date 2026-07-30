@@ -1,3 +1,9 @@
+---
+title: "Prerequisites -- cortex"
+created: 2026-04-04
+updated: 2026-07-30
+---
+
 # Prerequisites -- cortex
 
 Required tools and versions before developing or deploying.

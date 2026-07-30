@@ -1,3 +1,9 @@
+---
+title: "Deployment Guide -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Deployment Guide -- cortex
 
 Deployment patterns for cortex. Choose the method that fits your environment.

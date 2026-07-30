@@ -425,7 +425,7 @@ phase_protocol() {
 
   # initialize
   local init_resp
-  init_resp="$(mcp_post '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test_live.sh","version":"1.0.0"}}}')" || init_resp=""
+  init_resp="$(mcp_post '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test_live.sh","version":"1.0.0"}}}')" || init_resp=""
 
   assert_jq "initialize — protocolVersion present"    "${init_resp}" '.result.protocolVersion'
   assert_jq "initialize — serverInfo.name present"    "${init_resp}" '.result.serverInfo.name'

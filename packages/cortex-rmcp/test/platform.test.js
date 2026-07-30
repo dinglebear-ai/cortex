@@ -7,7 +7,7 @@ test("maps supported platforms to release assets", () => {
   assert.deepEqual(targetFor("linux", "x64"), { asset: "cortex-linux-x86_64.tar.gz", binary: "cortex", archiveType: "tar.gz" });
   assert.deepEqual(targetFor("win32", "x64"), { asset: "cortex-windows-x86_64.zip", binary: "cortex.exe", archiveType: "zip" });
 });
-test("rejects unsupported platforms", () => { assert.throws(() => targetFor("darwin", "arm64"), /Unsupported platform/); });
+test("rejects unsupported platforms", () => { assert.throws(() => targetFor("linux", "riscv64"), /Unsupported platform/); });
 test("uses pinned binary version as the binary tag by default", () => {
   assert.equal(binaryVersion(), pinnedBinaryVersion);
   assert.equal(releaseVersion({}), `v${pinnedBinaryVersion}`);

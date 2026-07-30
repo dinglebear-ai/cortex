@@ -1,3 +1,9 @@
+---
+title: "Testing Guide -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Testing Guide -- cortex
 
 ## Unit tests

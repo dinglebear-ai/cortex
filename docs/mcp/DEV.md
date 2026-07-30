@@ -1,3 +1,9 @@
+---
+title: "Development Workflow -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Development Workflow -- cortex
 
 Day-to-day development guide for the cortex server.

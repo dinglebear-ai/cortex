@@ -1,3 +1,9 @@
+---
+title: "cortex v0.26 rollout — HTTP CLI cutover"
+created: 2026-05-18
+updated: 2026-07-30
+---
+
 # cortex v0.26 rollout — HTTP CLI cutover
 
 > **v0.26 BREAKING**: `CORTEX_API_ENABLED` was removed. The REST API at

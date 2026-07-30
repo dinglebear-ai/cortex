@@ -1,23 +1,63 @@
 [workspace]
-members = ["xtask"]
-resolver = "2"
+members = [".", "xtask"]
+resolver = "3"
 
-[workspace.lints.clippy]
-# Enforce the foo.rs-sibling module style; forbid foo/mod.rs.
-mod_module_files = "deny"
-
-[package]
-name = "cortex"
+[workspace.package]
 version = "3.11.1"
 edition = "2024"
 rust-version = "1.97.1"
-categories = ["command-line-utilities", "development-tools"]
-keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
-repository = "https://github.com/dinglebear-ai/cortex"
-homepage = "https://github.com/dinglebear-ai/cortex#readme"
+authors = ["dinglebear.ai <hello@dinglebear.ai>"]
 license = "MIT"
-description = "Rust MCP/HTTP log aggregation platform for syslog, Docker logs, OTLP ingest, SQLite search, and AI transcript correlation."
+readme = "README.md"
+homepage = "https://cortex.dinglebear.ai"
+repository = "https://github.com/dinglebear-ai/cortex"
+
+[workspace.dependencies]
+rmcp = { version = "=3.0.0-beta.2", default-features = false }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
+invalid_rust_codeblocks = "deny"
+bare_urls = "warn"
+unescaped_backticks = "warn"
+redundant_explicit_links = "warn"
+
+[workspace.lints.rust]
+missing_docs = "allow"
+missing_crate_level_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+mod_module_files = "deny"
+missing_safety_doc = "deny"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+doc_markdown = "warn"
+
+[package]
+name = "cortex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories = ["command-line-utilities", "development-tools::debugging", "database", "network-programming", "parsing"]
+keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
+description = "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST."
+publish = false
 autobins = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [[bin]]
 name = "cortex"
@@ -45,7 +85,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 axum = "0.8"
 # Declared bound matches what Cargo.lock actually resolves (1.7.x) so docs,
 # lockfile, and code agree (full-review BM2).
-rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
+rmcp = { workspace = true, features = [
   "server",
   "macros",
   "transport-streamable-http-server",
@@ -166,7 +206,7 @@ serial_test = "3"
 # tests so backoff sleeps advance instantly instead of in real time.
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
-rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
+rmcp = { workspace = true, features = [
   "client",
   "transport-child-process",
 ] }

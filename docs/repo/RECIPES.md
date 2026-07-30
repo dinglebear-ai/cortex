@@ -1,3 +1,9 @@
+---
+title: "Justfile Recipes -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Justfile Recipes -- cortex
 
 Run `just --list` to see all available recipes.
