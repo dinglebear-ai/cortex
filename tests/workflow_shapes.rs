@@ -13,8 +13,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
 
     for job in [
         "version-sync",
-        "fmt",
-        "clippy",
+        "rust",
         "test",
         "docs-contract",
         "coverage",
@@ -44,13 +43,14 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
     for job in [
         "changes",
         "version-sync",
-        "fmt",
-        "clippy",
+        "rust",
         "test",
         "docs-contract",
         "coverage",
         "deny",
         "mcp-integration",
+        "fleet-policy",
+        "fleet-contract",
     ] {
         assert!(
             gate.contains(&format!("require_success_or_skipped {job}")),
@@ -239,7 +239,9 @@ fn local_cortex_server_has_auto_deploy_timer_contract() {
 }
 
 fn workflow_job_block<'a>(workflow: &'a str, job_name: &str) -> &'a str {
-    let marker = format!("  {job_name}:");
+    // Anchor at a top-level job line. An unanchored `"  rust:"` also matches
+    // the more deeply indented `changes.outputs.rust` key.
+    let marker = format!("\n  {job_name}:");
     let start = workflow
         .find(&marker)
         .unwrap_or_else(|| panic!("job {job_name} exists"));

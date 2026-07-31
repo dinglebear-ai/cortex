@@ -213,7 +213,8 @@ jobs:
     uses: dinglebear-ai/workflows/.github/workflows/rust-security.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
     with:
       toolchain: "1.97.1"
-      command: cargo deny check --all-features
+      cargo-deny-version: "0.20.2"
+      command: cargo deny --all-features check
 
   fleet-policy:
     name: Fleet Policy
