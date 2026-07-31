@@ -108,7 +108,7 @@ jobs:
     name: Fast Rust
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
-    uses: dinglebear-ai/workflows/.github/workflows/fast-rust.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+    uses: dinglebear-ai/workflows/.github/workflows/fast-rust.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d
     with:
       toolchain: "1.97.1"
       check-command: cargo check --all-targets --locked
@@ -210,24 +210,23 @@ jobs:
     name: Dependency Check (cargo-deny)
     needs: [changes]
     if: ${{ needs.changes.outputs.security == 'true' }}
-    uses: dinglebear-ai/workflows/.github/workflows/rust-security.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+    uses: dinglebear-ai/workflows/.github/workflows/rust-security.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d
     with:
       toolchain: "1.97.1"
-      cargo-deny-version: "0.20.2"
       command: cargo deny --all-features check
 
   fleet-policy:
     name: Fleet Policy
-    uses: dinglebear-ai/workflows/.github/workflows/fleet-policy.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+    uses: dinglebear-ai/workflows/.github/workflows/fleet-policy.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d
     with:
       release-file-regex: '(^|/)(release|docker-publish)\.ya?ml$'
 
   fleet-contract:
     name: Fleet Contract
-    uses: dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+    uses: dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d
     with:
       profile: rust
-      implementation-ref: 542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+      implementation-ref: 66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d
 
   mcp-integration:
     name: MCP Integration Tests
@@ -285,7 +284,7 @@ jobs:
     name: npm launcher
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' }}
-    uses: dinglebear-ai/workflows/.github/workflows/fast-node.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+    uses: dinglebear-ai/workflows/.github/workflows/fast-node.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d
     with:
       node-version: "22"
       working-directory: packages/cortex-rmcp

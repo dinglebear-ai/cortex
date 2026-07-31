@@ -124,10 +124,13 @@ fn workflows_default_to_read_only_github_token_permissions() {
     );
 
     let docker = include_str!("../.github/workflows/docker-publish.yml");
-    let publish = workflow_job_block(docker, "build-and-push");
+    let publish = workflow_job_block(docker, "container");
     assert!(
-        publish.contains("packages: write") && publish.contains("security-events: write"),
-        "the publish job must retain its explicit package and SARIF upload scopes"
+        docker.contains("packages: write")
+            && docker.contains("attestations: write")
+            && docker.contains("id-token: write")
+            && publish.contains("hosted-container-release.yml@"),
+        "the release-only container caller must retain publish and provenance scopes"
     );
 }
 
@@ -156,16 +159,15 @@ fn release_please_opens_prs_and_fixes_up_regex_carriers() {
     );
 
     assert!(
-        release.contains("tags: [\"v*\"]"),
-        "release.yml must still trigger on the vX.Y.Z tags release-please creates"
+        release.contains("release:\n    types: [published]")
+            && !release.contains("workflow_dispatch:")
+            && !release.contains("tags:"),
+        "heavy artifact publishing must run only from a published GitHub release"
     );
     assert!(
-        release.contains("publish:") && release.contains("type: boolean"),
-        "release workflow must expose an explicit publish input for workflow_dispatch"
-    );
-    assert!(
-        release.contains("github.event.inputs.publish == 'true'"),
-        "release publish job must run for tagged workflow_dispatch when publish=true"
+        release.contains("hosted-rust-platform-release.yml@")
+            && release.contains("checkout-ref: ${{ github.event.release.tag_name }}"),
+        "release artifacts must use the hosted reusable workflow at the published tag"
     );
     assert!(
         !release.contains("generate_release_notes: true"),
