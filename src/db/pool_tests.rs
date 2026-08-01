@@ -1034,6 +1034,162 @@ fn migration_44_applies_from_schema_43_and_is_idempotent() {
 }
 
 #[test]
+fn init_pool_creates_agent_observatory_run_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-runs.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_runs)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "run_key",
+            "native_session_id",
+            "tool",
+            "provider_tool",
+            "hostname",
+            "parent_run_id",
+            "previous_run_id",
+            "primary_worktree_id",
+            "transcript_path",
+            "process_id",
+            "status",
+            "status_reason",
+            "status_observed_at",
+            "started_at",
+            "last_activity_at",
+            "ended_at",
+            "first_source_log_id",
+            "last_source_log_id",
+            "last_event_id",
+            "event_count",
+            "error_count",
+            "primary_branch",
+            "start_head_sha",
+            "current_head_sha",
+            "projection_version",
+            "freshness_json",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5, ?5)",
+        rusqlite::params![
+            "v1|6:dookie|6:claude|9:session-1",
+            "session-1",
+            "claude",
+            "dookie",
+            "2026-08-01T02:00:00.000Z",
+        ],
+    )
+    .unwrap();
+
+    let primary_worktree_id: Option<i64> = conn
+        .query_row(
+            "SELECT primary_worktree_id FROM agent_runs WHERE native_session_id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(primary_worktree_id, None);
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_runs
+                (run_key, native_session_id, tool, hostname, status,
+                 status_observed_at, started_at, last_activity_at)
+             VALUES ('bad-status', 'session-2', 'claude', 'dookie',
+                     'running-ish', ?1, ?1, ?1)",
+            ["2026-08-01T02:00:01.000Z"],
+        )
+        .is_err(),
+        "unknown lifecycle status must be rejected"
+    );
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_runs
+                (run_key, native_session_id, tool, hostname, status,
+                 status_observed_at, started_at, last_activity_at)
+             VALUES ('different-run-key', 'session-1', 'claude', 'dookie',
+                     'idle', ?1, ?1, ?1)",
+            ["2026-08-01T02:00:02.000Z"],
+        )
+        .is_err(),
+        "host/tool/native-session identity must be unique"
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'agent_runs'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for expected in [
+        "idx_agent_runs_activity",
+        "idx_agent_runs_status_activity",
+        "idx_agent_runs_worktree_activity",
+        "idx_agent_runs_tool_host",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "missing {expected}"
+        );
+    }
+
+    let query_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM agent_runs
+             WHERE status = 'active'
+             ORDER BY last_activity_at DESC, id DESC
+             LIMIT 50",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        query_plan
+            .iter()
+            .any(|detail| detail.contains("idx_agent_runs_status_activity")),
+        "active-run query must use status/activity index: {query_plan:?}"
+    );
+
+    let migration_45_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 45",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        migration_45_count, 0,
+        "migration 45 remains unmarked until every projection table lands"
+    );
+}
+
+#[test]
 fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("graph-dedup.db"));

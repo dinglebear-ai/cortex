@@ -76,3 +76,14 @@ REGRESSION: pinned-target init_pool_creates_agent_observatory_ suite, known_sche
 REGRESSION result: 4 topology tests passed; schema-head test passed at 44; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: KNOWN_SCHEMA_VERSION now advances truthfully to 44 only after the complete topology migration commits atomically.
+
+## AO-008 Implement migration 45 agent_runs
+commit/worktree SHA: 696d60c5 (task started)
+RED: isolated pinned-target init_pool_creates_agent_observatory_run_schema_scaffold
+RED result: expected run columns, got an empty list because agent_runs did not exist
+GREEN: same focused command with the agent-runs table and four indexes implemented
+GREEN result: 1 passed; lifecycle status constraints, host/tool/native-session identity, nullable primary worktree, required indexes, and active-run query-plan use verified
+REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt, and git diff --check
+REGRESSION result: runtime schema remains 44; formatting and diff checks clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: Migration 45 remains unmarked until actors, evidence, events, cursors, and stream outbox are complete.
