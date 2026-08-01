@@ -2,7 +2,7 @@
 //! core.
 //!
 //! Owns the full schema: the `logs` table + FTS5 index, AI/graph/heartbeat
-//! projections, and the **40 sequential migrations** tracked by
+//! projections, and the **44 sequential migrations** tracked by
 //! `KNOWN_SCHEMA_VERSION`. Migrations run at startup; heavy ones log
 //! `Migration N: starting ...` lines, and the one-time
 //! `auto_vacuum=INCREMENTAL` conversion VACUUM is logged loudly (it can take
@@ -39,7 +39,7 @@ pub fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 43;
+pub const KNOWN_SCHEMA_VERSION: i64 = 44;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -2509,11 +2509,13 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         tracing::info!("Migration 43: stream_last_seen rollup for stream-silence alerting");
     }
 
-    // Agent Observatory migration 44 scaffold. The version marker is added
-    // only after repositories, worktrees, observations, and exact commits all
-    // exist, so a partial implementation cannot claim a completed migration.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS repositories (
+    // Migration 44: Agent Observatory repository, worktree, observation,
+    // and exact-commit topology. The DDL and version marker share one
+    // transaction so startup never reports a partially applied migration.
+    if !migration_applied(&conn, 44)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE IF NOT EXISTS repositories (
              id                  INTEGER PRIMARY KEY AUTOINCREMENT,
              repository_key      TEXT NOT NULL UNIQUE,
              hostname            TEXT NOT NULL,
@@ -2614,8 +2616,12 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              UNIQUE(repository_id, sha)
          );
          CREATE INDEX IF NOT EXISTS idx_git_commits_repo_time
-             ON git_commits(repository_id, committed_at DESC, id DESC);",
-    )?;
+             ON git_commits(repository_id, committed_at DESC, id DESC);
+         INSERT OR IGNORE INTO schema_migrations (version) VALUES (44);
+         COMMIT;",
+        )?;
+        tracing::info!("Migration 44: Agent Observatory repository topology");
+    }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
         let deleted_heartbeat_latest = conn.execute(

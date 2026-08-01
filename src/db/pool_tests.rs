@@ -492,8 +492,8 @@ fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
         )
         .unwrap();
     assert_eq!(
-        migration_44_count, 0,
-        "migration 44 remains unmarked until its complete topology schema lands"
+        migration_44_count, 1,
+        "completed migration 44 must remain marked exactly once"
     );
 }
 
@@ -937,6 +937,100 @@ fn init_pool_creates_agent_observatory_git_commit_schema_scaffold() {
         )
         .unwrap();
     assert_eq!(index_exists, 1);
+}
+
+#[test]
+fn migration_44_applies_from_schema_43_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("observatory-migration-44.db");
+    let config = test_storage_config(db_path.clone());
+
+    {
+        let pool = init_pool(&config).unwrap();
+        drop(pool);
+    }
+
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TABLE IF EXISTS git_commits;
+             DROP TABLE IF EXISTS repository_observations;
+             DROP TABLE IF EXISTS repository_worktrees;
+             DROP TABLE IF EXISTS repositories;
+             DELETE FROM schema_migrations WHERE version = 44;
+             INSERT OR REPLACE INTO stream_last_seen
+                 (hostname, source_kind, last_seen_at)
+             VALUES ('legacy-host', 'syslog-tcp', '2026-08-01T01:00:00.000Z');
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+    }
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let max_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(max_version, 44);
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+
+    for table in [
+        "repositories",
+        "repository_worktrees",
+        "repository_observations",
+        "git_commits",
+    ] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "migration 44 must create {table}");
+    }
+
+    let legacy_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM stream_last_seen
+             WHERE hostname = 'legacy-host' AND source_kind = 'syslog-tcp'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_rows, 1, "migration must preserve schema-43 data");
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(conn);
+    drop(pool);
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1, "reopening must not duplicate migration 44");
 }
 
 #[test]

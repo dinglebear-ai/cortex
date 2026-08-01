@@ -65,3 +65,14 @@ REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt
 REGRESSION result: runtime schema remains 43; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: No patch, diff, blob, or plaintext author-email column exists; migration 44 remains unmarked until AO-007.
+
+## AO-007 Complete migration 44 version bookkeeping
+commit/worktree SHA: f50abffc (task started)
+RED: pinned-target migration_44_applies_from_schema_43_and_is_idempotent
+RED result: schema migration head remained 43 after the simulated schema-43 database reopened
+GREEN: same focused command after wrapping all migration-44 DDL and the version marker in one BEGIN IMMEDIATE transaction
+GREEN result: 1 passed; schema 43 upgraded to 44, all four tables created, legacy stream state preserved, foreign-key/integrity checks clean, and repeated reopen kept one marker
+REGRESSION: pinned-target init_pool_creates_agent_observatory_ suite, known_schema_version_matches_migration_head, cargo fmt, and git diff --check
+REGRESSION result: 4 topology tests passed; schema-head test passed at 44; formatting and diff checks clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: KNOWN_SCHEMA_VERSION now advances truthfully to 44 only after the complete topology migration commits atomically.
