@@ -153,3 +153,14 @@ REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt
 REGRESSION result: runtime schema-head test passed at 47; formatting and whitespace checks clean
 FILES: tests/fixtures/schema-43.sql, src/db/pool_tests.rs
 NOTES: Fixture SQL is generated from the migration contract, contains deterministic reserved-example values only, and explicitly rejects user/home-path leakage.
+
+## AO-017 Add DB domain models
+commit/worktree SHA: f5d722be (task started)
+RED: pinned-target observatory_text_enums_round_trip_and_reject_unknown_values
+RED result: unresolved imports for db::agent_observatory, db::otlp_traces, and db::otlp_metrics
+GREEN: pinned-target agent_observatory_models_tests
+GREEN result: 2 passed; strict enums round-trip known values, reject unknown values, and row models preserve string API keys with internal integer IDs
+REGRESSION: cargo clippy --locked --lib --tests -- -D warnings, cargo fmt, and git diff --check
+REGRESSION result: Clippy completed without warnings after marking staged row-only model modules as intentionally unused until projector/API integration; formatting and diff checks clean
+FILES: src/db.rs, src/db/agent_observatory.rs, src/db/otlp_traces.rs, src/db/otlp_metrics.rs, src/db/agent_observatory_models_tests.rs, src/agent_observatory_tests.rs
+NOTES: This task adds strict text conversions and row structs only. Query and persistence methods remain deferred to later tasks. The schema lock test now requires runtime schema 47 because migrations 44 through 47 are complete.
