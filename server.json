@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "ai.dinglebear/cortex-rmcp",
+  "name": "ai.dinglebear/cortex",
   "title": "Cortex RMCP",
   "description": "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.",
   "version": "3.11.1",
@@ -24,7 +24,7 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "cortex-rmcp",
+      "identifier": "@dinglebear/cortex-mcp",
       "version": "3.11.1",
       "runtimeHint": "npx",
       "packageArguments": [
@@ -105,8 +105,8 @@
       "namespace": "ai.dinglebear",
       "dnsDomain": "dinglebear.ai",
       "distribution": {
-        "npm": "cortex-rmcp@3.11.1",
-        "nodePackage": "cortex-rmcp",
+        "npm": "@dinglebear/cortex-mcp@3.11.1",
+        "nodePackage": "@dinglebear/cortex-mcp",
         "ociImage": "ghcr.io/dinglebear-ai/cortex:v3.11.1"
       },
       "buildInfo": {

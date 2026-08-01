@@ -1,5 +1,5 @@
 {
-  "name": "cortex-rmcp",
+  "name": "@dinglebear/cortex-mcp",
   "version": "3.11.1",
   "description": "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.",
   "license": "MIT",
@@ -54,10 +54,13 @@
     "ai",
     "llm"
   ],
-  "mcpName": "ai.dinglebear/cortex-rmcp",
+  "mcpName": "ai.dinglebear/cortex",
   "binaryVersion": "3.11.1",
   "author": {
     "name": "dinglebear.ai",
     "url": "https://dinglebear.ai"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
