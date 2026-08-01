@@ -3711,3 +3711,249 @@ fn init_pool_creates_agent_observatory_run_events_schema() {
         ]
     );
 }
+
+#[test]
+fn init_pool_creates_agent_run_commits_and_projection_cursors() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-commits.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: tables do not exist yet
+    let commit_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_commits)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        commit_columns,
+        vec![
+            "id",
+            "relation_key",
+            "run_id",
+            "commit_id",
+            "worktree_id",
+            "evidence_kind",
+            "evidence_source",
+            "trust_level",
+            "confidence",
+            "first_seen_at",
+            "last_seen_at",
+            "metadata_json",
+        ]
+    );
+
+    let cursor_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_projection_cursors)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        cursor_columns,
+        vec![
+            "id",
+            "cursor_type",
+            "source_name",
+            "cursor_value",
+            "updated_at",
+        ]
+    );
+
+    // Insert test data for foreign key constraints
+    conn.execute(
+        "INSERT INTO repositories (repository_key, hostname, common_git_dir, primary_path, display_name, first_seen_at, last_seen_at)
+         VALUES ('repo-test', 'dookie', '/tmp/repo', '/tmp/repo', 'Test Repo', ?1, ?2)",
+        ["2026-08-01T02:50:00.000Z", "2026-08-01T02:50:00.000Z"],
+    )
+    .unwrap();
+    let repo_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+         VALUES ('wt-main', ?1, 'dookie', '/tmp/repo', '/tmp/repo/.git', ?2, ?2)",
+        rusqlite::params![repo_id, "2026-08-01T02:50:01.000Z"],
+    )
+    .unwrap();
+    let worktree_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO git_commits
+            (repository_id, sha, parent_shas_json, subject, author_name,
+             first_observed_at, last_observed_at)
+         VALUES (?1, 'abc123', '[]', 'Test commit', 'Test Author', ?2, ?2)",
+        rusqlite::params![repo_id, "2026-08-01T02:50:02.000Z"],
+    )
+    .unwrap();
+    let commit_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-commits-test', 'session-commits', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T02:50:03.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Test unique relation_key constraint
+    conn.execute(
+        "INSERT INTO agent_run_commits
+            (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+             evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+         VALUES ('rel-1', ?1, ?2, ?3, 'git_head', 'git', 'verified', 0.95, ?4, ?4)",
+        rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:04.000Z"],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_commits
+                (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+                 evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+             VALUES ('rel-1', ?1, ?2, ?3, 'git_status', 'git', 'claimed', 0.5, ?4, ?4)",
+            rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:05.000Z"],
+        )
+        .is_err(),
+        "duplicate relation key must be rejected"
+    );
+
+    // Test trust level constraint
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_commits
+                (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+                 evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+             VALUES ('rel-2', ?1, ?2, ?3, 'git_head', 'git', 'invalid_trust', 0.9, ?4, ?4)",
+            rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:06.000Z"],
+        )
+        .is_err(),
+        "invalid trust level must be rejected"
+    );
+
+    // Test confidence range constraint
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_commits
+                (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+                 evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+             VALUES ('rel-3', ?1, ?2, ?3, 'git_head', 'git', 'verified', 1.5, ?4, ?4)",
+            rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:07.000Z"],
+        )
+        .is_err(),
+        "confidence > 1.0 must be rejected"
+    );
+
+    // Verify seeded projection cursors (exactly 8 rows)
+    let cursor_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        cursor_count, 8,
+        "should have exactly 8 seeded projection cursors"
+    );
+
+    // Verify cursor types are correct
+    let cursor_types: Vec<String> = conn
+        .prepare("SELECT DISTINCT cursor_type FROM agent_projection_cursors ORDER BY cursor_type")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        cursor_types,
+        vec![
+            "agent_run_events",
+            "agent_runs",
+            "git_commits",
+            "otel_metric_points",
+            "otel_spans",
+            "repositories",
+            "repository_observations",
+            "repository_worktrees",
+        ]
+    );
+
+    // Verify INSERT OR IGNORE preserves existing cursors on repeated open
+    drop(conn);
+    drop(pool);
+
+    let pool2 = init_pool(&config).unwrap();
+    let conn2 = pool2.get().unwrap();
+
+    let cursor_count2: i64 = conn2
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        cursor_count2, 8,
+        "should still have exactly 8 cursors after reopen"
+    );
+
+    // Verify we can advance a cursor
+    conn2
+        .execute(
+            "UPDATE agent_projection_cursors
+                SET cursor_value = 'advanced-123', updated_at = '2026-08-01T03:00:00.000Z'
+              WHERE cursor_type = 'agent_runs' AND source_name = 'default'",
+            [],
+        )
+        .unwrap();
+
+    // Reopen again and verify the advanced cursor is preserved
+    drop(conn2);
+    drop(pool2);
+
+    let pool3 = init_pool(&config).unwrap();
+    let conn3 = pool3.get().unwrap();
+
+    let advanced_value: String = conn3
+        .query_row(
+            "SELECT cursor_value FROM agent_projection_cursors
+              WHERE cursor_type = 'agent_runs' AND source_name = 'default'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        advanced_value, "advanced-123",
+        "advanced cursor should be preserved"
+    );
+
+    // Verify indexes exist
+    let commit_indexes: Vec<String> = conn3
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_run_commits' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        commit_indexes,
+        vec!["idx_agent_run_commits_commit", "idx_agent_run_commits_run",]
+    );
+
+    let cursor_indexes: Vec<String> = conn3
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_projection_cursors' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(cursor_indexes, vec!["idx_agent_projection_cursors_type"]);
+}

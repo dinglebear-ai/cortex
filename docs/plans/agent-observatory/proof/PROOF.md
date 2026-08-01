@@ -109,3 +109,14 @@ REGRESSION: `export CARGO_TARGET_DIR=.cache/cargo cargo test known_schema_versio
 REGRESSION result: runtime schema remains 44; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: Migration 45 remains unmarked until AO-013; event kind CHECK constraint covers all 18 kinds from the contract.
+
+## AO-011 Add run/commit evidence and projection cursors
+commit/worktree SHA: (pending)
+RED: `cargo test init_pool_creates_agent_run_commits_and_projection_cursors --lib`
+RED result: expected agent_run_commits and agent_projection_cursors tables, got empty lists
+GREEN: same focused command with both tables, indexes, and seeded cursor rows implemented
+GREEN result: 1 passed; exact columns, relation-key uniqueness, trust/confidence constraints, 8 seeded cursors, cursor preservation across reopens, and all indexes verified
+REGRESSION: `cargo test known_schema_version_matches_migration_head --lib && cargo fmt --all && git diff --check`
+REGRESSION result: runtime schema remains 44; formatting and diff checks clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: Migration 45 remains unmarked until AO-013; INSERT OR IGNORE ensures cursor values persist across reopens; 8 cursor types match contract.
