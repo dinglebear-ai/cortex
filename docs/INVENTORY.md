@@ -14,6 +14,30 @@ through `src/mcp/schemas.rs::tool_definitions()` and exposed as
 `cortex://schema/mcp-tool`; maintained Markdown docs are drift-checked rather
 than automatically generated.
 
+## Proposed Agent Observatory package
+
+The following files describe a planned feature and are not part of the current
+3.11.1 runtime inventory:
+
+| Artifact | Scope |
+| --- | --- |
+| `research/2026-07-31-agent-observatory.md` | July 2026 source, version, dependency, and gap ledger |
+| `design/agent-observatory-architecture.md` | Projector, Git observer, OTLP, stream, storage, and embedding architecture |
+| `design/agent-observatory-ui.md` | Complete static Next.js and Aurora registry UI design |
+| `specs/agent-observatory.md` | Normative product and production requirements |
+| `contracts/agent-observatory.md` | Identity, API, streaming, OTLP, configuration, storage, and security contract |
+| `contracts/agent-observatory.sql` | Planned additive schema versions 44-47 |
+| `contracts/agent-observatory.schema.json` | JSON Schema definitions |
+| `contracts/agent-observatory.openapi.json` | Proposed REST/OpenAPI surface |
+| `contracts/agent-observatory-types.rs` | Compile-checked Rust contract declarations |
+| `contracts/agent-observatory-types.ts` | Type-checked TypeScript declarations |
+| `contracts/agent-observatory-aurora-lock.example.json` | Pinned Aurora source and generated-file lock contract |
+| `plans/2026-07-31-agent-observatory-implementation.md` | 116-task TDD implementation index and phase gates, including the transcript-forward env compatibility track |
+
+Runtime MCP actions, routes, commands, variables, ports, and dependencies below
+remain the authoritative current inventory until those tasks are implemented
+and generated inventories are updated.
+
 ## MCP tools
 
 cortex exposes one MCP tool named `cortex`. The required `action`

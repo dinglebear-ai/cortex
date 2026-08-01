@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dinglebear-ai/cortex/docs/contracts/agent-observatory.schema.json",
+  "title": "Cortex Agent Observatory",
+  "description": "Canonical public JSON shapes. API-specific envelopes reference these definitions.",
+  "$ref": "#/$defs/ContractDocument",
+  "$defs": {
+    "Id": { "type": "string", "pattern": "^[0-9]+$" },
+    "Timestamp": { "type": "string", "format": "date-time" },
+    "Sha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "TraceId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "SpanId": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "RunStatus": {
+      "type": "string",
+      "enum": ["starting", "active", "waiting", "idle", "stale", "completed", "failed", "abandoned"]
+    },
+    "TrustLevel": {
+      "type": "string",
+      "enum": ["verified", "claimed", "correlated", "inferred", "refuted"]
+    },
+    "EventKind": {
+      "type": "string",
+      "enum": [
+        "lifecycle", "transcript", "command", "shell_history", "git_status", "git_head",
+        "git_commit", "file_operation", "mcp", "hook", "skill", "llm", "otlp_log",
+        "otlp_span", "otlp_metric", "heartbeat", "error", "provider_event"
+      ]
+    },
+    "FreshnessLane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["fresh", "delayed", "stale", "not_observed", "error"] },
+        "last_observed_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "lag_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "detail": { "type": ["string", "null"], "maxLength": 512 }
+      }
+    },
+    "RunFreshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transcript", "command", "git", "otlp_log", "trace", "metric", "lifecycle"],
+      "properties": {
+        "transcript": { "$ref": "#/$defs/FreshnessLane" },
+        "command": { "$ref": "#/$defs/FreshnessLane" },
+        "git": { "$ref": "#/$defs/FreshnessLane" },
+        "otlp_log": { "$ref": "#/$defs/FreshnessLane" },
+        "trace": { "$ref": "#/$defs/FreshnessLane" },
+        "metric": { "$ref": "#/$defs/FreshnessLane" },
+        "lifecycle": { "$ref": "#/$defs/FreshnessLane" }
+      }
+    },
+    "Evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source", "trust", "confidence", "first_seen_at", "last_seen_at"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "trust": { "$ref": "#/$defs/TrustLevel" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "first_seen_at": { "$ref": "#/$defs/Timestamp" },
+        "last_seen_at": { "$ref": "#/$defs/Timestamp" },
+        "detail": { "type": ["string", "null"], "maxLength": 1024 }
+      }
+    },
+    "Worktree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "key", "repository_id", "hostname", "path", "detached", "bare", "locked",
+        "prunable", "dirty", "staged", "unstaged", "untracked", "last_seen_at"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "repository_id": { "$ref": "#/$defs/Id" },
+        "hostname": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "branch_ref": { "type": ["string", "null"], "maxLength": 1024 },
+        "branch": { "type": ["string", "null"], "maxLength": 1024 },
+        "head_sha": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
+        "upstream_ref": { "type": ["string", "null"], "maxLength": 1024 },
+        "detached": { "type": "boolean" },
+        "bare": { "type": "boolean" },
+        "locked": { "type": "boolean" },
+        "prunable": { "type": "boolean" },
+        "dirty": { "type": "boolean" },
+        "staged": { "type": "integer", "minimum": 0 },
+        "unstaged": { "type": "integer", "minimum": 0 },
+        "untracked": { "type": "integer", "minimum": 0 },
+        "ahead": { "type": ["integer", "null"], "minimum": 0 },
+        "behind": { "type": ["integer", "null"], "minimum": 0 },
+        "first_seen_at": { "$ref": "#/$defs/Timestamp" },
+        "last_seen_at": { "$ref": "#/$defs/Timestamp" },
+        "removed_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] }
+      }
+    },
+    "Repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "key", "hostname", "primary_path", "name", "first_seen_at", "last_seen_at", "worktree_count", "active_run_count"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "hostname": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "primary_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "first_seen_at": { "$ref": "#/$defs/Timestamp" },
+        "last_seen_at": { "$ref": "#/$defs/Timestamp" },
+        "removed_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "worktree_count": { "type": "integer", "minimum": 0 },
+        "active_run_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "AgentActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "native_id"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "native_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "actor_type": { "type": ["string", "null"], "maxLength": 256 },
+        "display_name": { "type": ["string", "null"], "maxLength": 512 },
+        "started_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "last_activity_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "ended_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] }
+      }
+    },
+    "AgentRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "run_key", "native_session_id", "tool", "hostname", "status", "status_reason",
+        "status_observed_at", "started_at", "last_activity_at", "event_count", "error_count", "freshness"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "run_key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "native_session_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "tool": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "provider_tool": { "type": ["string", "null"], "maxLength": 128 },
+        "hostname": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "parent_run_key": { "type": ["string", "null"], "maxLength": 1024 },
+        "previous_run_key": { "type": ["string", "null"], "maxLength": 1024 },
+        "status": { "$ref": "#/$defs/RunStatus" },
+        "status_reason": { "type": "string", "maxLength": 1024 },
+        "status_observed_at": { "$ref": "#/$defs/Timestamp" },
+        "started_at": { "$ref": "#/$defs/Timestamp" },
+        "last_activity_at": { "$ref": "#/$defs/Timestamp" },
+        "ended_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "transcript_path": { "type": ["string", "null"], "maxLength": 4096 },
+        "primary_worktree": { "anyOf": [{ "$ref": "#/$defs/Worktree" }, { "type": "null" }] },
+        "primary_branch": { "type": ["string", "null"], "maxLength": 1024 },
+        "start_head_sha": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
+        "current_head_sha": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
+        "event_count": { "type": "integer", "minimum": 0 },
+        "error_count": { "type": "integer", "minimum": 0 },
+        "freshness": { "$ref": "#/$defs/RunFreshness" },
+        "actors": { "type": "array", "items": { "$ref": "#/$defs/AgentActor" }, "maxItems": 256 },
+        "worktree_evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" }, "maxItems": 128 }
+      }
+    },
+    "AgentRunEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "event_key", "run_key", "observed_at", "ingested_at", "kind", "source_kind",
+        "source_id", "severity", "title", "summary", "content_scrubbed"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "event_key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "run_key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "actor_key": { "type": ["string", "null"], "maxLength": 1024 },
+        "worktree_id": { "anyOf": [{ "$ref": "#/$defs/Id" }, { "type": "null" }] },
+        "commit_sha": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
+        "observed_at": { "$ref": "#/$defs/Timestamp" },
+        "ingested_at": { "$ref": "#/$defs/Timestamp" },
+        "kind": { "$ref": "#/$defs/EventKind" },
+        "source_kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "source_log_id": { "anyOf": [{ "$ref": "#/$defs/Id" }, { "type": "null" }] },
+        "provider_sequence": { "type": ["integer", "null"], "minimum": 0 },
+        "trace_id": { "anyOf": [{ "$ref": "#/$defs/TraceId" }, { "type": "null" }] },
+        "span_id": { "anyOf": [{ "$ref": "#/$defs/SpanId" }, { "type": "null" }] },
+        "severity": { "type": "string", "maxLength": 32 },
+        "title": { "type": "string", "maxLength": 512 },
+        "summary": { "type": "string", "maxLength": 8192 },
+        "payload": {},
+        "content_scrubbed": { "type": "boolean" }
+      }
+    },
+    "SpanSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id", "span_id", "name", "start_time", "end_time", "duration_nano", "status_code"],
+      "properties": {
+        "trace_id": { "$ref": "#/$defs/TraceId" },
+        "span_id": { "$ref": "#/$defs/SpanId" },
+        "parent_span_id": { "anyOf": [{ "$ref": "#/$defs/SpanId" }, { "type": "null" }] },
+        "name": { "type": "string", "maxLength": 1024 },
+        "kind": { "type": "integer" },
+        "start_time": { "$ref": "#/$defs/Timestamp" },
+        "end_time": { "$ref": "#/$defs/Timestamp" },
+        "duration_nano": { "type": "integer", "minimum": 0 },
+        "status_code": { "type": "integer" },
+        "status_message": { "type": ["string", "null"], "maxLength": 4096 },
+        "service_name": { "type": ["string", "null"], "maxLength": 512 },
+        "attributes": { "type": "object" }
+      }
+    },
+    "MetricPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["point_key", "metric_name", "instrument_kind", "time", "value"],
+      "properties": {
+        "point_key": { "type": "string", "maxLength": 1024 },
+        "metric_name": { "type": "string", "maxLength": 1024 },
+        "description": { "type": "string", "maxLength": 4096 },
+        "unit": { "type": "string", "maxLength": 128 },
+        "instrument_kind": { "enum": ["gauge", "sum", "histogram", "exponential_histogram", "summary"] },
+        "start_time": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "time": { "$ref": "#/$defs/Timestamp" },
+        "value": {},
+        "attributes": { "type": "object" },
+        "exemplars": { "type": "array", "items": { "type": "object" }, "maxItems": 128 }
+      }
+    },
+    "Page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit", "truncated"],
+      "properties": {
+        "limit": { "type": "integer", "minimum": 1 },
+        "next_cursor": { "type": ["string", "null"], "maxLength": 2048 },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "StreamEventName": {
+      "enum": [
+        "run.created", "run.updated", "run.status", "run.event", "worktree.updated",
+        "repository.updated", "telemetry.updated", "observatory.reset"
+      ]
+    },
+    "StreamEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "event", "entity_type", "entity_key", "occurred_at", "data"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "event": { "$ref": "#/$defs/StreamEventName" },
+        "entity_type": { "type": "string", "maxLength": 128 },
+        "entity_key": { "type": "string", "maxLength": 1024 },
+        "run_key": { "type": ["string", "null"], "maxLength": 1024 },
+        "occurred_at": { "$ref": "#/$defs/Timestamp" },
+        "data": { "type": "object" }
+      }
+    },
+    "ContractDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositories", "worktrees", "runs", "events", "spans", "metrics", "stream"],
+      "properties": {
+        "repositories": { "type": "array", "items": { "$ref": "#/$defs/Repository" } },
+        "worktrees": { "type": "array", "items": { "$ref": "#/$defs/Worktree" } },
+        "runs": { "type": "array", "items": { "$ref": "#/$defs/AgentRun" } },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/AgentRunEvent" } },
+        "spans": { "type": "array", "items": { "$ref": "#/$defs/SpanSummary" } },
+        "metrics": { "type": "array", "items": { "$ref": "#/$defs/MetricPoint" } },
+        "stream": { "type": "array", "items": { "$ref": "#/$defs/StreamEnvelope" } }
+      }
+    }
+  }
+}
