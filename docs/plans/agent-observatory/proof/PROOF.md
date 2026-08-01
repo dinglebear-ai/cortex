@@ -54,3 +54,14 @@ REGRESSION: pinned-target `known_schema_version_matches_migration_head`, `cargo 
 REGRESSION result: runtime schema remains 43; formatting and diff checks clean
 FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`
 NOTES: Query-plan proof requires `idx_repository_observations_repo_time`; migration 44 remains deliberately unmarked.
+
+## AO-006 Add exact Git commit table
+commit/worktree SHA: 58c180f8 (task started)
+RED: pinned-target init_pool_creates_agent_observatory_git_commit_schema_scaffold
+RED result: expected exact-commit columns, got an empty list because git_commits did not exist
+GREEN: same focused command with exact-commit DDL implemented
+GREEN result: 1 passed; exact columns, per-repository SHA uniqueness, cross-repository SHA reuse, JSON rejection, reachability update, and metadata-only storage verified
+REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt --all -- --check, and git diff --check
+REGRESSION result: runtime schema remains 43; formatting and diff checks clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: No patch, diff, blob, or plaintext author-email column exists; migration 44 remains unmarked until AO-007.
