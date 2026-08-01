@@ -23,6 +23,9 @@ check:
     cargo check
     bash scripts/check-rust-module-size.sh --limit 500
 
+check-agent-observatory-contracts:
+    bash scripts/check-agent-observatory-contracts.sh
+
 lint:
     just test-cargo-wrapper
     cargo clippy -- -D warnings
