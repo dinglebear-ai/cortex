@@ -787,6 +787,159 @@ fn init_pool_creates_agent_observatory_observation_schema_scaffold() {
 }
 
 #[test]
+fn init_pool_creates_agent_observatory_git_commit_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-commits.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    for (key, common_dir, path, name) in [
+        ("repo-1", "/workspace/one/.git", "/workspace/one", "one"),
+        ("repo-2", "/workspace/two/.git", "/workspace/two", "two"),
+    ] {
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, 'dookie', ?2, ?3, ?4, ?5, ?5)",
+            rusqlite::params![key, common_dir, path, name, "2026-08-01T01:00:00.000Z"],
+        )
+        .unwrap();
+    }
+    let repo_one: i64 = conn
+        .query_row(
+            "SELECT id FROM repositories WHERE repository_key = 'repo-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let repo_two: i64 = conn
+        .query_row(
+            "SELECT id FROM repositories WHERE repository_key = 'repo-2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(git_commits)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "repository_id",
+            "sha",
+            "parent_shas_json",
+            "author_name",
+            "author_email_hash",
+            "authored_at",
+            "committed_at",
+            "subject",
+            "changed_files",
+            "insertions",
+            "deletions",
+            "changed_paths_json",
+            "first_observed_at",
+            "last_observed_at",
+            "reachable",
+            "metadata_json",
+        ]
+    );
+    assert!(
+        !columns
+            .iter()
+            .any(|name| matches!(name.as_str(), "diff" | "patch" | "blob" | "author_email"))
+    );
+
+    let sha = "0123456789012345678901234567890123456789";
+    let insert_commit = |repository_id: i64| {
+        conn.execute(
+            "INSERT INTO git_commits
+                (repository_id, sha, parent_shas_json, author_name, author_email_hash,
+                 authored_at, committed_at, subject, changed_files, insertions,
+                 deletions, changed_paths_json, first_observed_at, last_observed_at,
+                 metadata_json)
+             VALUES (?1, ?2, '[]', 'Cortex Test', 'sha256:test', ?3, ?3,
+                     'test commit', 2, 10, 3, '[\"src/lib.rs\"]', ?3, ?3, '{}')",
+            rusqlite::params![repository_id, sha, "2026-08-01T01:00:00.000Z"],
+        )
+    };
+    insert_commit(repo_one).unwrap();
+    assert!(
+        insert_commit(repo_one).is_err(),
+        "same SHA must dedupe within a repository"
+    );
+    insert_commit(repo_two).unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO git_commits
+                (repository_id, sha, parent_shas_json, changed_paths_json,
+                 first_observed_at, last_observed_at)
+             VALUES (?1, 'bad-json', '{', '[]', ?2, ?2)",
+            rusqlite::params![repo_one, "2026-08-01T01:00:00.000Z"],
+        )
+        .is_err(),
+        "commit JSON columns must reject invalid JSON"
+    );
+
+    conn.execute(
+        "UPDATE git_commits
+         SET reachable = 0, last_observed_at = ?1
+         WHERE repository_id = ?2 AND sha = ?3",
+        rusqlite::params!["2026-08-01T02:00:00.000Z", repo_one, sha],
+    )
+    .unwrap();
+    let state: (i64, String, String) = conn
+        .query_row(
+            "SELECT reachable, subject, last_observed_at FROM git_commits
+             WHERE repository_id = ?1 AND sha = ?2",
+            rusqlite::params![repo_one, sha],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            0,
+            "test commit".to_string(),
+            "2026-08-01T02:00:00.000Z".to_string()
+        )
+    );
+
+    let repo_one_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_commits WHERE repository_id = ?1",
+            [repo_one],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let repo_two_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_commits WHERE repository_id = ?1",
+            [repo_two],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!((repo_one_count, repo_two_count), (1, 1));
+
+    let index_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'idx_git_commits_repo_time'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_exists, 1);
+}
+
+#[test]
 fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("graph-dedup.db"));

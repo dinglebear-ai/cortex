@@ -2591,7 +2591,30 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
          CREATE INDEX IF NOT EXISTS idx_repository_observations_worktree_time
              ON repository_observations(worktree_id, observed_at DESC, id DESC);
          CREATE INDEX IF NOT EXISTS idx_repository_observations_repo_time
-             ON repository_observations(repository_id, observed_at DESC, id DESC);",
+             ON repository_observations(repository_id, observed_at DESC, id DESC);
+
+         CREATE TABLE IF NOT EXISTS git_commits (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             sha                 TEXT NOT NULL,
+             parent_shas_json    TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parent_shas_json)),
+             author_name         TEXT,
+             author_email_hash   TEXT,
+             authored_at         TEXT,
+             committed_at        TEXT,
+             subject             TEXT NOT NULL DEFAULT '',
+             changed_files       INTEGER CHECK (changed_files IS NULL OR changed_files >= 0),
+             insertions          INTEGER CHECK (insertions IS NULL OR insertions >= 0),
+             deletions           INTEGER CHECK (deletions IS NULL OR deletions >= 0),
+             changed_paths_json  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(changed_paths_json)),
+             first_observed_at   TEXT NOT NULL,
+             last_observed_at    TEXT NOT NULL,
+             reachable           INTEGER NOT NULL DEFAULT 1 CHECK (reachable IN (0, 1)),
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(repository_id, sha)
+         );
+         CREATE INDEX IF NOT EXISTS idx_git_commits_repo_time
+             ON git_commits(repository_id, committed_at DESC, id DESC);",
     )?;
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
