@@ -2744,7 +2744,50 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
          CREATE INDEX IF NOT EXISTS idx_agent_run_events_trace
              ON agent_run_events(trace_id, span_id);
          CREATE INDEX IF NOT EXISTS idx_agent_run_events_source_log
-             ON agent_run_events(source_log_id) WHERE source_log_id IS NOT NULL;",
+             ON agent_run_events(source_log_id) WHERE source_log_id IS NOT NULL;
+
+         CREATE TABLE IF NOT EXISTS agent_run_commits (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             relation_key        TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             commit_id           INTEGER NOT NULL REFERENCES git_commits(id) ON DELETE CASCADE,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             evidence_kind       TEXT NOT NULL,
+             evidence_source     TEXT NOT NULL,
+             trust_level         TEXT NOT NULL CHECK (trust_level IN (
+                 'verified', 'claimed', 'correlated', 'inferred', 'refuted'
+             )),
+             confidence          REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, commit_id, evidence_kind, evidence_source)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_commits_run
+             ON agent_run_commits(run_id, last_seen_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_commits_commit
+             ON agent_run_commits(commit_id, last_seen_at DESC, run_id);
+
+         CREATE TABLE IF NOT EXISTS agent_projection_cursors (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             cursor_type     TEXT NOT NULL,
+             source_name     TEXT NOT NULL DEFAULT 'default',
+             cursor_value    TEXT NOT NULL DEFAULT '',
+             updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(cursor_type, source_name)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_projection_cursors_type
+             ON agent_projection_cursors(cursor_type, source_name);
+
+         INSERT OR IGNORE INTO agent_projection_cursors (cursor_type, source_name, cursor_value) VALUES
+             ('repositories', 'default', ''),
+             ('repository_worktrees', 'default', ''),
+             ('repository_observations', 'default', ''),
+             ('git_commits', 'default', ''),
+             ('agent_runs', 'default', ''),
+             ('agent_run_events', 'default', ''),
+             ('otel_spans', 'default', ''),
+             ('otel_metric_points', 'default', '');",
     )?;
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
