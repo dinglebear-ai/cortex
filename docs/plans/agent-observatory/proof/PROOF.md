@@ -142,3 +142,14 @@ REGRESSION: `cargo test known_schema_version_matches_migration_head --lib && car
 REGRESSION result: runtime schema now at 45; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: KNOWN_SCHEMA_VERSION now truthfully at 45; migration 45 is atomic and idempotent; G1 Storage gate partially satisfied.
+
+## AO-016 Add schema-43 upgrade fixture
+commit/worktree SHA: 22626a72 (task started)
+RED: pinned-target schema_43_fixture_upgrades_to_47_and_preserves_legacy_rows
+RED result: compile failed because tests/fixtures/schema-43.sql did not exist
+GREEN: same focused command after adding the deterministic synthetic fixture
+GREEN result: 1 passed; fixture opened at schema 43, upgraded to 47, and preserved seeded legacy log and AI session-rollup rows
+REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt --all -- --check, and git diff --check
+REGRESSION result: runtime schema-head test passed at 47; formatting and whitespace checks clean
+FILES: tests/fixtures/schema-43.sql, src/db/pool_tests.rs
+NOTES: Fixture SQL is generated from the migration contract, contains deterministic reserved-example values only, and explicitly rejects user/home-path leakage.
