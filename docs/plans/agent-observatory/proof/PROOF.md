@@ -43,3 +43,14 @@ REGRESSION: pinned-target `known_schema_version_matches_migration_head`, `cargo 
 REGRESSION result: runtime schema remains 43; formatting and diff checks clean
 FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`
 NOTES: The worktree DDL remains part of the unmarked migration-44 scaffold; all Cargo proof commands now pin `CARGO_TARGET_DIR` to this worktree to avoid cross-worktree lock pollution.
+
+## AO-005 Add repository observations table
+commit/worktree SHA: fd3d8342 (task started)
+RED: pinned-target `init_pool_creates_agent_observatory_observation_schema_scaffold`
+RED result: expected observation columns, got an empty list because `repository_observations` did not exist
+GREEN: same focused command with observation DDL and indexes implemented
+GREEN result: 1 passed; exact columns, unique observation keys, invalid JSON rejection, deterministic `(observed_at DESC, id DESC)` ordering, and named repository/worktree indexes verified
+REGRESSION: pinned-target `known_schema_version_matches_migration_head`, `cargo fmt --all -- --check`, and `git diff --check`
+REGRESSION result: runtime schema remains 43; formatting and diff checks clean
+FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`
+NOTES: Query-plan proof requires `idx_repository_observations_repo_time`; migration 44 remains deliberately unmarked.

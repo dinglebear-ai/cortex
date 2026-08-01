@@ -2570,7 +2570,28 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
          CREATE INDEX IF NOT EXISTS idx_worktrees_branch
              ON repository_worktrees(branch_name, last_seen_at DESC);
          CREATE INDEX IF NOT EXISTS idx_worktrees_head
-             ON repository_worktrees(repository_id, head_sha);",
+             ON repository_worktrees(repository_id, head_sha);
+
+         CREATE TABLE IF NOT EXISTS repository_observations (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             observation_key     TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE CASCADE,
+             observed_at         TEXT NOT NULL,
+             observation_kind    TEXT NOT NULL CHECK (observation_kind IN (
+                 'discovered', 'status', 'head', 'branch', 'worktree_added',
+                 'worktree_removed', 'overflow_reconcile', 'periodic_reconcile', 'error'
+             )),
+             old_head_sha        TEXT,
+             new_head_sha        TEXT,
+             summary             TEXT NOT NULL DEFAULT '',
+             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_worktree_time
+             ON repository_observations(worktree_id, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_repo_time
+             ON repository_observations(repository_id, observed_at DESC, id DESC);",
     )?;
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
