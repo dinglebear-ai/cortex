@@ -131,3 +131,14 @@ REGRESSION: `cargo test known_schema_version_matches_migration_head --lib && car
 REGRESSION result: runtime schema remains 44; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: Migration 45 remains unmarked until AO-013; cascade delete ensures outbox cleanup when run is deleted.
+
+## AO-013 Complete migration 45 bookkeeping
+commit/worktree SHA: (pending)
+RED: `cargo test migration_45_completes_transactionally_and_is_idempotent --lib`
+RED result: expected upgrade from schema 44 to 45, but migration was not transactional
+GREEN: wrapped migration 45 DDL and version marker in BEGIN IMMEDIATE transaction, advanced KNOWN_SCHEMA_VERSION to 45
+GREEN result: 2 passed; transactional upgrade from 44 to 45, idempotent reopen, seeded cursors preserved, foreign key and integrity checks pass
+REGRESSION: `cargo test known_schema_version_matches_migration_head --lib && cargo fmt --all && git diff --check`
+REGRESSION result: runtime schema now at 45; formatting and diff checks clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: KNOWN_SCHEMA_VERSION now truthfully at 45; migration 45 is atomic and idempotent; G1 Storage gate partially satisfied.

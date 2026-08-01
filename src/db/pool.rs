@@ -39,7 +39,7 @@ pub fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 44;
+pub const KNOWN_SCHEMA_VERSION: i64 = 45;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -2623,10 +2623,22 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         tracing::info!("Migration 44: Agent Observatory repository topology");
     }
 
-    // Agent Observatory migration 45 scaffold. The version marker is added
-    // only after runs, actors, evidence, events, cursors, and outbox exist.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS agent_runs (
+    // Agent Observatory migration 45: run events, evidence, cursors, and outbox.
+    // This migration is wrapped in a transaction with the version marker.
+    let migration_45_applied: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 45",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !migration_45_applied {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+
+             CREATE TABLE IF NOT EXISTS agent_runs (
              id                      INTEGER PRIMARY KEY AUTOINCREMENT,
              run_key                 TEXT NOT NULL UNIQUE,
              native_session_id       TEXT NOT NULL,
@@ -2801,8 +2813,13 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
 	         CREATE INDEX IF NOT EXISTS idx_agent_stream_outbox_run
 	             ON agent_stream_outbox(run_id, id ASC);
 	         CREATE INDEX IF NOT EXISTS idx_agent_stream_outbox_expiry
-	             ON agent_stream_outbox(expires_at ASC);",
-    )?;
+	             ON agent_stream_outbox(expires_at ASC);
+
+	     INSERT OR IGNORE INTO schema_migrations (version) VALUES (45);
+	     COMMIT;",
+        )?;
+        tracing::info!("Migration 45: Agent Observatory run events, evidence, cursors, and outbox");
+    }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
         let deleted_heartbeat_latest = conn.execute(
@@ -2853,7 +2870,7 @@ pub fn reconcile_interrupted_server_work(pool: &DbPool) -> Result<()> {
         "UPDATE maintenance_jobs
             SET status = 'failed',
                 finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                result_json = json_object('error', 'interrupted by server restart')
+                result_json = json_object('error', \"interrupted by server restart\")
           WHERE status = 'running';
 
          UPDATE llm_invocations
