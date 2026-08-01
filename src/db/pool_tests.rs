@@ -368,6 +368,135 @@ fn known_schema_version_matches_migration_head() {
 }
 
 #[test]
+fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-repositories.db"));
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repositories)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "repository_key",
+            "hostname",
+            "common_git_dir",
+            "primary_path",
+            "display_name",
+            "remote_url_hash",
+            "first_seen_at",
+            "last_seen_at",
+            "removed_at",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'repositories'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repositories_display")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repositories_host_seen")
+    );
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        rusqlite::params![
+            "v1|6:dookie|20:/workspace/cortex/.git",
+            "dookie",
+            "/workspace/cortex/.git",
+            "/workspace/cortex",
+            "cortex",
+            "2026-07-31T23:00:00.000Z",
+        ],
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "v1|6:dookie|20:/workspace/cortex/.git",
+                "other-host",
+                "/workspace/other/.git",
+                "/workspace/other",
+                "other",
+                "2026-07-31T23:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "repository_key must be globally unique"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "different-key",
+                "dookie",
+                "/workspace/cortex/.git",
+                "/workspace/cortex-copy",
+                "cortex-copy",
+                "2026-07-31T23:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "hostname/common_git_dir must identify one repository"
+    );
+    drop(conn);
+    drop(pool);
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(row_count, 1, "reopening must preserve repository rows");
+    let migration_44_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        migration_44_count, 0,
+        "migration 44 remains unmarked until its complete topology schema lands"
+    );
+}
+
+#[test]
 fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("graph-dedup.db"));

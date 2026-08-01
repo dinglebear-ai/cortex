@@ -21,3 +21,14 @@ REGRESSION: `cargo test --manifest-path Cargo.toml --locked known_schema_version
 REGRESSION result: runtime schema-head test passed; rustfmt and diff checks clean
 FILES: `src/agent_observatory.rs`, `src/agent_observatory_tests.rs`, `src/lib.rs`
 NOTES: The planned target constant is intentionally distinct from `db::KNOWN_SCHEMA_VERSION`; runtime version advances only with implemented migrations.
+
+## AO-003 Implement migration 44 repository table
+commit/worktree SHA: ef73d297 (task started)
+RED: `cargo --config 'build.rustc-wrapper=""' test --manifest-path Cargo.toml --locked init_pool_creates_agent_observatory_repository_schema_scaffold --lib`
+RED result: expected repository columns, got an empty list because `repositories` did not exist
+GREEN: `cargo --config 'build.rustc-wrapper=""' test --manifest-path Cargo.toml --locked init_pool_creates_agent_observatory_repository_schema_scaffold --lib`
+GREEN result: 1 passed; exact columns, indexes, uniqueness, reopen preservation, and no premature migration-44 marker verified
+REGRESSION: `cargo test --manifest-path Cargo.toml --locked known_schema_version_matches_migration_head --lib && cargo fmt --all -- --check && git diff --check`
+REGRESSION result: runtime schema remains 43; focused formatted test passed; diff clean
+FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`
+NOTES: The repository DDL is an idempotent migration-44 scaffold. AO-007 will mark migration 44 only after worktrees, observations, and commits are complete.

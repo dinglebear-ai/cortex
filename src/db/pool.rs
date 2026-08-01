@@ -2509,6 +2509,32 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         tracing::info!("Migration 43: stream_last_seen rollup for stream-silence alerting");
     }
 
+    // Agent Observatory migration 44 scaffold. The version marker is added
+    // only after repositories, worktrees, observations, and exact commits all
+    // exist, so a partial implementation cannot claim a completed migration.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS repositories (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_key      TEXT NOT NULL UNIQUE,
+             hostname            TEXT NOT NULL,
+             common_git_dir      TEXT NOT NULL,
+             primary_path        TEXT NOT NULL,
+             display_name        TEXT NOT NULL,
+             remote_url_hash     TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, common_git_dir)
+         );
+         CREATE INDEX IF NOT EXISTS idx_repositories_host_seen
+             ON repositories(hostname, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_repositories_display
+             ON repositories(display_name COLLATE NOCASE);",
+    )?;
+
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
         let deleted_heartbeat_latest = conn.execute(
             "DELETE FROM host_heartbeats_latest
