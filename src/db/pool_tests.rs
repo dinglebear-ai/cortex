@@ -974,7 +974,10 @@ fn migration_44_applies_from_schema_43_and_is_idempotent() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(max_version, 44);
+    assert_eq!(
+        max_version, 47,
+        "schema 43 should upgrade to schema 47 (applying 44, 45, 46, 47)"
+    );
     let marker_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
@@ -1176,16 +1179,17 @@ fn init_pool_creates_agent_observatory_run_schema_scaffold() {
         "active-run query must use status/activity index: {query_plan:?}"
     );
 
-    let migration_45_count: i64 = conn
+    // Verify migration 47 is applied (schema includes OTLP tables)
+    let migration_47_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version = 45",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
             [],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(
-        migration_45_count, 0,
-        "migration 45 remains unmarked until every projection table lands"
+        migration_47_count, 1,
+        "migration 47 should be applied (OTLP metric points)"
     );
 }
 
@@ -4392,13 +4396,16 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
     let pool_45 = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
     let conn_45 = pool_45.get().unwrap();
 
-    // Verify we're now at schema 45
-    let schema_version_45: i64 = conn_45
+    // Verify we're now at schema 47 (45 + 46 + 47 are applied automatically)
+    let schema_version_final: i64 = conn_45
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema_version_45, 45, "should upgrade to schema 45");
+    assert_eq!(
+        schema_version_final, 47,
+        "should upgrade from schema 44 to schema 47 (applying 45, 46, 47)"
+    );
 
     // Verify all migration 45 tables now exist
     let tables_45: Vec<String> = conn_45
@@ -4443,7 +4450,10 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema_version_again, 45, "should remain at schema 45");
+    assert_eq!(
+        schema_version_again, 47,
+        "should remain at schema 47 after migrations 45, 46, 47"
+    );
 
     let cursor_count_again: i64 = conn_again
         .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
@@ -4494,9 +4504,9 @@ fn migration_45_fresh_database_applies_transactionally() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema_version, 45, "fresh database should be at schema 45");
+    assert_eq!(schema_version, 47, "fresh database should be at schema 47");
 
-    // Verify all migration 45 tables exist
+    // Verify all migration 45 tables still exist (additive migrations preserve them)
     let tables: Vec<String> = conn
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_%' ORDER BY name")
         .unwrap()
@@ -4516,6 +4526,100 @@ fn migration_45_fresh_database_applies_transactionally() {
             "agent_runs",
             "agent_stream_outbox",
         ],
-        "fresh database should have all migration 45 tables"
+        "migration 47 should preserve all migration 45 tables"
+    );
+}
+
+// AO-014 RED: migration 46 OTLP span table
+#[test]
+fn migration_46_creates_otel_spans_table_and_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = StorageConfig::for_test(dir.path().join("migration-46-otel-spans.db"));
+
+    // Open fresh database and check for migration 46 features
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: Verify otel_spans table exists (will fail - migration 46 not implemented)
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='otel_spans'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        table_exists, 1,
+        "otel_spans table must exist after migration 46"
+    );
+
+    // GREEN: Verify schema is at version 47 (includes migration 46 and 47)
+    let current_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        current_version, 47,
+        "schema should be at version 47 after migrations 46 and 47"
+    );
+}
+
+// AO-015 RED: migration 47 OTLP metric-point table
+#[test]
+fn migration_47_creates_otel_metric_points_table_and_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = StorageConfig::for_test(dir.path().join("migration-47-otel-metrics.db"));
+
+    // Open fresh database and check for migration 47 features
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: Verify otel_metric_points table exists (will fail - migration 47 not implemented)
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='otel_metric_points'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        table_exists, 1,
+        "otel_metric_points table must exist after migration 47"
+    );
+
+    // RED: Verify schema is at version 47 (will fail - currently at 46)
+    let current_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        current_version, 47,
+        "schema should be at version 47 after migration 47"
+    );
+
+    // GREEN: Verify duplicate point key deduplicates (constraint is enforced)
+    conn.execute(
+        "INSERT INTO otel_metric_points (point_key, metric_name, instrument_kind, time_unix_nano, hostname, value_json, received_at) VALUES ('test-point-key', 'test.metric', 'gauge', 1234567890, 'test-host', '{\"value\": 42.0}', '2024-01-01T00:00:00.000Z')",
+        [],
+    ).unwrap();
+    let duplicate_result = conn.execute(
+        "INSERT INTO otel_metric_points (point_key, metric_name, instrument_kind, time_unix_nano, hostname, value_json, received_at) VALUES ('test-point-key', 'test.metric', 'gauge', 1234567891, 'test-host', '{\"value\": 43.0}', '2024-01-01T00:00:01.000Z')",
+        [],
+    );
+    assert!(
+        duplicate_result.is_err(),
+        "duplicate point key should be rejected by UNIQUE constraint"
+    );
+
+    // GREEN: Verify invalid instrument kind is rejected (check constraint is enforced)
+    let invalid_kind_result = conn.execute(
+        "INSERT INTO otel_metric_points (point_key, metric_name, instrument_kind, time_unix_nano, hostname, value_json, received_at) VALUES ('invalid-key', 'test.metric', 'invalid_kind', 1234567892, 'test-host', '{\"value\": 44.0}', '2024-01-01T00:00:02.000Z')",
+        [],
+    );
+    assert!(
+        invalid_kind_result.is_err(),
+        "invalid instrument kind should be rejected by CHECK constraint"
     );
 }
