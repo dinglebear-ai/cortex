@@ -2623,6 +2623,55 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         tracing::info!("Migration 44: Agent Observatory repository topology");
     }
 
+    // Agent Observatory migration 45 scaffold. The version marker is added
+    // only after runs, actors, evidence, events, cursors, and outbox exist.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agent_runs (
+             id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+             run_key                 TEXT NOT NULL UNIQUE,
+             native_session_id       TEXT NOT NULL,
+             tool                    TEXT NOT NULL,
+             provider_tool           TEXT,
+             hostname                TEXT NOT NULL,
+             parent_run_id           INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             previous_run_id         INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             primary_worktree_id     INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             transcript_path         TEXT,
+             process_id              TEXT,
+             status                  TEXT NOT NULL CHECK (status IN (
+                 'starting', 'active', 'waiting', 'idle', 'stale',
+                 'completed', 'failed', 'abandoned'
+             )),
+             status_reason           TEXT NOT NULL DEFAULT '',
+             status_observed_at      TEXT NOT NULL,
+             started_at              TEXT NOT NULL,
+             last_activity_at        TEXT NOT NULL,
+             ended_at                TEXT,
+             first_source_log_id     INTEGER,
+             last_source_log_id      INTEGER,
+             last_event_id           INTEGER,
+             event_count             INTEGER NOT NULL DEFAULT 0 CHECK (event_count >= 0),
+             error_count             INTEGER NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+             primary_branch          TEXT,
+             start_head_sha          TEXT,
+             current_head_sha        TEXT,
+             projection_version      INTEGER NOT NULL DEFAULT 1,
+             freshness_json          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(freshness_json)),
+             metadata_json           TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, tool, native_session_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_activity
+             ON agent_runs(last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_status_activity
+             ON agent_runs(status, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree_activity
+             ON agent_runs(primary_worktree_id, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_tool_host
+             ON agent_runs(tool, hostname, last_activity_at DESC);",
+    )?;
+
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
         let deleted_heartbeat_latest = conn.execute(
             "DELETE FROM host_heartbeats_latest
