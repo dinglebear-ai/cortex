@@ -17,6 +17,15 @@ pub struct CommandOutput {
 }
 
 pub async fn run_command(program: &str, args: &[&str], timeout: Duration) -> Result<CommandOutput> {
+    run_command_capped(program, args, timeout, MAX_COMMAND_OUTPUT_BYTES).await
+}
+
+pub async fn run_command_capped(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> Result<CommandOutput> {
     let start = Instant::now();
     let mut child = Command::new(program)
         .args(args)
@@ -29,8 +38,8 @@ pub async fn run_command(program: &str, args: &[&str], timeout: Duration) -> Res
 
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let stdout_task = tokio::spawn(async move { read_capped(&mut stdout).await });
-    let stderr_task = tokio::spawn(async move { read_capped(&mut stderr).await });
+    let stdout_task = tokio::spawn(async move { read_capped(&mut stdout, max_output_bytes).await });
+    let stderr_task = tokio::spawn(async move { read_capped(&mut stderr, max_output_bytes).await });
     let wait = tokio::time::timeout(timeout, child.wait()).await;
     let status = match wait {
         Ok(Ok(status)) => Some(status.code().unwrap_or(-1)),
@@ -61,7 +70,10 @@ pub async fn run_command(program: &str, args: &[&str], timeout: Duration) -> Res
     })
 }
 
-async fn read_capped<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<(String, bool)> {
+async fn read_capped<R: AsyncReadExt + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> Result<(String, bool)> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 8192];
     let mut truncated = false;
@@ -70,7 +82,7 @@ async fn read_capped<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<(String,
         if n == 0 {
             break;
         }
-        let remaining = MAX_COMMAND_OUTPUT_BYTES.saturating_sub(buf.len());
+        let remaining = max_bytes.saturating_sub(buf.len());
         if remaining == 0 {
             truncated = true;
             continue;

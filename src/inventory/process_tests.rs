@@ -2,10 +2,28 @@ use super::*;
 
 #[tokio::test]
 async fn command_timeout_returns_error() {
-    let err = run_command("sh", &["-c", "sleep 2"], Duration::from_millis(20))
+    for attempt in 0..5 {
+        match run_command(
+            "sh",
+            &["-c", "while :; do :; done"],
+            Duration::from_millis(50),
+        )
         .await
-        .unwrap_err();
-    assert!(err.to_string().contains("timed out"));
+        {
+            Err(error) if error.to_string().contains("spawn failed") && attempt < 4 => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => {
+                assert!(
+                    error.to_string().contains("timed out"),
+                    "unexpected command error: {error:#}"
+                );
+                return;
+            }
+            Ok(output) => panic!("non-terminating command unexpectedly exited: {output:?}"),
+        }
+    }
+    unreachable!("timeout command retry loop always returns or panics")
 }
 
 #[test]

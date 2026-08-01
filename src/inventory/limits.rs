@@ -3,6 +3,7 @@ pub const MAP_SCHEMA: &str = "cortex.homelab_map.v2";
 pub const MAX_RAW_ARTIFACT_BYTES: usize = 512 * 1024;
 pub const MAX_HTTP_BODY_BYTES: usize = 512 * 1024;
 pub const MAX_COMMAND_OUTPUT_BYTES: usize = 256 * 1024;
+pub const MAX_RAW_BATCH_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_JSON_DEPTH: usize = 12;
 pub const MAX_ARRAY_ENTRIES: usize = 200;
 pub const MAX_SECTION_ITEMS: usize = 250;

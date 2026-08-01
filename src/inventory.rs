@@ -13,6 +13,7 @@
 //! driven by the background task in `runtime/inventory_refresh.rs` (5 min
 //! cadence + file watchers) or `cortex inventory refresh`.
 
+pub mod adguard;
 pub mod cache;
 pub mod collectors;
 pub mod config;

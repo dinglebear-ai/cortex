@@ -295,6 +295,7 @@ fn inventory_graph_projection_enabled() -> bool {
 fn watched_config_targets(config: &crate::inventory::InventoryConfig) -> Vec<PathBuf> {
     let mut paths = config.compose_paths.clone();
     paths.extend(config.proxy_paths.clone());
+    paths.extend(config.adguard_paths.clone());
     paths.sort();
     paths.dedup();
     paths
