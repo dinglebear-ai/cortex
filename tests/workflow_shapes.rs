@@ -124,11 +124,17 @@ fn workflows_default_to_read_only_github_token_permissions() {
     );
 
     let docker = include_str!("../.github/workflows/docker-publish.yml");
-    let publish = workflow_job_block(docker, "build-and-push");
+    let publish = workflow_job_block(docker, "container");
     assert!(
-        publish.contains("packages: write") && publish.contains("security-events: write"),
-        "the publish job must retain its explicit package and SARIF upload scopes"
+        publish.contains("hosted-container-release.yml@"),
+        "the container job must delegate to the immutable shared hosted release workflow"
     );
+    for required_scope in ["packages: write", "attestations: write", "id-token: write"] {
+        assert!(
+            docker.contains(required_scope),
+            "docker-publish.yml must retain {required_scope}"
+        );
+    }
 }
 
 #[test]
