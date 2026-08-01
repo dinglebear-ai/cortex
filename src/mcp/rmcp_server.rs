@@ -10,7 +10,7 @@ use rmcp::{
     model::{
         Annotations, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         EmbeddedResource, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
-        Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, Meta,
+        Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, MetaObject,
         PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
         ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
     },
@@ -460,7 +460,7 @@ fn embedded_widget_content() -> ContentBlock {
     )
 }
 
-fn cortex_tool_meta() -> Meta {
+fn cortex_tool_meta() -> MetaObject {
     let mut meta = Map::new();
     // Both formats the MCP Apps SDK tells hosts to check: the flat
     // `ui/resourceUri` key (ext-apps `RESOURCE_URI_META_KEY`) and the nested
@@ -476,7 +476,7 @@ fn cortex_tool_meta() -> Meta {
             "visibility": ["model", "app"],
         }),
     );
-    Meta(meta)
+    MetaObject(meta)
 }
 
 fn rmcp_tool_definitions() -> Result<Vec<Tool>, ErrorData> {

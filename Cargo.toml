@@ -13,7 +13,7 @@ homepage = "https://cortex.dinglebear.ai"
 repository = "https://github.com/dinglebear-ai/cortex"
 
 [workspace.dependencies]
-rmcp = { version = "=3.0.0-beta.2", default-features = false }
+rmcp = { version = "=3.1.0", default-features = false }
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
