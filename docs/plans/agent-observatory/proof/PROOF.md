@@ -198,3 +198,14 @@ REGRESSION: setup::heartbeat_agent::tests, agent_deploy::tests, cargo fmt, git d
 REGRESSION result: 12 setup tests and 32 deployment tests passed; the only non-test source occurrence of CORTEX_AGENT_AI_TRANSCRIPTS is the compatibility constant
 FILES: src/setup/heartbeat_agent.rs, src/setup/heartbeat_agent_tests.rs, src/agent_deploy.rs, src/agent_deploy_tests.rs
 NOTES: Replacement values are authoritative; legacy persisted values are normalized instead of copied verbatim, and generated files never contain both names.
+
+## ENV-003 Add doctor detection and safe automatic migration
+commit/worktree SHA: 67fea1c2 (task started)
+RED: temporary env-file fixtures for legacy-only, both-equal, conflicting, authorization, permission, and idempotency behavior
+RED result: doctor had no transcript-forwarding migration diagnostic or safe rewrite path
+GREEN: pinned-target transcript_forward_migration_ test filter
+GREEN result: 11 passed; legacy-only rename, equal-alias cleanup, conflict no-write, missing/current-only no-op, explicit --fix --yes authorization, private 0600 permissions, and idempotent second run verified
+REGRESSION: pinned-target setup::doctor::tests, cargo fmt --all -- --check, git diff --check
+REGRESSION result: 23 doctor tests passed; formatting and diff checks clean
+FILES: src/setup/doctor.rs, src/setup/doctor_tests.rs
+NOTES: Migration uses temporary-file write, sync_all, atomic rename, and parent-directory fsync. Conflicting values are never guessed or rewritten.

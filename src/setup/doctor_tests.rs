@@ -258,3 +258,201 @@ fn stale_agent_command_fix_requires_yes() {
         "yes alone without fix must not disable"
     );
 }
+
+// ENV-003: transcript forwarding env migration tests
+
+#[test]
+fn transcript_forward_migration_detects_legacy_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "CORTEX_AGENT_AI_TRANSCRIPTS=true\n").unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, false, false);
+
+    assert!(matches!(result.status, SetupStatus::Warn));
+    assert!(result.detail.contains("deprecated"));
+    assert!(result.detail.contains("CORTEX_AGENT_AI_TRANSCRIPTS"));
+    assert!(result.detail.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD"));
+}
+
+#[test]
+fn transcript_forward_migration_detects_both_equal() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(
+        &env_path,
+        "CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true\n",
+    )
+    .unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, false, false);
+
+    assert!(matches!(result.status, SetupStatus::Warn));
+    assert!(result.detail.contains("duplicate"));
+}
+
+#[test]
+fn transcript_forward_migration_detects_conflicting_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(
+        &env_path,
+        "CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_AI_TRANSCRIPT_FORWARD=false\n",
+    )
+    .unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, false, false);
+
+    assert!(matches!(result.status, SetupStatus::Error));
+    assert!(result.detail.contains("conflicting"));
+}
+
+#[test]
+fn transcript_forward_migration_ok_when_new_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true\n").unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, false, false);
+
+    assert!(matches!(result.status, SetupStatus::Ok));
+}
+
+#[test]
+fn transcript_forward_migration_ok_when_neither_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "CORTEX_API_TOKEN=secret\n").unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, false, false);
+
+    assert!(matches!(result.status, SetupStatus::Ok));
+}
+
+#[test]
+fn transcript_forward_migration_ok_when_file_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+
+    let result = check_transcript_forward_env_migration(&env_path, false, false);
+
+    assert!(matches!(result.status, SetupStatus::Ok));
+}
+
+#[test]
+fn transcript_forward_migration_fix_requires_yes() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "CORTEX_AGENT_AI_TRANSCRIPTS=true\n").unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, true, false);
+
+    // Should still warn without --yes
+    assert!(matches!(result.status, SetupStatus::Warn));
+    assert!(result.detail.contains("--yes"));
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_forward_migration_fix_renames_legacy_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "CORTEX_AGENT_AI_TRANSCRIPTS=true\n").unwrap();
+    let mut perms = std::fs::metadata(&env_path).unwrap().permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&env_path, perms).unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, true, true);
+
+    assert!(matches!(result.status, SetupStatus::Ok));
+
+    let content = std::fs::read_to_string(&env_path).unwrap();
+    assert!(content.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true"));
+    assert!(!content.contains("CORTEX_AGENT_AI_TRANSCRIPTS"));
+
+    // Verify permissions remain private
+    let new_perms = std::fs::metadata(&env_path).unwrap().permissions();
+    assert_eq!(new_perms.mode() & 0o777, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_forward_migration_fix_removes_legacy_when_both_equal() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(
+        &env_path,
+        "CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true\n",
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&env_path).unwrap().permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&env_path, perms).unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, true, true);
+
+    assert!(matches!(result.status, SetupStatus::Ok));
+
+    let content = std::fs::read_to_string(&env_path).unwrap();
+    assert!(content.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true"));
+    assert!(!content.contains("CORTEX_AGENT_AI_TRANSCRIPTS"));
+
+    // Verify permissions remain private
+    let new_perms = std::fs::metadata(&env_path).unwrap().permissions();
+    assert_eq!(new_perms.mode() & 0o777, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_forward_migration_fix_errors_on_conflict() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    let original = "CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_AI_TRANSCRIPT_FORWARD=false\n";
+    std::fs::write(&env_path, original).unwrap();
+    let mut perms = std::fs::metadata(&env_path).unwrap().permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&env_path, perms).unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, true, true);
+
+    assert!(matches!(result.status, SetupStatus::Error));
+    assert!(result.detail.contains("conflicting"));
+
+    // File should not be modified
+    let content = std::fs::read_to_string(&env_path).unwrap();
+    assert_eq!(content, original);
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_forward_migration_idempotent_second_run() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, "CORTEX_AGENT_AI_TRANSCRIPTS=true\n").unwrap();
+    let mut perms = std::fs::metadata(&env_path).unwrap().permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&env_path, perms).unwrap();
+
+    // First run - should migrate
+    let result1 = check_transcript_forward_env_migration(&env_path, true, true);
+    assert!(matches!(result1.status, SetupStatus::Ok));
+
+    let content1 = std::fs::read_to_string(&env_path).unwrap();
+    assert!(content1.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true"));
+    assert!(!content1.contains("CORTEX_AGENT_AI_TRANSCRIPTS"));
+
+    // Second run - should be idempotent (no-op)
+    let result2 = check_transcript_forward_env_migration(&env_path, true, true);
+    assert!(matches!(result2.status, SetupStatus::Ok));
+
+    let content2 = std::fs::read_to_string(&env_path).unwrap();
+    assert_eq!(content1, content2);
+}
