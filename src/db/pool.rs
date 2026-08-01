@@ -2532,7 +2532,45 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
          CREATE INDEX IF NOT EXISTS idx_repositories_host_seen
              ON repositories(hostname, last_seen_at DESC);
          CREATE INDEX IF NOT EXISTS idx_repositories_display
-             ON repositories(display_name COLLATE NOCASE);",
+             ON repositories(display_name COLLATE NOCASE);
+
+         CREATE TABLE IF NOT EXISTS repository_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             worktree_key        TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             hostname            TEXT NOT NULL,
+             path                TEXT NOT NULL,
+             git_dir             TEXT NOT NULL,
+             branch_ref          TEXT,
+             branch_name         TEXT,
+             head_sha            TEXT,
+             upstream_ref        TEXT,
+             detached            INTEGER NOT NULL DEFAULT 0 CHECK (detached IN (0, 1)),
+             bare                INTEGER NOT NULL DEFAULT 0 CHECK (bare IN (0, 1)),
+             locked              INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+             lock_reason         TEXT,
+             prunable            INTEGER NOT NULL DEFAULT 0 CHECK (prunable IN (0, 1)),
+             prune_reason        TEXT,
+             dirty               INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+             staged_count        INTEGER NOT NULL DEFAULT 0 CHECK (staged_count >= 0),
+             unstaged_count      INTEGER NOT NULL DEFAULT 0 CHECK (unstaged_count >= 0),
+             untracked_count     INTEGER NOT NULL DEFAULT 0 CHECK (untracked_count >= 0),
+             ahead               INTEGER CHECK (ahead IS NULL OR ahead >= 0),
+             behind              INTEGER CHECK (behind IS NULL OR behind >= 0),
+             status_hash         TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, path)
+         );
+         CREATE INDEX IF NOT EXISTS idx_worktrees_repo_active
+             ON repository_worktrees(repository_id, removed_at, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_worktrees_branch
+             ON repository_worktrees(branch_name, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_worktrees_head
+             ON repository_worktrees(repository_id, head_sha);",
     )?;
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

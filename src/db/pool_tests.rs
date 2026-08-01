@@ -5,6 +5,7 @@ use crate::db::{
     TRUST_LEVELS, insert_logs_batch, is_known_entity_type, is_known_evidence_source_kind,
     is_known_reason_code, is_known_relationship_type, is_known_trust_level,
 };
+use rusqlite::OptionalExtension;
 
 fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
     StorageConfig::for_test(db_path)
@@ -494,6 +495,161 @@ fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
         migration_44_count, 0,
         "migration 44 remains unmarked until its complete topology schema lands"
     );
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_worktree_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-worktrees.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        rusqlite::params![
+            "repo-key",
+            "dookie",
+            "/workspace/cortex/.git",
+            "/workspace/cortex",
+            "cortex",
+            "2026-08-01T01:00:00.000Z",
+        ],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repository_worktrees)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "worktree_key",
+            "repository_id",
+            "hostname",
+            "path",
+            "git_dir",
+            "branch_ref",
+            "branch_name",
+            "head_sha",
+            "upstream_ref",
+            "detached",
+            "bare",
+            "locked",
+            "lock_reason",
+            "prunable",
+            "prune_reason",
+            "dirty",
+            "staged_count",
+            "unstaged_count",
+            "untracked_count",
+            "ahead",
+            "behind",
+            "status_hash",
+            "first_seen_at",
+            "last_seen_at",
+            "removed_at",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, branch_ref,
+             branch_name, head_sha, upstream_ref, dirty, staged_count,
+             unstaged_count, untracked_count, ahead, behind, first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 2, 3, 4, 5, 6, ?10, ?10)",
+        rusqlite::params![
+            "worktree-key",
+            repository_id,
+            "dookie",
+            "/workspace/cortex",
+            "/workspace/cortex/.git",
+            "refs/heads/feat/agent-observatory",
+            "feat/agent-observatory",
+            "0123456789012345678901234567890123456789",
+            "refs/remotes/origin/feat/agent-observatory",
+            "2026-08-01T01:00:00.000Z",
+        ],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO repository_worktrees
+                (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "different-key",
+                repository_id,
+                "dookie",
+                "/workspace/cortex",
+                "/workspace/cortex/.git/worktrees/duplicate",
+                "2026-08-01T01:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "hostname/path must identify one worktree"
+    );
+
+    let state: (String, String, i64, i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT branch_name, head_sha, dirty, staged_count, unstaged_count,
+                    untracked_count, ahead
+             FROM repository_worktrees WHERE worktree_key = 'worktree-key'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            "feat/agent-observatory".to_string(),
+            "0123456789012345678901234567890123456789".to_string(),
+            1,
+            2,
+            3,
+            4,
+            5,
+        )
+    );
+
+    conn.execute("DELETE FROM repositories WHERE id = ?1", [repository_id])
+        .unwrap();
+    let remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repository_worktrees", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "repository deletion must cascade to worktrees"
+    );
+
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
 }
 
 #[test]
