@@ -209,3 +209,14 @@ REGRESSION: pinned-target setup::doctor::tests, cargo fmt --all -- --check, git 
 REGRESSION result: 23 doctor tests passed; formatting and diff checks clean
 FILES: src/setup/doctor.rs, src/setup/doctor_tests.rs
 NOTES: Migration uses temporary-file write, sync_all, atomic rename, and parent-directory fsync. Conflicting values are never guessed or rewritten.
+
+## ENV-004 Complete documentation, release, and removal gates
+commit/worktree SHA: 42c2c2f9 (task started)
+RED: strict occurrence validation against the consolidated repository
+RED result: the initial grep pipeline corrupted NUL-delimited filenames, falsely passed with zero counted files, and the corrected scanner exposed missing migration-document allowlist entries
+GREEN: tracked-file NUL-safe git grep scanner plus documented migration-only allowlist
+GREEN result: clean repository passes with 12 allowlisted files; a temporary legacy occurrence in README.md fails and names README.md as the violation
+REGRESSION: bash syntax validation, transcript_forward_env_ tests, and git diff --check
+REGRESSION result: 4 compatibility tests passed; new-variable precedence, legacy-only compatibility, and local sessions-watch independence remain intact
+FILES: docs/contracts/agent-observatory.md, scripts/validate-transcript-forward-env-rename.sh
+NOTES: Cortex 3.x keeps the deprecated alias only in compatibility code, tests, migration documentation, and proof. Cortex 4.0 removal must delete the resolver, warning, doctor migration, and allowlist entries together.
