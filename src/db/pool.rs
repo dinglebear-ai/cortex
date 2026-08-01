@@ -2669,7 +2669,45 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
          CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree_activity
              ON agent_runs(primary_worktree_id, last_activity_at DESC, id DESC);
          CREATE INDEX IF NOT EXISTS idx_agent_runs_tool_host
-             ON agent_runs(tool, hostname, last_activity_at DESC);",
+             ON agent_runs(tool, hostname, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_actors (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             actor_key           TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             native_actor_id     TEXT NOT NULL,
+             actor_type          TEXT,
+             display_name        TEXT,
+             started_at          TEXT,
+             last_activity_at    TEXT,
+             ended_at            TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, native_actor_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_actors_run
+             ON agent_run_actors(run_id, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             relation_key        TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             worktree_id         INTEGER NOT NULL REFERENCES repository_worktrees(id) ON DELETE CASCADE,
+             evidence_kind       TEXT NOT NULL,
+             evidence_source     TEXT NOT NULL,
+             trust_level         TEXT NOT NULL CHECK (trust_level IN (
+                 'verified', 'claimed', 'correlated', 'inferred', 'refuted'
+             )),
+             confidence          REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+             is_primary          INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, worktree_id, evidence_kind, evidence_source)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_run
+             ON agent_run_worktrees(run_id, is_primary DESC, confidence DESC, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_worktree
+             ON agent_run_worktrees(worktree_id, last_seen_at DESC, run_id);",
     )?;
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
