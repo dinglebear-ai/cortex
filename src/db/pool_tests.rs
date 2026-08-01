@@ -3518,3 +3518,196 @@ fn migration_42_widens_old_aliases_constraint_and_preserves_rows() {
     )
     .unwrap();
 }
+
+#[test]
+fn init_pool_creates_agent_observatory_run_events_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-events.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: table does not exist yet
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_events)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "event_key",
+            "run_id",
+            "actor_id",
+            "worktree_id",
+            "commit_id",
+            "observed_at",
+            "ingested_at",
+            "event_kind",
+            "source_kind",
+            "source_id",
+            "source_log_id",
+            "provider_sequence",
+            "trace_id",
+            "span_id",
+            "severity",
+            "title",
+            "summary",
+            "payload_json",
+            "content_scrubbed",
+            "created_at",
+        ]
+    );
+
+    // Insert a test run first for foreign key constraint
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-events-test', 'session-events', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T02:40:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Test unique event key constraint
+    conn.execute(
+        "INSERT INTO agent_run_events
+            (event_key, run_id, observed_at, ingested_at, event_kind,
+             source_kind, source_id, payload_json)
+         VALUES ('evt-1', ?1, ?2, ?2, 'lifecycle', 'test', 'src-1', '{}')",
+        rusqlite::params![run_id, "2026-08-01T02:40:01.000Z"],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES ('evt-1', ?1, ?2, ?2, 'command', 'test', 'src-2', '{}')",
+            rusqlite::params![run_id, "2026-08-01T02:40:02.000Z"],
+        )
+        .is_err(),
+        "duplicate event key must be rejected"
+    );
+
+    // Test invalid event kind rejection
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES ('evt-2', ?1, ?2, ?2, 'invalid_kind', 'test', 'src-3', '{}')",
+            rusqlite::params![run_id, "2026-08-01T02:40:03.000Z"],
+        )
+        .is_err(),
+        "invalid event kind must be rejected"
+    );
+
+    // Test JSON validation on payload
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES ('evt-3', ?1, ?2, ?2, 'command', 'test', 'src-4', '{invalid')",
+            rusqlite::params![run_id, "2026-08-01T02:40:04.000Z"],
+        )
+        .is_err(),
+        "invalid payload JSON must be rejected"
+    );
+
+    // Test 1000-event fixture for query plan and ordering
+    let mut events = Vec::new();
+    for i in 0..1000 {
+        let event_key = format!("evt-batch-{}", i);
+        events.push((event_key, run_id));
+    }
+
+    for (event_key, run_id) in &events {
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES (?1, ?2, datetime('now'), datetime('now'), 'command', 'test', ?3, '{}')",
+            rusqlite::params![event_key, run_id, format!("src-{}", event_key)],
+        )
+        .unwrap();
+    }
+
+    // Verify query uses index and returns stable ordering
+    let query_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+                  SELECT id, observed_at FROM agent_run_events
+                  WHERE run_id = ?1
+                  ORDER BY observed_at DESC, id DESC
+                  LIMIT 10",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert!(
+        query_plan
+            .iter()
+            .any(|detail| detail.contains("idx_agent_run_events_run_order")),
+        "query plan should use idx_agent_run_events_run_order index"
+    );
+
+    // Verify stable ordering
+    let mut prev_observed_at: Option<String> = None;
+    let mut prev_id: Option<i64> = None;
+
+    let results: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT id, observed_at FROM agent_run_events
+                  WHERE run_id = ?1
+                  ORDER BY observed_at DESC, id DESC
+                  LIMIT 100",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![run_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    for (id, observed_at) in results {
+        if let (Some(prev_id), Some(prev_observed)) = (prev_id, prev_observed_at) {
+            assert!(
+                observed_at <= prev_observed || (observed_at == prev_observed && id < prev_id),
+                "results should be ordered by observed_at DESC, id DESC"
+            );
+        }
+        prev_observed_at = Some(observed_at);
+        prev_id = Some(id);
+    }
+
+    // Verify indexes exist (excluding autoindexes created by UNIQUE constraints)
+    let indexes: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_run_events' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        indexes,
+        vec![
+            "idx_agent_run_events_run_kind",
+            "idx_agent_run_events_run_order",
+            "idx_agent_run_events_source_log",
+            "idx_agent_run_events_trace",
+        ]
+    );
+}

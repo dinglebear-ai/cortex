@@ -98,3 +98,14 @@ REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt
 REGRESSION result: runtime schema remains 44; formatting and diff clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: Migration 45 remains intentionally unmarked until AO-013.
+
+## AO-010 Add durable run events
+commit/worktree SHA: (pending)
+RED: `export CARGO_TARGET_DIR=.cache/cargo cargo --config 'build.rustc-wrapper=""' test init_pool_creates_agent_observatory_run_events_schema --lib`
+RED result: expected 21 event columns, got empty list because agent_run_events did not exist
+GREEN: same focused command with events table and four indexes implemented
+GREEN result: 1 passed; exact columns, unique event key, invalid event kind rejection, JSON validation, 1000-event fixture query plan, stable ordering, and all indexes verified
+REGRESSION: `export CARGO_TARGET_DIR=.cache/cargo cargo test known_schema_version_matches_migration_head --lib && cargo fmt --all -- --check && git diff --check`
+REGRESSION result: runtime schema remains 44; formatting and diff checks clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: Migration 45 remains unmarked until AO-013; event kind CHECK constraint covers all 18 kinds from the contract.
