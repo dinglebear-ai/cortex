@@ -32,3 +32,14 @@ REGRESSION: `cargo test --manifest-path Cargo.toml --locked known_schema_version
 REGRESSION result: runtime schema remains 43; focused formatted test passed; diff clean
 FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`
 NOTES: The repository DDL is an idempotent migration-44 scaffold. AO-007 will mark migration 44 only after worktrees, observations, and commits are complete.
+
+## AO-004 Add repository worktree table
+commit/worktree SHA: 9a7d6c25 (task started)
+RED: `env CARGO_TARGET_DIR=.cache/cargo cargo --config 'build.rustc-wrapper=""' test --manifest-path Cargo.toml --locked init_pool_creates_agent_observatory_worktree_schema_scaffold --lib`
+RED result: expected worktree columns, got an empty list because `repository_worktrees` did not exist
+GREEN: same focused command with the worktree DDL implemented
+GREEN result: 1 passed; exact columns, branch/HEAD state, host/path uniqueness, repository cascade, and empty `PRAGMA foreign_key_check` verified
+REGRESSION: pinned-target `known_schema_version_matches_migration_head`, `cargo fmt --all -- --check`, and `git diff --check`
+REGRESSION result: runtime schema remains 43; formatting and diff checks clean
+FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`
+NOTES: The worktree DDL remains part of the unmarked migration-44 scaffold; all Cargo proof commands now pin `CARGO_TARGET_DIR` to this worktree to avoid cross-worktree lock pollution.
