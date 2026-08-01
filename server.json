@@ -24,7 +24,7 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "@dinglebear/cortex-mcp",
+      "identifier": "@dinglebear/cortex",
       "version": "3.11.1",
       "runtimeHint": "npx",
       "packageArguments": [
@@ -105,8 +105,8 @@
       "namespace": "ai.dinglebear",
       "dnsDomain": "dinglebear.ai",
       "distribution": {
-        "npm": "@dinglebear/cortex-mcp@3.11.1",
-        "nodePackage": "@dinglebear/cortex-mcp",
+        "npm": "@dinglebear/cortex@3.11.1",
+        "nodePackage": "@dinglebear/cortex",
         "ociImage": "ghcr.io/dinglebear-ai/cortex:v3.11.1"
       },
       "buildInfo": {

@@ -54,14 +54,14 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 The npm launcher is the fastest path for local CLI and stdio MCP use:
 
 ```bash
-npx -y @dinglebear/cortex-mcp --help
-npx -y @dinglebear/cortex-mcp mcp
+npx -y @dinglebear/cortex --help
+npx -y @dinglebear/cortex mcp
 ```
 
 Install it permanently with:
 
 ```bash
-npm install --global @dinglebear/cortex-mcp
+npm install --global @dinglebear/cortex
 cortex --version
 ```
 
@@ -721,7 +721,7 @@ Maintenance operations are single-flight and separately limited from heavy read 
 | --- | --- |
 | Canonical source repository | `dinglebear-ai/cortex` |
 | Native binary and CLI | `cortex` |
-| npm launcher | `@dinglebear/cortex-mcp` |
+| npm launcher | `@dinglebear/cortex` |
 | MCP Registry server name | `ai.dinglebear/cortex` |
 | Published OCI image | `ghcr.io/dinglebear-ai/cortex:v<version>` |
 

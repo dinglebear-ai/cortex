@@ -182,7 +182,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if npm view "@dinglebear/cortex-mcp@${{ steps.npm-version.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "@dinglebear/cortex@${{ steps.npm-version.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -199,7 +199,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.npm-version.outputs.version }}"
-          package="@dinglebear/cortex-mcp@${version}"
+          package="@dinglebear/cortex@${version}"
           for attempt in {1..18}; do
             cache="$(mktemp -d)"
             if npm view "$package" version >/dev/null 2>&1 && npm_config_cache="$cache" npx -y "$package" --version; then
