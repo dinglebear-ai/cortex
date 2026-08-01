@@ -39,7 +39,8 @@ pub async fn run_command_capped(
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");
     let stdout_task = tokio::spawn(async move { read_capped(&mut stdout, max_output_bytes).await });
-    let stderr_task = tokio::spawn(async move { read_capped(&mut stderr, max_output_bytes).await });
+    let stderr_max_bytes = max_output_bytes.min(MAX_COMMAND_OUTPUT_BYTES);
+    let stderr_task = tokio::spawn(async move { read_capped(&mut stderr, stderr_max_bytes).await });
     let wait = tokio::time::timeout(timeout, child.wait()).await;
     let status = match wait {
         Ok(Ok(status)) => Some(status.code().unwrap_or(-1)),

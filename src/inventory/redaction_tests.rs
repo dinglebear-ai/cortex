@@ -21,6 +21,19 @@ fn redacts_url_query_headers_and_jwt_like_values() {
 }
 
 #[test]
+fn redacts_generic_key_query_parameters_without_touching_safe_queries() {
+    let secret = "remove-this-query-key";
+    let input = format!("https://dns.example/dns-query?profile=home&key={secret}&mode=strict");
+
+    let out = redact_text(&input);
+
+    assert!(!out.contains(secret));
+    assert!(out.contains("profile=home"));
+    assert!(out.contains("key=[REDACTED]"));
+    assert!(out.contains("mode=strict"));
+}
+
+#[test]
 fn redaction_preserves_domain_like_three_segment_strings() {
     let value = "com.docker.compose.project.name";
     assert_eq!(redact_text(value), value);

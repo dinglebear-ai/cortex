@@ -1,6 +1,7 @@
 use chrono::Utc;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 
 use super::SiteRef;
 use crate::inventory::collectors::CollectorOutput;
@@ -26,6 +27,13 @@ pub(super) fn normalize_sites(
             .to_string();
         let id = string_field(item, &["id", "siteId", "_id"]).map(ToString::to_string);
         let mut details = BTreeMap::new();
+        if let Some(id) = &id {
+            details.insert("id".to_string(), Value::String(id.clone()));
+        }
+        details.insert(
+            "internal_reference".to_string(),
+            Value::String(internal_reference.clone()),
+        );
         details.insert("settings".to_string(), redact_json(item));
         merge_network(
             out,
@@ -141,41 +149,61 @@ pub(super) fn normalize_networks(
 
 fn normalize_dhcp(item: &Value) -> Map<String, Value> {
     let mut dhcp = Map::new();
-    let sources = [
+    let dhcp_sources = [
         item.pointer("/ipv4Configuration/dhcpConfiguration"),
         item.pointer("/ipv4_configuration/dhcp_configuration"),
-        item.pointer("/ipv4Configuration"),
-        item.pointer("/ipv4_configuration"),
         item.get("dhcpConfiguration"),
         item.get("dhcp_configuration"),
-        Some(item),
     ];
-    for (output, aliases) in [
-        ("enabled", &["enabled", "dhcp_enabled", "dhcpd_enabled"][..]),
-        (
-            "range_start",
-            &["rangeStart", "range_start", "dhcpd_start"][..],
-        ),
-        (
-            "range_end",
-            &["rangeEnd", "range_stop", "range_end", "dhcpd_stop"][..],
-        ),
-        (
-            "lease_seconds",
-            &["leaseTimeSeconds", "lease_time_seconds", "dhcpd_leasetime"][..],
-        ),
-        (
-            "gateway",
-            &["gatewayIpAddress", "gateway_ip", "dhcpd_gateway"][..],
-        ),
-    ] {
-        if let Some(value) = first_field(&sources, aliases) {
-            dhcp.insert(output.to_string(), redact_json(value));
-        }
-    }
+    let ipv4_sources = [
+        item.pointer("/ipv4Configuration"),
+        item.pointer("/ipv4_configuration"),
+    ];
+    let legacy_sources = [Some(item)];
+
+    insert_first(
+        &mut dhcp,
+        "enabled",
+        first_field(&dhcp_sources, &["enabled"])
+            .or_else(|| first_field(&legacy_sources, &["dhcp_enabled", "dhcpd_enabled"])),
+    );
+    insert_first(
+        &mut dhcp,
+        "range_start",
+        first_field(&dhcp_sources, &["rangeStart", "range_start"])
+            .or_else(|| first_field(&legacy_sources, &["dhcpd_start"])),
+    );
+    insert_first(
+        &mut dhcp,
+        "range_end",
+        first_field(
+            &dhcp_sources,
+            &["rangeEnd", "rangeStop", "range_end", "range_stop"],
+        )
+        .or_else(|| first_field(&legacy_sources, &["dhcpd_stop"])),
+    );
+    insert_first(
+        &mut dhcp,
+        "lease_seconds",
+        first_field(&dhcp_sources, &["leaseTimeSeconds", "lease_time_seconds"])
+            .or_else(|| first_field(&legacy_sources, &["dhcpd_leasetime"])),
+    );
+    insert_first(
+        &mut dhcp,
+        "gateway",
+        first_field(&ipv4_sources, &["gatewayIpAddress", "gateway_ip"])
+            .or_else(|| first_field(&dhcp_sources, &["gatewayIpAddress", "gateway_ip"]))
+            .or_else(|| first_field(&legacy_sources, &["dhcpd_gateway"])),
+    );
+
     let mut dns_servers = BTreeSet::new();
-    for source in sources.into_iter().flatten() {
-        collect_dns_servers(source, &mut dns_servers);
+    for source in dhcp_sources
+        .into_iter()
+        .chain(ipv4_sources)
+        .chain(legacy_sources)
+        .flatten()
+    {
+        collect_dns_server_addresses(source, &mut dns_servers);
     }
     if !dns_servers.is_empty() {
         dhcp.insert(
@@ -186,33 +214,46 @@ fn normalize_dhcp(item: &Value) -> Map<String, Value> {
     dhcp
 }
 
-fn collect_dns_servers(value: &Value, out: &mut BTreeSet<String>) {
+fn insert_first(target: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    if let Some(value) = value {
+        target.insert(key.to_string(), redact_json(value));
+    }
+}
+
+fn collect_dns_server_addresses(value: &Value, out: &mut BTreeSet<String>) {
     let Some(object) = value.as_object() else {
         return;
     };
     for (key, value) in object {
         let normalized = key.to_ascii_lowercase().replace(['-', '_'], "");
-        let is_dns = normalized.contains("dns")
-            && (normalized.contains("server") || normalized.starts_with("dhcpddns"));
-        if is_dns {
-            collect_strings(value, out);
-        }
-        if matches!(value, Value::Object(_)) {
-            collect_dns_servers(value, out);
+        let is_address_field = matches!(
+            normalized.as_str(),
+            "dnsserveripaddresses"
+                | "dnsservers"
+                | "nameserveripaddresses"
+                | "dhcpddns1"
+                | "dhcpddns2"
+                | "dhcpddns3"
+                | "dhcpddns4"
+        );
+        if is_address_field {
+            collect_ip_addresses(value, out);
         }
     }
 }
 
-fn collect_strings(value: &Value, out: &mut BTreeSet<String>) {
+fn collect_ip_addresses(value: &Value, out: &mut BTreeSet<String>) {
     match value {
         Value::String(value) => {
             for part in value.split([',', ' ']).filter(|part| !part.is_empty()) {
-                out.insert(part.to_string());
+                if let Ok(address) = part.parse::<IpAddr>() {
+                    out.insert(address.to_string());
+                }
             }
         }
         Value::Array(values) => {
             for value in values {
-                collect_strings(value, out);
+                collect_ip_addresses(value, out);
             }
         }
         _ => {}
@@ -234,17 +275,28 @@ fn copy_fields(item: &Value, details: &mut BTreeMap<String, Value>, fields: &[&s
     }
 }
 
-fn merge_network(out: &mut CollectorOutput, candidate: NetworkSegment) {
+fn merge_network(out: &mut CollectorOutput, mut candidate: NetworkSegment) {
     let candidate_id = candidate.details.get("id").and_then(Value::as_str);
     if let Some(existing) = out.networks.iter_mut().find(|existing| {
-        existing.kind == candidate.kind
-            && (candidate_id.is_some()
-                && existing.details.get("id").and_then(Value::as_str) == candidate_id
-                || existing.name == candidate.name)
-    }) {
-        if candidate.details.len() >= existing.details.len() {
-            *existing = candidate;
+        if existing.kind != candidate.kind {
+            return false;
         }
+        let existing_id = existing.details.get("id").and_then(Value::as_str);
+        match (existing_id, candidate_id) {
+            (Some(existing_id), Some(candidate_id)) => existing_id == candidate_id,
+            _ => existing.name == candidate.name,
+        }
+    }) {
+        if existing.name == "network" && candidate.name != "network" {
+            existing.name = candidate.name;
+        }
+        existing.provenance = candidate.provenance;
+        for member in candidate.members.drain(..) {
+            if !existing.members.contains(&member) {
+                existing.members.push(member);
+            }
+        }
+        existing.details.extend(candidate.details);
     } else {
         out.networks.push(candidate);
     }

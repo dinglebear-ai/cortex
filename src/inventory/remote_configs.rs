@@ -175,7 +175,18 @@ async fn remote_records(
                     ),
                 );
             }
-            parse_records(&output.stdout)
+            let records = parse_records(&output.stdout);
+            let frame_count = output.stdout.matches('\u{1e}').count();
+            let dropped = frame_count.saturating_sub(records.len());
+            if dropped > 0 {
+                out.warn(
+                    "remote_config_frames",
+                    format!(
+                        "ssh config collection dropped {dropped} incomplete or malformed record frame(s) on {host}"
+                    ),
+                );
+            }
+            records
         }
         Ok(output) => {
             out.warn(

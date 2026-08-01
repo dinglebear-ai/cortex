@@ -125,7 +125,7 @@ async fn collection_deadline_preserves_completed_unifi_network_details() {
         ))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(300))
+                .set_delay(Duration::from_secs(2))
                 .set_body_json(json!({"id": "slow", "name": "Slow"})),
         )
         .mount(&server)
@@ -134,7 +134,7 @@ async fn collection_deadline_preserves_completed_unifi_network_details() {
     let out = collect(
         Some(&server.uri()),
         Some("test-api-key"),
-        Duration::from_millis(100),
+        Duration::from_millis(500),
     )
     .await;
 
@@ -149,6 +149,12 @@ async fn collection_deadline_preserves_completed_unifi_network_details() {
         warning.contains("preserved completed results")
             && warning.contains("network detail requests")
     }));
+}
+
+#[test]
+fn unifi_path_segments_are_percent_encoded() {
+    assert_eq!(encode_path_segment("default"), "default");
+    assert_eq!(encode_path_segment("site /?"), "site%20%2F%3F");
 }
 
 #[tokio::test]
@@ -217,6 +223,88 @@ fn modern_unifi_network_details_include_exact_dhcp_dns_assignments() {
 }
 
 #[test]
+fn top_level_network_enabled_does_not_imply_dhcp_enabled() {
+    let mut out = CollectorOutput::new("unifi");
+    normalize_networks(
+        "https://unifi",
+        "/proxy/network/integration/v1/sites/site-1/networks/net-1",
+        Some("site-1"),
+        &json!({
+            "id": "net-1",
+            "name": "LAN",
+            "enabled": true,
+            "ipv4Configuration": {
+                "dnsServerType": "auto",
+                "dnsServerIpAddresses": ["10.1.0.8", "not-an-ip", "2001:db8::53"]
+            }
+        }),
+        &mut out,
+    );
+
+    let dhcp = out.networks[0].details.get("dhcp").unwrap();
+    assert!(dhcp.get("enabled").is_none());
+    assert_eq!(dhcp["dns_servers"], json!(["10.1.0.8", "2001:db8::53"]));
+    assert!(!dhcp.to_string().contains("auto"));
+}
+
+#[test]
+fn network_detail_merge_preserves_list_fields_and_adds_dhcp() {
+    let mut out = CollectorOutput::new("unifi");
+    normalize_networks(
+        "https://unifi",
+        "/proxy/network/integration/v1/sites/site-1/networks",
+        Some("site-1"),
+        &json!({"data":[{
+            "id":"net-1",
+            "name":"LAN",
+            "vlanId":42,
+            "purpose":"corporate"
+        }]}),
+        &mut out,
+    );
+    normalize_networks(
+        "https://unifi",
+        "/proxy/network/integration/v1/sites/site-1/networks/net-1",
+        Some("site-1"),
+        &json!({
+            "id":"net-1",
+            "name":"LAN",
+            "ipv4Configuration": {
+                "dhcpConfiguration": {
+                    "enabled": true,
+                    "dnsServerIpAddresses": ["10.1.0.8"]
+                }
+            }
+        }),
+        &mut out,
+    );
+
+    assert_eq!(out.networks.len(), 1);
+    let details = &out.networks[0].details;
+    assert_eq!(details["vlanId"], 42);
+    assert_eq!(details["purpose"], "corporate");
+    assert_eq!(details["dhcp"]["enabled"], true);
+    assert_eq!(details["dhcp"]["dns_servers"], json!(["10.1.0.8"]));
+}
+
+#[test]
+fn same_name_networks_with_different_ids_remain_distinct() {
+    let mut out = CollectorOutput::new("unifi");
+    normalize_networks(
+        "https://unifi",
+        "/proxy/network/integration/v1/sites/site-1/networks",
+        Some("site-1"),
+        &json!({"data":[
+            {"id":"net-1","name":"LAN"},
+            {"id":"net-2","name":"LAN"}
+        ]}),
+        &mut out,
+    );
+
+    assert_eq!(out.networks.len(), 2);
+}
+
+#[test]
 fn legacy_unifi_networkconf_fields_are_normalized() {
     let mut out = CollectorOutput::new("unifi");
     normalize_networks(
@@ -257,6 +345,8 @@ fn unifi_sites_and_truncation_are_reported() {
         &mut out,
     );
     assert_eq!(sites[0].internal_reference, "default");
+    assert_eq!(out.networks[0].details["id"], "site-1");
+    assert_eq!(out.networks[0].details["internal_reference"], "default");
     assert_eq!(out.networks[0].details["settings"]["id"], "site-1");
 
     let items = (0..201)

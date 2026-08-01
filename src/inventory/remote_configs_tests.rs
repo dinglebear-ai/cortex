@@ -27,6 +27,31 @@ fn record_parser_drops_incomplete_trailing_frame() {
     assert_eq!(records[0].path, "/tmp/ok.yml");
 }
 
+#[tokio::test]
+async fn remote_records_warns_when_malformed_frames_are_dropped() {
+    let context = SshContext::with_runner_for_test(SshOptions::default(), |_, _, _| {
+        Box::pin(async {
+            Ok(CommandOutput {
+                status: Some(0),
+                stdout: "\u{1e}compose\t/tmp/ok.yml\nservices: {}\u{1f}\n\u{1e}adguard\t/tmp/config.yaml\ndns:\n  port: 53"
+                    .to_string(),
+                stderr: String::new(),
+                elapsed_ms: 1,
+                truncated: false,
+            })
+        })
+    });
+    let mut out = CollectorOutput::new("raw_configs");
+
+    let records = remote_records(&mut out, "host", &context, Duration::from_secs(1)).await;
+
+    assert_eq!(records.len(), 1);
+    assert!(out.warnings.iter().any(|warning| {
+        warning.contains("dropped 1 incomplete or malformed record frame")
+            && warning.contains("host")
+    }));
+}
+
 #[test]
 fn config_batch_command_covers_compose_proxy_and_adguard_roots_once() {
     let command = config_batch_command();

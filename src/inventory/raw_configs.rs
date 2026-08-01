@@ -15,6 +15,10 @@ use crate::inventory::schema::{
 use crate::inventory::ssh::SshContext;
 use crate::inventory::storage::{InventoryPaths, write_artifact};
 
+#[path = "raw_configs_nginx.rs"]
+mod nginx;
+use nginx::substitute_nginx_variables;
+
 pub struct CollectOptions<'a> {
     pub compose_paths: &'a [PathBuf],
     pub proxy_paths: &'a [PathBuf],
@@ -349,24 +353,6 @@ fn parse_proxy_routes(path: &Path, body: &str) -> Vec<ReverseProxyRoute> {
             Utc::now().to_rfc3339(),
         ),
     }]
-}
-
-fn substitute_nginx_variables(value: &str, variables: &BTreeMap<String, String>) -> String {
-    let mut resolved = value.to_string();
-    for _ in 0..8 {
-        let mut changed = false;
-        for (name, replacement) in variables {
-            let needle = ["$", name].concat();
-            if resolved.contains(&needle) {
-                resolved = resolved.replace(&needle, replacement);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    resolved
 }
 
 fn push_unique(values: &mut Vec<String>, value: String) {

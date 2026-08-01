@@ -43,6 +43,21 @@ fn request_site_key(spec: &RequestSpec) -> String {
     spec.site_id.clone().unwrap_or_else(|| spec.path.clone())
 }
 
+fn encode_path_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
+}
+
 pub async fn collect(
     url: Option<&str>,
     api_key: Option<&str>,
@@ -101,10 +116,8 @@ pub async fn collect(
     let request_limiter = Arc::new(Semaphore::new(MAX_UNIFI_CONCURRENT_REQUESTS));
     let mut requests = FuturesUnordered::new();
     for site in &sites {
-        let device_path = format!(
-            "/proxy/network/api/s/{}/stat/device",
-            site.internal_reference
-        );
+        let site_reference = encode_path_segment(&site.internal_reference);
+        let device_path = format!("/proxy/network/api/s/{site_reference}/stat/device");
         push_request(
             &mut requests,
             &http,
@@ -117,10 +130,7 @@ pub async fn collect(
                 site_id: site.id.clone(),
             },
         );
-        let legacy_path = format!(
-            "/proxy/network/api/s/{}/rest/networkconf",
-            site.internal_reference
-        );
+        let legacy_path = format!("/proxy/network/api/s/{site_reference}/rest/networkconf");
         push_request(
             &mut requests,
             &http,
@@ -134,8 +144,9 @@ pub async fn collect(
             },
         );
         if let Some(site_id) = &site.id {
+            let encoded_site_id = encode_path_segment(site_id);
             let path = format!(
-                "/proxy/network/integration/v1/sites/{site_id}/networks?offset=0&limit=200"
+                "/proxy/network/integration/v1/sites/{encoded_site_id}/networks?offset=0&limit=200"
             );
             push_request(
                 &mut requests,
@@ -190,11 +201,13 @@ pub async fn collect(
                         &mut out,
                     );
                     if let Some(site_id) = spec.site_id {
+                        let encoded_site_id = encode_path_segment(&site_id);
                         detail_requests.extend(network_ids.into_iter().map(|network_id| {
+                            let encoded_network_id = encode_path_segment(&network_id);
                             RequestSpec {
                                 kind: RequestKind::NetworkDetails,
                                 path: format!(
-                                    "/proxy/network/integration/v1/sites/{site_id}/networks/{network_id}"
+                                    "/proxy/network/integration/v1/sites/{encoded_site_id}/networks/{encoded_network_id}"
                                 ),
                                 site_id: Some(site_id.clone()),
                             }
