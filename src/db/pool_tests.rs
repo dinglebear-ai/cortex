@@ -3713,6 +3713,182 @@ fn init_pool_creates_agent_observatory_run_events_schema() {
 }
 
 #[test]
+fn init_pool_creates_agent_stream_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-outbox.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: table does not exist yet
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_stream_outbox)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "outbox_key",
+            "run_id",
+            "stream_event_type",
+            "expires_at",
+            "payload_json",
+            "created_at",
+        ]
+    );
+
+    // Insert test data for foreign key constraint
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-outbox-test', 'session-outbox', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:00:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Test unique outbox_key constraint
+    conn.execute(
+        "INSERT INTO agent_stream_outbox
+            (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+         VALUES ('outbox-1', ?1, 'lifecycle', ?2, '{}')",
+        rusqlite::params![run_id, "2026-08-01T03:01:00.000Z"],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_stream_outbox
+                (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+             VALUES ('outbox-1', ?1, 'command', ?2, '{}')",
+            rusqlite::params![run_id, "2026-08-01T03:02:00.000Z"],
+        )
+        .is_err(),
+        "duplicate outbox key must be rejected"
+    );
+
+    // Test JSON validation on payload
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_stream_outbox
+                (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+             VALUES ('outbox-2', ?1, 'command', ?2, '{invalid')",
+            rusqlite::params![run_id, "2026-08-01T03:03:00.000Z"],
+        )
+        .is_err(),
+        "invalid payload JSON must be rejected"
+    );
+
+    // Test cascade delete: when run is deleted, outbox rows are removed
+    conn.execute(
+        "INSERT INTO agent_stream_outbox
+            (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+         VALUES ('outbox-3', ?1, 'skill', ?2, '{}')",
+        rusqlite::params![run_id, "2026-08-01T03:04:00.000Z"],
+    )
+    .unwrap();
+
+    let outbox_count_before: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_stream_outbox WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        outbox_count_before, 2,
+        "should have 2 outbox rows (one duplicate failed)"
+    );
+
+    // Delete the run
+    conn.execute(
+        "DELETE FROM agent_runs WHERE id = ?1",
+        rusqlite::params![run_id],
+    )
+    .unwrap();
+
+    let outbox_count_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_stream_outbox WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        outbox_count_after, 0,
+        "all outbox rows should be cascade deleted"
+    );
+
+    // Verify query uses index and returns ascending order
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-outbox-query', 'session-outbox-query', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:05:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Insert 100 outbox events
+    for i in 0..100 {
+        let outbox_key = format!("outbox-query-{}", i);
+        conn.execute(
+            "INSERT INTO agent_stream_outbox
+                (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+             VALUES (?1, ?2, 'command', datetime('now', '+1 hour'), '{}')",
+            rusqlite::params![outbox_key, run_id],
+        )
+        .unwrap();
+    }
+
+    let query_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+                  SELECT id FROM agent_stream_outbox
+                  WHERE run_id = ?1
+                  ORDER BY id ASC
+                  LIMIT 10",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert!(
+        query_plan
+            .iter()
+            .any(|detail| detail.contains("idx_agent_stream_outbox_run")),
+        "query plan should use idx_agent_stream_outbox_run index"
+    );
+
+    // Verify indexes exist
+    let indexes: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_stream_outbox' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        indexes,
+        vec![
+            "idx_agent_stream_outbox_expiry",
+            "idx_agent_stream_outbox_run",
+        ]
+    );
+}
+
+#[test]
 fn init_pool_creates_agent_run_commits_and_projection_cursors() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("observatory-commits.db"));

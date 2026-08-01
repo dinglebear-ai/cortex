@@ -2787,7 +2787,21 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              ('agent_runs', 'default', ''),
              ('agent_run_events', 'default', ''),
              ('otel_spans', 'default', ''),
-             ('otel_metric_points', 'default', '');",
+             ('otel_metric_points', 'default', '');
+
+	         CREATE TABLE IF NOT EXISTS agent_stream_outbox (
+	             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+	             outbox_key          TEXT NOT NULL UNIQUE,
+	             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+	             stream_event_type   TEXT NOT NULL,
+	             expires_at          TEXT NOT NULL,
+	             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+	             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	         );
+	         CREATE INDEX IF NOT EXISTS idx_agent_stream_outbox_run
+	             ON agent_stream_outbox(run_id, id ASC);
+	         CREATE INDEX IF NOT EXISTS idx_agent_stream_outbox_expiry
+	             ON agent_stream_outbox(expires_at ASC);",
     )?;
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
