@@ -4133,3 +4133,389 @@ fn init_pool_creates_agent_run_commits_and_projection_cursors() {
 
     assert_eq!(cursor_indexes, vec!["idx_agent_projection_cursors_type"]);
 }
+
+#[test]
+fn migration_45_completes_transactionally_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("migration-45.db");
+
+    // Manually create a schema-44 database by stopping before migration 45
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+    // Apply the base schema
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS logs (
+             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+             timestamp   TEXT NOT NULL,
+             hostname    TEXT NOT NULL,
+             facility    TEXT,
+             severity    TEXT NOT NULL,
+             app_name    TEXT,
+             process_id  TEXT,
+             message     TEXT NOT NULL,
+             raw         TEXT NOT NULL,
+             received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             source_ip   TEXT NOT NULL DEFAULT '',
+             ai_tool            TEXT,
+             ai_project         TEXT,
+             ai_session_id      TEXT,
+             ai_transcript_path TEXT,
+             metadata_json      TEXT
+         );
+         CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_hostname  ON logs(hostname);
+         CREATE INDEX IF NOT EXISTS idx_logs_severity  ON logs(severity);
+         CREATE INDEX IF NOT EXISTS idx_logs_app_name  ON logs(app_name);
+         CREATE INDEX IF NOT EXISTS idx_logs_host_time ON logs(hostname, timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_sev_time ON logs(severity, timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_app_name_timestamp ON logs(app_name, timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_received_at ON logs(received_at);
+         CREATE INDEX IF NOT EXISTS idx_logs_hostname_received_at ON logs(hostname, received_at);
+         CREATE INDEX IF NOT EXISTS idx_logs_source_ip_timestamp ON logs(source_ip, timestamp);
+
+         CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
+             message,
+             content='logs',
+             content_rowid='id',
+             tokenize='porter unicode61'
+         );
+
+         CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
+             INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+         END;
+
+         CREATE TABLE IF NOT EXISTS hosts (
+             hostname    TEXT PRIMARY KEY,
+             first_seen  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             last_seen   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             log_count   INTEGER NOT NULL DEFAULT 0
+         );
+
+         CREATE TABLE IF NOT EXISTS schema_migrations (
+             version     INTEGER PRIMARY KEY,
+             applied_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );",
+    )
+    .unwrap();
+
+    // Manually insert migration 44 marker (simulating migration 44 was applied)
+    conn.execute("INSERT INTO schema_migrations (version) VALUES (44)", [])
+        .unwrap();
+
+    // Apply migration 44 tables manually
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS repositories (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_key      TEXT NOT NULL UNIQUE,
+             hostname            TEXT NOT NULL,
+             common_git_dir      TEXT NOT NULL,
+             primary_path        TEXT NOT NULL,
+             display_name        TEXT NOT NULL,
+             remote_url_hash     TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, common_git_dir)
+         );
+         CREATE INDEX IF NOT EXISTS idx_repositories_host_seen
+             ON repositories(hostname, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_repositories_display
+             ON repositories(display_name COLLATE NOCASE);
+
+         CREATE TABLE IF NOT EXISTS repository_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             worktree_key        TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             hostname            TEXT NOT NULL,
+             path                TEXT NOT NULL,
+             git_dir             TEXT NOT NULL,
+             branch_ref          TEXT,
+             branch_name         TEXT,
+             head_sha            TEXT,
+             upstream_ref        TEXT,
+             detached            INTEGER NOT NULL DEFAULT 0 CHECK (detached IN (0, 1)),
+             bare                INTEGER NOT NULL DEFAULT 0 CHECK (bare IN (0, 1)),
+             locked              INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+             lock_reason         TEXT,
+             prunable            INTEGER NOT NULL DEFAULT 0 CHECK (prunable IN (0, 1)),
+             prune_reason        TEXT,
+             dirty               INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+             staged_count        INTEGER NOT NULL DEFAULT 0 CHECK (staged_count >= 0),
+             unstaged_count      INTEGER NOT NULL DEFAULT 0 CHECK (unstaged_count >= 0),
+             untracked_count     INTEGER NOT NULL DEFAULT 0 CHECK (untracked_count >= 0),
+             ahead               INTEGER CHECK (ahead IS NULL OR ahead >= 0),
+             behind              INTEGER CHECK (behind IS NULL OR behind >= 0),
+             status_hash         TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(repository_id, path),
+             UNIQUE(repository_id, hostname, git_dir)
+         );
+         CREATE INDEX IF NOT EXISTS idx_repository_worktrees_repo
+             ON repository_worktrees(repository_id, last_seen_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_repository_worktrees_host
+             ON repository_worktrees(hostname, path);
+
+         CREATE TABLE IF NOT EXISTS repository_observations (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             observation_key    TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             observed_at         TEXT NOT NULL,
+             observed_from       TEXT NOT NULL,
+             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_repo_time
+             ON repository_observations(repository_id, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_worktree_time
+             ON repository_observations(worktree_id, observed_at DESC, id DESC);
+
+         CREATE TABLE IF NOT EXISTS git_commits (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             sha                 TEXT NOT NULL,
+             parent_shas_json    TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parent_shas_json)),
+             author_name         TEXT,
+             author_email_hash   TEXT,
+             authored_at         TEXT,
+             committed_at        TEXT,
+             subject             TEXT NOT NULL DEFAULT '',
+             changed_files       INTEGER CHECK (changed_files IS NULL OR changed_files >= 0),
+             insertions          INTEGER CHECK (insertions IS NULL OR insertions >= 0),
+             deletions           INTEGER CHECK (deletions IS NULL OR deletions >= 0),
+             changed_paths_json  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(changed_paths_json)),
+             first_observed_at   TEXT NOT NULL,
+             last_observed_at    TEXT NOT NULL,
+             reachable           INTEGER NOT NULL DEFAULT 1 CHECK (reachable IN (0, 1)),
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(repository_id, sha)
+         );
+         CREATE INDEX IF NOT EXISTS idx_git_commits_repo_time
+             ON git_commits(repository_id, committed_at DESC, id DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_runs (
+             id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+             run_key                 TEXT NOT NULL UNIQUE,
+             native_session_id       TEXT NOT NULL,
+             tool                    TEXT NOT NULL,
+             provider_tool           TEXT,
+             hostname                TEXT NOT NULL,
+             parent_run_id           INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             previous_run_id         INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             primary_worktree_id     INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             transcript_path         TEXT,
+             process_id              TEXT,
+             status                  TEXT NOT NULL CHECK (status IN (
+                 'starting', 'active', 'waiting', 'idle', 'stale',
+                 'completed', 'failed', 'abandoned'
+             )),
+             status_reason           TEXT NOT NULL DEFAULT '',
+             status_observed_at      TEXT NOT NULL,
+             started_at              TEXT NOT NULL,
+             last_activity_at        TEXT NOT NULL,
+             ended_at                TEXT,
+             first_source_log_id     INTEGER,
+             last_source_log_id      INTEGER,
+             last_event_id           INTEGER,
+             event_count             INTEGER NOT NULL DEFAULT 0 CHECK (event_count >= 0),
+             error_count             INTEGER NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+             primary_branch          TEXT,
+             start_head_sha          TEXT,
+             current_head_sha        TEXT,
+             projection_version      INTEGER NOT NULL DEFAULT 1,
+             freshness_json          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(freshness_json)),
+             metadata_json           TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, tool, native_session_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_activity
+             ON agent_runs(last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_status_activity
+             ON agent_runs(status, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree_activity
+             ON agent_runs(primary_worktree_id, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_tool_host
+             ON agent_runs(tool, hostname, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_actors (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             actor_key           TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             native_actor_id     TEXT NOT NULL,
+             actor_type          TEXT,
+             display_name        TEXT,
+             started_at          TEXT,
+             last_activity_at    TEXT,
+             ended_at            TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, native_actor_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_actors_run
+             ON agent_run_actors(run_id, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             relation_key        TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             worktree_id         INTEGER NOT NULL REFERENCES repository_worktrees(id) ON DELETE CASCADE,
+             evidence_kind       TEXT NOT NULL,
+             evidence_source     TEXT NOT NULL,
+             trust_level         TEXT NOT NULL CHECK (trust_level IN (
+                 'verified', 'claimed', 'correlated', 'inferred', 'refuted'
+             )),
+             confidence          REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+             is_primary          INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, worktree_id, evidence_kind, evidence_source)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_run
+             ON agent_run_worktrees(run_id, is_primary DESC, confidence DESC, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_worktree
+             ON agent_run_worktrees(worktree_id, last_seen_at DESC, run_id);",
+    )
+    .unwrap();
+
+    drop(conn);
+
+    // Now reopen the database - migration 45 should apply transactionally
+    let pool_45 = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
+    let conn_45 = pool_45.get().unwrap();
+
+    // Verify we're now at schema 45
+    let schema_version_45: i64 = conn_45
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(schema_version_45, 45, "should upgrade to schema 45");
+
+    // Verify all migration 45 tables now exist
+    let tables_45: Vec<String> = conn_45
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        tables_45,
+        vec![
+            "agent_projection_cursors",
+            "agent_run_actors",
+            "agent_run_commits",
+            "agent_run_events",
+            "agent_run_worktrees",
+            "agent_runs",
+            "agent_stream_outbox",
+        ],
+        "should have all migration 45 agent tables"
+    );
+
+    // Verify seeded cursors exist
+    let cursor_count: i64 = conn_45
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(cursor_count, 8, "should have 8 seeded cursors");
+
+    drop(conn_45);
+    drop(pool_45);
+
+    // Verify idempotency: reopening should keep schema at 45 and not reapply migration
+    let pool_again = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
+    let conn_again = pool_again.get().unwrap();
+
+    let schema_version_again: i64 = conn_again
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(schema_version_again, 45, "should remain at schema 45");
+
+    let cursor_count_again: i64 = conn_again
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        cursor_count_again, 8,
+        "should still have 8 cursors (not duplicated)"
+    );
+
+    // Verify migration 45 marker exists only once
+    let migration_45_count: i64 = conn_again
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 45",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        migration_45_count, 1,
+        "should have exactly one migration 45 marker"
+    );
+
+    // Verify foreign key checks pass
+    let fk_check: String = conn_again
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .unwrap_or("ok".to_string());
+    assert_eq!(fk_check, "ok", "foreign key checks should pass");
+
+    // Verify integrity checks pass
+    let integrity_result: String = conn_again
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity_result, "ok", "integrity checks should pass");
+}
+
+#[test]
+fn migration_45_fresh_database_applies_transactionally() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = StorageConfig::for_test(dir.path().join("migration-45-fresh.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // Fresh database should be at schema 45
+    let schema_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(schema_version, 45, "fresh database should be at schema 45");
+
+    // Verify all migration 45 tables exist
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        tables,
+        vec![
+            "agent_projection_cursors",
+            "agent_run_actors",
+            "agent_run_commits",
+            "agent_run_events",
+            "agent_run_worktrees",
+            "agent_runs",
+            "agent_stream_outbox",
+        ],
+        "fresh database should have all migration 45 tables"
+    );
+}
