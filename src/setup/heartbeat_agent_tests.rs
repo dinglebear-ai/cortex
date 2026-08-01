@@ -352,7 +352,8 @@ fn write_heartbeat_agent_env_reads_setup_env_fallbacks_and_optional_syslog() {
     assert!(raw.contains("CORTEX_AGENT_SYSLOG_FILE=/var/log/syslog\n"));
     assert!(raw.contains("CORTEX_SYSLOG_TARGET=127.0.0.1:1514\n"));
     assert!(raw.contains("CORTEX_AGENT_FILE_TAILS=/var/log/app.log:app\n"));
-    assert!(raw.contains("CORTEX_AGENT_AI_TRANSCRIPTS=true\n"));
+    assert!(raw.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true\n"));
+    assert!(!raw.contains("CORTEX_AGENT_AI_TRANSCRIPTS="));
     assert!(raw.contains("CORTEX_AGENT_COMMAND_FORWARD=true\n"));
     assert!(raw.contains("CORTEX_AGENT_SHELL_HISTORY_FORWARD=true\n"));
     assert!(raw.contains("CORTEX_AGENT_AUTO_UPDATE=false\n"));
