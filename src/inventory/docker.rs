@@ -85,6 +85,7 @@ fn normalize_containers(host: &str, body: &Value, out: &mut CollectorOutput) {
                     kind: "docker".to_string(),
                     members: vec![name.clone()],
                     provenance: provenance(host),
+                    details: Default::default(),
                 });
             }
         }
@@ -119,6 +120,7 @@ fn normalize_containers(host: &str, body: &Value, out: &mut CollectorOutput) {
                         || key.contains("swag")
                 })
                 .collect::<BTreeMap<_, _>>(),
+            details: Default::default(),
         });
     }
 }

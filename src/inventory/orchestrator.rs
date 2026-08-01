@@ -88,12 +88,14 @@ pub async fn refresh_inventory_with_inventory(
             crate::inventory::raw_configs::collect(crate::inventory::raw_configs::CollectOptions {
                 compose_paths: &config.compose_paths,
                 proxy_paths: &config.proxy_paths,
+                adguard_paths: &config.adguard_paths,
                 ssh_config: config.ssh_config.as_deref(),
                 ssh_hosts: &config.ssh_hosts,
                 ssh_context: &ssh_context,
                 paths: &paths,
                 run_id: &run_id,
-                timeout: probe_deadline,
+                probe_timeout: probe_deadline,
+                collector_timeout: collector_deadline,
             }),
         ),
         collector_task(
