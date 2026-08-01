@@ -7,6 +7,9 @@ fn planned_schema_and_projection_versions_are_locked() {
 }
 
 #[test]
-fn runtime_schema_does_not_claim_unimplemented_observatory_migrations() {
-    assert!(crate::db::KNOWN_SCHEMA_VERSION < AGENT_OBSERVATORY_SCHEMA_VERSION);
+fn runtime_schema_matches_completed_observatory_migrations() {
+    assert_eq!(
+        crate::db::KNOWN_SCHEMA_VERSION,
+        AGENT_OBSERVATORY_SCHEMA_VERSION
+    );
 }
