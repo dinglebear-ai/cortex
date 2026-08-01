@@ -1474,6 +1474,74 @@ fn init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema() {
 }
 
 #[test]
+fn schema_43_fixture_upgrades_to_47_and_preserves_legacy_rows() {
+    const FIXTURE: &str = include_str!("../../tests/fixtures/schema-43.sql");
+    assert!(!FIXTURE.contains("jmagar"));
+    assert!(!FIXTURE.contains("/home/"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("schema-43-upgrade.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(FIXTURE).unwrap();
+        let version: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 43);
+    }
+
+    let config = test_storage_config(db_path);
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, 47);
+
+    let legacy_log: (String, String, String) = conn
+        .query_row(
+            "SELECT hostname, message, ai_session_id FROM logs WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        legacy_log,
+        (
+            "fixture-host".to_string(),
+            "synthetic legacy log".to_string(),
+            "fixture-session".to_string(),
+        )
+    );
+
+    let rollup_count: i64 = conn
+        .query_row(
+            "SELECT event_count FROM ai_session_rollup
+             WHERE ai_project = 'fixture-project'
+               AND ai_tool = 'fixture-tool'
+               AND ai_session_id = 'fixture-session'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rollup_count, 1);
+
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+}
+
+#[test]
 fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("graph-dedup.db"));
