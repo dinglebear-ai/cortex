@@ -39,7 +39,7 @@ pub fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 45;
+pub const KNOWN_SCHEMA_VERSION: i64 = 47;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -2819,6 +2819,116 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
 	     COMMIT;",
         )?;
         tracing::info!("Migration 45: Agent Observatory run events, evidence, cursors, and outbox");
+    }
+
+    // Migration 46: OTLP traces.
+    // The DDL and version marker share one transaction for atomicity.
+    if !migration_applied(&conn, 46)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+
+             CREATE TABLE IF NOT EXISTS otel_spans (
+                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                 trace_id            TEXT NOT NULL CHECK (length(trace_id) = 32),
+                 span_id             TEXT NOT NULL CHECK (length(span_id) = 16),
+                 parent_span_id      TEXT CHECK (parent_span_id IS NULL OR length(parent_span_id) = 16),
+                 trace_state         TEXT,
+                 flags               INTEGER NOT NULL DEFAULT 0,
+                 span_name           TEXT NOT NULL,
+                 span_kind           INTEGER NOT NULL,
+                 start_time_unix_nano INTEGER NOT NULL,
+                 end_time_unix_nano  INTEGER NOT NULL,
+                 duration_nano       INTEGER NOT NULL CHECK (duration_nano >= 0),
+                 status_code         INTEGER NOT NULL DEFAULT 0,
+                 status_message      TEXT,
+                 hostname            TEXT NOT NULL DEFAULT '',
+                 service_name        TEXT,
+                 service_version     TEXT,
+                 scope_name          TEXT,
+                 scope_version       TEXT,
+                 ai_tool             TEXT,
+                 ai_project          TEXT,
+                 ai_session_id       TEXT,
+                 run_id              INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 resource_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(resource_json)),
+                 attributes_json     TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(attributes_json)),
+                 events_json         TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(events_json)),
+                 links_json          TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(links_json)),
+                 received_at         TEXT NOT NULL,
+                 content_scrubbed    INTEGER NOT NULL DEFAULT 1 CHECK (content_scrubbed IN (0, 1)),
+                 UNIQUE(trace_id, span_id)
+             );
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_run_time
+                 ON otel_spans(run_id, start_time_unix_nano DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_session_time
+                 ON otel_spans(hostname, ai_tool, ai_session_id, start_time_unix_nano DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_trace
+                 ON otel_spans(trace_id, start_time_unix_nano, span_id);
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_service_time
+                 ON otel_spans(service_name, start_time_unix_nano DESC);
+
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (46);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 46: OTLP traces");
+    }
+
+    // Agent Observatory migration 47: OTLP metric points.
+    // This migration is wrapped in a transaction with the version marker.
+    let migration_47_applied: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !migration_47_applied {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+
+             CREATE TABLE IF NOT EXISTS otel_metric_points (
+                 id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                 point_key               TEXT NOT NULL UNIQUE,
+                 metric_name             TEXT NOT NULL,
+                 description             TEXT NOT NULL DEFAULT '',
+                 unit                    TEXT NOT NULL DEFAULT '',
+                 instrument_kind         TEXT NOT NULL CHECK (instrument_kind IN (
+                     'gauge', 'sum', 'histogram', 'exponential_histogram', 'summary'
+                 )),
+                 aggregation_temporality INTEGER,
+                 monotonic               INTEGER CHECK (monotonic IS NULL OR monotonic IN (0, 1)),
+                 start_time_unix_nano    INTEGER,
+                 time_unix_nano          INTEGER NOT NULL,
+                 hostname                TEXT NOT NULL DEFAULT '',
+                 service_name            TEXT,
+                 service_version         TEXT,
+                 scope_name              TEXT,
+                 scope_version           TEXT,
+                 ai_tool                 TEXT,
+                 ai_project              TEXT,
+                 ai_session_id           TEXT,
+                 run_id                  INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 resource_json           TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(resource_json)),
+                 attributes_json         TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(attributes_json)),
+                 value_json              TEXT NOT NULL CHECK (json_valid(value_json)),
+                 exemplars_json          TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(exemplars_json)),
+                 received_at             TEXT NOT NULL,
+                 content_scrubbed        INTEGER NOT NULL DEFAULT 1 CHECK (content_scrubbed IN (0, 1))
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_otel_metric_points_run_time
+                 ON otel_metric_points(run_id, time_unix_nano DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_metric_points_name_time
+                 ON otel_metric_points(metric_name, time_unix_nano DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_metric_points_session_time
+                 ON otel_metric_points(hostname, ai_tool, ai_session_id, time_unix_nano DESC);
+
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (47);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 47: OTLP metric points");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
