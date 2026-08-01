@@ -1190,6 +1190,286 @@ fn init_pool_creates_agent_observatory_run_schema_scaffold() {
 }
 
 #[test]
+fn init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-run-evidence.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES ('repo-evidence', 'dookie', '/workspace/cortex/.git',
+                 '/workspace/cortex', 'cortex', ?1, ?1)",
+        ["2026-08-01T02:30:00.000Z"],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+    for (key, path) in [
+        ("wt-main", "/workspace/cortex"),
+        ("wt-feature", "/workspace/cortex/.worktrees/feature"),
+    ] {
+        conn.execute(
+            "INSERT INTO repository_worktrees
+                (worktree_key, repository_id, hostname, path, git_dir,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, 'dookie', ?3, ?4, ?5, ?5)",
+            rusqlite::params![
+                key,
+                repository_id,
+                path,
+                format!("{path}/.git"),
+                "2026-08-01T02:30:00.000Z",
+            ],
+        )
+        .unwrap();
+    }
+    let main_worktree: i64 = conn
+        .query_row(
+            "SELECT id FROM repository_worktrees WHERE worktree_key = 'wt-main'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let feature_worktree: i64 = conn
+        .query_row(
+            "SELECT id FROM repository_worktrees WHERE worktree_key = 'wt-feature'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-evidence', 'session-evidence', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T02:30:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    let actor_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_actors)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        actor_columns,
+        vec![
+            "id",
+            "actor_key",
+            "run_id",
+            "native_actor_id",
+            "actor_type",
+            "display_name",
+            "started_at",
+            "last_activity_at",
+            "ended_at",
+            "metadata_json",
+        ]
+    );
+    let evidence_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_worktrees)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        evidence_columns,
+        vec![
+            "id",
+            "relation_key",
+            "run_id",
+            "worktree_id",
+            "evidence_kind",
+            "evidence_source",
+            "trust_level",
+            "confidence",
+            "is_primary",
+            "first_seen_at",
+            "last_seen_at",
+            "metadata_json",
+        ]
+    );
+
+    conn.execute(
+        "INSERT INTO agent_run_actors
+            (actor_key, run_id, native_actor_id, actor_type, started_at, metadata_json)
+         VALUES ('actor-key-1', ?1, 'subagent-1', 'subagent', ?2, '{}')",
+        rusqlite::params![run_id, "2026-08-01T02:30:01.000Z"],
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_actors
+                (actor_key, run_id, native_actor_id, metadata_json)
+             VALUES ('actor-key-2', ?1, 'subagent-1', '{}')",
+            [run_id],
+        )
+        .is_err(),
+        "native actor identity must dedupe within one run"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_actors
+                (actor_key, run_id, native_actor_id, metadata_json)
+             VALUES ('actor-bad-json', ?1, 'subagent-2', '{')",
+            [run_id],
+        )
+        .is_err(),
+        "actor metadata must be valid JSON"
+    );
+
+    let insert_relation = |relation_key: &str,
+                           worktree_id: i64,
+                           evidence_kind: &str,
+                           evidence_source: &str,
+                           trust: &str,
+                           confidence: f64,
+                           is_primary: i64,
+                           last_seen: &str| {
+        conn.execute(
+            "INSERT INTO agent_run_worktrees
+                (relation_key, run_id, worktree_id, evidence_kind, evidence_source,
+                 trust_level, confidence, is_primary, first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            rusqlite::params![
+                relation_key,
+                run_id,
+                worktree_id,
+                evidence_kind,
+                evidence_source,
+                trust,
+                confidence,
+                is_primary,
+                last_seen,
+            ],
+        )
+    };
+    insert_relation(
+        "rel-verified",
+        main_worktree,
+        "hook_cwd",
+        "hook:1",
+        "verified",
+        1.0,
+        1,
+        "2026-08-01T02:30:02.000Z",
+    )
+    .unwrap();
+    insert_relation(
+        "rel-claimed",
+        feature_worktree,
+        "transcript_project_path",
+        "log:2",
+        "claimed",
+        0.8,
+        0,
+        "2026-08-01T02:30:03.000Z",
+    )
+    .unwrap();
+
+    assert!(
+        insert_relation(
+            "rel-duplicate",
+            main_worktree,
+            "hook_cwd",
+            "hook:1",
+            "verified",
+            0.9,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "the same evidence tuple must not create a second relation"
+    );
+    assert!(
+        insert_relation(
+            "rel-confidence-high",
+            main_worktree,
+            "other",
+            "source:high",
+            "inferred",
+            1.01,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "confidence above one must be rejected"
+    );
+    assert!(
+        insert_relation(
+            "rel-confidence-low",
+            main_worktree,
+            "other",
+            "source:low",
+            "inferred",
+            -0.01,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "negative confidence must be rejected"
+    );
+    assert!(
+        insert_relation(
+            "rel-bad-trust",
+            main_worktree,
+            "other",
+            "source:trust",
+            "magical",
+            0.5,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "unknown trust levels must be rejected"
+    );
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT relation_key FROM agent_run_worktrees
+             WHERE run_id = ?1
+             ORDER BY is_primary DESC, confidence DESC, last_seen_at DESC, id",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["rel-verified", "rel-claimed"]);
+    let distinct_worktrees: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT worktree_id) FROM agent_run_worktrees WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(distinct_worktrees, 2, "one run may have worktree history");
+
+    for expected in [
+        "idx_agent_run_actors_run",
+        "idx_agent_run_worktrees_run",
+        "idx_agent_run_worktrees_worktree",
+    ] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [expected],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "missing {expected}");
+    }
+}
+
+#[test]
 fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("graph-dedup.db"));

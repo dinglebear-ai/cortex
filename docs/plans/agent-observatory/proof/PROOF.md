@@ -87,3 +87,14 @@ REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt
 REGRESSION result: runtime schema remains 44; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: Migration 45 remains unmarked until actors, evidence, events, cursors, and stream outbox are complete.
+
+## AO-009 Add actors and run/worktree evidence
+commit/worktree SHA: cb6f7f77 (task started)
+RED: isolated pinned-target init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema
+RED result: expected actor columns, got an empty list because agent_run_actors and agent_run_worktrees did not exist
+GREEN: same focused command with both tables and three indexes implemented
+GREEN result: 1 passed; actor identity and JSON checks, confidence/trust constraints, evidence tuple dedupe, deterministic primary ordering, multiple-worktree history, and all indexes verified
+REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
+REGRESSION result: runtime schema remains 44; formatting and diff clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: Migration 45 remains intentionally unmarked until AO-013.
