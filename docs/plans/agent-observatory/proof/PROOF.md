@@ -120,3 +120,14 @@ REGRESSION: `cargo test known_schema_version_matches_migration_head --lib && car
 REGRESSION result: runtime schema remains 44; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: Migration 45 remains unmarked until AO-013; INSERT OR IGNORE ensures cursor values persist across reopens; 8 cursor types match contract.
+
+## AO-012 Add durable stream outbox
+commit/worktree SHA: (pending)
+RED: `cargo test init_pool_creates_agent_stream_outbox --lib`
+RED result: expected 7 outbox columns, got empty list because agent_stream_outbox did not exist
+GREEN: same focused command with outbox table and two indexes implemented
+GREEN result: 1 passed; exact columns, unique outbox key, JSON validation, cascade delete, 100-event fixture query plan, stable ordering, and all indexes verified
+REGRESSION: `cargo test known_schema_version_matches_migration_head --lib && cargo fmt --all && git diff --check`
+REGRESSION result: runtime schema remains 44; formatting and diff checks clean
+FILES: src/db/pool.rs, src/db/pool_tests.rs
+NOTES: Migration 45 remains unmarked until AO-013; cascade delete ensures outbox cleanup when run is deleted.
