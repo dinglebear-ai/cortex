@@ -323,7 +323,7 @@ Error detection is disabled by default. When enabled, it scans bounded batches, 
 
 The native inventory subsystem can collect and normalize evidence from:
 
-- Local Compose and reverse-proxy configuration
+- Local and remote Compose, reverse-proxy, and AdGuard Home configuration
 - Local process, storage, project, and raw configuration inventories
 - SSH sessions to remote fleet hosts
 - Local and remote Docker endpoints

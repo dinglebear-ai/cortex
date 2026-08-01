@@ -8,7 +8,8 @@ use std::time::Duration;
 use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::inventory::process::{CommandOutput, run_command};
+use crate::inventory::limits::MAX_COMMAND_OUTPUT_BYTES;
+use crate::inventory::process::{CommandOutput, run_command_capped};
 
 const SSH_IGNORE_UNKNOWN_OPTIONS: &str = "IgnoreUnknown=WarnWeakCrypto";
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 4;
@@ -22,8 +23,9 @@ pub const DEFAULT_MAX_CONCURRENT_SSH: usize = 8;
 const DEFAULT_RETRY_ATTEMPTS: usize = 1;
 const DEFAULT_RETRY_INITIAL_BACKOFF_MS: u64 = 250;
 
-type SshRunner =
-    Arc<dyn Fn(Vec<String>, Duration) -> BoxFuture<'static, Result<CommandOutput>> + Send + Sync>;
+type SshRunner = Arc<
+    dyn Fn(Vec<String>, Duration, usize) -> BoxFuture<'static, Result<CommandOutput>> + Send + Sync,
+>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SshHostKeyPolicy {
@@ -194,10 +196,10 @@ pub struct SshContext {
 
 impl SshContext {
     pub fn new(options: SshOptions) -> Self {
-        let runner: SshRunner = Arc::new(|args, timeout| {
+        let runner: SshRunner = Arc::new(|args, timeout, max_output_bytes| {
             Box::pin(async move {
                 let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-                run_command("ssh", &refs, timeout).await
+                run_command_capped("ssh", &refs, timeout, max_output_bytes).await
             })
         });
         Self::with_runner(options, runner)
@@ -215,7 +217,7 @@ impl SshContext {
     #[cfg(test)]
     pub fn with_runner_for_test<F>(options: SshOptions, runner: F) -> Self
     where
-        F: Fn(Vec<String>, Duration) -> BoxFuture<'static, Result<CommandOutput>>
+        F: Fn(Vec<String>, Duration, usize) -> BoxFuture<'static, Result<CommandOutput>>
             + Send
             + Sync
             + 'static,
@@ -229,6 +231,17 @@ impl SshContext {
         remote_command: &str,
         timeout: Duration,
     ) -> Result<CommandOutput> {
+        self.run_capped(host, remote_command, timeout, MAX_COMMAND_OUTPUT_BYTES)
+            .await
+    }
+
+    pub async fn run_capped(
+        &self,
+        host: &str,
+        remote_command: &str,
+        timeout: Duration,
+        max_output_bytes: usize,
+    ) -> Result<CommandOutput> {
         let args = self.options.ssh_args(host, remote_command)?;
         let attempts = self.options.retry_attempts.max(1);
         let mut last_error = None;
@@ -238,7 +251,7 @@ impl SshContext {
                 .acquire()
                 .await
                 .map_err(|_| anyhow!("ssh concurrency limiter closed"))?;
-            match (self.runner)(args.clone(), timeout).await {
+            match (self.runner)(args.clone(), timeout, max_output_bytes).await {
                 Ok(output) => return Ok(output),
                 Err(error) => last_error = Some(error),
             }

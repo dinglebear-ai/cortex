@@ -159,6 +159,7 @@ methods as the MCP actions.
 | `CORTEX_INVENTORY_DIR` | no | `~/.cortex/inventory` | no |
 | `CORTEX_INVENTORY_COMPOSE_PATHS` | no | `~/.cortex/compose/docker-compose.yml` | no |
 | `CORTEX_INVENTORY_PROXY_PATHS` | no | (none) | no |
+| `CORTEX_INVENTORY_ADGUARD_PATHS` | no | common AdGuard Home config paths | no |
 | `CORTEX_INVENTORY_SSH_CONFIG` | no | `~/.ssh/config` | no |
 | `CORTEX_INVENTORY_SSH_HOSTS` | no | all concrete `Host` aliases in SSH config except wildcard patterns and `github.com` | no |
 | `CORTEX_INVENTORY_PROJECT_ROOTS` | no | `~/workspace` | no |
@@ -182,7 +183,9 @@ disable background refresh.
 
 When background refresh is enabled, Cortex also watches local configured
 Compose/proxy config paths and refreshes after a short debounce when they
-change. Set `CORTEX_INVENTORY_WATCH_ENABLED=false` to disable local file
+change. AdGuard Home paths are collected during each refresh; configure them
+with `CORTEX_INVENTORY_ADGUARD_PATHS` when the defaults do not match. Set
+`CORTEX_INVENTORY_WATCH_ENABLED=false` to disable local file
 watching. To use container events as refresh triggers, explicitly set
 `CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS=true`; Cortex then opens `docker events`
 streams over SSH for selected hosts.
@@ -190,9 +193,11 @@ streams over SSH for selected hosts.
 Remote collection is SSH-backed and uses concrete aliases from `~/.ssh/config`
 unless `CORTEX_INVENTORY_SSH_HOSTS` is set. It collects host facts, listener
 ports, storage summaries, Compose YAML artifacts, reverse proxy conf artifacts,
-and compact Docker inspect data including container status/health, image,
-published ports, networks, mounts, compose/route labels, and environment key
-names only. It does not store environment values.
+redacted AdGuard Home configuration, and compact Docker inspect data including
+container status/health, image, published ports, networks, mounts, compose/route
+labels, and environment key names only. One bounded config sweep runs per host.
+A slow or unreachable host is reported without discarding completed host results.
+Cortex does not store Docker environment values.
 
 SSH targets are validated before invoking OpenSSH, option-like hosts are
 rejected, and the command builder inserts `--` before the host argument.
@@ -206,8 +211,13 @@ opted in with `CORTEX_INVENTORY_SSH_TRUST_ON_FIRST_USE=true`. Set
 known-hosts file.
 
 Optional provider collectors are activated only when their URL/credential env
-vars are present. Supported media prefixes are `SONARR`, `RADARR`, `PROWLARR`,
-`SABNZBD`, `QBITTORRENT`, `PLEX`, `TAUTULLI`, and `OVERSEERR`.
+vars are present. The UniFi collector includes sites, devices, network settings,
+and normalized DHCP assignments such as gateway, pool, lease time, and DNS
+servers. Supported media prefixes are `SONARR`, `RADARR`, `PROWLARR`, `SABNZBD`,
+`QBITTORRENT`, `PLEX`, `TAUTULLI`, and `OVERSEERR`.
+
+Safe provider configuration is exposed in typed `services[].details` and
+`networks[].details` objects. Raw artifact bodies remain private and redacted.
 
 The MCP `map` action defaults to the bounded snapshot. Set `mode` to ask
 topology questions backed by the graph projection:
