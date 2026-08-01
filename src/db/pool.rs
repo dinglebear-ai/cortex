@@ -2707,7 +2707,44 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
          CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_run
              ON agent_run_worktrees(run_id, is_primary DESC, confidence DESC, last_seen_at DESC);
          CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_worktree
-             ON agent_run_worktrees(worktree_id, last_seen_at DESC, run_id);",
+             ON agent_run_worktrees(worktree_id, last_seen_at DESC, run_id);
+
+         CREATE TABLE IF NOT EXISTS agent_run_events (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             event_key           TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             actor_id            INTEGER REFERENCES agent_run_actors(id) ON DELETE SET NULL,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             commit_id           INTEGER REFERENCES git_commits(id) ON DELETE SET NULL,
+             observed_at         TEXT NOT NULL,
+             ingested_at         TEXT NOT NULL,
+             event_kind          TEXT NOT NULL CHECK (event_kind IN (
+                 'lifecycle', 'transcript', 'command', 'shell_history',
+                 'git_status', 'git_head', 'git_commit', 'file_operation',
+                 'mcp', 'hook', 'skill', 'llm', 'otlp_log', 'otlp_span',
+                 'otlp_metric', 'heartbeat', 'error', 'provider_event'
+             )),
+             source_kind         TEXT NOT NULL,
+             source_id           TEXT NOT NULL,
+             source_log_id       INTEGER,
+             provider_sequence   INTEGER,
+             trace_id            TEXT,
+             span_id             TEXT,
+             severity            TEXT NOT NULL DEFAULT 'info',
+             title               TEXT NOT NULL DEFAULT '',
+             summary             TEXT NOT NULL DEFAULT '',
+             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+             content_scrubbed    INTEGER NOT NULL DEFAULT 1 CHECK (content_scrubbed IN (0, 1)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_order
+             ON agent_run_events(run_id, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_kind
+             ON agent_run_events(run_id, event_kind, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_trace
+             ON agent_run_events(trace_id, span_id);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_source_log
+             ON agent_run_events(source_log_id) WHERE source_log_id IS NOT NULL;",
     )?;
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
