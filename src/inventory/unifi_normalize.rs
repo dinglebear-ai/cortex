@@ -275,6 +275,15 @@ fn copy_fields(item: &Value, details: &mut BTreeMap<String, Value>, fields: &[&s
     }
 }
 
+fn network_scope(network: &NetworkSegment) -> Option<&str> {
+    let key = match network.kind.as_str() {
+        "unifi_network" => "site_id",
+        "unifi_site" => "internal_reference",
+        _ => return None,
+    };
+    network.details.get(key).and_then(Value::as_str)
+}
+
 fn merge_network(out: &mut CollectorOutput, mut candidate: NetworkSegment) {
     let candidate_id = candidate.details.get("id").and_then(Value::as_str);
     if let Some(existing) = out.networks.iter_mut().find(|existing| {
@@ -284,7 +293,16 @@ fn merge_network(out: &mut CollectorOutput, mut candidate: NetworkSegment) {
         let existing_id = existing.details.get("id").and_then(Value::as_str);
         match (existing_id, candidate_id) {
             (Some(existing_id), Some(candidate_id)) => existing_id == candidate_id,
-            _ => existing.name == candidate.name,
+            _ => {
+                existing.name == candidate.name
+                    && match (network_scope(existing), network_scope(&candidate)) {
+                        (Some(existing_scope), Some(candidate_scope)) => {
+                            existing_scope == candidate_scope
+                        }
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
         }
     }) {
         if existing.name == "network" && candidate.name != "network" {
@@ -317,15 +335,17 @@ fn bounded_items_or_single<'a>(
     path: &str,
     out: &mut CollectorOutput,
 ) -> Vec<&'a Value> {
-    let items = bounded_items(body, path, out);
-    if !items.is_empty() {
-        return items;
+    if let Some(data) = body.get("data") {
+        return match data {
+            Value::Array(items) => bounded_slice(items, path, out),
+            Value::Object(_) => vec![data],
+            _ => Vec::new(),
+        };
     }
-    if body.is_object() {
-        vec![body]
-    } else {
-        Vec::new()
+    if let Some(items) = body.as_array() {
+        return bounded_slice(items, path, out);
     }
+    body.is_object().then_some(body).into_iter().collect()
 }
 
 fn bounded_slice<'a>(items: &'a [Value], path: &str, out: &mut CollectorOutput) -> Vec<&'a Value> {

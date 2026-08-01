@@ -169,7 +169,7 @@ pub async fn collect(
     let mut network_errors = Vec::new();
     while !requests.is_empty() {
         let next = tokio::select! {
-            next = requests.next() => next,
+            biased;
             _ = tokio::time::sleep_until(deadline) => {
                 out.warn(
                     "collection_deadline",
@@ -180,6 +180,7 @@ pub async fn collect(
                 );
                 return out;
             }
+            next = requests.next() => next,
         };
         let Some((spec, result)) = next else {
             break;
@@ -251,7 +252,7 @@ pub async fn collect(
     }
     while !details.is_empty() {
         let next = tokio::select! {
-            next = details.next() => next,
+            biased;
             _ = tokio::time::sleep_until(deadline) => {
                 out.warn(
                     "collection_deadline",
@@ -262,6 +263,7 @@ pub async fn collect(
                 );
                 return out;
             }
+            next = details.next() => next,
         };
         let Some((spec, result)) = next else {
             break;

@@ -305,6 +305,40 @@ fn same_name_networks_with_different_ids_remain_distinct() {
 }
 
 #[test]
+fn empty_network_list_does_not_create_synthetic_network() {
+    let mut out = CollectorOutput::new("unifi");
+
+    let ids = normalize_networks(
+        "https://unifi",
+        "/proxy/network/integration/v1/sites/site-1/networks",
+        Some("site-1"),
+        &json!({"data": []}),
+        &mut out,
+    );
+
+    assert!(ids.is_empty());
+    assert!(out.networks.is_empty());
+}
+
+#[test]
+fn same_name_idless_networks_are_scoped_by_site() {
+    let mut out = CollectorOutput::new("unifi");
+    for site_id in ["site-1", "site-2"] {
+        normalize_networks(
+            "https://unifi",
+            &format!("/proxy/network/integration/v1/sites/{site_id}/networks"),
+            Some(site_id),
+            &json!({"data": [{"name": "LAN"}]}),
+            &mut out,
+        );
+    }
+
+    assert_eq!(out.networks.len(), 2);
+    assert_eq!(out.networks[0].details["site_id"], "site-1");
+    assert_eq!(out.networks[1].details["site_id"], "site-2");
+}
+
+#[test]
 fn legacy_unifi_networkconf_fields_are_normalized() {
     let mut out = CollectorOutput::new("unifi");
     normalize_networks(
