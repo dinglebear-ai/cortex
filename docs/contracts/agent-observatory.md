@@ -496,6 +496,46 @@ Doctor migration behavior under explicit `--fix --yes`:
 
 File ownership and restrictive permissions must be preserved. A second doctor run is idempotent. The alias remains accepted through Cortex 3.x and is removed in Cortex 4.0 only when parser, warning, doctor migration, tests, docs, and occurrence allowlist are updated together.
 
+### 10.2 Cortex 4.0 removal checklist
+
+When removing the deprecated `CORTEX_AGENT_AI_TRANSCRIPTS` alias in Cortex 4.0, all of the following must be deleted together in a single coordinated change:
+
+1. **Parser compatibility code** in `src/heartbeat_agent.rs`:
+   - Remove `AI_TRANSCRIPT_FORWARD_LEGACY_ENV` constant
+   - Remove legacy variable resolution logic
+   - Remove deprecation and conflict warning emission
+
+2. **Doctor migration** in `src/setup/doctor.rs` and tests:
+   - Remove `check_transcript_forward_env_migration()` function
+   - Remove `migrate_legacy_only()` and `migrate_both_equal()` helpers
+   - Remove all migration tests from `doctor_tests.rs`
+
+3. **Compatibility tests** in `src/heartbeat_agent_tests.rs`:
+   - Remove all test cases referencing the legacy variable name
+   - Remove `EnvGuard` setup for `CORTEX_AGENT_AI_TRANSCRIPTS`
+
+4. **Deployment regression tests** in `src/agent_deploy_tests.rs`:
+   - Remove fixtures containing the legacy variable
+   - Remove assertions checking for the legacy name
+
+5. **Documentation updates**:
+   - Update `docs/contracts/agent-observatory.md` section 10.1 to remove deprecated alias table
+   - Update or remove this section 10.2 removal checklist
+   - Update CHANGELOG.md with breaking change notice
+   - Remove legacy variable references from plan and research docs (or archive them)
+
+6. **Validation script**:
+   - Remove or update `scripts/validate-transcript-forward-env-rename.sh` to check for absence of legacy variable
+
+7. **Setup generation** (if any legacy references remain in comments or examples):
+   - Audit `src/setup/heartbeat_agent.rs` for any lingering references
+   - Update any help text or examples
+
+Verification after removal:
+- `scripts/validate-transcript-forward-env-rename.sh` must report the legacy variable is absent
+- All tests must pass without any `CORTEX_AGENT_AI_TRANSCRIPTS` references
+- `grep -R "CORTEX_AGENT_AI_TRANSCRIPTS"` should return only this contract section (for historical reference)
+
 ## 11. CLI contract
 
 Planned commands:
