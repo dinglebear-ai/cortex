@@ -653,6 +653,140 @@ fn init_pool_creates_agent_observatory_worktree_schema_scaffold() {
 }
 
 #[test]
+fn init_pool_creates_agent_observatory_observation_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-observations.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES ('repo-key', 'dookie', '/workspace/cortex/.git',
+                 '/workspace/cortex', 'cortex', ?1, ?1)",
+        ["2026-08-01T01:00:00.000Z"],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+         VALUES ('worktree-key', ?1, 'dookie', '/workspace/cortex',
+                 '/workspace/cortex/.git', ?2, ?2)",
+        rusqlite::params![repository_id, "2026-08-01T01:00:00.000Z"],
+    )
+    .unwrap();
+    let worktree_id = conn.last_insert_rowid();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repository_observations)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "observation_key",
+            "repository_id",
+            "worktree_id",
+            "observed_at",
+            "observation_kind",
+            "old_head_sha",
+            "new_head_sha",
+            "summary",
+            "payload_json",
+            "created_at",
+        ]
+    );
+
+    let insert = |key: &str, observed_at: &str, kind: &str| {
+        conn.execute(
+            "INSERT INTO repository_observations
+                (observation_key, repository_id, worktree_id, observed_at,
+                 observation_kind, summary, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '{}')",
+            rusqlite::params![key, repository_id, worktree_id, observed_at, kind, key],
+        )
+    };
+    insert("obs-1", "2026-08-01T01:00:00.000Z", "discovered").unwrap();
+    insert("obs-2", "2026-08-01T01:00:01.000Z", "status").unwrap();
+    insert("obs-3", "2026-08-01T01:00:01.000Z", "head").unwrap();
+
+    assert!(
+        insert("obs-1", "2026-08-01T01:00:02.000Z", "status").is_err(),
+        "observation_key must be globally unique"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO repository_observations
+                (observation_key, repository_id, observed_at, observation_kind, payload_json)
+             VALUES ('bad-json', ?1, ?2, 'error', '{')",
+            rusqlite::params![repository_id, "2026-08-01T01:00:03.000Z"],
+        )
+        .is_err(),
+        "payload_json must be valid JSON"
+    );
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT observation_key FROM repository_observations
+             WHERE repository_id = ?1
+             ORDER BY observed_at DESC, id DESC",
+        )
+        .unwrap()
+        .query_map([repository_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["obs-3", "obs-2", "obs-1"]);
+
+    let repo_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM repository_observations
+             WHERE repository_id = ?1
+             ORDER BY observed_at DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map([repository_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        repo_plan
+            .iter()
+            .any(|detail| detail.contains("idx_repository_observations_repo_time")),
+        "repository timeline query must use its chronological index: {repo_plan:?}"
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'repository_observations'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repository_observations_repo_time")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repository_observations_worktree_time")
+    );
+}
+
+#[test]
 fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("graph-dedup.db"));
