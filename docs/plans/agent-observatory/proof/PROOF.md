@@ -176,3 +176,14 @@ REGRESSION result: 96 config tests passed; 20 runtime tests passed; corrected va
 FILES: src/config.rs, src/config_tests.rs, src/runtime_tests.rs, docs/contracts/config-schema.md
 NOTES: Feature remains explicitly disabled by default. The nested agent_observatory block denies unknown fields and all documented CORTEX_AGENT_OBSERVATORY_* variables override TOML.
 
+## ENV-001 Add the new resolver and compatibility alias
+commit/worktree SHA: 2e22dc19 (task started)
+RED: pinned-target env_new_only_true_enables_forwarding
+RED result: new CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true was ignored and forwarding remained false
+GREEN: pinned-target transcript_forward_env_ test filter
+GREEN result: 4 passed; precedence matrix, warning codes, authoritative replacement, legacy-only compatibility, and local sessions-watch independence verified
+REGRESSION: pinned-target heartbeat_agent::tests plus cargo fmt and git diff --check
+REGRESSION result: 46 passed; formatting and diff clean
+FILES: src/heartbeat_agent.rs, src/heartbeat_agent_tests.rs
+NOTES: The deprecated name is centralized in AI_TRANSCRIPT_FORWARD_LEGACY_ENV; from_env emits exactly one warning selected by the pure resolver.
+
