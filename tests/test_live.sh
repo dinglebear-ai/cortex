@@ -931,6 +931,29 @@ run_http_mode() {
 }
 
 # ---------------------------------------------------------------------------
+# Wait for the eager hourly timeline rollup before comparing local and HTTP
+# transports. The server intentionally performs its first refresh 10 seconds
+# after startup; without this gate, the local call can observe the empty rollup
+# immediately before the HTTP call observes the freshly populated one.
+# ---------------------------------------------------------------------------
+wait_for_timeline_rollup() {
+  local token="$1"
+  local response=""
+  local attempt
+  for attempt in {1..30}; do
+    response="$(curl -sf --max-time 3 \
+      -H "Authorization: Bearer ${token}" \
+      "${BASE_URL}/api/timeline?bucket=hour" 2>/dev/null || true)"
+    if jq -e '.rollup_as_of | select(type == "string" and length > 0)' \
+      <<<"${response}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Phase 5 — CLI parity (bead cortex-0p8r.10)
 # For each HTTP-supported CLI command, run both local + --http transports
 # and assert their JSON shapes agree after filtering volatile fields. This
@@ -1002,6 +1025,11 @@ phase_cli_parity() {
   for pair in "${pairs[@]}"; do
     label="${pair%%|*}"
     args="${pair#*|}"
+    if [[ "${label}" == "timeline --bucket hour" ]] \
+      && ! wait_for_timeline_rollup "${cli_token}"; then
+      _fail "cli parity: ${label} (timeline rollup not ready after 30s)"
+      continue
+    fi
     if [[ -n "${CLI_PARITY_CONTAINER}" ]]; then
       # shellcheck disable=SC2086  # word splitting on $args is intentional
       local_out="$(docker exec "${CLI_PARITY_CONTAINER}" env -u CORTEX_USE_HTTP RUST_LOG=off cortex ${args} --json 2>&1)"
