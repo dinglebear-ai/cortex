@@ -54,14 +54,14 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 The npm launcher is the fastest path for local CLI and stdio MCP use:
 
 ```bash
-npx -y cortex-rmcp --help
-npx -y cortex-rmcp mcp
+npx -y @dinglebear/cortex --help
+npx -y @dinglebear/cortex mcp
 ```
 
 Install it permanently with:
 
 ```bash
-npm install --global cortex-rmcp
+npm install --global @dinglebear/cortex
 cortex --version
 ```
 
@@ -721,8 +721,8 @@ Maintenance operations are single-flight and separately limited from heavy read 
 | --- | --- |
 | Canonical source repository | `dinglebear-ai/cortex` |
 | Native binary and CLI | `cortex` |
-| npm launcher | `cortex-rmcp` |
-| MCP Registry server name | `ai.dinglebear/cortex-rmcp` |
+| npm launcher | `@dinglebear/cortex` |
+| MCP Registry server name | `ai.dinglebear/cortex` |
 | Published OCI image | `ghcr.io/dinglebear-ai/cortex:v<version>` |
 
 The source repository and its published artifacts both live under the `dinglebear-ai` organization. The legacy `jmagar` namespace is retired: `scripts/check-public-identity.sh` fails the build on any tracked file that reintroduces it, and the release workflow derives the MCP Registry OCI identifier from the same `REGISTRY`/`IMAGE_NAME` it pushes to, so the two cannot drift apart again.
