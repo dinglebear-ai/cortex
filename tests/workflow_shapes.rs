@@ -198,6 +198,28 @@ fn release_please_config_and_manifest_agree_with_components_toml() {
             "release-please-config.json must declare an extra-files entry for {extra_file}"
         );
     }
+    let config_json: serde_json::Value =
+        serde_json::from_str(config).expect("release-please config must be valid JSON");
+    let extra_files = config_json["packages"]["."]["extra-files"]
+        .as_array()
+        .expect("root package must declare extra-files");
+    for jsonpath in ["$.version", "$.binaryVersion"] {
+        assert!(
+            extra_files.iter().any(|entry| {
+                entry["type"] == "json"
+                    && entry["path"] == "packages/cortex-rmcp/package.json"
+                    && entry["jsonpath"] == jsonpath
+            }),
+            "npm launcher {jsonpath} must use an explicit JSON updater"
+        );
+    }
+    assert!(
+        !extra_files
+            .iter()
+            .any(|entry| entry.as_str() == Some("packages/cortex-rmcp/package.json")),
+        "package.json must not use the implicit extra-file updater"
+    );
+
     assert!(
         manifest.contains("\".\""),
         ".release-please-manifest.json must track the root package"
@@ -210,6 +232,44 @@ fn release_please_config_and_manifest_agree_with_components_toml() {
         assert!(
             components.contains(&format!("regex_version\", path = \"{regex_carrier}\"")),
             "release/components.toml must keep a regex_version carrier for {regex_carrier}"
+        );
+    }
+}
+
+#[test]
+fn release_please_rust_workspace_uses_scalar_package_versions() {
+    let root_manifest = include_str!("../Cargo.toml");
+    let xtask_manifest = include_str!("../xtask/Cargo.toml");
+    let components = include_str!("../release/components.toml");
+
+    let root: toml::Value = toml::from_str(root_manifest).expect("root Cargo.toml must parse");
+    let xtask: toml::Value = toml::from_str(xtask_manifest).expect("xtask Cargo.toml must parse");
+    let root_version = root
+        .get("package")
+        .and_then(|value| value.get("version"))
+        .and_then(toml::Value::as_str)
+        .expect("root package.version must be a scalar string");
+    let xtask_version = xtask
+        .get("package")
+        .and_then(|value| value.get("version"))
+        .and_then(toml::Value::as_str)
+        .expect("xtask package.version must be a scalar string");
+
+    assert_eq!(root_version, xtask_version);
+    assert!(
+        root.get("workspace")
+            .and_then(|value| value.get("package"))
+            .and_then(|value| value.get("version"))
+            .is_none(),
+        "workspace.package.version must stay absent because release-please cannot replace inherited package versions"
+    );
+    for required in [
+        r#"cargo_package", path = "xtask/Cargo.toml", package = "xtask""#,
+        r#"cargo_lock_package", path = "Cargo.lock", package = "xtask""#,
+    ] {
+        assert!(
+            components.contains(required),
+            "release/components.toml must track {required}"
         );
     }
 }

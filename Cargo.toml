@@ -3,7 +3,6 @@ members = [".", "xtask"]
 resolver = "3"
 
 [workspace.package]
-version = "3.11.1"
 edition = "2024"
 rust-version = "1.97.1"
 authors = ["dinglebear.ai <hello@dinglebear.ai>"]
@@ -36,7 +35,7 @@ missing_safety_doc = "deny"
 
 [package]
 name = "cortex"
-version.workspace = true
+version = "3.11.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

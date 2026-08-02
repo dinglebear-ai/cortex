@@ -7,7 +7,8 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -1351,6 +1352,8 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("failed to build heartbeat reqwest::Client")?;
+    let update_client = crate::agent::self_update::build_update_client()?;
+    let update_in_flight = Arc::new(AtomicBool::new(false));
     let mut retry = RetryBuffer::new(config.retry_buffer_limit);
     let mut sequence = chrono::Utc::now().timestamp_millis();
     let mut attempt = 0u32;
@@ -1390,21 +1393,53 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
                     update_confirmed = true;
                 }
                 if let Some(directive) = directive {
-                    if auto_update {
-                        if let Err(error) = crate::agent::self_update::maybe_update(
-                            &client,
-                            target,
-                            config.token.as_deref(),
-                            &directive,
-                        )
-                        .await
+                    let update_needed = crate::agent::self_update::update_needed(&directive);
+                    if auto_update && update_needed {
+                        // Self-update runs outside the heartbeat cadence and only one
+                        // attempt may be active at a time. Slow or repeated directives
+                        // therefore cannot make the host appear silent or race the swap.
+                        if update_in_flight
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                            .is_ok()
                         {
-                            tracing::warn!(
-                                error = format!("{error:#}"),
-                                "agent self-update failed; staying on current binary"
+                            let update_client = update_client.clone();
+                            let update_target = target.to_string();
+                            let update_token = config.token.clone();
+                            let update_in_flight = Arc::clone(&update_in_flight);
+                            tokio::spawn(async move {
+                                let result = timeout(
+                                    crate::agent::self_update::SELF_UPDATE_DEADLINE,
+                                    crate::agent::self_update::maybe_update(
+                                        &update_client,
+                                        &update_target,
+                                        update_token.as_deref(),
+                                        &directive,
+                                    ),
+                                )
+                                .await;
+                                update_in_flight.store(false, Ordering::Release);
+
+                                match result {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(error)) => tracing::warn!(
+                                        error = format!("{error:#}"),
+                                        "agent self-update failed; staying on current binary"
+                                    ),
+                                    Err(_) => tracing::warn!(
+                                        timeout_secs =
+                                            crate::agent::self_update::SELF_UPDATE_DEADLINE
+                                                .as_secs(),
+                                        "agent self-update exceeded deadline; heartbeat loop remains active"
+                                    ),
+                                }
+                            });
+                        } else {
+                            tracing::debug!(
+                                target_version = %directive.version,
+                                "agent self-update already in progress; skipping duplicate directive"
                             );
                         }
-                    } else if crate::agent::self_update::update_needed(&directive) {
+                    } else if !auto_update && update_needed {
                         tracing::info!(
                             target_version = %directive.version,
                             "agent update available (CORTEX_AGENT_AUTO_UPDATE disabled)"
