@@ -256,6 +256,56 @@ async fn reconcile_initializes_start_at_end_checkpoint_before_returning() {
     supervisor.shutdown();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn first_open_uses_checkpoint_snapshot_created_by_reconcile() {
+    use std::io::Write as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<LogBatchEntry>(4);
+    let ingest = IngestTx::from_sender_for_test(tx);
+    let token = tokio_util::sync::CancellationToken::new();
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        token.clone(),
+        8192,
+    );
+    let log_path = temp.path().join("loop.log");
+    tokio::fs::write(&log_path, b"already here\n")
+        .await
+        .unwrap();
+
+    registry
+        .upsert(source("loop", &log_path.to_string_lossy(), "loop"))
+        .unwrap();
+    supervisor.reconcile().unwrap();
+
+    // A current-thread runtime guarantees the spawned task has not performed
+    // its first open while this synchronous section runs. Replacing the
+    // persisted definition models a later registry read that no longer has the
+    // checkpoint that reconcile just created. The first open must still use
+    // the exact checkpoint snapshot handed to the task by reconcile.
+    registry
+        .upsert(source("loop", &log_path.to_string_lossy(), "loop"))
+        .unwrap();
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&log_path)
+        .unwrap();
+    writer.write_all(b"after reconcile\n").unwrap();
+    writer.flush().unwrap();
+
+    let entry = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.message, "after reconcile");
+
+    token.cancel();
+    supervisor.shutdown();
+}
+
 #[tokio::test]
 async fn supervisor_waits_for_durable_ack_before_checkpointing() {
     let temp = tempfile::tempdir().unwrap();
