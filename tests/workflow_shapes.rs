@@ -237,6 +237,44 @@ fn release_please_config_and_manifest_agree_with_components_toml() {
 }
 
 #[test]
+fn release_please_rust_workspace_uses_scalar_package_versions() {
+    let root_manifest = include_str!("../Cargo.toml");
+    let xtask_manifest = include_str!("../xtask/Cargo.toml");
+    let components = include_str!("../release/components.toml");
+
+    let root: toml::Value = toml::from_str(root_manifest).expect("root Cargo.toml must parse");
+    let xtask: toml::Value = toml::from_str(xtask_manifest).expect("xtask Cargo.toml must parse");
+    let root_version = root
+        .get("package")
+        .and_then(|value| value.get("version"))
+        .and_then(toml::Value::as_str)
+        .expect("root package.version must be a scalar string");
+    let xtask_version = xtask
+        .get("package")
+        .and_then(|value| value.get("version"))
+        .and_then(toml::Value::as_str)
+        .expect("xtask package.version must be a scalar string");
+
+    assert_eq!(root_version, xtask_version);
+    assert!(
+        root.get("workspace")
+            .and_then(|value| value.get("package"))
+            .and_then(|value| value.get("version"))
+            .is_none(),
+        "workspace.package.version must stay absent because release-please cannot replace inherited package versions"
+    );
+    for required in [
+        r#"cargo_package", path = "xtask/Cargo.toml", package = "xtask""#,
+        r#"cargo_lock_package", path = "Cargo.lock", package = "xtask""#,
+    ] {
+        assert!(
+            components.contains(required),
+            "release/components.toml must track {required}"
+        );
+    }
+}
+
+#[test]
 fn local_cortex_server_has_auto_deploy_timer_contract() {
     let service = include_str!("../config/systemd/cortex-auto-deploy.service");
     let timer = include_str!("../config/systemd/cortex-auto-deploy.timer");
