@@ -242,3 +242,14 @@ REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --ch
 REGRESSION result: schema head test passed at 47; formatting and diff checks clean
 FILES: src/db/pool_tests.rs
 NOTES: The original migration DDL remains unchanged; this task adds full independent contract proof after AO-014 and AO-015 were originally combined in one implementation commit.
+
+## AO-019 Implement versioned identity helpers
+commit/worktree SHA: ccfd024c (task started)
+RED: sidecar contract vectors imported canonical tool, run, repository, worktree, actor, and event identity helpers before the module exposed them
+RED result: compile failed with unresolved imports for every required helper, IdentityError, and MAX_EVENT_KEY_BYTES
+GREEN: focused identity contract suite after implementing version-one length-prefixed identities and deterministic event-key validation
+GREEN result: 10 focused tests passed, covering the frozen run-key example, UTF-8 byte lengths, delimiter-bearing components, whitespace trimming, unknown-tool normalization, nested actor keys, strict ASCII lower snake case, exact 1024-byte acceptance, 1025-byte rejection, empty components, and repeated deterministic generation
+REGRESSION: Agent Observatory contracts, complete agent_observatory module tests, workspace Clippy with warnings denied, formatting, diff check, and dependency-lock audit
+REGRESSION result: JSON/SQL/Rust/TypeScript contract checks passed; 12 Agent Observatory tests passed; Clippy, rustfmt, git diff --check, and unchanged Cargo.toml/Cargo.lock gates passed
+FILES: src/agent_observatory.rs, src/agent_observatory/identity.rs, src/agent_observatory/identity_tests.rs
+NOTES: Unknown provider labels are trimmed and Unicode-lowercased under unknown:<source>; original provider labels remain a future metadata concern. No random identity or new dependency was introduced.
