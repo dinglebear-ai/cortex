@@ -138,6 +138,72 @@ Per-host (`DockerHostConfig`): `name`, `base_url`, `allow_insecure_http` (defaul
 | `scrub_prompts` | `CORTEX_SCRUB_PROMPTS` | bool | `true` | tuning | restart-only | — | — | AI-source credential scrub |
 | `fts_merge_pages` | `CORTEX_FTS_MERGE_PAGES` | u32 | `0` | tuning | restart-only | `0..=10_000` | — | `0` = force merge after every purge |
 
+### `[agent_observatory]` — durable agent, Git, and telemetry projection
+
+This block is parsed strictly with `deny_unknown_fields`. The entire subsystem is
+disabled unless `enabled=true`; when disabled, nested safety limits are retained as
+defaults but do not start projector, Git, stream, or retention work.
+
+| TOML key | Env var | Type | Default | Validation |
+|---|---|---|---|---|
+| `enabled` | `CORTEX_AGENT_OBSERVATORY_ENABLED` | bool | `false` | dedicated rollout switch |
+| `projector_poll_ms` | `CORTEX_AGENT_OBSERVATORY_PROJECTOR_POLL_MS` | u64 | `500` | `> 0` when enabled |
+| `projector_page_rows` | `CORTEX_AGENT_OBSERVATORY_PROJECTOR_PAGE_ROWS` | usize | `500` | `> 0` when enabled |
+| `projector_page_bytes` | `CORTEX_AGENT_OBSERVATORY_PROJECTOR_PAGE_BYTES` | usize bytes | `4_194_304` | `> 0` when enabled |
+| `active_window_secs` | `CORTEX_AGENT_OBSERVATORY_ACTIVE_WINDOW_SECS` | u64 | `15` | `> 0` |
+| `stale_after_secs` | `CORTEX_AGENT_OBSERVATORY_STALE_AFTER_SECS` | u64 | `300` | `> active_window_secs` |
+| `abandoned_after_secs` | `CORTEX_AGENT_OBSERVATORY_ABANDONED_AFTER_SECS` | u64 | `86_400` | `> stale_after_secs` |
+
+#### `[agent_observatory.git]`
+
+| TOML key | Env var | Type | Default | Validation |
+|---|---|---|---|---|
+| `enabled` | `CORTEX_AGENT_OBSERVATORY_GIT_ENABLED` | bool | `true` | — |
+| `roots` | `CORTEX_AGENT_OBSERVATORY_GIT_ROOTS` | csv/string[] | `["~/workspace"]` | non-empty, no blank entries when Git observer enabled |
+| `max_depth` | `CORTEX_AGENT_OBSERVATORY_GIT_MAX_DEPTH` | usize | `3` | `> 0` |
+| `max_repositories` | `CORTEX_AGENT_OBSERVATORY_GIT_MAX_REPOSITORIES` | usize | `120` | `> 0` |
+| `reconcile_interval_secs` | `CORTEX_AGENT_OBSERVATORY_GIT_RECONCILE_INTERVAL_SECS` | u64 | `60` | `> 0` |
+| `debounce_ms` | `CORTEX_AGENT_OBSERVATORY_GIT_DEBOUNCE_MS` | u64 | `500` | `> 0` |
+| `command_timeout_ms` | `CORTEX_AGENT_OBSERVATORY_GIT_COMMAND_TIMEOUT_MS` | u64 | `5_000` | `> 0` |
+| `max_commits_per_transition` | `CORTEX_AGENT_OBSERVATORY_GIT_MAX_COMMITS_PER_TRANSITION` | usize | `500` | `> 0` |
+| `store_changed_paths` | `CORTEX_AGENT_OBSERVATORY_GIT_STORE_CHANGED_PATHS` | bool | `true` | privacy switch |
+| `store_author_name` | `CORTEX_AGENT_OBSERVATORY_GIT_STORE_AUTHOR_NAME` | bool | `true` | privacy switch |
+| `store_author_email_hash` | `CORTEX_AGENT_OBSERVATORY_GIT_STORE_AUTHOR_EMAIL_HASH` | bool | `false` | never stores plaintext email |
+
+#### `[agent_observatory.stream]`
+
+| TOML key | Env var | Type | Default | Validation |
+|---|---|---|---|---|
+| `outbox_retention_secs` | `CORTEX_AGENT_OBSERVATORY_STREAM_OUTBOX_RETENTION_SECS` | u64 | `86_400` | `> 0` |
+| `replay_limit` | `CORTEX_AGENT_OBSERVATORY_STREAM_REPLAY_LIMIT` | usize | `1_000` | `> 0` |
+| `client_queue` | `CORTEX_AGENT_OBSERVATORY_STREAM_CLIENT_QUEUE` | usize | `256` | `> 0` |
+| `max_clients` | `CORTEX_AGENT_OBSERVATORY_STREAM_MAX_CLIENTS` | usize | `256` | `> 0` |
+| `keepalive_secs` | `CORTEX_AGENT_OBSERVATORY_STREAM_KEEPALIVE_SECS` | u64 | `15` | `> 0` |
+| `max_event_bytes` | `CORTEX_AGENT_OBSERVATORY_STREAM_MAX_EVENT_BYTES` | usize bytes | `65_536` | `1..=1_048_576` |
+
+#### `[agent_observatory.privacy]`
+
+| TOML key | Env var | Type | Default |
+|---|---|---|---|
+| `include_prompt_content` | `CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PROMPT_CONTENT` | bool | `false` |
+| `include_tool_content` | `CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_TOOL_CONTENT` | bool | `false` |
+| `include_command_content` | `CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_COMMAND_CONTENT` | bool | `true` |
+| `include_paths` | `CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PATHS` | bool | `true` |
+| `include_user_identity` | `CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_USER_IDENTITY` | bool | `false` |
+| `hash_email` | `CORTEX_AGENT_OBSERVATORY_PRIVACY_HASH_EMAIL` | bool | `true` |
+
+#### `[agent_observatory.retention]`
+
+| TOML key | Env var | Type | Default | Validation |
+|---|---|---|---|---|
+| `events_days` | `CORTEX_AGENT_OBSERVATORY_RETENTION_EVENTS_DAYS` | u64 | `90` | `> 0` |
+| `spans_days` | `CORTEX_AGENT_OBSERVATORY_RETENTION_SPANS_DAYS` | u64 | `30` | `> 0` |
+| `metrics_days` | `CORTEX_AGENT_OBSERVATORY_RETENTION_METRICS_DAYS` | u64 | `30` | `> 0` |
+| `repository_observations_days` | `CORTEX_AGENT_OBSERVATORY_RETENTION_REPOSITORY_OBSERVATIONS_DAYS` | u64 | `90` | `> 0` |
+| `removed_worktrees_days` | `CORTEX_AGENT_OBSERVATORY_RETENTION_REMOVED_WORKTREES_DAYS` | u64 | `365` | `> 0` |
+
+All fields are `restart-only`. Environment values take precedence over TOML.
+
 ## 5. Schema — planned blocks (not in V1 loader)
 
 These rows are sourced from the design specs under `docs/superpowers/specs/`. They are **not** yet defined in `src/config.rs`; the current `serde(deny_unknown_fields)` behavior is *off* (the top-level `Config` uses `#[serde(default)]` without deny), so unknown top-level tables in `config.toml` are silently ignored. Operators writing forward-compatible config can include these sections, but the V1 server will not act on them. Each row carries an epic pointer.
