@@ -55,6 +55,7 @@ fn seed_inventory(pool: &DbPool, services: usize) {
             }],
             env_keys: Vec::new(),
             labels: Default::default(),
+            details: Default::default(),
         });
     }
     inventory.reverse_proxies.push(ReverseProxyRoute {

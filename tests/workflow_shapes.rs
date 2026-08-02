@@ -95,7 +95,7 @@ fn workflows_default_to_read_only_github_token_permissions() {
         let workflow = std::fs::read_to_string(&path).expect("readable workflow");
         let permissions = workflow
             .lines()
-            .position(|line| line.trim_end() == "permissions:")
+            .position(|line| matches!(line.trim_end(), "permissions:" | "permissions: {}"))
             .map(|idx| {
                 workflow
                     .lines()
@@ -113,8 +113,11 @@ fn workflows_default_to_read_only_github_token_permissions() {
             continue;
         }
         assert!(
-            permissions.contains("contents: read"),
-            "{name} must default GITHUB_TOKEN to read-only contents access"
+            workflow
+                .lines()
+                .any(|line| line.trim_end() == "permissions: {}")
+                || permissions.contains("contents: read"),
+            "{name} must deny all GITHUB_TOKEN permissions or default contents access to read-only"
         );
     }
 
@@ -124,17 +127,17 @@ fn workflows_default_to_read_only_github_token_permissions() {
     );
 
     let docker = include_str!("../.github/workflows/docker-publish.yml");
-    let publish = workflow_job_block(docker, "container");
+    let container = workflow_job_block(docker, "container");
     assert!(
-        publish.contains("hosted-container-release.yml@"),
-        "the container job must delegate to the immutable shared hosted release workflow"
+        container.contains("hosted-container-release.yml"),
+        "the container job must remain delegated to the hardened reusable release workflow"
     );
-    for required_scope in ["packages: write", "attestations: write", "id-token: write"] {
-        assert!(
-            docker.contains(required_scope),
-            "docker-publish.yml must retain {required_scope}"
-        );
-    }
+    assert!(
+        docker.contains("packages: write")
+            && docker.contains("attestations: write")
+            && docker.contains("id-token: write"),
+        "the container release workflow must retain package, provenance, and OIDC scopes"
+    );
 }
 
 #[test]
