@@ -283,3 +283,11 @@ RED result: compile failed with unresolved imports for every AO-022 persistence 
 GREEN: added parameterized transactional repository/worktree upserts, deterministic reads/lists, immutable identity checks, canonical absolute-path validation, active-set removal, and reappearance clearing while preserving IDs and first_seen timestamps
 Proof: create/update/remove/reappear, transaction rollback, path rejection, and SQL-metacharacter fixtures all pass; 2 model tests and 56 schema/migration tests pass
 Gate: workspace Clippy with -D warnings, rustfmt, diff check, 500-line module limit, no formatted SQL call sites, and unchanged Cargo manifests all pass
+
+## AO-023 Parse worktree porcelain -z
+commit/worktree SHA: b73e6663 (task started)
+RED: real Git 2.53.0 byte fixtures and malformed-input tests imported the worktree record, unknown-field, typed-error, size-limit, and parser surfaces before implementation
+RED result: compile failed with unresolved imports for every AO-023 porcelain parser surface
+GREEN: added a NUL-safe byte parser for normal, detached, locked, prunable, and bare records with SHA-1/SHA-256 validation, duplicate/state checks, future-field retention, and bounded errors
+Proof: 9 parser tests pass against worktrees.bin sha256 ffac43a52ba54a25d859c852b5b747ee038022b0d0b77adb5b2cc783e75e3e5b and bare.bin sha256 1ef3fc47b4d104cb2c1a60f12c677d017cce2b98efa3a2b4cda2ee288e3fbc33; non-UTF-8 paths/branches/reasons survive unchanged
+Gate: workspace Clippy with -D warnings, rustfmt, diff check, fixture checksum verification, module-size limit, and unchanged Cargo manifests all pass
