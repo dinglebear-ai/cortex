@@ -43,7 +43,7 @@ pub(crate) async fn open_tail_file(
     let mut file = open_validated_tail_file(&source.path).await?;
     let metadata = file.metadata().await?;
     let identity = FileIdentity::from_metadata(&metadata);
-    let fingerprint = file_prefix_fingerprint(&mut file).await?;
+    let fingerprint = file_prefix_fingerprint(&mut file, FILE_TAIL_FINGERPRINT_BYTES).await?;
     let checkpoint_matches = source.checkpoint_dev == Some(identity.dev)
         && source.checkpoint_ino == Some(identity.ino)
         && source
@@ -89,8 +89,12 @@ pub(crate) async fn reopen_if_rotated_or_truncated(
     }
     if position > 0 {
         let mut file = open_validated_tail_file(&source.path).await?;
-        let current_fingerprint = file_prefix_fingerprint(&mut file).await?;
-        if current_fingerprint != fingerprint {
+        // Compare only the baseline bytes. Reading farther after a short file grows
+        // would misclassify an ordinary append as same-inode replacement, but keep
+        // the full current prefix so a real replacement gets a fresh baseline.
+        let current_fingerprint =
+            file_prefix_fingerprint(&mut file, FILE_TAIL_FINGERPRINT_BYTES).await?;
+        if !current_fingerprint.starts_with(fingerprint) {
             let metadata = file.metadata().await?;
             file.seek(std::io::SeekFrom::Start(0)).await?;
             return Ok(Some(OpenedTailFile {
@@ -121,7 +125,7 @@ pub(crate) async fn path_identity_changed(
 async fn reopen_from_start(source: &FileTailSource) -> Result<OpenedTailFile> {
     let mut file = open_validated_tail_file(&source.path).await?;
     let metadata = file.metadata().await?;
-    let fingerprint = file_prefix_fingerprint(&mut file).await?;
+    let fingerprint = file_prefix_fingerprint(&mut file, FILE_TAIL_FINGERPRINT_BYTES).await?;
     file.seek(std::io::SeekFrom::Start(0)).await?;
     Ok(OpenedTailFile {
         file,
@@ -131,8 +135,11 @@ async fn reopen_from_start(source: &FileTailSource) -> Result<OpenedTailFile> {
     })
 }
 
-async fn file_prefix_fingerprint(file: &mut tokio::fs::File) -> std::io::Result<Vec<u8>> {
-    let mut buf = vec![0; FILE_TAIL_FINGERPRINT_BYTES];
+async fn file_prefix_fingerprint(
+    file: &mut tokio::fs::File,
+    limit: usize,
+) -> std::io::Result<Vec<u8>> {
+    let mut buf = vec![0; limit.min(FILE_TAIL_FINGERPRINT_BYTES)];
     file.seek(std::io::SeekFrom::Start(0)).await?;
     let n = file.read(&mut buf).await?;
     buf.truncate(n);

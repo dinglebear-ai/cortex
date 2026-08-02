@@ -504,6 +504,58 @@ async fn reopen_if_rotated_or_truncated_detects_copytruncate() {
 }
 
 #[tokio::test]
+async fn reopen_if_rotated_or_truncated_ignores_append_beyond_original_fingerprint() {
+    let temp = tempfile::tempdir().unwrap();
+    let file_path = temp.path().join("app.log");
+    let old_contents = b"already here\n";
+    tokio::fs::write(&file_path, old_contents).await.unwrap();
+    let src = source("app", &file_path.to_string_lossy(), "app");
+    let mut opened = open_tail_file(&src, false).await.unwrap();
+    opened.position = old_contents.len() as u64;
+
+    let mut writer = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&file_path)
+        .await
+        .unwrap();
+    writer.write_all(b"after reconcile\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    let reopened =
+        reopen_if_rotated_or_truncated(&src, opened.identity, opened.position, &opened.fingerprint)
+            .await
+            .unwrap();
+    assert!(
+        reopened.is_none(),
+        "append-only growth must not be mistaken for same-inode replacement"
+    );
+}
+
+#[tokio::test]
+async fn reopen_if_rotated_or_truncated_refreshes_full_fingerprint_after_replacement() {
+    let temp = tempfile::tempdir().unwrap();
+    let file_path = temp.path().join("app.log");
+    let old_contents = b"old
+";
+    tokio::fs::write(&file_path, old_contents).await.unwrap();
+    let src = source("app", &file_path.to_string_lossy(), "app");
+    let mut opened = open_tail_file(&src, false).await.unwrap();
+    opened.position = old_contents.len() as u64;
+
+    let replacement = b"new replacement that is longer than the old prefix
+";
+    tokio::fs::write(&file_path, replacement).await.unwrap();
+
+    let reopened =
+        reopen_if_rotated_or_truncated(&src, opened.identity, opened.position, &opened.fingerprint)
+            .await
+            .unwrap()
+            .expect("replacement should reopen");
+    assert_eq!(reopened.position, 0);
+    assert_eq!(reopened.fingerprint, replacement.to_vec());
+}
+
+#[tokio::test]
 async fn reopen_if_rotated_or_truncated_detects_same_inode_copytruncate_regrow() {
     let temp = tempfile::tempdir().unwrap();
     let file_path = temp.path().join("app.log");
