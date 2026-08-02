@@ -328,15 +328,17 @@ pub(crate) fn check_transcript_forward_env_migration(
 
     for (line_num, line) in content.lines().enumerate() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix(AI_TRANSCRIPT_FORWARD_ENV) {
-            if rest.starts_with('=') {
-                current_value = Some(rest[1..].to_string());
-            }
-        } else if let Some(rest) = line.strip_prefix(AI_TRANSCRIPT_FORWARD_LEGACY_ENV) {
-            if rest.starts_with('=') {
-                legacy_value = Some(rest[1..].to_string());
-                legacy_line = Some(line_num);
-            }
+        if let Some(value) = line
+            .strip_prefix(AI_TRANSCRIPT_FORWARD_ENV)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
+            current_value = Some(value.to_string());
+        } else if let Some(value) = line
+            .strip_prefix(AI_TRANSCRIPT_FORWARD_LEGACY_ENV)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
+            legacy_value = Some(value.to_string());
+            legacy_line = Some(line_num);
         }
     }
 
