@@ -4,6 +4,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 
+#[path = "agent_observatory_queries.rs"]
+mod queries;
+pub use queries::{
+    RepositoryReconcileResult, RepositoryUpsert, RepositoryWorktreeUpsert, get_repository_by_key,
+    get_worktree_by_key, list_repository_worktrees, mark_repository_removed, mark_worktree_removed,
+    reconcile_repository,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumParseError {
     type_name: &'static str,

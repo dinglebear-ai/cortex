@@ -275,3 +275,11 @@ REGRESSION: complete Agent Observatory module tests, workspace Clippy with warni
 REGRESSION result: all 35 Agent Observatory tests passed; Clippy, rustfmt, git diff --check, and unchanged Cargo.toml/Cargo.lock gates passed
 FILES: src/agent_observatory.rs, src/agent_observatory/attribution.rs, src/agent_observatory/attribution_tests.rs
 NOTES: Refutation is scoped to worktree plus evidence source. Recovery requires evidence that is both newer and strictly stronger. Timestamp proximity remains stored evidence but is excluded from primary ranking.
+
+## AO-022 Add repository/worktree DB upserts
+commit/worktree SHA: cd3c02a7 (task started)
+RED: repository reconciliation tests imported repository/worktree upsert inputs, transactional reconcile/read helpers, and removal helpers before implementation
+RED result: compile failed with unresolved imports for every AO-022 persistence surface
+GREEN: added parameterized transactional repository/worktree upserts, deterministic reads/lists, immutable identity checks, canonical absolute-path validation, active-set removal, and reappearance clearing while preserving IDs and first_seen timestamps
+Proof: create/update/remove/reappear, transaction rollback, path rejection, and SQL-metacharacter fixtures all pass; 2 model tests and 56 schema/migration tests pass
+Gate: workspace Clippy with -D warnings, rustfmt, diff check, 500-line module limit, no formatted SQL call sites, and unchanged Cargo manifests all pass
