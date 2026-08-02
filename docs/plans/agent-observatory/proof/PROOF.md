@@ -220,3 +220,14 @@ REGRESSION: bash syntax validation, transcript_forward_env_ tests, and git diff 
 REGRESSION result: 4 compatibility tests passed; new-variable precedence, legacy-only compatibility, and local sessions-watch independence remain intact
 FILES: docs/contracts/agent-observatory.md, scripts/validate-transcript-forward-env-rename.sh
 NOTES: Cortex 3.x keeps the deprecated alias only in compatibility code, tests, migration documentation, and proof. Cortex 4.0 removal must delete the resolver, warning, doctor migration, and allowlist entries together.
+
+## AO-014 Implement migration 46 OTLP span table
+commit/worktree SHA: bffe249c (independent compliance verification started)
+RED: replace the shallow table-existence check with the complete migration-46 SQL contract fixture
+RED result: the expanded test initially failed to compile at its JSON fixture, proving the new contract path had not previously been exercised
+GREEN: pinned-target migration_46_creates_otel_spans_table_and_indexes
+GREEN result: exact columns, four indexes, trace/span dedupe, identifier lengths, duration/JSON/scrub constraints, deterministic run ordering, run and trace query plans, run-FK SET NULL, integrity, and idempotent reopen all passed
+REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
+REGRESSION result: schema head remains 47; formatting and diff checks clean
+FILES: src/db/pool_tests.rs, docs/plans/agent-observatory/proof/PROOF.md
+NOTES: Migration-46 DDL originally landed in the combined 22626a72 runner commit; this independent task commit locks the full contract without rewriting later unpublished descendants.

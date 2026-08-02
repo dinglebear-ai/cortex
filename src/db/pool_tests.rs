@@ -4598,39 +4598,264 @@ fn migration_45_fresh_database_applies_transactionally() {
     );
 }
 
-// AO-014 RED: migration 46 OTLP span table
+// AO-014: migration 46 OTLP span table contract.
 #[test]
 fn migration_46_creates_otel_spans_table_and_indexes() {
     let dir = tempfile::tempdir().unwrap();
-    let config = StorageConfig::for_test(dir.path().join("migration-46-otel-spans.db"));
-
-    // Open fresh database and check for migration 46 features
+    let db_path = dir.path().join("migration-46-otel-spans.db");
+    let config = StorageConfig::for_test(db_path.clone());
     let pool = init_pool(&config).unwrap();
     let conn = pool.get().unwrap();
 
-    // RED: Verify otel_spans table exists (will fail - migration 46 not implemented)
-    let table_exists: i64 = conn
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(otel_spans)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "trace_id",
+            "span_id",
+            "parent_span_id",
+            "trace_state",
+            "flags",
+            "span_name",
+            "span_kind",
+            "start_time_unix_nano",
+            "end_time_unix_nano",
+            "duration_nano",
+            "status_code",
+            "status_message",
+            "hostname",
+            "service_name",
+            "service_version",
+            "scope_name",
+            "scope_version",
+            "ai_tool",
+            "ai_project",
+            "ai_session_id",
+            "run_id",
+            "resource_json",
+            "attributes_json",
+            "events_json",
+            "links_json",
+            "received_at",
+            "content_scrubbed",
+        ]
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'otel_spans'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for expected in [
+        "idx_otel_spans_run_time",
+        "idx_otel_spans_service_time",
+        "idx_otel_spans_session_time",
+        "idx_otel_spans_trace",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "missing {expected}: {indexes:?}"
+        );
+    }
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('span-run', 'span-session', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:00:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    let insert_span = |span_id: &str, start: i64| {
+        conn.execute(
+            "INSERT INTO otel_spans
+                (trace_id, span_id, parent_span_id, span_name, span_kind,
+                 start_time_unix_nano, end_time_unix_nano, duration_nano,
+                 hostname, service_name, ai_tool, ai_session_id, run_id,
+                 resource_json, attributes_json, events_json, links_json,
+                 received_at, content_scrubbed)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 100,
+                     'dookie', 'cortex', 'claude', 'span-session', ?7,
+                     '{}', '{\"worktree\":\"cortex\"}', '[]', '[]', ?8, 1)",
+            rusqlite::params![
+                "0123456789abcdef0123456789abcdef",
+                span_id,
+                "1111111111111111",
+                format!("span-{span_id}"),
+                start,
+                start + 100,
+                run_id,
+                "2026-08-01T03:00:00.000Z",
+            ],
+        )
+    };
+    insert_span("2222222222222222", 100).unwrap();
+    insert_span("3333333333333333", 200).unwrap();
+
+    assert!(
+        insert_span("2222222222222222", 300).is_err(),
+        "trace/span identity must deduplicate"
+    );
+    for (label, sql) in [
+        (
+            "trace length",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at)
+             VALUES ('short', '4444444444444444', 'bad-trace', 1, 1, 2, 1, 'now')",
+        ),
+        (
+            "span length",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at)
+             VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'short', 'bad-span', 1, 1, 2, 1, 'now')",
+        ),
+        (
+            "parent length",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, parent_span_id, span_name, span_kind,
+                 start_time_unix_nano, end_time_unix_nano, duration_nano, received_at)
+             VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '5555555555555555', 'short',
+                     'bad-parent', 1, 1, 2, 1, 'now')",
+        ),
+        (
+            "negative duration",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at)
+             VALUES ('cccccccccccccccccccccccccccccccc', '6666666666666666',
+                     'bad-duration', 1, 2, 1, -1, 'now')",
+        ),
+        (
+            "invalid JSON",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, resource_json, received_at)
+             VALUES ('dddddddddddddddddddddddddddddddd', '7777777777777777',
+                     'bad-json', 1, 1, 2, 1, '{', 'now')",
+        ),
+        (
+            "scrub flag",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at, content_scrubbed)
+             VALUES ('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', '8888888888888888',
+                     'bad-scrub', 1, 1, 2, 1, 'now', 2)",
+        ),
+    ] {
+        assert!(conn.execute(sql, []).is_err(), "{label} must be rejected");
+    }
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT span_id FROM otel_spans
+             WHERE run_id = ?1
+             ORDER BY start_time_unix_nano DESC, id DESC",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["3333333333333333", "2222222222222222"]);
+
+    let run_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM otel_spans
+             WHERE run_id = ?1
+             ORDER BY start_time_unix_nano DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        run_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_spans_run_time")),
+        "run timeline query must use its index: {run_plan:?}"
+    );
+
+    let trace_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT span_id FROM otel_spans
+             WHERE trace_id = ?1
+             ORDER BY start_time_unix_nano, span_id",
+        )
+        .unwrap()
+        .query_map(["0123456789abcdef0123456789abcdef"], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        trace_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_spans_trace")),
+        "trace query must use its index: {trace_plan:?}"
+    );
+
+    let marker_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='otel_spans'",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 46",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(
-        table_exists, 1,
-        "otel_spans table must exist after migration 46"
-    );
+    assert_eq!(marker_count, 1);
 
-    // GREEN: Verify schema is at version 47 (includes migration 46 and 47)
-    let current_version: i64 = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
-            row.get(0)
-        })
+    conn.execute("DELETE FROM agent_runs WHERE id = ?1", [run_id])
         .unwrap();
-    assert_eq!(
-        current_version, 47,
-        "schema should be at version 47 after migrations 46 and 47"
-    );
+    let null_run_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM otel_spans WHERE run_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(null_run_count, 2, "run deletion must preserve spans");
+
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+
+    drop(conn);
+    drop(pool);
+    let reopened = init_pool(&StorageConfig::for_test(db_path)).unwrap();
+    let reopened_conn = reopened.get().unwrap();
+    let marker_count: i64 = reopened_conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 46",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1, "migration 46 must be idempotent");
 }
 
 // AO-015 RED: migration 47 OTLP metric-point table
