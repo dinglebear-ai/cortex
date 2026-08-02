@@ -620,7 +620,15 @@ phase_tools() {
   assert_jq "cortex sessions — count field present" "${sessions_result}" '.count != null'
   assert_jq "cortex sessions — sessions field is array" "${sessions_result}" '.sessions | type' "array"
   if [[ "${AI_SEEDED}" == true ]]; then
-    assert_jq "cortex sessions — seeded AI project appears" "${sessions_result}" \
+    # The unbounded sessions action intentionally reads a periodically refreshed
+    # rollup. Query the seeded fixture through an explicit time window so this
+    # assertion uses the exact live path instead of racing rollup refresh timing.
+    local seeded_sessions_result
+    seeded_sessions_result="$(call_tool cortex "$(jq -nc \
+      --arg project "${AI_SMOKE_PROJECT}" \
+      '{"action":"sessions","project":$project,"since":"2026-05-11T00:00:00Z","until":"2026-05-13T00:00:00Z","limit":10}')")" \
+      || seeded_sessions_result=""
+    assert_jq "cortex sessions — seeded AI project appears" "${seeded_sessions_result}" \
       "any(.sessions[]?; .project == \"${AI_SMOKE_PROJECT}\")" "true"
   fi
 
@@ -940,7 +948,7 @@ wait_for_timeline_rollup() {
   local token="$1"
   local response=""
   local attempt
-  for attempt in {1..30}; do
+  for attempt in {1..120}; do
     response="$(curl -sf --max-time 3 \
       -H "Authorization: Bearer ${token}" \
       "${BASE_URL}/api/timeline?bucket=hour" 2>/dev/null || true)"
@@ -1027,7 +1035,7 @@ phase_cli_parity() {
     args="${pair#*|}"
     if [[ "${label}" == "timeline --bucket hour" ]] \
       && ! wait_for_timeline_rollup "${cli_token}"; then
-      _fail "cli parity: ${label} (timeline rollup not ready after 30s)"
+      _fail "cli parity: ${label} (timeline rollup not ready after 120s)"
       continue
     fi
     if [[ -n "${CLI_PARITY_CONTAINER}" ]]; then

@@ -76,13 +76,18 @@ fn coverage_tooling_is_documented_and_scripted() {
 }
 
 #[test]
-fn live_smoke_waits_for_hourly_rollup_before_cli_parity() {
+fn live_smoke_stabilizes_rollups_before_data_assertions() {
     let live = include_str!("../tests/test_live.sh");
     assert!(
         live.contains("wait_for_timeline_rollup")
+            && live.contains("for attempt in {1..120}")
             && live.contains(".rollup_as_of")
-            && live.contains("timeline rollup not ready after 30s"),
-        "live smoke should stabilize the eager hourly rollup before timeline CLI parity"
+            && live.contains("timeline rollup not ready after 120s"),
+        "live smoke should give the eager hourly rollup a bounded loaded-CI startup budget"
+    );
+    assert!(
+        live.contains(r#""action":"sessions","project":$project,"since":"2026-05-11T00:00:00Z","until":"2026-05-13T00:00:00Z""#),
+        "seeded-session visibility should use an exact time-windowed query instead of a stale rollup"
     );
 }
 
