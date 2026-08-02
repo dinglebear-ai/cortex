@@ -264,3 +264,14 @@ REGRESSION: complete Agent Observatory module tests, workspace Clippy with warni
 REGRESSION result: all 24 Agent Observatory tests passed; Clippy, rustfmt, git diff --check, and unchanged Cargo.toml/Cargo.lock gates passed
 FILES: src/agent_observatory.rs, src/agent_observatory/lifecycle.rs, src/agent_observatory/lifecycle_tests.rs
 NOTES: The reducer is pure and receives now explicitly. Unavailable process evidence remains stale rather than terminal, and unchanged status/reason pairs preserve observed_at to avoid poll-driven writes.
+
+## AO-021 Implement attribution scoring and primary selection
+commit/worktree SHA: 1a97b963 (task started)
+RED: attribution sidecar tests imported the candidate, kind, default, validation, trust-rank, selection, and threshold surfaces before implementation
+RED result: compile failed with unresolved imports for every required attribution API
+GREEN: focused scoring suite after implementing frozen defaults, validation, latest-source refutation, stronger-evidence recovery, deterministic sorting, per-worktree deduplication, and the 0.75 primary threshold
+GREEN result: 11 tests passed; exact defaults and trust rank, confidence-first order, trust/time/worktree tie-breaks, below-threshold behavior, timestamp-only exclusion, refutation blocking/recovery, strongest evidence per worktree, 128 shuffled orders, and invalid candidate rejection are covered
+REGRESSION: complete Agent Observatory module tests, workspace Clippy with warnings denied, formatting, diff check, and dependency-lock audit
+REGRESSION result: all 35 Agent Observatory tests passed; Clippy, rustfmt, git diff --check, and unchanged Cargo.toml/Cargo.lock gates passed
+FILES: src/agent_observatory.rs, src/agent_observatory/attribution.rs, src/agent_observatory/attribution_tests.rs
+NOTES: Refutation is scoped to worktree plus evidence source. Recovery requires evidence that is both newer and strictly stronger. Timestamp proximity remains stored evidence but is excluded from primary ranking.
