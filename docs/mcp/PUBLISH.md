@@ -64,7 +64,8 @@ Steps executed:
 | crates.io | `cargo publish` via GitHub Actions | `v*` tag push |
 | GHCR | Docker image build and push | `v*` tag push |
 | MCP Registry | `server.json` under `tv.tootie/cortex` namespace | manual update |
-| MCPB | `dist/cortex-X.Y.Z-linux.mcpb` | `just build-mcpb` |
+| MCPB (Linux) | `dist/cortex-X.Y.Z-linux.mcpb` | `just build-mcpb` |
+| MCPB (Windows) | `dist/cortex-X.Y.Z-windows.mcpb` | `bash scripts/build-mcpb.sh --target windows` |
 
 ## server.json
 
@@ -91,10 +92,12 @@ Run before publishing a release:
 
 ```bash
 just build-mcpb
+bash scripts/build-mcpb.sh --target windows
 npx --yes @anthropic-ai/mcpb info dist/cortex-X.Y.Z-linux.mcpb
+npx --yes @anthropic-ai/mcpb info dist/cortex-X.Y.Z-windows.mcpb
 ```
 
-The unsigned MCPB is a Linux bundle for local stdio clients. Signing is a
+The unsigned MCPBs are target-specific bundles for local stdio clients. Signing is a
 separate distribution step once signing keys are available.
 
 ## Verification
