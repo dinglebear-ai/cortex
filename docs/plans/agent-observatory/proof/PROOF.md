@@ -164,3 +164,15 @@ REGRESSION: cargo clippy --locked --lib --tests -- -D warnings, cargo fmt, and g
 REGRESSION result: Clippy completed without warnings after marking staged row-only model modules as intentionally unused until projector/API integration; formatting and diff checks clean
 FILES: src/db.rs, src/db/agent_observatory.rs, src/db/otlp_traces.rs, src/db/otlp_metrics.rs, src/db/agent_observatory_models_tests.rs, src/agent_observatory_tests.rs
 NOTES: This task adds strict text conversions and row structs only. Query and persistence methods remain deferred to later tasks. The schema lock test now requires runtime schema 47 because migrations 44 through 47 are complete.
+
+## AO-018 Add configuration types, defaults, and validation
+commit/worktree SHA: 5564d05c (task started)
+RED: pinned-target agent_observatory_defaults_are_safe_and_disabled
+RED result: compile failed because Config had no agent_observatory field, AgentObservatoryConfig did not exist, and no validator or env mappings were defined
+GREEN: pinned-target agent_observatory_ test filter after adding strict nested config, safe defaults, env precedence, and validation
+GREEN result: 13 focused observatory config/model/storage tests passed, including disabled defaults, full TOML round-trip, unknown-field rejection, environment overrides, and unsafe-bound rejection
+REGRESSION: full config::tests, runtime::tests, corrected focused validation test, cargo clippy --lib --tests -- -D warnings, cargo fmt, and git diff --check
+REGRESSION result: 96 config tests passed; 20 runtime tests passed; corrected validation test passed; Clippy, formatting, and diff checks clean
+FILES: src/config.rs, src/config_tests.rs, src/runtime_tests.rs, docs/contracts/config-schema.md
+NOTES: Feature remains explicitly disabled by default. The nested agent_observatory block denies unknown fields and all documented CORTEX_AGENT_OBSERVATORY_* variables override TOML.
+

@@ -1656,3 +1656,185 @@ fn silence_defaults_pass_validation() {
             .contains(&"agent-docker".to_string())
     );
 }
+
+#[test]
+fn agent_observatory_defaults_are_safe_and_disabled() {
+    let cfg = AgentObservatoryConfig::default();
+    assert!(!cfg.enabled);
+    assert!(cfg.git.enabled);
+    assert_eq!(cfg.projector_poll_ms, 500);
+    assert_eq!(cfg.projector_page_rows, 500);
+    assert_eq!(cfg.projector_page_bytes, 4_194_304);
+    assert_eq!(cfg.active_window_secs, 15);
+    assert_eq!(cfg.stale_after_secs, 300);
+    assert_eq!(cfg.abandoned_after_secs, 86_400);
+    assert_eq!(cfg.stream.max_event_bytes, 65_536);
+    assert!(!cfg.privacy.include_prompt_content);
+    assert!(!cfg.privacy.include_tool_content);
+    assert!(!cfg.privacy.include_user_identity);
+}
+
+#[test]
+fn agent_observatory_full_toml_deserializes_and_unknown_fields_fail() {
+    let raw = r#"
+        [agent_observatory]
+        enabled = true
+        projector_poll_ms = 250
+        projector_page_rows = 750
+        projector_page_bytes = 8388608
+        active_window_secs = 20
+        stale_after_secs = 400
+        abandoned_after_secs = 90000
+
+        [agent_observatory.git]
+        enabled = true
+        roots = ["/workspace", "/srv/repos"]
+        max_depth = 4
+        max_repositories = 200
+        reconcile_interval_secs = 90
+        debounce_ms = 750
+        command_timeout_ms = 7000
+        max_commits_per_transition = 800
+        store_changed_paths = false
+        store_author_name = false
+        store_author_email_hash = true
+
+        [agent_observatory.stream]
+        outbox_retention_secs = 172800
+        replay_limit = 2000
+        client_queue = 512
+        max_clients = 300
+        keepalive_secs = 20
+        max_event_bytes = 131072
+
+        [agent_observatory.privacy]
+        include_prompt_content = true
+        include_tool_content = true
+        include_command_content = false
+        include_paths = false
+        include_user_identity = true
+        hash_email = false
+
+        [agent_observatory.retention]
+        events_days = 120
+        spans_days = 45
+        metrics_days = 45
+        repository_observations_days = 120
+        removed_worktrees_days = 730
+    "#;
+    let cfg: Config = toml::from_str(raw).expect("complete observatory config should parse");
+    assert!(cfg.agent_observatory.enabled);
+    assert_eq!(
+        cfg.agent_observatory.git.roots,
+        vec!["/workspace", "/srv/repos"]
+    );
+    assert_eq!(cfg.agent_observatory.stream.client_queue, 512);
+    assert!(cfg.agent_observatory.privacy.include_prompt_content);
+    assert_eq!(cfg.agent_observatory.retention.removed_worktrees_days, 730);
+
+    let unknown = "[agent_observatory]
+enabled = false
+unknown_knob = true
+";
+    let error = toml::from_str::<Config>(unknown).unwrap_err();
+    assert!(
+        error.to_string().contains("unknown field"),
+        "wrong error: {error}"
+    );
+}
+
+#[test]
+fn agent_observatory_validation_rejects_zero_and_unsafe_limits() {
+    let cfg = AgentObservatoryConfig {
+        enabled: true,
+        projector_poll_ms: 0,
+        ..Default::default()
+    };
+    assert!(
+        validate_agent_observatory_config(&cfg)
+            .unwrap_err()
+            .to_string()
+            .contains("projector_poll_ms")
+    );
+
+    let cfg = AgentObservatoryConfig {
+        enabled: true,
+        stale_after_secs: 15,
+        ..Default::default()
+    };
+    assert!(
+        validate_agent_observatory_config(&cfg)
+            .unwrap_err()
+            .to_string()
+            .contains("stale_after_secs")
+    );
+
+    let cfg = AgentObservatoryConfig {
+        enabled: true,
+        stream: AgentObservatoryStreamConfig {
+            max_event_bytes: 1_048_577,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(
+        validate_agent_observatory_config(&cfg)
+            .unwrap_err()
+            .to_string()
+            .contains("max_event_bytes")
+    );
+
+    let cfg = AgentObservatoryConfig {
+        enabled: true,
+        retention: AgentObservatoryRetentionConfig {
+            events_days: 0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(
+        validate_agent_observatory_config(&cfg)
+            .unwrap_err()
+            .to_string()
+            .contains("events_days")
+    );
+}
+
+#[test]
+#[serial]
+fn agent_observatory_environment_overrides_toml_values() {
+    unsafe {
+        std::env::set_var("CORTEX_HOST", "127.0.0.1");
+        std::env::set_var("CORTEX_AGENT_OBSERVATORY_ENABLED", "true");
+        std::env::set_var("CORTEX_AGENT_OBSERVATORY_PROJECTOR_POLL_MS", "125");
+        std::env::set_var(
+            "CORTEX_AGENT_OBSERVATORY_GIT_ROOTS",
+            "/workspace,/srv/repos",
+        );
+        std::env::set_var("CORTEX_AGENT_OBSERVATORY_STREAM_MAX_EVENT_BYTES", "131072");
+        std::env::set_var("CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PATHS", "false");
+        std::env::set_var("CORTEX_AGENT_OBSERVATORY_RETENTION_EVENTS_DAYS", "180");
+    }
+    let result = Config::load();
+    for key in [
+        "CORTEX_HOST",
+        "CORTEX_AGENT_OBSERVATORY_ENABLED",
+        "CORTEX_AGENT_OBSERVATORY_PROJECTOR_POLL_MS",
+        "CORTEX_AGENT_OBSERVATORY_GIT_ROOTS",
+        "CORTEX_AGENT_OBSERVATORY_STREAM_MAX_EVENT_BYTES",
+        "CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PATHS",
+        "CORTEX_AGENT_OBSERVATORY_RETENTION_EVENTS_DAYS",
+    ] {
+        unsafe { std::env::remove_var(key) };
+    }
+    let cfg = result.expect("observatory env overrides should load");
+    assert!(cfg.agent_observatory.enabled);
+    assert_eq!(cfg.agent_observatory.projector_poll_ms, 125);
+    assert_eq!(
+        cfg.agent_observatory.git.roots,
+        vec!["/workspace", "/srv/repos"]
+    );
+    assert_eq!(cfg.agent_observatory.stream.max_event_bytes, 131_072);
+    assert!(!cfg.agent_observatory.privacy.include_paths);
+    assert_eq!(cfg.agent_observatory.retention.events_days, 180);
+}
