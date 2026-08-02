@@ -4858,61 +4858,271 @@ fn migration_46_creates_otel_spans_table_and_indexes() {
     assert_eq!(marker_count, 1, "migration 46 must be idempotent");
 }
 
-// AO-015 RED: migration 47 OTLP metric-point table
+// AO-015: migration 47 OTLP metric-point table contract.
 #[test]
 fn migration_47_creates_otel_metric_points_table_and_indexes() {
     let dir = tempfile::tempdir().unwrap();
-    let config = StorageConfig::for_test(dir.path().join("migration-47-otel-metrics.db"));
-
-    // Open fresh database and check for migration 47 features
+    let db_path = dir.path().join("migration-47-otel-metrics.db");
+    let config = StorageConfig::for_test(db_path.clone());
     let pool = init_pool(&config).unwrap();
     let conn = pool.get().unwrap();
 
-    // RED: Verify otel_metric_points table exists (will fail - migration 47 not implemented)
-    let table_exists: i64 = conn
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(otel_metric_points)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "point_key",
+            "metric_name",
+            "description",
+            "unit",
+            "instrument_kind",
+            "aggregation_temporality",
+            "monotonic",
+            "start_time_unix_nano",
+            "time_unix_nano",
+            "hostname",
+            "service_name",
+            "service_version",
+            "scope_name",
+            "scope_version",
+            "ai_tool",
+            "ai_project",
+            "ai_session_id",
+            "run_id",
+            "resource_json",
+            "attributes_json",
+            "value_json",
+            "exemplars_json",
+            "received_at",
+            "content_scrubbed",
+        ]
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'otel_metric_points'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for expected in [
+        "idx_otel_metric_points_name_time",
+        "idx_otel_metric_points_run_time",
+        "idx_otel_metric_points_session_time",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "missing {expected}: {indexes:?}"
+        );
+    }
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('metric-run', 'metric-session', 'codex', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:30:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    let insert_point = |point_key: &str, metric_name: &str, kind: &str, time: i64| {
+        conn.execute(
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, description, unit, instrument_kind,
+                 aggregation_temporality, monotonic, start_time_unix_nano,
+                 time_unix_nano, hostname, service_name, ai_tool,
+                 ai_session_id, run_id, resource_json, attributes_json,
+                 value_json, exemplars_json, received_at, content_scrubbed)
+             VALUES (?1, ?2, 'fixture', 'ms', ?3, 2, 0, ?4, ?5,
+                     'dookie', 'cortex', 'codex', 'metric-session', ?6,
+                     '{}', '{}', ?7, '[]', ?8, 1)",
+            rusqlite::params![
+                point_key,
+                metric_name,
+                kind,
+                time - 10,
+                time,
+                run_id,
+                "{\"value\":42.0}",
+                "2026-08-01T03:30:00.000Z",
+            ],
+        )
+    };
+    insert_point("point-1", "agent.latency", "gauge", 100).unwrap();
+    insert_point("point-2", "agent.latency", "histogram", 200).unwrap();
+
+    assert!(
+        insert_point("point-1", "agent.latency", "gauge", 300).is_err(),
+        "point_key must deduplicate"
+    );
+    assert!(
+        insert_point("bad-kind", "agent.latency", "invalid_kind", 300).is_err(),
+        "unknown instrument kind must be rejected"
+    );
+
+    for (label, sql, params) in [
+        (
+            "resource JSON",
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 resource_json, value_json, received_at)
+             VALUES (?1, 'agent.bad', 'gauge', 300, ?2, '{}', 'now')",
+            ("bad-resource", "{"),
+        ),
+        (
+            "value JSON",
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 value_json, received_at)
+             VALUES (?1, 'agent.bad', 'sum', 301, ?2, 'now')",
+            ("bad-value", "{"),
+        ),
+        (
+            "exemplars JSON",
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 value_json, exemplars_json, received_at)
+             VALUES (?1, 'agent.bad', 'summary', 302, '{}', ?2, 'now')",
+            ("bad-exemplars", "{"),
+        ),
+    ] {
+        assert!(
+            conn.execute(sql, rusqlite::params![params.0, params.1])
+                .is_err(),
+            "{label} must be rejected"
+        );
+    }
+
+    assert!(
+        conn.execute(
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, monotonic,
+                 time_unix_nano, value_json, received_at)
+             VALUES ('bad-monotonic', 'agent.bad', 'sum', 2, 303, '{}', 'now')",
+            [],
+        )
+        .is_err(),
+        "monotonic must be null, zero, or one"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 value_json, received_at, content_scrubbed)
+             VALUES ('bad-scrub', 'agent.bad', 'gauge', 304, '{}', 'now', 2)",
+            [],
+        )
+        .is_err(),
+        "content_scrubbed must be zero or one"
+    );
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT point_key FROM otel_metric_points
+             WHERE run_id = ?1
+             ORDER BY time_unix_nano DESC, id DESC",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["point-2", "point-1"]);
+
+    let run_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM otel_metric_points
+             WHERE run_id = ?1
+             ORDER BY time_unix_nano DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        run_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_metric_points_run_time")),
+        "run metric query must use its index: {run_plan:?}"
+    );
+
+    let name_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM otel_metric_points
+             WHERE metric_name = ?1
+             ORDER BY time_unix_nano DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map(["agent.latency"], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        name_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_metric_points_name_time")),
+        "metric-name query must use its index: {name_plan:?}"
+    );
+
+    let marker_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='otel_metric_points'",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+
+    conn.execute("DELETE FROM agent_runs WHERE id = ?1", [run_id])
+        .unwrap();
+    let null_run_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM otel_metric_points WHERE run_id IS NULL",
             [],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(
-        table_exists, 1,
-        "otel_metric_points table must exist after migration 47"
+        null_run_count, 2,
+        "run deletion must preserve metric points"
     );
 
-    // RED: Verify schema is at version 47 (will fail - currently at 46)
-    let current_version: i64 = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
-            row.get(0)
-        })
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
         .unwrap();
-    assert_eq!(
-        current_version, 47,
-        "schema should be at version 47 after migration 47"
-    );
+    assert_eq!(foreign_key_violation, None);
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
 
-    // GREEN: Verify duplicate point key deduplicates (constraint is enforced)
-    conn.execute(
-        "INSERT INTO otel_metric_points (point_key, metric_name, instrument_kind, time_unix_nano, hostname, value_json, received_at) VALUES ('test-point-key', 'test.metric', 'gauge', 1234567890, 'test-host', '{\"value\": 42.0}', '2024-01-01T00:00:00.000Z')",
-        [],
-    ).unwrap();
-    let duplicate_result = conn.execute(
-        "INSERT INTO otel_metric_points (point_key, metric_name, instrument_kind, time_unix_nano, hostname, value_json, received_at) VALUES ('test-point-key', 'test.metric', 'gauge', 1234567891, 'test-host', '{\"value\": 43.0}', '2024-01-01T00:00:01.000Z')",
-        [],
-    );
-    assert!(
-        duplicate_result.is_err(),
-        "duplicate point key should be rejected by UNIQUE constraint"
-    );
-
-    // GREEN: Verify invalid instrument kind is rejected (check constraint is enforced)
-    let invalid_kind_result = conn.execute(
-        "INSERT INTO otel_metric_points (point_key, metric_name, instrument_kind, time_unix_nano, hostname, value_json, received_at) VALUES ('invalid-key', 'test.metric', 'invalid_kind', 1234567892, 'test-host', '{\"value\": 44.0}', '2024-01-01T00:00:02.000Z')",
-        [],
-    );
-    assert!(
-        invalid_kind_result.is_err(),
-        "invalid instrument kind should be rejected by CHECK constraint"
-    );
+    drop(conn);
+    drop(pool);
+    let reopened = init_pool(&StorageConfig::for_test(db_path)).unwrap();
+    let reopened_conn = reopened.get().unwrap();
+    let marker_count: i64 = reopened_conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1, "migration 47 must be idempotent");
 }
