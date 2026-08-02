@@ -253,3 +253,14 @@ REGRESSION: Agent Observatory contracts, complete agent_observatory module tests
 REGRESSION result: JSON/SQL/Rust/TypeScript contract checks passed; 12 Agent Observatory tests passed; Clippy, rustfmt, git diff --check, and unchanged Cargo.toml/Cargo.lock gates passed
 FILES: src/agent_observatory.rs, src/agent_observatory/identity.rs, src/agent_observatory/identity_tests.rs
 NOTES: Unknown provider labels are trimmed and Unicode-lowercased under unknown:<source>; original provider labels remain a future metadata concern. No random identity or new dependency was introduced.
+
+## AO-020 Implement lifecycle reducer
+commit/worktree SHA: 96451127 (task started)
+RED: fixed-time lifecycle tests imported the reducer evidence, window, wait, reason, state, and decision surfaces before implementation
+RED result: compile failed with unresolved imports for every required reducer type and reduce_lifecycle
+GREEN: focused pure reducer suite with fixed 2026-08-02T16:00:00Z clock and no sleeps
+GREEN result: 12 tests passed; explicit failure and success precedence, permission/tool waits, starting without activity, exact active/idle/stale/abandoned boundary seconds, process-live and unavailable behavior, future timestamp clamping, stable observed_at/write suppression, transition timestamps, default windows, and all frozen reason codes are covered
+REGRESSION: complete Agent Observatory module tests, workspace Clippy with warnings denied, formatting, diff check, and dependency-lock audit
+REGRESSION result: all 24 Agent Observatory tests passed; Clippy, rustfmt, git diff --check, and unchanged Cargo.toml/Cargo.lock gates passed
+FILES: src/agent_observatory.rs, src/agent_observatory/lifecycle.rs, src/agent_observatory/lifecycle_tests.rs
+NOTES: The reducer is pure and receives now explicitly. Unavailable process evidence remains stale rather than terminal, and unchanged status/reason pairs preserve observed_at to avoid poll-driven writes.
