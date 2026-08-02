@@ -198,6 +198,28 @@ fn release_please_config_and_manifest_agree_with_components_toml() {
             "release-please-config.json must declare an extra-files entry for {extra_file}"
         );
     }
+    let config_json: serde_json::Value =
+        serde_json::from_str(config).expect("release-please config must be valid JSON");
+    let extra_files = config_json["packages"]["."]["extra-files"]
+        .as_array()
+        .expect("root package must declare extra-files");
+    for jsonpath in ["$.version", "$.binaryVersion"] {
+        assert!(
+            extra_files.iter().any(|entry| {
+                entry["type"] == "json"
+                    && entry["path"] == "packages/cortex-rmcp/package.json"
+                    && entry["jsonpath"] == jsonpath
+            }),
+            "npm launcher {jsonpath} must use an explicit JSON updater"
+        );
+    }
+    assert!(
+        !extra_files
+            .iter()
+            .any(|entry| entry.as_str() == Some("packages/cortex-rmcp/package.json")),
+        "package.json must not use the implicit extra-file updater"
+    );
+
     assert!(
         manifest.contains("\".\""),
         ".release-please-manifest.json must track the root package"
