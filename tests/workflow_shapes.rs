@@ -138,6 +138,16 @@ fn workflows_default_to_read_only_github_token_permissions() {
             && docker.contains("id-token: write"),
         "the container release workflow must retain package, provenance, and OIDC scopes"
     );
+    assert!(
+        docker.contains("workflow_dispatch:") && docker.contains("release_tag:"),
+        "the container release workflow must support controlled recovery for an existing release tag"
+    );
+    assert!(
+        docker
+            .contains(r#"smoke-command: docker run --rm --entrypoint cortex "$IMAGE_REF" --help"#)
+            && !docker.contains(r#"smoke-command: docker run --rm "$IMAGE_REF" --help"#),
+        "the container smoke test must invoke the cortex binary instead of treating --help as the executable"
+    );
 }
 
 #[test]
