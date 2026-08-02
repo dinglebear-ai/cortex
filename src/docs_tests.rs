@@ -76,6 +76,17 @@ fn coverage_tooling_is_documented_and_scripted() {
 }
 
 #[test]
+fn live_smoke_waits_for_hourly_rollup_before_cli_parity() {
+    let live = include_str!("../tests/test_live.sh");
+    assert!(
+        live.contains("wait_for_timeline_rollup")
+            && live.contains(".rollup_as_of")
+            && live.contains("timeline rollup not ready after 30s"),
+        "live smoke should stabilize the eager hourly rollup before timeline CLI parity"
+    );
+}
+
+#[test]
 fn live_smoke_keeps_deterministic_admin_rest_coverage() {
     let live = include_str!("../tests/test_live.sh");
     assert!(
