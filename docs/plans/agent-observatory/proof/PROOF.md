@@ -231,3 +231,14 @@ REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --ch
 REGRESSION result: schema head remains 47; formatting and diff checks clean
 FILES: src/db/pool_tests.rs, docs/plans/agent-observatory/proof/PROOF.md
 NOTES: Migration-46 DDL originally landed in the combined 22626a72 runner commit; this independent task commit locks the full contract without rewriting later unpublished descendants.
+
+## AO-015 Implement migration 47 OTLP metric-point table
+commit/worktree SHA: cebcafb6 (independent compliance verification started)
+RED: replace the shallow table-existence check with the complete migration-47 SQL contract fixture
+RED result: the expanded test initially failed to compile because its JSON value fixture lacked Rust string escaping
+GREEN: corrected the fixture and reran migration_47_creates_otel_metric_points_table_and_indexes in an isolated Cargo target
+GREEN result: 1 passed; exact columns and all three indexes, point-key dedupe, instrument/JSON/boolean constraints, deterministic ordering, run/name query plans, run deletion preservation, integrity, foreign keys, and idempotent reopen verified
+REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
+REGRESSION result: schema head test passed at 47; formatting and diff checks clean
+FILES: src/db/pool_tests.rs
+NOTES: The original migration DDL remains unchanged; this task adds full independent contract proof after AO-014 and AO-015 were originally combined in one implementation commit.
