@@ -155,6 +155,22 @@ fn workflows_default_to_read_only_github_token_permissions() {
             && !docker.contains("--domain tootie.tv"),
         "MCP Registry publication must authenticate through the canonical dinglebear.ai repository variable"
     );
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../server.json")).expect("server.json must parse");
+    let description = manifest["description"]
+        .as_str()
+        .expect("server.json description must be a string");
+    assert!(
+        description.chars().count() <= 100,
+        "MCP Registry description must stay within the 100-character schema limit"
+    );
+    assert!(
+        docker.contains(
+            r#".description = "Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.""#,
+        ),
+        "release recovery must restamp older tags with the schema-compliant description"
+    );
 }
 
 #[test]

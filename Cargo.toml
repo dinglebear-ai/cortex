@@ -45,7 +45,7 @@ homepage.workspace = true
 repository.workspace = true
 categories = ["command-line-utilities", "development-tools::debugging", "database", "network-programming", "parsing"]
 keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
-description = "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST."
+description = "Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS."
 publish = false
 autobins = false
 
