@@ -299,3 +299,12 @@ RED result: compile failed with unresolved StatusSummary, StatusParseError, Stat
 GREEN: implemented NUL-safe porcelain-v2 branch/header parsing, ahead/behind counts, tracked/unmerged/rename/untracked/ignored counting, rename source consumption, and non-UTF-8 pathname handling without returning filenames
 Proof: 19 combined porcelain tests passed; all seven checked-in status fixtures matched regenerated temporary-repository output byte-for-byte and their SHA-256 checks passed
 Gate: workspace Clippy passed with -D warnings; format, diff, 500-line module-size, and Cargo manifest/lock checks passed; exhaustive StatusSummary destructuring proves no pathname field is persisted
+
+## AO-025 Add deterministic temporary Git fixture builder
+commit/worktree SHA: 12ad7234 (task started)
+RED: deterministic fixture smoke tests imported GitFixture and git_available before implementation
+RED result: compile failed because the fixture helper surface was absent
+GREEN: real system Git fixture builds root/main/feature/reset/rebase commits, linked and detached worktrees, and a locked linked worktree under isolated HOME/XDG/GIT_CONFIG_GLOBAL/GIT_CONFIG_NOSYSTEM settings
+verification: 3 fixture tests passed; repeated builds matched exact SHA vectors a4600ca60e26420e56b54374401fd23ccd4a208d, 3deaf115eb2df48b835b5b706d626640b33230d2, f6a7405024dfb8c42a20bc675fe9093e0bc767fc, 5e5c810eaec0f70f0745db09c1299b2766bb6c81, 96c48c2090c90ff0997e9cecc686a636240df3fb, and ee987310aaf16c3916a9c5d033ecd21dd0d143b5; all 19 porcelain tests passed
+quality: workspace Clippy passed with -D warnings; formatting, diff, module-size, and Cargo manifest/lock gates passed
+isolation: fixture command environment sets isolated HOME and XDG_CONFIG_HOME, disables global/system Git config, hooks, and signing; global sentinel config remained unchanged
