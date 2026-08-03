@@ -317,3 +317,14 @@ GREEN: iterative canonical traversal discovers directory and linked-worktree fil
 GREEN result: 8 focused discovery tests passed
 REGRESSION: 19 porcelain tests and 3 deterministic Git fixture tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-027 Implement one-repository reconciliation
+commit/worktree SHA: da6b2c38 (task started)
+RED: append-only observation tests imported RepositoryObservationInput, list_repository_observations, and record_repository_observations_if_changed before implementation
+RED result: compile failed with all three observation surfaces unresolved
+RED: real-Git reconciliation tests imported the command runner, options, report stages/warnings, and both reconcile entry points before implementation
+RED result: compile failed with GitCommandResult, GitCommandRunner, ProcessGitRunner, ReconcileOptions, ReconcileStage, ReconcileWarningKind, reconcile_one_repository, and reconcile_one_repository_with_runner unresolved
+GREEN: bounded Git commands collect common dir, worktree porcelain, status v2, HEAD, branch, and optional upstream divergence before any database mutation; topology and append-only discovered/status/head observations persist with deterministic transition keys and unchanged-state suppression
+GREEN result: 3 real reconciliation tests and 2 observation persistence tests passed, including second-reconcile last_seen updates, dirty/head transitions, transactional observation rollback, and timeout preservation of prior rows
+REGRESSION: all 33 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed

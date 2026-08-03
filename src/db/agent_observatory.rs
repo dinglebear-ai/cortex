@@ -4,6 +4,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 
+#[path = "agent_observatory_observations.rs"]
+mod observations;
+pub use observations::{
+    RepositoryObservationInput, list_repository_observations,
+    record_repository_observations_if_changed,
+};
+
 #[path = "agent_observatory_queries.rs"]
 mod queries;
 pub use queries::{
