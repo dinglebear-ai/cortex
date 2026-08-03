@@ -2,6 +2,12 @@
 
 use std::fmt;
 
+#[path = "porcelain_status.rs"]
+mod status;
+pub use status::{
+    StatusParseError, StatusParseErrorKind, StatusSummary, parse_status_porcelain_v2,
+};
+
 /// Maximum accepted byte length for one NUL-delimited porcelain field.
 pub const MAX_PORCELAIN_FIELD_BYTES: usize = 16 * 1024;
 const MAX_PORCELAIN_RECORDS: usize = 4096;

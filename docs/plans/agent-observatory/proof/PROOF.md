@@ -291,3 +291,11 @@ RED result: compile failed with unresolved imports for every AO-023 porcelain pa
 GREEN: added a NUL-safe byte parser for normal, detached, locked, prunable, and bare records with SHA-1/SHA-256 validation, duplicate/state checks, future-field retention, and bounded errors
 Proof: 9 parser tests pass against worktrees.bin sha256 ffac43a52ba54a25d859c852b5b747ee038022b0d0b77adb5b2cc783e75e3e5b and bare.bin sha256 1ef3fc47b4d104cb2c1a60f12c677d017cce2b98efa3a2b4cda2ee288e3fbc33; non-UTF-8 paths/branches/reasons survive unchanged
 Gate: workspace Clippy with -D warnings, rustfmt, diff check, fixture checksum verification, module-size limit, and unchanged Cargo manifests all pass
+
+## AO-024 Parse status porcelain v2 -z
+commit/worktree SHA: d41b840d (task started)
+RED: real Git 2.53.0 clean, dirty, rename, conflict, detached, no-upstream, and diverged byte fixtures imported the status summary, typed error, and parser surfaces before implementation
+RED result: compile failed with unresolved StatusSummary, StatusParseError, StatusParseErrorKind, and parse_status_porcelain_v2 imports
+GREEN: implemented NUL-safe porcelain-v2 branch/header parsing, ahead/behind counts, tracked/unmerged/rename/untracked/ignored counting, rename source consumption, and non-UTF-8 pathname handling without returning filenames
+Proof: 19 combined porcelain tests passed; all seven checked-in status fixtures matched regenerated temporary-repository output byte-for-byte and their SHA-256 checks passed
+Gate: workspace Clippy passed with -D warnings; format, diff, 500-line module-size, and Cargo manifest/lock checks passed; exhaustive StatusSummary destructuring proves no pathname field is persisted
