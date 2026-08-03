@@ -148,6 +148,13 @@ fn workflows_default_to_read_only_github_token_permissions() {
             && !docker.contains(r#"smoke-command: docker run --rm "$IMAGE_REF" --help"#),
         "the container smoke test must invoke the cortex binary instead of treating --help as the executable"
     );
+    assert!(
+        docker.contains("MCP_REGISTRY_DOMAIN: ${{ vars.MCP_REGISTRY_DOMAIN }}")
+            && docker.contains(r#"test "$MCP_REGISTRY_DOMAIN" = dinglebear.ai"#)
+            && docker.contains(r#"--domain "$MCP_REGISTRY_DOMAIN""#)
+            && !docker.contains("--domain tootie.tv"),
+        "MCP Registry publication must authenticate through the canonical dinglebear.ai repository variable"
+    );
 }
 
 #[test]
