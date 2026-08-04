@@ -1,7 +1,7 @@
 ---
 title: "Tool Schema Documentation -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: "2026-08-04"
 ---
 
 # Tool Schema Documentation -- cortex
@@ -195,8 +195,11 @@ All MCP tool responses use one text content block containing pretty-printed JSON
 }
 ```
 
-Validation failures usually surface as MCP invalid-params errors. Execution
-failures return tool errors with `isError: true`.
+Action validation failures and execution failures return tool errors with
+`isError: true`. Validation errors also include matching JSON text and
+`structuredContent` containing `kind: "invalid_param"`, `action`, `message`,
+and `retryable: false`. JSON-RPC errors are reserved for failures that prevent
+normal tool execution.
 
 ## Drift Checks
 

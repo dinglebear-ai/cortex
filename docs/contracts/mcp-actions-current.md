@@ -111,9 +111,12 @@ The runtime schema also includes cortex-specific metadata:
 Successful action responses are returned as one MCP text content block. The
 text is pretty-printed JSON for the action-specific response struct.
 
-Execution failures surface as MCP tool errors with `isError: true`.
-Validation failures usually surface as invalid-params errors before the handler
-runs.
+Action validation and execution failures surface as MCP tool errors with
+`isError: true`. Validation failures include matching JSON text and
+`structuredContent` with `kind: "invalid_param"`, the action name, the
+caller-safe validation message, and `retryable: false`. JSON-RPC errors are
+reserved for failures that prevent the MCP request from reaching normal tool
+execution.
 
 ## Correlation Notes
 
