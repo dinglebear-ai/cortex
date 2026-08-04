@@ -127,6 +127,7 @@ fn workflows_default_to_read_only_github_token_permissions() {
     );
 
     let docker = include_str!("../.github/workflows/docker-publish.yml");
+    let registry = include_str!("../.github/workflows/mcp-registry.yml");
     let container = workflow_job_block(docker, "container");
     assert!(
         container.contains("hosted-container-release.yml"),
@@ -149,11 +150,19 @@ fn workflows_default_to_read_only_github_token_permissions() {
         "the container smoke test must invoke the cortex binary instead of treating --help as the executable"
     );
     assert!(
-        docker.contains("MCP_REGISTRY_DOMAIN: ${{ vars.MCP_REGISTRY_DOMAIN }}")
-            && docker.contains(r#"test "$MCP_REGISTRY_DOMAIN" = dinglebear.ai"#)
-            && docker.contains(r#"--domain "$MCP_REGISTRY_DOMAIN""#)
-            && !docker.contains("--domain tootie.tv"),
-        "MCP Registry publication must authenticate through the canonical dinglebear.ai repository variable"
+        !docker.contains("mcp-publisher")
+            && !docker.contains("registry.modelcontextprotocol.io")
+            && !docker.contains("MCP_PRIVATE_KEY"),
+        "container publication must not duplicate the shared MCP Registry publisher"
+    );
+    assert!(
+        registry.contains("mcp-registry-publish.yml@befa67c7b7f976235bf3fbced6ede93293a7f405")
+            && registry.contains("workflow_dispatch:")
+            && registry.contains("expected-version:")
+            && registry.contains("manifest-path: server.json")
+            && registry.contains("MCP_PRIVATE_KEY")
+            && !registry.contains("auth-method:"),
+        "MCP Registry publication must use the pinned DNS-only workflow source of truth"
     );
 
     let manifest: serde_json::Value =
@@ -166,10 +175,8 @@ fn workflows_default_to_read_only_github_token_permissions() {
         "MCP Registry description must stay within the 100-character schema limit"
     );
     assert!(
-        docker.contains(
-            r#".description = "Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.""#,
-        ),
-        "release recovery must restamp older tags with the schema-compliant description"
+        registry.contains("version-prefix: v"),
+        "Cortex Registry recovery must normalize v-prefixed release tags"
     );
 }
 
