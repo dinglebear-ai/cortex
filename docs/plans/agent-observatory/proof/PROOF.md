@@ -338,3 +338,13 @@ GREEN result: remove, quiet repeat reconcile, re-add at the same path, and secon
 GATE: agent_runs.primary_worktree_id and agent_run_worktrees evidence remained intact; PRAGMA foreign_key_check returned no violations
 REGRESSION: 4 reconciliation tests, 2 observation persistence tests, all 34 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-029 Parse exact commit metadata
+commit/worktree SHA: 6a8724b7 (task started)
+RED: real Git and synthetic byte-stream tests imported COMMIT_SHOW_FORMAT, CommitParseOptions, CommitParseErrorKind, commit_show_arguments, and parse_commit_show before implementation
+RED result: compile failed with the complete commit parser surface unresolved
+GREEN: defined one bounded machine-only git show format using NUL-delimited metadata plus --numstat -z; parser preserves arbitrary path bytes, parses parent lists and RFC3339 times, aggregates text/binary changes, supports rename old/new paths, and applies author/path privacy options
+GREEN result: 6 focused tests passed for real merge/binary/rename commits, synthetic non-UTF8 paths, privacy suppression, path truncation, invocation hardening, and bounded malformed errors
+GATE: command builder includes --no-walk=unsorted, --diff-merges=first-parent, --find-renames, --numstat, -z, --no-ext-diff, and --no-textconv; no patch/blob option is emitted and plaintext email is never returned
+REGRESSION: all 40 Git observer tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
