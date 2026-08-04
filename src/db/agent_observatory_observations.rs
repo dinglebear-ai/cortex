@@ -180,6 +180,12 @@ fn state_is_unchanged(
     latest: &RepositoryObservationRow,
     input: &RepositoryObservationInput,
 ) -> bool {
+    if matches!(
+        input.observation_kind,
+        RepositoryObservationKind::WorktreeAdded | RepositoryObservationKind::WorktreeRemoved
+    ) {
+        return false;
+    }
     latest.new_head_sha == input.new_head_sha
         && latest.summary == input.summary
         && latest.payload_json == input.payload_json

@@ -4,12 +4,13 @@ use super::{
 };
 use crate::config::StorageConfig;
 use crate::db::agent_observatory::{
-    RepositoryObservationKind, get_repository_by_key, list_repository_observations,
-    list_repository_worktrees,
+    RepositoryObservationKind, get_repository_by_key, get_worktree_by_key,
+    list_repository_observations, list_repository_worktrees,
 };
 use crate::db::init_pool;
 use crate::git_observer::test_support::{GitFixture, git_available};
 use anyhow::{Result, bail};
+use rusqlite::params;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -257,4 +258,208 @@ fn reconcile_options_reject_empty_hostname_and_noncanonical_input_before_git() {
         ))
         .unwrap_err();
     assert!(error.to_string().contains("hostname"));
+}
+
+#[tokio::test]
+async fn removed_and_reappeared_worktree_reuses_identity_and_preserves_run_evidence() {
+    if !git_available() {
+        eprintln!("skipping worktree lifecycle test: git executable is unavailable");
+        return;
+    }
+    let fixture = GitFixture::build().unwrap();
+    let db_dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(db_dir.path().join("lifecycle.db"))).unwrap();
+    let first_seen = "2026-08-03T16:00:00.000Z";
+    let removed_at = "2026-08-03T16:01:00.000Z";
+    let reappeared_at = "2026-08-03T16:03:00.000Z";
+    let removed_again_at = "2026-08-03T16:04:00.000Z";
+
+    let initial = reconcile_one_repository(&pool, fixture.repository(), &options(), first_seen)
+        .await
+        .unwrap();
+    let repository = initial.topology.as_ref().unwrap().repository.clone();
+    let linked_before = list_repository_worktrees(&pool, repository.id, false)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.path == fixture.linked_worktree().to_str().unwrap())
+        .unwrap();
+
+    let run_id = {
+        let connection = pool.get().unwrap();
+        connection
+            .execute(
+                "INSERT INTO agent_runs
+                    (run_key, native_session_id, tool, hostname, primary_worktree_id,
+                     status, status_reason, status_observed_at, started_at, last_activity_at)
+                 VALUES ('run-key', 'session-one', 'claude', 'dookie', ?1,
+                         'active', 'fixture', ?2, ?2, ?2)",
+                params![linked_before.id, first_seen],
+            )
+            .unwrap();
+        let run_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO agent_run_worktrees
+                    (relation_key, run_id, worktree_id, evidence_kind, evidence_source,
+                     trust_level, confidence, is_primary, first_seen_at, last_seen_at)
+                 VALUES ('relation-key', ?1, ?2, 'cwd', 'fixture',
+                         'verified', 1.0, 1, ?3, ?3)",
+                params![run_id, linked_before.id, first_seen],
+            )
+            .unwrap();
+        run_id
+    };
+
+    let linked_path = fixture.linked_worktree().to_str().unwrap();
+    fixture
+        .git_text(fixture.repository(), &["worktree", "unlock", linked_path])
+        .unwrap();
+    fixture
+        .git_text(
+            fixture.repository(),
+            &["worktree", "remove", "--force", linked_path],
+        )
+        .unwrap();
+
+    let removed = reconcile_one_repository(&pool, fixture.repository(), &options(), removed_at)
+        .await
+        .unwrap();
+    assert_eq!(
+        removed.topology.as_ref().unwrap().removed_worktree_ids,
+        vec![linked_before.id]
+    );
+    assert_eq!(removed.inserted_observations.len(), 1);
+    assert_eq!(
+        removed.inserted_observations[0].observation_kind,
+        RepositoryObservationKind::WorktreeRemoved
+    );
+    let removed_row = get_worktree_by_key(&pool, &linked_before.worktree_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(removed_row.id, linked_before.id);
+    assert_eq!(removed_row.first_seen_at, linked_before.first_seen_at);
+    assert_eq!(removed_row.last_seen_at, linked_before.last_seen_at);
+    assert_eq!(removed_row.removed_at.as_deref(), Some(removed_at));
+
+    let still_removed = reconcile_one_repository(
+        &pool,
+        fixture.repository(),
+        &options(),
+        "2026-08-03T16:02:00.000Z",
+    )
+    .await
+    .unwrap();
+    assert!(
+        still_removed
+            .topology
+            .as_ref()
+            .unwrap()
+            .removed_worktree_ids
+            .is_empty()
+    );
+    assert!(still_removed.inserted_observations.is_empty());
+
+    fixture
+        .git_text(
+            fixture.repository(),
+            &["worktree", "add", linked_path, "feature"],
+        )
+        .unwrap();
+    fixture
+        .git_text(
+            fixture.repository(),
+            &["worktree", "lock", "--reason", "fixture lock", linked_path],
+        )
+        .unwrap();
+
+    let reappeared =
+        reconcile_one_repository(&pool, fixture.repository(), &options(), reappeared_at)
+            .await
+            .unwrap();
+    assert_eq!(reappeared.inserted_observations.len(), 1);
+    assert_eq!(
+        reappeared.inserted_observations[0].observation_kind,
+        RepositoryObservationKind::WorktreeAdded
+    );
+    let linked_after = get_worktree_by_key(&pool, &linked_before.worktree_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(linked_after.id, linked_before.id);
+    assert_eq!(linked_after.first_seen_at, linked_before.first_seen_at);
+    assert_eq!(linked_after.last_seen_at, reappeared_at);
+    assert_eq!(linked_after.removed_at, None);
+
+    fixture
+        .git_text(fixture.repository(), &["worktree", "unlock", linked_path])
+        .unwrap();
+    fixture
+        .git_text(
+            fixture.repository(),
+            &["worktree", "remove", "--force", linked_path],
+        )
+        .unwrap();
+    let removed_again =
+        reconcile_one_repository(&pool, fixture.repository(), &options(), removed_again_at)
+            .await
+            .unwrap();
+    assert_eq!(removed_again.inserted_observations.len(), 1);
+    assert_eq!(
+        removed_again.inserted_observations[0].observation_kind,
+        RepositoryObservationKind::WorktreeRemoved
+    );
+    let final_row = get_worktree_by_key(&pool, &linked_before.worktree_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_row.id, linked_before.id);
+    assert_eq!(final_row.first_seen_at, linked_before.first_seen_at);
+    assert_eq!(final_row.last_seen_at, reappeared_at);
+    assert_eq!(final_row.removed_at.as_deref(), Some(removed_again_at));
+
+    let lifecycle = list_repository_observations(&pool, repository.id)
+        .unwrap()
+        .into_iter()
+        .filter(|row| {
+            matches!(
+                row.observation_kind,
+                RepositoryObservationKind::WorktreeAdded
+                    | RepositoryObservationKind::WorktreeRemoved
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle
+            .iter()
+            .map(|row| row.observation_kind)
+            .collect::<Vec<_>>(),
+        vec![
+            RepositoryObservationKind::WorktreeRemoved,
+            RepositoryObservationKind::WorktreeAdded,
+            RepositoryObservationKind::WorktreeRemoved,
+        ]
+    );
+
+    let connection = pool.get().unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT primary_worktree_id FROM agent_runs WHERE id = ?1",
+                [run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        linked_before.id
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM agent_run_worktrees
+                  WHERE run_id = ?1 AND worktree_id = ?2",
+                params![run_id, linked_before.id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    let mut foreign_keys = connection.prepare("PRAGMA foreign_key_check").unwrap();
+    assert!(foreign_keys.query([]).unwrap().next().unwrap().is_none());
 }

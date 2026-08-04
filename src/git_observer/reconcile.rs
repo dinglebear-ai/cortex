@@ -18,14 +18,16 @@ use support::{
 use crate::agent_observatory::identity::{repository_key, worktree_key};
 use crate::db::DbPool;
 use crate::db::agent_observatory::{
-    RepositoryObservationInput, RepositoryObservationKind, RepositoryUpsert,
-    RepositoryWorktreeUpsert, reconcile_repository, record_repository_observations_if_changed,
+    RepositoryObservationInput, RepositoryObservationKind, RepositoryReconcileResult,
+    RepositoryUpsert, RepositoryWorktreeRow, RepositoryWorktreeUpsert, get_repository_by_key,
+    list_repository_worktrees, reconcile_repository, record_repository_observations_if_changed,
 };
 use crate::git_observer::porcelain::{
     StatusSummary, WorktreeRecord, parse_status_porcelain_v2, parse_worktree_porcelain,
 };
 use anyhow::{Context, Result, bail};
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -348,6 +350,72 @@ fn observations(snapshot: &RepositorySnapshot) -> Vec<RepositoryObservationInput
     inputs
 }
 
+fn previous_worktrees(
+    pool: &DbPool,
+    repository_key: &str,
+) -> Result<(bool, Vec<RepositoryWorktreeRow>)> {
+    let Some(repository) = get_repository_by_key(pool, repository_key)? else {
+        return Ok((false, Vec::new()));
+    };
+    Ok((true, list_repository_worktrees(pool, repository.id, true)?))
+}
+
+fn lifecycle_observations(
+    repository_existed: bool,
+    previous: &[RepositoryWorktreeRow],
+    topology: &RepositoryReconcileResult,
+    observed_at: &str,
+) -> Result<Vec<RepositoryObservationInput>> {
+    let by_key = previous
+        .iter()
+        .map(|row| (row.worktree_key.as_str(), row))
+        .collect::<HashMap<_, _>>();
+    let by_id = previous
+        .iter()
+        .map(|row| (row.id, row))
+        .collect::<HashMap<_, _>>();
+    let mut inputs = Vec::new();
+
+    for id in &topology.removed_worktree_ids {
+        let row = by_id.get(id).with_context(|| {
+            format!("removed worktree id {id} was not present before reconcile")
+        })?;
+        inputs.push(RepositoryObservationInput {
+            worktree_key: Some(row.worktree_key.clone()),
+            observation_kind: RepositoryObservationKind::WorktreeRemoved,
+            new_head_sha: None,
+            summary: "worktree removed".to_string(),
+            payload_json: json!({
+                "path": row.path,
+                "removed_at": observed_at,
+            })
+            .to_string(),
+        });
+    }
+
+    if repository_existed {
+        for row in &topology.worktrees {
+            let previous_row = by_key.get(row.worktree_key.as_str());
+            if previous_row.is_some_and(|previous| previous.removed_at.is_none()) {
+                continue;
+            }
+            inputs.push(RepositoryObservationInput {
+                worktree_key: Some(row.worktree_key.clone()),
+                observation_kind: RepositoryObservationKind::WorktreeAdded,
+                new_head_sha: None,
+                summary: "worktree added".to_string(),
+                payload_json: json!({
+                    "path": row.path,
+                    "reappeared": previous_row.is_some(),
+                    "reappeared_at": observed_at,
+                })
+                .to_string(),
+            });
+        }
+    }
+    Ok(inputs)
+}
+
 pub(crate) async fn reconcile_one_repository(
     pool: &DbPool,
     repository_path: &Path,
@@ -380,16 +448,25 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
         Ok(snapshot) => snapshot,
         Err(warning) => return Ok(RepositoryReconcileReport::warning(warning)),
     };
+    let (repository_existed, previous) =
+        previous_worktrees(pool, &snapshot.repository.repository_key)?;
     let worktrees = snapshot
         .worktrees
         .iter()
         .map(|worktree| worktree.upsert.clone())
         .collect::<Vec<_>>();
     let topology = reconcile_repository(pool, &snapshot.repository, &worktrees, observed_at)?;
+    let mut observation_inputs = observations(&snapshot);
+    observation_inputs.extend(lifecycle_observations(
+        repository_existed,
+        &previous,
+        &topology,
+        observed_at,
+    )?);
     let inserted_observations = record_repository_observations_if_changed(
         pool,
         &snapshot.repository.repository_key,
-        &observations(&snapshot),
+        &observation_inputs,
         observed_at,
     )?;
     Ok(RepositoryReconcileReport {

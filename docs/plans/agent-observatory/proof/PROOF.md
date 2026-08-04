@@ -328,3 +328,13 @@ GREEN: bounded Git commands collect common dir, worktree porcelain, status v2, H
 GREEN result: 3 real reconciliation tests and 2 observation persistence tests passed, including second-reconcile last_seen updates, dirty/head transitions, transactional observation rollback, and timeout preservation of prior rows
 REGRESSION: all 33 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-028 Detect removed and reappeared worktrees
+commit/worktree SHA: 6930a337 (task started)
+RED: real linked-worktree lifecycle fixture removed a locked worktree and expected one worktree_removed observation while preserving the row identity and run/evidence references
+RED result: reconciliation marked the row removed but inserted zero lifecycle observations
+GREEN: compare pre-reconcile rows with the transactional active-set result, emit repeatable worktree_removed/worktree_added transitions, and clear removal on same host/path reappearance while preserving ID, first_seen, and last_seen history
+GREEN result: remove, quiet repeat reconcile, re-add at the same path, and second remove all passed; lifecycle order was removed/added/removed with one transition per state change
+GATE: agent_runs.primary_worktree_id and agent_run_worktrees evidence remained intact; PRAGMA foreign_key_check returned no violations
+REGRESSION: 4 reconciliation tests, 2 observation persistence tests, all 34 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
