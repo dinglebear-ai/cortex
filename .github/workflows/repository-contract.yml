@@ -2,6 +2,7 @@ name: Repository contract
 
 on:
   pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -10,7 +11,8 @@ concurrency:
   group: repository-contract-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   contract:

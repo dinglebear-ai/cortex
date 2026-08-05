@@ -3,11 +3,10 @@ members = [".", "xtask"]
 resolver = "3"
 
 [workspace.package]
-version = "3.11.1"
 edition = "2024"
 rust-version = "1.97.1"
 authors = ["dinglebear.ai <hello@dinglebear.ai>"]
-license = "MIT"
+license = "AGPL-3.0-only"
 readme = "README.md"
 homepage = "https://cortex.dinglebear.ai"
 repository = "https://github.com/dinglebear-ai/cortex"
@@ -36,7 +35,7 @@ missing_safety_doc = "deny"
 
 [package]
 name = "cortex"
-version.workspace = true
+version = "3.11.3"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -46,7 +45,7 @@ homepage.workspace = true
 repository.workspace = true
 categories = ["command-line-utilities", "development-tools::debugging", "database", "network-programming", "parsing"]
 keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
-description = "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST."
+description = "Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS."
 publish = false
 autobins = false
 
@@ -111,6 +110,7 @@ bytes = "1"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml_ng = "0.10"
 
 # Query-string serializer/deserializer that handles `Vec<String>` from repeated
 # `?terms[]=a&terms[]=b` params (and `terms=a&terms=b`), unlike the default

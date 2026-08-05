@@ -136,6 +136,7 @@ fn normalize_inspect(host: &str, body: &Value, out: &mut CollectorOutput) {
                         || key.contains("swag")
                 })
                 .collect::<BTreeMap<_, _>>(),
+            details: Default::default(),
         });
     }
 }
@@ -219,6 +220,7 @@ fn normalize_compact_record(host: &str, fields: &[&str], out: &mut CollectorOutp
                     || key.contains("swag")
             })
             .collect::<BTreeMap<_, _>>(),
+        details: Default::default(),
     });
 }
 
@@ -309,6 +311,7 @@ fn add_networks(host: &str, name: &str, networks: Vec<String>, out: &mut Collect
                 kind: "docker".to_string(),
                 members: vec![name.to_string()],
                 provenance: provenance(host),
+                details: Default::default(),
             });
         }
     }

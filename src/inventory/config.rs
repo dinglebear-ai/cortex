@@ -11,6 +11,7 @@ pub struct InventoryConfig {
     pub root: PathBuf,
     pub compose_paths: Vec<PathBuf>,
     pub proxy_paths: Vec<PathBuf>,
+    pub adguard_paths: Vec<PathBuf>,
     pub ssh_config: Option<PathBuf>,
     pub ssh_hosts: Vec<String>,
     pub project_roots: Vec<PathBuf>,
@@ -47,6 +48,8 @@ impl InventoryConfig {
             compose_paths: env_paths("CORTEX_INVENTORY_COMPOSE_PATHS")
                 .unwrap_or_else(|| vec![cortex_home.join("compose/docker-compose.yml")]),
             proxy_paths: env_paths("CORTEX_INVENTORY_PROXY_PATHS").unwrap_or_default(),
+            adguard_paths: env_paths("CORTEX_INVENTORY_ADGUARD_PATHS")
+                .unwrap_or_else(default_adguard_paths),
             ssh_config: env_path("CORTEX_INVENTORY_SSH_CONFIG").or_else(|| {
                 env::var_os("HOME").map(|home| PathBuf::from(home).join(".ssh/config"))
             }),
@@ -85,6 +88,20 @@ impl InventoryConfig {
             ),
         }
     }
+}
+
+fn default_adguard_paths() -> Vec<PathBuf> {
+    [
+        "/mnt/appdata/adguard/etc/config.yaml",
+        "/mnt/cache/appdata/adguard/etc/config.yaml",
+        "/mnt/user/appdata/adguard/etc/config.yaml",
+        "/opt/AdGuardHome/AdGuardHome.yaml",
+        "/opt/adguardhome/conf/AdGuardHome.yaml",
+        "/etc/AdGuardHome.yaml",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
 }
 
 fn env_string(name: &str) -> Option<String> {

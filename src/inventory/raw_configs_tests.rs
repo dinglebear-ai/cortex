@@ -59,6 +59,41 @@ fn proxy_parser_preserves_server_names_and_upstreams() {
 }
 
 #[test]
+fn proxy_parser_resolves_swag_set_variables() {
+    let routes = parse_proxy_routes(
+        Path::new("/tmp/adguard.conf"),
+        r#"
+server {
+    server_name adguard.example.test;
+    set $upstream_app 100.75.111.118;
+    set $upstream_port 3010;
+    set $upstream_proto http;
+    proxy_pass $upstream_proto://$upstream_app:$upstream_port;
+}
+"#,
+    );
+
+    assert_eq!(routes[0].server_names, vec!["adguard.example.test"]);
+    assert_eq!(routes[0].upstreams, vec!["http://100.75.111.118:3010"]);
+}
+
+#[test]
+fn nginx_variable_substitution_uses_exact_names_and_preserves_unknowns() {
+    let variables = BTreeMap::from([
+        ("upstream_app".to_string(), "short".to_string()),
+        ("upstream_application".to_string(), "long".to_string()),
+        ("upstream_port".to_string(), "3010".to_string()),
+    ]);
+
+    let resolved = substitute_nginx_variables(
+        "http://$upstream_application/$upstream_app:${upstream_port}/$unknown",
+        &variables,
+    );
+
+    assert_eq!(resolved, "http://long/short:3010/$unknown");
+}
+
+#[test]
 fn proxy_parser_skips_empty_routes() {
     assert!(parse_proxy_routes(Path::new("/tmp/app.conf"), "listen 443;").is_empty());
 }

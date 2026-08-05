@@ -261,6 +261,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         mounts: Vec::new(),
         env_keys: vec!["URL".to_string()],
         labels: Default::default(),
+        details: Default::default(),
     });
     inventory.compose_projects.push(ComposeProject {
         name: "edge".to_string(),
@@ -545,6 +546,7 @@ fn project_inventory_does_not_route_to_ambiguous_service_name() {
             mounts: Vec::new(),
             env_keys: Vec::new(),
             labels: Default::default(),
+            details: Default::default(),
         });
     }
     inventory.reverse_proxies.push(ReverseProxyRoute {
@@ -603,6 +605,7 @@ fn project_inventory_routes_to_service_name_beginning_with_http() {
         mounts: Vec::new(),
         env_keys: Vec::new(),
         labels: Default::default(),
+        details: Default::default(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
         id: "proxy:http-api.tootie.tv".to_string(),
@@ -672,6 +675,7 @@ fn project_inventory_scopes_compose_projects_and_networks_by_source_host() {
             mounts: Vec::new(),
             env_keys: Vec::new(),
             labels: Default::default(),
+            details: Default::default(),
         });
         inventory.compose_projects.push(ComposeProject {
             name: "edge".to_string(),
@@ -689,6 +693,7 @@ fn project_inventory_scopes_compose_projects_and_networks_by_source_host() {
             kind: "docker".to_string(),
             members: vec!["swag".to_string()],
             provenance: provenance(&format!("docker:{host}"), "app_inventory"),
+            details: Default::default(),
         });
     }
 
@@ -758,6 +763,7 @@ fn reprojection_prunes_stale_resolver_instance_of_edges_when_service_moves_hosts
             mounts: Vec::new(),
             env_keys: Vec::new(),
             labels: Default::default(),
+            details: Default::default(),
         });
         inventory
     };
@@ -849,6 +855,7 @@ fn double_projection_with_log_and_inventory_instance_of_leaves_no_orphans() {
         mounts: Vec::new(),
         env_keys: Vec::new(),
         labels: Default::default(),
+        details: Default::default(),
     });
     project_inventory(&pool, &inventory).unwrap();
 
@@ -941,6 +948,7 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
         }],
         env_keys: Vec::new(),
         labels: Default::default(),
+        details: Default::default(),
     });
     inventory.compose_projects.push(ComposeProject {
         name: "plex".to_string(),

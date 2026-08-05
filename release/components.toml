@@ -3,11 +3,11 @@
 # sync-version, check-version-sync, check-release-versions).
 #
 # cortex ships exactly one component. The `version_source` is the canonical
-# version (Cargo.toml `[workspace.package]`); every entry in `version_files` must agree
+# version (Cargo.toml root `[package]`); every entry in `version_files` must agree
 # with it. To add a new version carrier, add a row here — no code changes.
 #
-# release-please (.github/workflows/release-please.yml) owns Cargo.toml,
-# Cargo.lock, and CHANGELOG.md natively, plus server.json's and
+# release-please (.github/workflows/release-please.yml) owns both Cargo.toml
+# package versions, Cargo.lock, and CHANGELOG.md natively, plus server.json's and
 # mcpb/manifest.json's plain "version" fields via its `extra-files` config.
 # `cargo xtask sync-version` fixes up the two `regex_version` carriers below,
 # which aren't expressible as a release-please `extra-files` entry, as a
@@ -22,7 +22,9 @@ tag_prefix = "v"
 version_source = { kind = "cargo_package", path = "Cargo.toml", package = "cortex" }
 version_files = [
   { kind = "cargo_package", path = "Cargo.toml", package = "cortex" },
+  { kind = "cargo_package", path = "xtask/Cargo.toml", package = "xtask" },
   { kind = "cargo_lock_package", path = "Cargo.lock", package = "cortex" },
+  { kind = "cargo_lock_package", path = "Cargo.lock", package = "xtask" },
   { kind = "json_version", path = "server.json", json_pointer = "/version" },
   { kind = "json_version", path = "server.json", json_pointer = "/packages/0/version" },
   { kind = "json_version", path = "server.json", json_pointer = "/_meta/io.modelcontextprotocol.registry~1publisher-provided/buildInfo/version" },
@@ -30,7 +32,7 @@ version_files = [
   { kind = "json_version", path = "packages/cortex-rmcp/package.json", json_pointer = "/binaryVersion" },
   # server.json pins the deploy image tag: ghcr.io/dinglebear-ai/cortex:vX.Y.Z
   { kind = "regex_version", path = "server.json", pattern = 'cortex:v(\d+\.\d+\.\d+)' },
-  { kind = "regex_version", path = "server.json", pattern = 'cortex-rmcp@(\d+\.\d+\.\d+)' },
+  { kind = "regex_version", path = "server.json", pattern = '@dinglebear/cortex@(\d+\.\d+\.\d+)' },
   { kind = "regex_version", path = "server.json", pattern = '"placeholder": "v(\d+\.\d+\.\d+)"' },
   { kind = "json_version", path = "mcpb/manifest.json", json_pointer = "/version" },
   # docker-compose.prod.yml default image tag: ${CORTEX_VERSION:-X.Y.Z}

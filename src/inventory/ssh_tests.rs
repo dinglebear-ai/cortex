@@ -104,7 +104,7 @@ async fn ssh_context_limits_concurrency_and_retries_with_backoff() {
             .unwrap()
             .with_retry_initial_backoff(Duration::from_millis(1))
             .unwrap(),
-        move |args, _timeout| {
+        move |args, _timeout, _max_output_bytes| {
             let active = Arc::clone(&active_for_runner);
             let max_active = Arc::clone(&max_active_for_runner);
             let attempts = Arc::clone(&attempts_for_runner);

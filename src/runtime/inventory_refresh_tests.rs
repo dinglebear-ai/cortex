@@ -117,6 +117,7 @@ fn start_config_watcher_returns_none_when_no_targets_are_configured() {
     let mut config = crate::inventory::InventoryConfig::from_env();
     config.compose_paths.clear();
     config.proxy_paths.clear();
+    config.adguard_paths.clear();
 
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let watcher = start_config_watcher(&config, tx);
@@ -128,19 +129,21 @@ fn start_config_watcher_returns_none_when_no_targets_are_configured() {
 }
 
 #[test]
-fn watched_config_targets_include_compose_and_proxy_paths_once() {
+fn watched_config_targets_include_compose_proxy_and_adguard_paths_once() {
     let mut config = crate::inventory::InventoryConfig::from_env();
     config.compose_paths = vec![
         "/opt/edge/compose.yaml".into(),
         "/opt/edge/compose.yaml".into(),
     ];
     config.proxy_paths = vec!["/opt/swag/nginx/site.conf".into()];
+    config.adguard_paths = vec!["/opt/adguard/AdGuardHome.yaml".into()];
 
     let targets = watched_config_targets(&config);
 
-    assert_eq!(targets.len(), 2);
+    assert_eq!(targets.len(), 3);
     assert!(targets.contains(&"/opt/edge/compose.yaml".into()));
     assert!(targets.contains(&"/opt/swag/nginx/site.conf".into()));
+    assert!(targets.contains(&"/opt/adguard/AdGuardHome.yaml".into()));
 }
 
 #[test]

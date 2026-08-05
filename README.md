@@ -4,9 +4,9 @@
 [![Release](https://img.shields.io/github/v/release/dinglebear-ai/cortex)](https://github.com/dinglebear-ai/cortex/releases)
 [![npm](https://img.shields.io/npm/v/cortex-rmcp)](https://www.npmjs.com/package/cortex-rmcp)
 [![crates.io](https://img.shields.io/crates/v/cortex)](https://crates.io/crates/cortex)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](LICENSE)
 
-Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.
+Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.
 
 It collects logs and operational evidence, stores them in SQLite with FTS5 search, and exposes one shared intelligence layer through CLI, REST, MCP, and a bundled browser workspace.
 
@@ -54,14 +54,14 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 The npm launcher is the fastest path for local CLI and stdio MCP use:
 
 ```bash
-npx -y cortex-rmcp --help
-npx -y cortex-rmcp mcp
+npx -y @dinglebear/cortex --help
+npx -y @dinglebear/cortex mcp
 ```
 
 Install it permanently with:
 
 ```bash
-npm install --global cortex-rmcp
+npm install --global @dinglebear/cortex
 cortex --version
 ```
 
@@ -323,7 +323,7 @@ Error detection is disabled by default. When enabled, it scans bounded batches, 
 
 The native inventory subsystem can collect and normalize evidence from:
 
-- Local Compose and reverse-proxy configuration
+- Local and remote Compose, reverse-proxy, and AdGuard Home configuration
 - Local process, storage, project, and raw configuration inventories
 - SSH sessions to remote fleet hosts
 - Local and remote Docker endpoints
@@ -721,8 +721,8 @@ Maintenance operations are single-flight and separately limited from heavy read 
 | --- | --- |
 | Canonical source repository | `dinglebear-ai/cortex` |
 | Native binary and CLI | `cortex` |
-| npm launcher | `cortex-rmcp` |
-| MCP Registry server name | `ai.dinglebear/cortex-rmcp` |
+| npm launcher | `@dinglebear/cortex` |
+| MCP Registry server name | `ai.dinglebear/cortex` |
 | Published OCI image | `ghcr.io/dinglebear-ai/cortex:v<version>` |
 
 The source repository and its published artifacts both live under the `dinglebear-ai` organization. The legacy `jmagar` namespace is retired: `scripts/check-public-identity.sh` fails the build on any tracked file that reintroduces it, and the release workflow derives the MCP Registry OCI identifier from the same `REGISTRY`/`IMAGE_NAME` it pushes to, so the two cannot drift apart again.
@@ -915,4 +915,4 @@ Cortex is intentionally opinionated:
 
 ## License
 
-Cortex is available under the [MIT License](LICENSE).
+Original Dinglebear-authored portions of this project are licensed under [AGPL-3.0-only](LICENSE). Separate commercial licensing is available for organizations that need terms outside the AGPL. Third-party material remains under its original license. See [LICENSING.md](https://github.com/dinglebear-ai/cortex/blob/main/LICENSING.md).
