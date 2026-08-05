@@ -1,9 +1,11 @@
 //! Command and validation support for one-repository reconciliation.
 
-use crate::db::agent_observatory::{RepositoryObservationRow, RepositoryReconcileResult};
+use crate::db::agent_observatory::{
+    GitCommitRow, RepositoryObservationRow, RepositoryReconcileResult,
+};
 use crate::git_observer::porcelain::{StatusSummary, WorktreeRecord};
 use crate::inventory::limits::MAX_COMMAND_OUTPUT_BYTES;
-use crate::inventory::process::run_command_capped;
+use crate::inventory::process::run_command_bytes_capped;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -14,6 +16,10 @@ use std::time::Duration;
 pub(crate) struct ReconcileOptions {
     pub hostname: String,
     pub command_timeout: Duration,
+    pub max_commits_per_transition: usize,
+    pub store_changed_paths: bool,
+    pub store_author_name: bool,
+    pub store_author_email_hash: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +30,8 @@ pub(crate) enum ReconcileStage {
     Head,
     Branch,
     Divergence,
+    CommitTraversal,
+    CommitMetadata,
     WorktreePath,
 }
 
@@ -35,6 +43,7 @@ pub(crate) enum ReconcileWarningKind {
     ParseFailed,
     InvalidUtf8,
     SnapshotChanged,
+    CommitLimitReached { limit: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +56,7 @@ pub(crate) struct ReconcileWarning {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RepositoryReconcileReport {
     pub topology: Option<RepositoryReconcileResult>,
+    pub imported_commits: Vec<GitCommitRow>,
     pub inserted_observations: Vec<RepositoryObservationRow>,
     pub warnings: Vec<ReconcileWarning>,
 }
@@ -55,6 +65,7 @@ impl RepositoryReconcileReport {
     pub(super) fn warning(warning: ReconcileWarning) -> Self {
         Self {
             topology: None,
+            imported_commits: Vec::new(),
             inserted_observations: Vec::new(),
             warnings: vec![warning],
         }
@@ -65,6 +76,7 @@ impl RepositoryReconcileReport {
 pub(crate) struct GitCommandResult {
     pub(super) status: Option<i32>,
     pub(super) stdout: String,
+    pub(super) stdout_bytes: Vec<u8>,
     pub(super) truncated: bool,
 }
 
@@ -80,10 +92,12 @@ impl GitCommandRunner for ProcessGitRunner {
     async fn run(&mut self, args: Vec<String>, timeout: Duration) -> Result<GitCommandResult> {
         let references = args.iter().map(String::as_str).collect::<Vec<_>>();
         let output =
-            run_command_capped("git", &references, timeout, MAX_COMMAND_OUTPUT_BYTES).await?;
+            run_command_bytes_capped("git", &references, timeout, MAX_COMMAND_OUTPUT_BYTES).await?;
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         Ok(GitCommandResult {
             status: output.status,
-            stdout: output.stdout,
+            stdout,
+            stdout_bytes: output.stdout,
             truncated: output.truncated,
         })
     }

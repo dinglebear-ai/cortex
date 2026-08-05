@@ -4,6 +4,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 
+#[path = "agent_observatory_commits.rs"]
+mod commits;
+pub use commits::{GitCommitUpsert, get_git_commit, list_git_commits, upsert_git_commits};
+
 #[path = "agent_observatory_observations.rs"]
 mod observations;
 pub use observations::{
@@ -187,6 +191,27 @@ pub struct RepositoryObservationRow {
     pub summary: String,
     pub payload_json: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GitCommitRow {
+    pub id: i64,
+    pub repository_id: i64,
+    pub sha: String,
+    pub parent_shas_json: String,
+    pub author_name: Option<String>,
+    pub author_email_hash: Option<String>,
+    pub authored_at: Option<String>,
+    pub committed_at: Option<String>,
+    pub subject: String,
+    pub changed_files: Option<i64>,
+    pub insertions: Option<i64>,
+    pub deletions: Option<i64>,
+    pub changed_paths_json: String,
+    pub first_observed_at: String,
+    pub last_observed_at: String,
+    pub reachable: bool,
+    pub metadata_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

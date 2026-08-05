@@ -19,6 +19,10 @@ fn options() -> ReconcileOptions {
     ReconcileOptions {
         hostname: "dookie".to_string(),
         command_timeout: Duration::from_secs(5),
+        max_commits_per_transition: 500,
+        store_changed_paths: true,
+        store_author_name: true,
+        store_author_email_hash: false,
     }
 }
 
@@ -252,6 +256,10 @@ fn reconcile_options_reject_empty_hostname_and_noncanonical_input_before_git() {
             &ReconcileOptions {
                 hostname: " ".to_string(),
                 command_timeout: Duration::from_secs(1),
+                max_commits_per_transition: 500,
+                store_changed_paths: true,
+                store_author_name: true,
+                store_author_email_hash: false,
             },
             "2026-08-03T15:00:00.000Z",
             &mut runner,

@@ -2,8 +2,14 @@
 
 #![allow(dead_code)]
 
+#[path = "reconcile_commits.rs"]
+mod commit_import;
+#[path = "reconcile_lifecycle.rs"]
+mod lifecycle;
 #[path = "reconcile_support.rs"]
 mod support;
+use commit_import::{collect_fast_forward_commits, commit_upserts, transitions};
+use lifecycle::{lifecycle_observations, previous_worktrees};
 #[cfg(test)]
 pub(crate) use support::GitCommandResult;
 pub(crate) use support::{
@@ -18,16 +24,15 @@ use support::{
 use crate::agent_observatory::identity::{repository_key, worktree_key};
 use crate::db::DbPool;
 use crate::db::agent_observatory::{
-    RepositoryObservationInput, RepositoryObservationKind, RepositoryReconcileResult,
-    RepositoryUpsert, RepositoryWorktreeRow, RepositoryWorktreeUpsert, get_repository_by_key,
-    list_repository_worktrees, reconcile_repository, record_repository_observations_if_changed,
+    RepositoryObservationInput, RepositoryObservationKind, RepositoryUpsert,
+    RepositoryWorktreeUpsert, reconcile_repository, record_repository_observations_if_changed,
+    upsert_git_commits,
 };
 use crate::git_observer::porcelain::{
     StatusSummary, WorktreeRecord, parse_status_porcelain_v2, parse_worktree_porcelain,
 };
 use anyhow::{Context, Result, bail};
 use serde_json::json;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -350,72 +355,6 @@ fn observations(snapshot: &RepositorySnapshot) -> Vec<RepositoryObservationInput
     inputs
 }
 
-fn previous_worktrees(
-    pool: &DbPool,
-    repository_key: &str,
-) -> Result<(bool, Vec<RepositoryWorktreeRow>)> {
-    let Some(repository) = get_repository_by_key(pool, repository_key)? else {
-        return Ok((false, Vec::new()));
-    };
-    Ok((true, list_repository_worktrees(pool, repository.id, true)?))
-}
-
-fn lifecycle_observations(
-    repository_existed: bool,
-    previous: &[RepositoryWorktreeRow],
-    topology: &RepositoryReconcileResult,
-    observed_at: &str,
-) -> Result<Vec<RepositoryObservationInput>> {
-    let by_key = previous
-        .iter()
-        .map(|row| (row.worktree_key.as_str(), row))
-        .collect::<HashMap<_, _>>();
-    let by_id = previous
-        .iter()
-        .map(|row| (row.id, row))
-        .collect::<HashMap<_, _>>();
-    let mut inputs = Vec::new();
-
-    for id in &topology.removed_worktree_ids {
-        let row = by_id.get(id).with_context(|| {
-            format!("removed worktree id {id} was not present before reconcile")
-        })?;
-        inputs.push(RepositoryObservationInput {
-            worktree_key: Some(row.worktree_key.clone()),
-            observation_kind: RepositoryObservationKind::WorktreeRemoved,
-            new_head_sha: None,
-            summary: "worktree removed".to_string(),
-            payload_json: json!({
-                "path": row.path,
-                "removed_at": observed_at,
-            })
-            .to_string(),
-        });
-    }
-
-    if repository_existed {
-        for row in &topology.worktrees {
-            let previous_row = by_key.get(row.worktree_key.as_str());
-            if previous_row.is_some_and(|previous| previous.removed_at.is_none()) {
-                continue;
-            }
-            inputs.push(RepositoryObservationInput {
-                worktree_key: Some(row.worktree_key.clone()),
-                observation_kind: RepositoryObservationKind::WorktreeAdded,
-                new_head_sha: None,
-                summary: "worktree added".to_string(),
-                payload_json: json!({
-                    "path": row.path,
-                    "reappeared": previous_row.is_some(),
-                    "reappeared_at": observed_at,
-                })
-                .to_string(),
-            });
-        }
-    }
-    Ok(inputs)
-}
-
 pub(crate) async fn reconcile_one_repository(
     pool: &DbPool,
     repository_path: &Path,
@@ -440,6 +379,9 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
     if options.command_timeout.is_zero() {
         bail!("command_timeout must be positive");
     }
+    if options.max_commits_per_transition == 0 {
+        bail!("max_commits_per_transition must be positive");
+    }
     chrono::DateTime::parse_from_rfc3339(observed_at)
         .with_context(|| format!("invalid observed_at: {observed_at}"))?;
     let repository_path = fs::canonicalize(repository_path)
@@ -455,6 +397,19 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
         .iter()
         .map(|worktree| worktree.upsert.clone())
         .collect::<Vec<_>>();
+    let commit_transitions = transitions(&previous, &worktrees);
+    let parsed_commits =
+        match collect_fast_forward_commits(runner, &commit_transitions, options).await {
+            Ok(commits) => commits,
+            Err(warning) => return Ok(RepositoryReconcileReport::warning(warning)),
+        };
+    let commit_inputs = commit_upserts(&parsed_commits)?;
+    let imported_commits = upsert_git_commits(
+        pool,
+        &snapshot.repository.repository_key,
+        &commit_inputs,
+        observed_at,
+    )?;
     let topology = reconcile_repository(pool, &snapshot.repository, &worktrees, observed_at)?;
     let mut observation_inputs = observations(&snapshot);
     observation_inputs.extend(lifecycle_observations(
@@ -471,10 +426,15 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
     )?;
     Ok(RepositoryReconcileReport {
         topology: Some(topology),
+        imported_commits,
         inserted_observations,
         warnings: Vec::new(),
     })
 }
+
+#[cfg(test)]
+#[path = "reconcile_commits_tests.rs"]
+mod commit_tests;
 
 #[cfg(test)]
 #[path = "reconcile_tests.rs"]

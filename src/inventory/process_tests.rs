@@ -45,3 +45,13 @@ fn shell_words_preserves_quoted_and_escaped_arguments() {
         vec!["cmd", r#"quoted "inner" value"#]
     );
 }
+
+#[tokio::test]
+async fn byte_command_output_preserves_non_utf8_stdout() {
+    let output =
+        run_command_bytes_capped("sh", &["-c", r"printf '\377'"], Duration::from_secs(1), 16)
+            .await
+            .unwrap();
+    assert_eq!(output.stdout, vec![255]);
+    assert!(!output.truncated);
+}

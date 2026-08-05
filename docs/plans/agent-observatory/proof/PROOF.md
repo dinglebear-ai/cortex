@@ -348,3 +348,13 @@ GREEN result: 6 focused tests passed for real merge/binary/rename commits, synth
 GATE: command builder includes --no-walk=unsorted, --diff-merges=first-parent, --find-renames, --numstat, -z, --no-ext-diff, and --no-textconv; no patch/blob option is emitted and plaintext email is never returned
 REGRESSION: all 40 Git observer tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-030 Import fast-forward HEAD transitions
+commit/worktree SHA: 6da7c751 (task started)
+RED: byte-runner, transactional commit persistence, and real two-commit fast-forward reconcile fixtures imported APIs before implementation
+RED result: compile failed with run_command_bytes_capped, GitCommitUpsert/get/list/upsert helpers, expanded reconcile options/report, and bounded commit traversal surfaces absent
+GREEN: added capped raw-byte process output while preserving the existing text API; added validated transactional git_commits upserts with stable IDs/first_observed_at and input-order returns; added bounded merge-base/rev-list --reverse enumeration and exact machine-format batch metadata import before topology mutation
+GREEN result: raw non-UTF8 stdout was preserved, two exact commits imported in chronological order with parent metadata, repeated reconcile stayed idempotent, and commit rows retained deterministic identities
+GATE: max_commits_per_transition uses --max-count=limit+1, returns CommitLimitReached, imports no partial rows, records no HEAD observation, and leaves the prior worktree HEAD unchanged
+REGRESSION: 4 process tests, 2 commit DB tests, all 42 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
