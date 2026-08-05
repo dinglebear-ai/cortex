@@ -368,3 +368,14 @@ GREEN result: hard rewind, divergent rebase, and detached rewind preserved histo
 GATE: the recording runner observed no reset, rebase, checkout, switch, commit, or merge command issued by Cortex
 REGRESSION: 4 process tests, 3 commit DB tests, all 43 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-032 Build Git watch-set planner
+commit/worktree SHA: c178f95f (task started)
+RED: pure planner tests imported repository/worktree watch inputs, deterministic targets, bounded error taxonomy, and plan_watch_set before implementation
+RED result: compile failed with all watch planner surfaces unresolved
+GREEN: added a filesystem-independent BTree-backed planner for canonical project roots, common Git HEAD/index/packed-refs/refs/worktrees controls, and per-worktree control directory HEAD/index paths with repository association and deterministic deduplication
+GREEN result: the exact three-worktree fixture produced 13 sorted unique targets; reversing worktree order and duplicating roots produced the identical plan
+PROOF: creating 10,000 source files did not change target count or content because production planning performs no filesystem traversal
+GATE: unique-path cap failed at observed 13 for limit 12; relative/parent paths, out-of-root worktrees, out-of-common control dirs, blank keys, duplicate keys, and zero caps were rejected with bounded errors
+REGRESSION: all 5 watch planner tests and all 48 Git observer tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
