@@ -7,20 +7,20 @@
 
 ## Executive Summary
 
-The fleet is mostly healthy but has **3 active issues requiring immediate attention** and several lower-priority recurring failures. The most severe event was a repeated OOM killer on `dookie` killing the `codex-acp` process (consuming 26–34 GB RAM each time), with at least **8 kill events** in the past 24 hours. `tootie`'s Radarr container is in a **persistent permission-denied crash loop** that was still firing at report time. The `axon-qdrant` container on `100.88.16.79` experienced a sustained **5-second panic loop** for ~20 minutes mid-afternoon before recovering.
+The fleet is mostly healthy but has **3 active issues requiring immediate attention** and several lower-priority recurring failures. The most severe event was a repeated OOM killer on `devhost` killing the `codex-acp` process (consuming 26–34 GB RAM each time), with at least **8 kill events** in the past 24 hours. `nashost`'s Radarr container is in a **persistent permission-denied crash loop** that was still firing at report time. The `axon-qdrant` container on `198.51.100.1` experienced a sustained **5-second panic loop** for ~20 minutes mid-afternoon before recovering.
 
 | Severity | Issue | Host | Status |
 |----------|-------|------|--------|
-| 🔴 CRITICAL | OOM killer repeatedly killing `codex-acp` (26–34 GB) | dookie | Active |
-| 🔴 CRITICAL | Radarr `UnauthorizedAccessException` every 90s on movie file | tootie | Active — ongoing |
-| 🔴 CRITICAL | `axon-qdrant` panic crash loop every 5s for ~20 min | 100.88.16.79 | Resolved (~19:07 UTC) |
-| 🟠 HIGH | tracearr Plex 401 Unauthorized — API token invalid | tootie | Active |
-| 🟠 HIGH | `wsl-pro.service` crash loop (restart counter at 162) | STEAMY | Active |
-| 🟡 MEDIUM | High volume of nginx unauthorized hits (33K warnings) | squirts | Monitored by fail2ban |
-| 🟡 MEDIUM | `sccache.service` restarting repeatedly (counter at 13) | dookie | Active |
-| 🟢 LOW | WSL clock sync issues (`Time jumped backwards` 95x) | vivobook | Intermittent |
-| 🟢 LOW | WSL DNS failures (`getaddrinfo failed: -3`) | vivobook | Intermittent |
-| 🟢 INFO | Snap service failures (firmware-updater, portal, prompting-client) | dookie, squirts | Benign/known |
+| 🔴 CRITICAL | OOM killer repeatedly killing `codex-acp` (26–34 GB) | devhost | Active |
+| 🔴 CRITICAL | Radarr `UnauthorizedAccessException` every 90s on movie file | nashost | Active — ongoing |
+| 🔴 CRITICAL | `axon-qdrant` panic crash loop every 5s for ~20 min | 198.51.100.1 | Resolved (~19:07 UTC) |
+| 🟠 HIGH | tracearr Plex 401 Unauthorized — API token invalid | nashost | Active |
+| 🟠 HIGH | `wsl-pro.service` crash loop (restart counter at 162) | WINHOST | Active |
+| 🟡 MEDIUM | High volume of nginx unauthorized hits (33K warnings) | edgehost | Monitored by fail2ban |
+| 🟡 MEDIUM | `sccache.service` restarting repeatedly (counter at 13) | devhost | Active |
+| 🟢 LOW | WSL clock sync issues (`Time jumped backwards` 95x) | laptophost | Intermittent |
+| 🟢 LOW | WSL DNS failures (`getaddrinfo failed: -3`) | laptophost | Intermittent |
+| 🟢 INFO | Snap service failures (firmware-updater, portal, prompting-client) | devhost, edgehost | Benign/known |
 
 ---
 
@@ -28,25 +28,25 @@ The fleet is mostly healthy but has **3 active issues requiring immediate attent
 
 | Host | Logs (24h) | Warnings | Errors | Last Seen |
 |------|-----------|----------|--------|-----------|
-| dookie | ~418,180 | 4,214 | 129 | 03:56 UTC |
-| vivobook | ~239,957 | 34 | 38 | 03:56 UTC |
-| squirts | ~96,002 | **33,493** | 10 | 03:56 UTC |
-| tootie | ~84,258 | 5,448 | 0 | 03:56 UTC |
-| 100.88.16.79 | ~73,941 | **13,327** | 0 | 03:56 UTC |
-| STEAMY | 4,472 | 16 | 0 | 03:39 UTC |
-| shart | 1,351 | 0 | 0 | 03:56 UTC |
-| SHART | 5,039 | 1 | 1 | Last seen 13:00 UTC (stopped reporting) |
+| devhost | ~418,180 | 4,214 | 129 | 03:56 UTC |
+| laptophost | ~239,957 | 34 | 38 | 03:56 UTC |
+| edgehost | ~96,002 | **33,493** | 10 | 03:56 UTC |
+| nashost | ~84,258 | 5,448 | 0 | 03:56 UTC |
+| 198.51.100.1 | ~73,941 | **13,327** | 0 | 03:56 UTC |
+| WINHOST | 4,472 | 16 | 0 | 03:39 UTC |
+| backuphost | 1,351 | 0 | 0 | 03:56 UTC |
+| BACKUPHOST | 5,039 | 1 | 1 | Last seen 13:00 UTC (stopped reporting) |
 | smoke-test-host | 4 | 1 | 2 | One-off test only |
 
 **DB stats:** 900 MB logical / 1,320 MB physical, 462 GB free disk, 0 phantom FTS rows, write-block: false.
 
-> **Note:** `SHART` and `shart` are the same host — hostname casing changed around 13:00 UTC yesterday when the host reconnected.
+> **Note:** `BACKUPHOST` and `backuphost` are the same host — hostname casing changed around 13:00 UTC yesterday when the host reconnected.
 
 ---
 
 ## Critical Issues
 
-### 1. 🔴 dookie — Repeated OOM Kills of `codex-acp`
+### 1. 🔴 devhost — Repeated OOM Kills of `codex-acp`
 
 **Status:** Active — multiple events in the past 6 hours, most recent at 03:00 UTC.
 
@@ -82,7 +82,7 @@ systemd: app.slice: A process of this unit has been killed by the OOM killer.
 
 ---
 
-### 2. 🔴 tootie — Radarr Permission Denied (Ongoing Crash Loop)
+### 2. 🔴 nashost — Radarr Permission Denied (Ongoing Crash Loop)
 
 **Status:** Active — firing every ~90 seconds, still ongoing at 03:57 UTC.
 
@@ -100,7 +100,7 @@ This has been looping since at least 03:00 UTC (and likely much longer based on 
 **Root cause:** The file `/data/media/movies/Ready or Not 2 Here I Come (2026)/...` has incorrect ownership or permissions relative to the UID/GID that the `radarr` container runs as. The `{edition-Trailer}` tag suggests this is a metadata file that Radarr is trying to rename or delete.
 
 **Recommended actions:**
-1. SSH into `tootie` and check permissions:
+1. SSH into `nashost` and check permissions:
    ```bash
    ls -la '/data/media/movies/Ready or Not 2 Here I Come (2026)/'
    docker inspect radarr | grep -E 'User|PUID|PGID'
@@ -110,7 +110,7 @@ This has been looping since at least 03:00 UTC (and likely much longer based on 
 
 ---
 
-### 3. 🔴 100.88.16.79 — Qdrant Panic Crash Loop (Resolved)
+### 3. 🔴 198.51.100.1 — Qdrant Panic Crash Loop (Resolved)
 
 **Status:** Resolved — recovered at approximately 19:07 UTC. Was panicking every 5 seconds for ~20 minutes prior.
 
@@ -129,7 +129,7 @@ At 19:07 UTC, the service successfully restarted: `INFO qdrant::actix: Qdrant HT
 **Root cause:** Likely a corrupted or incomplete segment file left over from a previous unclean shutdown. Qdrant's WAL-based recovery couldn't reconstruct the missing file, and the optimizer kept retrying.
 
 **Recommended actions:**
-- Check Qdrant storage directory on `100.88.16.79` for orphaned segment files
+- Check Qdrant storage directory on `198.51.100.1` for orphaned segment files
 - Monitor for recurrence — if the panic loop returns after reindex operations, consider enabling Qdrant's `on_disk_payload` option to reduce memory-mapped file complexity
 - Review Qdrant version for known bugs in `update_handler.rs:374`
 
@@ -137,7 +137,7 @@ At 19:07 UTC, the service successfully restarted: `INFO qdrant::actix: Qdrant HT
 
 ## High Severity Issues
 
-### 4. 🟠 tootie — tracearr Plex 401 Unauthorized
+### 4. 🟠 nashost — tracearr Plex 401 Unauthorized
 
 **Status:** Active — firing intermittently throughout the report period.
 
@@ -145,13 +145,13 @@ The `tracearr` container is failing to authenticate with Plex:
 
 ```
 [SSEProcessor] Error fetching session 528: HttpClientError: plex request failed: 401 Unauthorized
-Error polling server TOOTIE: HttpClientError: plex request failed: 401 Unauthorized
+Error polling server NASHOST: HttpClientError: plex request failed: 401 Unauthorized
 statusText: 'Unauthorized'
 ```
 
-This affects both SSE session streaming and the primary polling loop for server `TOOTIE`.
+This affects both SSE session streaming and the primary polling loop for server `NASHOST`.
 
-**Root cause:** The Plex API token stored in tracearr's configuration is expired, revoked, or belongs to an account that no longer has access to the `TOOTIE` Plex server. This is a common occurrence after Plex account password changes or server re-claims.
+**Root cause:** The Plex API token stored in tracearr's configuration is expired, revoked, or belongs to an account that no longer has access to the `NASHOST` Plex server. This is a common occurrence after Plex account password changes or server re-claims.
 
 **Recommended actions:**
 1. Log into the Plex web UI and generate a new API token
@@ -160,11 +160,11 @@ This affects both SSE session streaming and the primary polling loop for server 
 
 ---
 
-### 5. 🟠 STEAMY — `wsl-pro.service` Crash Loop
+### 5. 🟠 WINHOST — `wsl-pro.service` Crash Loop
 
 **Status:** Active — restart counter reached **162** by 03:27 UTC.
 
-The `wsl-pro.service` (Ubuntu Pro / Landscape agent for WSL) on the Windows host `STEAMY` has been restarting continuously throughout the 24-hour period:
+The `wsl-pro.service` (Ubuntu Pro / Landscape agent for WSL) on the Windows host `WINHOST` has been restarting continuously throughout the 24-hour period:
 
 ```
 systemd: wsl-pro.service: Scheduled restart job, restart counter is at 162.
@@ -175,7 +175,7 @@ Restart events observed at: 01:23, 01:54, 02:25, 02:56, 03:27 UTC (approximately
 **Root cause:** `wsl-pro.service` is a background service for Ubuntu Pro subscription management. At restart counter 162, this service has been failing for an extended period — likely hundreds of hours. The root cause is most likely network connectivity issues between WSL2 and the Ubuntu Pro endpoint, or an expired/invalid Ubuntu Pro token.
 
 **Recommended actions:**
-1. On STEAMY, run: `sudo systemctl status wsl-pro.service` and `journalctl -u wsl-pro.service -n 50`
+1. On WINHOST, run: `sudo systemctl status wsl-pro.service` and `journalctl -u wsl-pro.service -n 50`
 2. If Ubuntu Pro is not needed: `sudo systemctl disable --now wsl-pro.service`
 3. If needed: `sudo pro detach && sudo pro attach <token>`
 
@@ -183,11 +183,11 @@ Restart events observed at: 01:23, 01:54, 02:25, 02:56, 03:27 UTC (approximately
 
 ## Medium Severity Issues
 
-### 6. 🟡 squirts — High-Volume Nginx Unauthorized Access (fail2ban Active)
+### 6. 🟡 edgehost — High-Volume Nginx Unauthorized Access (fail2ban Active)
 
 **Status:** Being handled by fail2ban — no breach detected.
 
-`squirts` generated **33,493 warning-level logs** in 24 hours, almost entirely from `fail2ban` tracking `nginx-unauthorized` hits. Active attacker IPs:
+`edgehost` generated **33,493 warning-level logs** in 24 hours, almost entirely from `fail2ban` tracking `nginx-unauthorized` hits. Active attacker IPs:
 
 | IP | Pattern | fail2ban Action |
 |----|---------|----------------|
@@ -197,16 +197,16 @@ Restart events observed at: 01:23, 01:54, 02:25, 02:56, 03:27 UTC (approximately
 
 One confirmed ban/unban cycle for `76.213.118.20`: banned after hitting nginx-unauthorized threshold, unbanned after the 300-second window expired at 03:23 UTC.
 
-Additionally, `sshd-session` on `dookie` logged: `error: connect_to 100.120.242.29 port 22: failed` — this is `tootie`'s Tailscale IP, suggesting a brief network hiccup between `dookie` and `tootie` at ~13:19 UTC.
+Additionally, `sshd-session` on `devhost` logged: `error: connect_to 198.51.100.2 port 22: failed` — this is `nashost`'s Tailscale IP, suggesting a brief network hiccup between `devhost` and `nashost` at ~13:19 UTC.
 
 **Recommended actions:**
 - Consider increasing the fail2ban ban time for `nginx-unauthorized` from the default — repeated bans/unbans suggest the current window is too short
-- Review nginx access logs on squirts for the specific endpoints being probed by `76.213.118.20`
+- Review nginx access logs on edgehost for the specific endpoints being probed by `76.213.118.20`
 - Consider a persistent blocklist for IPs that trigger multiple ban cycles
 
 ---
 
-### 7. 🟡 dookie — `sccache.service` Restart Loop
+### 7. 🟡 devhost — `sccache.service` Restart Loop
 
 **Status:** Active — restart counter at **13** by 02:41 UTC.
 
@@ -224,7 +224,7 @@ This directly degrades Rust compilation performance, forcing full recompiles rat
 
 ## Low Severity / Informational
 
-### 8. 🟢 vivobook — WSL Clock Sync & DNS Instability
+### 8. 🟢 laptophost — WSL Clock Sync & DNS Instability
 
 Two related issues:
 
@@ -236,13 +236,13 @@ Two related issues:
 - Install `ntp` or `systemd-timesyncd` in the WSL distro to smooth out clock jumps
 - The DNS failures are likely transient and resolved by tailscale's resolver restart — monitor for recurrence
 
-### 9. 🟢 dookie — Snap Service Failures (Benign/Known)
+### 9. 🟢 devhost — Snap Service Failures (Benign/Known)
 
 Several snap-managed services fail on every boot and on their hourly scheduled runs:
 
 | Service | Frequency | Pattern |
 |---------|-----------|---------|
-| `snap.firmware-updater.firmware-notifier` | Hourly (every :00) on dookie AND squirts | Fails, restarts, fails — counter reaching 4-5 per run |
+| `snap.firmware-updater.firmware-notifier` | Hourly (every :00) on devhost AND edgehost | Fails, restarts, fails — counter reaching 4-5 per run |
 | `snap.prompting-client.daemon` | After reboots | Likely missing kernel feature flag |
 | `xdg-desktop-portal.service` | After session starts | Portal service fails when no desktop session active |
 | `xdg-desktop-portal-gtk.service` | After session starts | Same |
@@ -253,11 +253,11 @@ These are well-known Ubuntu/snap packaging issues. The `firmware-updater.firmwar
 - `sudo snap remove firmware-updater` if firmware update notifications aren't needed
 - The portal failures are cosmetic — no action required unless specific D-Bus-dependent apps are breaking
 
-### 10. 🟢 tootie — High-Volume SSH from 100.120.242.29 (Automation, Not Attack)
+### 10. 🟢 nashost — High-Volume SSH from 198.51.100.2 (Automation, Not Attack)
 
-At approximately 03:18 UTC, `tootie` received a burst of rapid-fire SSH connections from `100.120.242.29` (dookie's Tailscale IP), all authenticated via the same ED25519 key (`SHA256:1zMWu3LJd4ETzBOp7gV1Pdi4I3A2P5osYigv/LRCUxU`). Sessions opened and closed within milliseconds, consistent with SSH multiplexing or scripted parallelism (e.g., Ansible, fabric, or rsync-over-SSH). All authenticated successfully as `root`.
+At approximately 03:18 UTC, `nashost` received a burst of rapid-fire SSH connections from `198.51.100.2` (devhost's Tailscale IP), all authenticated via the same ED25519 key (`SHA256:1zMWu3LJd4ETzBOp7gV1Pdi4I3A2P5osYigv/LRCUxU`). Sessions opened and closed within milliseconds, consistent with SSH multiplexing or scripted parallelism (e.g., Ansible, fabric, or rsync-over-SSH). All authenticated successfully as `root`.
 
-This appears to be legitimate automation from `dookie` → `tootie`. No concern, but worth noting that root-as-SSH-target is elevated risk if the key is ever compromised.
+This appears to be legitimate automation from `devhost` → `nashost`. No concern, but worth noting that root-as-SSH-target is elevated risk if the key is ever compromised.
 
 ---
 
@@ -265,15 +265,15 @@ This appears to be legitimate automation from `dookie` → `tootie`. No concern,
 
 | Host | Container | Status | Issues |
 |------|-----------|--------|--------|
-| tootie | radarr | Running | 🔴 Permission denied loop (every 90s) |
-| tootie | tracearr | Running | 🟠 Plex 401 Unauthorized |
-| tootie | immich_redis | Healthy | Saving DB every 5 minutes normally |
-| tootie | tracearr-redis | Healthy | Saving DB every 5 minutes normally |
-| squirts | paperless-cache | Healthy | Saving DB every 5 minutes normally |
-| 100.88.16.79 | axon-qdrant | Recovered | 🔴 Panic loop 18:49–19:07 (resolved) |
-| 100.88.16.79 | lab-labby-master-1 | Healthy | Qdrant peer re-registered successfully |
+| nashost | radarr | Running | 🔴 Permission denied loop (every 90s) |
+| nashost | tracearr | Running | 🟠 Plex 401 Unauthorized |
+| nashost | immich_redis | Healthy | Saving DB every 5 minutes normally |
+| nashost | tracearr-redis | Healthy | Saving DB every 5 minutes normally |
+| edgehost | paperless-cache | Healthy | Saving DB every 5 minutes normally |
+| 198.51.100.1 | axon-qdrant | Recovered | 🔴 Panic loop 18:49–19:07 (resolved) |
+| 198.51.100.1 | lab-labby-master-1 | Healthy | Qdrant peer re-registered successfully |
 
-**Notable:** `dookie` runs a scheduled `artifact-prune.service` approximately every 15 minutes (`Rust target/ + Docker`) that completes successfully each time — disk maintenance is healthy.
+**Notable:** `devhost` runs a scheduled `artifact-prune.service` approximately every 15 minutes (`Rust target/ + Docker`) that completes successfully each time — disk maintenance is healthy.
 
 ---
 
@@ -281,13 +281,13 @@ This appears to be legitimate automation from `dookie` → `tootie`. No concern,
 
 ```
 2026-05-07
-  13:00 UTC  ─── SHART stops reporting (hostname casing change to shart)
-  13:19 UTC  ─── dookie → tootie SSH connection failure (brief network hiccup)
+  13:00 UTC  ─── BACKUPHOST stops reporting (hostname casing change to backuphost)
+  13:19 UTC  ─── devhost → nashost SSH connection failure (brief network hiccup)
   18:49 UTC  ─┐  axon-qdrant panic loop begins (every 5s)
   19:07 UTC  ─┘  axon-qdrant recovers, HTTP/gRPC listeners up
   19:38 UTC  ─── labby-master re-registers qdrant peer
   22:47 UTC  ─── OOM kill #1: codex-acp (26.5 GB RSS)
-  23:09 UTC  ─── vivobook DNS failures
+  23:09 UTC  ─── laptophost DNS failures
   23:33 UTC  ─── OOM kills #2/3 (app.slice events)
 
 2026-05-08
@@ -297,11 +297,11 @@ This appears to be legitimate automation from `dookie` → `tootie`. No concern,
   02:21 UTC  ─── OOM kill sequence in session-scope
   02:29 UTC  ─── OOM kill #7: codex-acp (28.2 GB RSS)
   02:45 UTC  ─── OOM kill #8: codex-acp (34.0 GB RSS) — worst event
-  02:57 UTC  ─── fail2ban bans 76.213.118.20 on squirts
+  02:57 UTC  ─── fail2ban bans 76.213.118.20 on edgehost
   03:00 UTC  ─── OOM kill #9: app.slice/-.slice
-  03:18 UTC  ─── SSH burst from dookie → tootie (automation)
+  03:18 UTC  ─── SSH burst from devhost → nashost (automation)
   03:23 UTC  ─── fail2ban unbans 76.213.118.20
-  03:27 UTC  ─── STEAMY wsl-pro.service restart #162
+  03:27 UTC  ─── WINHOST wsl-pro.service restart #162
   03:57 UTC  ─── Report end; Radarr permission loop still active
 ```
 
@@ -311,11 +311,11 @@ This appears to be legitimate automation from `dookie` → `tootie`. No concern,
 
 | Priority | Action | Host | Estimated Effort |
 |----------|--------|------|-----------------|
-| P0 — Do now | Add swap + set `oom_score_adj` for `codex-acp` | dookie | 15 min |
-| P0 — Do now | Fix Radarr file permissions on movie directory | tootie | 5 min |
-| P1 — Today | Rotate Plex API token in tracearr config | tootie | 10 min |
-| P1 — Today | Disable or fix `wsl-pro.service` | STEAMY | 5 min |
-| P2 — This week | Investigate `axon-qdrant` segment corruption root cause | 100.88.16.79 | 30 min |
-| P2 — This week | Increase fail2ban ban duration for `nginx-unauthorized` | squirts | 10 min |
-| P3 — Low priority | Remove `snap firmware-updater` if not needed | dookie, squirts | 2 min |
-| P3 — Low priority | Investigate vivobook WSL2 time sync | vivobook | 20 min |
+| P0 — Do now | Add swap + set `oom_score_adj` for `codex-acp` | devhost | 15 min |
+| P0 — Do now | Fix Radarr file permissions on movie directory | nashost | 5 min |
+| P1 — Today | Rotate Plex API token in tracearr config | nashost | 10 min |
+| P1 — Today | Disable or fix `wsl-pro.service` | WINHOST | 5 min |
+| P2 — This week | Investigate `axon-qdrant` segment corruption root cause | 198.51.100.1 | 30 min |
+| P2 — This week | Increase fail2ban ban duration for `nginx-unauthorized` | edgehost | 10 min |
+| P3 — Low priority | Remove `snap firmware-updater` if not needed | devhost, edgehost | 2 min |
+| P3 — Low priority | Investigate laptophost WSL2 time sync | laptophost | 20 min |

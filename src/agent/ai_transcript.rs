@@ -43,7 +43,7 @@ const CODEX_PREFIX_METADATA_SCAN_LINES: usize = 200;
 #[derive(Debug, Clone)]
 pub struct AiTranscriptForwardConfig {
     pub roots: Vec<PathBuf>,
-    /// Central server base URL, e.g. `http://tootie:3100`.
+    /// Central server base URL, e.g. `http://nashost:3100`.
     pub target: String,
     pub token: Option<String>,
     pub hostname: String,

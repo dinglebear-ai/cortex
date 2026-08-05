@@ -47,7 +47,7 @@ Wrote a 14-task, 4-phase implementation plan (`docs/superpowers/plans/2026-07-06
 ## Technical Decisions
 
 - Nested CLI restructure (`ingest shell {user,agent}`, `setup shell {agent,completions}`) chosen over a flat hyphenated `shell-agent`/`shell-completions` per explicit user correction, avoiding both new hyphens and a naming collision with the pre-existing `heartbeat_agent`/fleet-deploy "agent" concept.
-- Kept the CLI parser tolerant of exactly one legacy grammar shape (`ingest agent-command ingest-spool`/`wrap`, the one actually deployed on `dookie`) rather than three, after `lavra-eng-review`'s simplicity pass identified the third ("pre-move," two renames back) shape as provably unreachable through the CLI's own top-level parser.
+- Kept the CLI parser tolerant of exactly one legacy grammar shape (`ingest agent-command ingest-spool`/`wrap`, the one actually deployed on `devhost`) rather than three, after `lavra-eng-review`'s simplicity pass identified the third ("pre-move," two renames back) shape as provably unreachable through the CLI's own top-level parser.
 - Forwarding reuses the exact `/v1/heartbeats` auth/body-limit/router pattern (`is_authorized`, `RequestBodyLimitLayer`, `AuthPolicy` matching) rather than inventing a new auth model, per architecture review guidance to measure new code against an already-shipped baseline.
 - Stale-timer detection in `doctor.rs` stays a read-only/`--fix --yes`-gated scan reusing existing `setup/systemd.rs` helpers, explicitly rejecting a fuller systemd-timer-lifecycle-management feature (mirroring `sessions_watch.rs`'s depth) as out of scope for a "lightweight" ask.
 - Chose to extract shared argv-classifier primitives (`cortex_argv_program_matches`, `is_current_shell_agent_index_argv`, `is_grouped_legacy_agent_command_argv`, `is_bare_legacy_agent_command_argv`) as plain functions rather than a single enum-returning classifier (which `type-design-analyzer` suggested as the "best design-quality win for the effort") — deferred that follow-up refactor rather than doing it mid-review-cycle, since the plain-function extraction already achieves the review's stated goal (no more drift between the two call sites) and the enum refactor is optional polish, not a correctness fix.
@@ -76,7 +76,7 @@ Wrote a 14-task, 4-phase implementation plan (`docs/superpowers/plans/2026-07-06
 
 ## Beads Activity
 
-- `syslog-mcp-4n4a6` (P1, `agent-command wrapper + self-ingest guard use pre-rename CLI grammar`): 4 knowledge comments added (LEARNED: lock-scope bug root cause; PATTERN: shared argv-classifier extraction; LEARNED: dropped prefilter rationale; INVESTIGATION: full review summary with fix disposition). Left open — should be closed by the user once verified live on `dookie` (regenerate wrapper via `cortex setup shell agent install`, then `cortex doctor --fix --yes` or manual review to retire the stale timer).
+- `syslog-mcp-4n4a6` (P1, `agent-command wrapper + self-ingest guard use pre-rename CLI grammar`): 4 knowledge comments added (LEARNED: lock-scope bug root cause; PATTERN: shared argv-classifier extraction; LEARNED: dropped prefilter rationale; INVESTIGATION: full review summary with fix disposition). Left open — should be closed by the user once verified live on `devhost` (regenerate wrapper via `cortex setup shell agent install`, then `cortex doctor --fix --yes` or manual review to retire the stale timer).
 - `syslog-mcp-7j61f` (P3, created): `validate_agent_command_binary` blocking `Command::output()` in async fn — confirmed pre-existing (predates PR #123), filed standalone, not blocking.
 - `syslog-mcp-q6a2j` (P3, created): `entry_exists` check-then-insert dedup race, now network-exposed via `/v1/agent-commands` — pre-existing logic, filed standalone.
 - `syslog-mcp-uail9` (P4, created): merged-router test only covers 2 of ~6 routers chained in `serve_mcp()` — test-coverage gap, filed standalone.
@@ -143,7 +143,7 @@ Wrote a 14-task, 4-phase implementation plan (`docs/superpowers/plans/2026-07-06
 
 - CI on the final push (`afe34c9`) was still pending when this log was written — the branch's own pre-push hooks (version-sync, module-size, clippy) already passed locally, but full CI (Tests, Formatting, Dependency Check, Pre-publish gate) had not yet reported.
 - Rollback: PR #123 is a single feature branch off `main`; reverting is `git branch -D feature/shell-agent-cli-rename` locally / closing the PR remotely with no impact on `main`, since nothing has merged yet.
-- Operational risk called out explicitly in the plan and PR body: any host with an already-installed wrapper or manually-created timer (confirmed: `dookie` has one) needs `cortex setup shell agent install` to regenerate the wrapper after this ships, and `cortex doctor --fix --yes` (or manual review) to retire the stale timer — this is the actual production fix for bead `syslog-mcp-4n4a6`, not yet performed live.
+- Operational risk called out explicitly in the plan and PR body: any host with an already-installed wrapper or manually-created timer (confirmed: `devhost` has one) needs `cortex setup shell agent install` to regenerate the wrapper after this ships, and `cortex doctor --fix --yes` (or manual review) to retire the stale timer — this is the actual production fix for bead `syslog-mcp-4n4a6`, not yet performed live.
 
 ## Decisions Not Taken
 
@@ -159,6 +159,6 @@ Wrote a 14-task, 4-phase implementation plan (`docs/superpowers/plans/2026-07-06
 ## Next Steps
 
 - Wait for CI to go green on PR #123, then run the `vibin:merge-status` final gate before publishing as complete.
-- Once merged, deploy and run `cortex setup shell agent install` + `cortex doctor --fix --yes` (or manual review) on `dookie` to actually resolve the live incident bead `syslog-mcp-4n4a6` describes, then close it.
+- Once merged, deploy and run `cortex setup shell agent install` + `cortex doctor --fix --yes` (or manual review) on `devhost` to actually resolve the live incident bead `syslog-mcp-4n4a6` describes, then close it.
 - Triage the 3 backlog beads (`syslog-mcp-7j61f`, `syslog-mcp-q6a2j`, `syslog-mcp-uail9`) in a future session — none are urgent.
 - Consider the optional enum-based argv-classifier refactor and the `MAX_RECORDS_PER_BATCH`-enforced-in-the-domain-function (rather than only the HTTP handler) suggestion from `type-design-analyzer` as low-priority follow-up polish.

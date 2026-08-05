@@ -87,7 +87,7 @@ fn investigate_ai_mcp_incidents_bundle_has_bounded_collections_and_truncation_fl
 
     let call_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -95,7 +95,7 @@ fn investigate_ai_mcp_incidents_bundle_has_bounded_collections_and_truncation_fl
     );
     let correction_log = make_ai_entry(
         "2026-01-01T00:01:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -116,7 +116,7 @@ fn investigate_ai_mcp_incidents_bundle_has_bounded_collections_and_truncation_fl
         "codex",
         "/tmp/project-d",
         "sess-d",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "call_d",
         "mcp__labby__search",
@@ -152,7 +152,7 @@ fn investigate_ai_mcp_incidents_filters_by_incident_id() {
     let (pool, _dir) = test_pool();
     let call_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "claude",
         "/tmp/project-f",
         "sess-f",
@@ -170,7 +170,7 @@ fn investigate_ai_mcp_incidents_filters_by_incident_id() {
         "claude",
         "/tmp/project-f",
         "sess-f",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "call_f",
         "mcp__gh__search",

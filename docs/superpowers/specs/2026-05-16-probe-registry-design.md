@@ -13,8 +13,8 @@
 
 Define a **hardcoded-in-Rust probe registry** that runs inside the per-host agent and a set of **MCP actions** that surface live host state through `syslog-mcp`. The system must let an AI agent answer concrete operational questions that log streams alone cannot answer:
 
-- "Who's eating dookie's RAM right now?" (`mem.top`, `mem.pressure`)
-- "Which paths on squirts are blackholes?" (`disk.blackholes` — `~/.cargo/target`, `node_modules`, Docker overlay, `.venv`, `__pycache__`)
+- "Who's eating devhost's RAM right now?" (`mem.top`, `mem.pressure`)
+- "Which paths on edgehost are blackholes?" (`disk.blackholes` — `~/.cargo/target`, `node_modules`, Docker overlay, `.venv`, `__pycache__`)
 - "Is `/var/log` filling again?" (`disk.usage`)
 - "Why is DNS flaky on the WSL boxes?" (`net.dns_check`)
 - "What MAC just collided on the LAN?" (`net.neigh`)
@@ -227,8 +227,8 @@ CREATE INDEX idx_metrics_ts              ON metrics_gauge(ts);
 **Sample emission** (from `mem.pressure`):
 
 ```text
-host_id=dookie metric=mem.pressure_avg10 labels={"scope":"some"} value=14.2 ts=...
-host_id=dookie metric=mem.pressure_avg10 labels={"scope":"full"} value=2.1  ts=...
+host_id=devhost metric=mem.pressure_avg10 labels={"scope":"some"} value=14.2 ts=...
+host_id=devhost metric=mem.pressure_avg10 labels={"scope":"full"} value=2.1  ts=...
 ```
 
 ---
@@ -366,7 +366,7 @@ Glob expansion uses `globwalk` with `max_depth(6)`. Each globbed match is treate
 
 ### 8.3 `mem.top`
 
-**Purpose**: top-N processes by RSS. Directly answers "who's OOMing dookie".
+**Purpose**: top-N processes by RSS. Directly answers "who's OOMing devhost".
 
 ```rust
 pub struct MemTopArgs { pub n: u32 }  // default 20, cap 100
@@ -442,7 +442,7 @@ pub struct NeighEntry {
 
 ```rust
 pub struct NetDnsCheckArgs {
-    pub hostnames: Vec<String>,     // e.g. ["google.com", "github.com", "tootie.lan"]
+    pub hostnames: Vec<String>,     // e.g. ["google.com", "github.com", "nashost.lan"]
     pub resolvers: Vec<IpAddr>,     // empty = use /etc/resolv.conf
     pub query_type: String,         // "A" | "AAAA"; default "A"
 }

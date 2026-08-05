@@ -420,7 +420,7 @@ async fn rmcp_prompts_get_renders_argument_aware_prompt() {
                 "name": "infra.service-outage",
                 "arguments": {
                     "service": "plex",
-                    "host": "tootie",
+                    "host": "nashost",
                     "window": "last 45 minutes"
                 }
             })),
@@ -436,7 +436,7 @@ async fn rmcp_prompts_get_renders_argument_aware_prompt() {
         .as_str()
         .unwrap();
     assert!(text.contains("service `plex`"));
-    assert!(text.contains("Host: tootie"));
+    assert!(text.contains("Host: nashost"));
     assert!(text.contains("Window: last 45 minutes"));
     assert!(text.contains("action=correlate"));
 }

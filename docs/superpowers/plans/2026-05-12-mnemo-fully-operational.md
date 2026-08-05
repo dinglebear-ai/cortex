@@ -1407,7 +1407,7 @@ fn request_with_log_attrs(attrs: Vec<KeyValue>) -> ExportLogsServiceRequest {
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
-                attributes: vec![kv("host.name", av_string("tootie"))],
+                attributes: vec![kv("host.name", av_string("nashost"))],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
             }),

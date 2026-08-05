@@ -60,7 +60,7 @@ fn parse_filter_collects_structured_filters_and_rejects_query_terms() {
     let args = strings(&[
         "--source-kind=docker-stream",
         "--docker-host",
-        "dookie",
+        "devhost",
         "--container=cortex",
         "--stream=stdout",
         "--event-action",
@@ -77,7 +77,7 @@ fn parse_filter_collects_structured_filters_and_rejects_query_terms() {
     match command {
         crate::cli::CliCommand::Filter(args) => {
             assert_eq!(args.source_kind.as_deref(), Some("docker-stream"));
-            assert_eq!(args.docker_host.as_deref(), Some("dookie"));
+            assert_eq!(args.docker_host.as_deref(), Some("devhost"));
             assert_eq!(args.container.as_deref(), Some("cortex"));
             assert_eq!(args.stream.as_deref(), Some("stdout"));
             assert_eq!(args.event_action.as_deref(), Some("die"));
@@ -330,27 +330,27 @@ fn filter_and_sessions_normalize_relative_from() {
 
 #[test]
 fn tail_positional_sets_host_and_default_limit() {
-    let cmd = parse_tail(&strings(&["dookie"])).unwrap();
+    let cmd = parse_tail(&strings(&["devhost"])).unwrap();
     let crate::cli::CliCommand::Tail(args) = cmd else {
         panic!("expected Tail")
     };
-    assert_eq!(args.host.as_deref(), Some("dookie"));
+    assert_eq!(args.host.as_deref(), Some("devhost"));
     assert_eq!(args.n, None); // shared service applies the default
 }
 
 #[test]
 fn tail_explicit_limit_overrides_default() {
-    let cmd = parse_tail(&strings(&["dookie", "-n", "10"])).unwrap();
+    let cmd = parse_tail(&strings(&["devhost", "-n", "10"])).unwrap();
     let crate::cli::CliCommand::Tail(args) = cmd else {
         panic!("expected Tail")
     };
-    assert_eq!(args.host.as_deref(), Some("dookie"));
+    assert_eq!(args.host.as_deref(), Some("devhost"));
     assert_eq!(args.n, Some(10));
 }
 
 #[test]
 fn tail_rejects_two_positionals() {
-    let err = parse_tail(&strings(&["dookie", "tootie"]))
+    let err = parse_tail(&strings(&["devhost", "nashost"]))
         .unwrap_err()
         .to_string();
     assert!(err.contains("at most one"), "{err}");

@@ -196,7 +196,7 @@ macro_rules! action_spec {
         "search", Read, "Full-text search over syslog messages", Cheap, SearchLogs,
         flags: COMMON_LOG_FLAGS,
         examples: &[
-            "cortex search \"oom killer\" --host dookie --since 1h",
+            "cortex search \"oom killer\" --host devhost --since 1h",
             "cortex search --grep \"smoke-test\" --limit 20",
         ]
     ),
@@ -311,7 +311,7 @@ one asserting the old name now errors:
 ```rust
 #[test]
 fn search_rejects_legacy_hostname_flag() {
-    let err = parse_search(&["x".into(), "--host".into(), "dookie".into()])
+    let err = parse_search(&["x".into(), "--host".into(), "devhost".into()])
         .unwrap_err().to_string();
     assert!(err.contains("--host"), "should suggest canonical flag: {err}");
 }
@@ -855,7 +855,7 @@ cortex completions zsh > "${fpath[1]}/_cortex"   # or source into a test fpath
 # new shell:
 cortex <TAB>            # lists actions with descriptions
 cortex search --<TAB>   # lists --host --since --grep ...
-cortex search --host <TAB>   # lists live hostnames (dookie, tootie, ...)
+cortex search --host <TAB>   # lists live hostnames (devhost, nashost, ...)
 ```
 
 - [ ] **Step 3: Commit any cleanup**

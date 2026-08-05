@@ -3,8 +3,8 @@
 //!
 //! This module owns the hard-break canonical service identity contract:
 //! `logical_service:plex` for logical identity and
-//! `service_instance:tootie/plex` for host-scoped deployment topology.
-//! Legacy nested shapes (`tootie:plex`, `tootie:plex:plex`, `plex/plex/plex`)
+//! `service_instance:nashost/plex` for host-scoped deployment topology.
+//! Legacy nested shapes (`nashost:plex`, `nashost:plex:plex`, `plex/plex/plex`)
 //! are classified for rejection, never normalized.
 
 pub mod adapters;

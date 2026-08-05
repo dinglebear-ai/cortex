@@ -31,28 +31,28 @@ whitelist_filters:
     url: https://filters.example/allow.txt
     name: allow
 user_rules:
-  - '||printer.home^$dnsrewrite=NOERROR;A;10.1.0.20'
+  - '||printer.home^$dnsrewrite=NOERROR;A;192.0.2.20'
 dhcp:
   enabled: true
   interface_name: eth0
   dhcpv4:
-    gateway_ip: 10.1.0.1
-    range_start: 10.1.0.100
-    range_end: 10.1.0.200
+    gateway_ip: 192.0.2.1
+    range_start: 192.0.2.100
+    range_end: 192.0.2.200
 filtering:
   protection_enabled: true
   rewrites:
     - domain: nas.home
-      answer: 10.1.0.10
+      answer: 192.0.2.10
 clients:
   persistent:
     - name: laptop
-      ids: [10.1.0.50]
+      ids: [192.0.2.50]
 "#;
 
     let (artifact, service) = collect_body(
-        Some("squirts".to_string()),
-        "squirts:/mnt/appdata/adguard/etc/config.yaml".to_string(),
+        Some("edgehost".to_string()),
+        "edgehost:/mnt/appdata/adguard/etc/config.yaml".to_string(),
         body.to_string(),
         &paths,
         "run",
@@ -62,7 +62,7 @@ clients:
     assert_eq!(artifact.kind, "adguard_config_yaml");
     assert_eq!(service.kind, "adguard_home");
     assert_eq!(service.name, "adguard");
-    assert_eq!(service.host.as_deref(), Some("squirts"));
+    assert_eq!(service.host.as_deref(), Some("edgehost"));
     assert_eq!(service.status.as_deref(), Some("enabled"));
     assert_eq!(service.domains, vec!["dns.home.example"]);
     for section in [

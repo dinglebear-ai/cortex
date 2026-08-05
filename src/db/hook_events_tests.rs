@@ -42,13 +42,13 @@ fn sample_event(hook_name: &str) -> ExtractedHookEvent {
 #[test]
 fn insert_and_list_round_trips() {
     let (pool, _dir) = test_pool();
-    let log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
+    let log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
     let insert = HookEventInsert {
         log_id: Some(log_id),
         ai_tool: "claude".to_string(),
         ai_project: Some("cortex".to_string()),
         ai_session_id: Some("sess-1".to_string()),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         timestamp: "2026-06-01T00:00:00.000Z".to_string(),
         event: sample_event("format-on-save"),
     };
@@ -70,13 +70,13 @@ fn insert_and_list_round_trips() {
 #[test]
 fn insert_or_ignore_is_idempotent_on_duplicate() {
     let (pool, _dir) = test_pool();
-    let log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
+    let log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
     let insert = HookEventInsert {
         log_id: Some(log_id),
         ai_tool: "claude".to_string(),
         ai_project: None,
         ai_session_id: Some("sess-1".to_string()),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         timestamp: "2026-06-01T00:00:00.000Z".to_string(),
         event: sample_event("format-on-save"),
     };
@@ -98,7 +98,7 @@ fn insert_succeeds_without_log_id_for_config_inventory_rows() {
         ai_tool: "codex".to_string(),
         ai_project: None,
         ai_session_id: None,
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         timestamp: "2026-06-01T00:00:00.000Z".to_string(),
         event: ExtractedHookEvent {
             hook_event: "PreToolUse".to_string(),
@@ -126,8 +126,8 @@ fn insert_succeeds_without_log_id_for_config_inventory_rows() {
 #[test]
 fn list_filters_by_hook_name_project_and_tool() {
     let (pool, _dir) = test_pool();
-    let log_id_a = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
-    let log_id_b = insert_log_row(&pool, "tootie", "2026-06-01T01:00:00.000Z");
+    let log_id_a = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
+    let log_id_b = insert_log_row(&pool, "nashost", "2026-06-01T01:00:00.000Z");
     insert_hook_events(
         &pool,
         &[
@@ -136,7 +136,7 @@ fn list_filters_by_hook_name_project_and_tool() {
                 ai_tool: "claude".to_string(),
                 ai_project: Some("cortex".to_string()),
                 ai_session_id: Some("sess-a".to_string()),
-                hostname: "dookie".to_string(),
+                hostname: "devhost".to_string(),
                 timestamp: "2026-06-01T00:00:00.000Z".to_string(),
                 event: sample_event("format-on-save"),
             },
@@ -145,7 +145,7 @@ fn list_filters_by_hook_name_project_and_tool() {
                 ai_tool: "codex".to_string(),
                 ai_project: Some("axon".to_string()),
                 ai_session_id: Some("sess-b".to_string()),
-                hostname: "tootie".to_string(),
+                hostname: "nashost".to_string(),
                 timestamp: "2026-06-01T01:00:00.000Z".to_string(),
                 event: sample_event("lint-check"),
             },
@@ -182,7 +182,7 @@ fn list_filters_by_hook_name_project_and_tool() {
 #[test]
 fn list_filters_by_status_and_evidence_kind() {
     let (pool, _dir) = test_pool();
-    let log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
+    let log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
     let mut failed = sample_event("lint-check");
     failed.status = HookStatus::Failed;
     failed.hook_event = "PreToolUse".to_string();
@@ -194,7 +194,7 @@ fn list_filters_by_status_and_evidence_kind() {
                 ai_tool: "claude".to_string(),
                 ai_project: Some("cortex".to_string()),
                 ai_session_id: Some("sess-a".to_string()),
-                hostname: "dookie".to_string(),
+                hostname: "devhost".to_string(),
                 timestamp: "2026-06-01T00:00:00.000Z".to_string(),
                 event: sample_event("format-on-save"),
             },
@@ -203,7 +203,7 @@ fn list_filters_by_status_and_evidence_kind() {
                 ai_tool: "claude".to_string(),
                 ai_project: Some("cortex".to_string()),
                 ai_session_id: Some("sess-a".to_string()),
-                hostname: "dookie".to_string(),
+                hostname: "devhost".to_string(),
                 timestamp: "2026-06-01T00:00:01.000Z".to_string(),
                 event: failed,
             },

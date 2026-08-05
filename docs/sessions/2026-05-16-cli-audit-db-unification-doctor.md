@@ -126,7 +126,7 @@ syslog doctor  # → exits 0
 | `cargo test` | 545 → 547 pass | 547 passed | ✓ |
 | `syslog compose up --dry-run` | exit 0, "Dry run passed" | exit 0 | ✓ |
 | `docker inspect syslog-mcp --format '{{.Mounts}}'` | `bind ... -> /data` | `bind /home/jmagar/.claude/.../syslog-jmagar-lab -> /data` | ✓ |
-| `syslog hosts` (after DB unification) | Shows fleet hosts with 7M+ logs | squirts 7007108, tootie 1613989, etc. | ✓ |
+| `syslog hosts` (after DB unification) | Shows fleet hosts with 7M+ logs | edgehost 7007108, nashost 1613989, etc. | ✓ |
 | `syslog doctor` | exits 0 after container update | All checks passed. Exit: 0 | ✓ |
 | `docker exec syslog-mcp syslog --version` | syslog-mcp 0.25.3 | syslog-mcp 0.25.3 | ✓ |
 

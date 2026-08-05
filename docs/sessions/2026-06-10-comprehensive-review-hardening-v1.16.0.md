@@ -158,7 +158,7 @@ No bead activity observed during this session. Work was driven by the PR review 
 
 - `docs/plans/2026-03-29-unifi-cef-hostname-fix.md`: CEF parser exists in `src/enrich/parsers/` but full plan checklist not verified. May be complete.
 - `docs/plans/2026-05-04-rmcp-stdio-support-follow-up.md`: Stdio mode ships but follow-up items (if any remain) not reviewed.
-- UniFi gateway (`10.1.0.1`) remote logging still not configured — this is a manual step in the Network app (Settings → System → Advanced → Remote Logging → `100.88.16.79:1514`). Not addressable from this host.
+- UniFi gateway (`192.0.2.1`) remote logging still not configured — this is a manual step in the Network app (Settings → System → Advanced → Remote Logging → `198.51.100.1:1514`). Not addressable from this host.
 
 ## Next Steps
 

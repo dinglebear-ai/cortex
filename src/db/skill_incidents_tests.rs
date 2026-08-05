@@ -84,7 +84,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
     // Skill event log row.
     let skill_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-skill-1",
@@ -93,7 +93,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
     // Correction anchor shortly after, same session.
     let correction_log = make_ai_entry(
         "2026-01-01T00:02:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-skill-1",
@@ -117,7 +117,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-skill-1",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),
@@ -139,7 +139,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
     assert_eq!(incident.tool, "codex");
     assert_eq!(incident.project, "/home/jmagar/workspace/cortex");
     assert_eq!(incident.session_id, "sess-skill-1");
-    assert_eq!(incident.hostname, "dookie");
+    assert_eq!(incident.hostname, "devhost");
     assert_eq!(incident.skill_event_count, 1);
     assert_eq!(incident.signal_counts.user_correction_after_skill, 1);
     assert!(
@@ -163,7 +163,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     // Session A: skill event only, no negative signal (low score).
     let a_skill = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-a",
         "sess-a",
@@ -172,7 +172,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     // Session B: skill event + correction + tool failure (higher score).
     let b_skill = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-b",
         "sess-b",
@@ -180,7 +180,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     );
     let b_correction = make_ai_entry(
         "2026-01-01T00:01:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-b",
         "sess-b",
@@ -188,7 +188,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     );
     let b_failure = make_ai_entry(
         "2026-01-01T00:02:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-b",
         "sess-b",
@@ -210,7 +210,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
         "codex",
         "/tmp/project-a",
         "sess-a",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),
@@ -221,7 +221,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
         "codex",
         "/tmp/project-b",
         "sess-b",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),
@@ -258,7 +258,7 @@ fn search_ai_skill_incidents_min_score_and_signals_filters() {
     let (pool, _dir) = test_pool();
     let skill_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "claude",
         "/tmp/project-c",
         "sess-c",
@@ -276,7 +276,7 @@ fn search_ai_skill_incidents_min_score_and_signals_filters() {
         "claude",
         "/tmp/project-c",
         "sess-c",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),

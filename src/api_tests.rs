@@ -187,7 +187,7 @@ async fn file_tails_route_adds_and_lists_sources() {
         "id": "swag-access",
         "path": log_path,
         "tag": "swag-access",
-        "host": "squirts",
+        "host": "edgehost",
         "facility": "local4",
         "severity": "info",
         "start_at_end": true

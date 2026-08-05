@@ -107,7 +107,7 @@ fn agent_command_ingest_spool_guard_is_argv_scoped() {
     ]));
     // Grouped grammar predating this rename: `cortex ingest agent-command
     // ingest-spool`. This is the one already deployed on live hosts (e.g.
-    // dookie) and the only legacy shape worth tolerating here — the even
+    // devhost) and the only legacy shape worth tolerating here — the even
     // older bare `cortex agent-command ingest-spool` (no `ingest` prefix) is
     // unreachable: the CLI's top-level parser rejects it outright (see
     // `src/surfaces.rs`'s `MovedIntoGroupedDomain` entry), so no process can
@@ -313,7 +313,7 @@ fn imports_atuin_history_as_shell_history_rows() {
             "export API_KEY=abc123",
             "/tmp/project",
             "session-1",
-            "dookie"
+            "devhost"
         ],
     )
     .unwrap();
@@ -337,7 +337,7 @@ fn imports_atuin_history_as_shell_history_rows() {
     )
     .unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].hostname, "dookie");
+    assert_eq!(rows[0].hostname, "devhost");
     assert_eq!(rows[0].facility.as_deref(), Some("shell"));
     assert_eq!(rows[0].app_name.as_deref(), Some("atuin"));
     assert_eq!(rows[0].severity, "warning");
@@ -374,7 +374,7 @@ fn imports_atuin_history_from_saved_timestamp_cursor() {
     .unwrap();
     conn.execute(
         "INSERT INTO history (id, timestamp, duration, exit, command, cwd, session, hostname)
-         VALUES ('hist-1', 1716500000000000000, 1000, 0, 'cargo test', '/tmp/project', 's1', 'dookie')",
+         VALUES ('hist-1', 1716500000000000000, 1000, 0, 'cargo test', '/tmp/project', 's1', 'devhost')",
         [],
     )
     .unwrap();
@@ -382,7 +382,7 @@ fn imports_atuin_history_from_saved_timestamp_cursor() {
     let first = import_atuin_history_with_state(&pool, &atuin, &state).unwrap();
     conn.execute(
         "INSERT INTO history (id, timestamp, duration, exit, command, cwd, session, hostname)
-         VALUES ('hist-2', 1716500001000000000, 1000, 0, 'cargo fmt', '/tmp/project', 's1', 'dookie')",
+         VALUES ('hist-2', 1716500001000000000, 1000, 0, 'cargo fmt', '/tmp/project', 's1', 'devhost')",
         [],
     )
     .unwrap();
@@ -420,7 +420,7 @@ fn imports_agent_spool_as_agent_command_rows() {
         cwd: Some("/tmp/project".into()),
         agent: "claude-code".into(),
         command_surface: Some("bash_tool".into()),
-        hostname: "dookie".into(),
+        hostname: "devhost".into(),
         user: Some("jmagar".into()),
         pid: 42,
         session_id: Some("session-1".into()),

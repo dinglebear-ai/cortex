@@ -106,11 +106,11 @@ POST {apprise_url}/notify/{config_key}
 Content-Type: application/x-www-form-urlencoded
 X-Apprise-Token: {token}      # optional, only if apprise-api is auth-protected
 
-title=syslog-mcp%3A+container+die+%E2%80%94+plex+on+tootie
+title=syslog-mcp%3A+container+die+%E2%80%94+plex+on+nashost
 &body=%23%23+container+die%0A...markdown+body...
 &type=failure
 &format=markdown
-&tag=critical%2Ccontainer%2Chost-tootie
+&tag=critical%2Ccontainer%2Chost-nashost
 ```
 
 Severity → apprise `type` mapping:
@@ -196,7 +196,7 @@ dedup_window = "30m"
 | Operator | Semantics | Example |
 |---|---|---|
 | `tag` | exact match on enriched `tag` field | `tag = "authelia"` |
-| `host` | exact match on `host` | `host = "tootie"` |
+| `host` | exact match on `host` | `host = "nashost"` |
 | `severity_min` | numeric ≥ | `severity_min = "warn"` |
 | `field_eq` | map: field path → expected value (supports `metadata_json.x` dotted paths) | `{ http_status = "401" }` |
 | `field_neq` | inverse of `field_eq` | |
@@ -300,7 +300,7 @@ CREATE INDEX idx_alert_state_active ON alert_state (ack_at) WHERE ack_at IS NULL
 CREATE INDEX idx_alert_state_rule_lastfired ON alert_state (rule_id, last_fired_at);
 ```
 
-`fingerprint` = stable hash of `(group_by-projected fields)`. For `container_die` on `plex@tootie`, fingerprint is `plex@tootie`. For `oom_kill` with no group_by, fingerprint is `host`.
+`fingerprint` = stable hash of `(group_by-projected fields)`. For `container_die` on `plex@nashost`, fingerprint is `plex@nashost`. For `oom_kill` with no group_by, fingerprint is `host`.
 
 Lifecycle:
 
@@ -414,14 +414,14 @@ _None._ All clear since 02:14.
 ## Top errors by host
 | host    | count | top cluster                                            |
 |---------|------:|--------------------------------------------------------|
-| tootie  |   312 | `plex: HTTP 500 from /library/sections (×287)`         |
+| nashost  |   312 | `plex: HTTP 500 from /library/sections (×287)`         |
 | jakey   |    44 | `sshd: invalid user 'admin' from 192.0.2.14 (×39)`     |
 | unraid  |    12 | `smbd: STATUS_LOGON_FAILURE (×9)`                      |
 
 ## Auth events
 - 18 successful logins (Authelia)
 - 3 failed MFA, all from `192.0.2.14` — flagged by fail2ban at 03:42, banned 1h
-- 2 sudo invocations (jmagar@tootie)
+- 2 sudo invocations (jmagar@nashost)
 
 ## DNS / AdGuard
 - 88,412 queries (+12% vs 7-day avg)
@@ -432,13 +432,13 @@ _None._ All clear since 02:14.
 ## Container churn
 | event   | container        | host   | count |
 |---------|------------------|--------|------:|
-| restart | watchtower       | tootie | 1     |
-| die     | radarr           | tootie | 1 (exit=0, planned via systemd) |
+| restart | watchtower       | nashost | 1     |
+| die     | radarr           | nashost | 1 (exit=0, planned via systemd) |
 
 ## Disk pressure
 | host   | /var/log | trend |
 |--------|---------:|-------|
-| tootie |     38%  | `▁▁▂▂▂▁▁` |
+| nashost |     38%  | `▁▁▂▂▂▁▁` |
 | jakey  |     71%  | `▃▄▅▆▆▆▇` ← rising, investigate |
 | unraid |     22%  | `▁▁▁▁▁▁▁` |
 
@@ -460,7 +460,7 @@ enabled = true
 transport = "apprise"            # only valid value in V1
 
 [notifications.apprise]
-url        = "https://apprise.tootie.tv"
+url        = "https://apprise.example.internal"
 config_key = "syslog-mcp"        # named stored-config on apprise side
 token      = "${SYSLOG_MCP_APPRISE_TOKEN}"  # optional X-Apprise-Token
 default_tag = "syslog"           # appended to every push in addition to severity+host tags
@@ -527,7 +527,7 @@ All added to `src/mcp/tools.rs` dispatch under the existing `cortex` tool.
 - **Mock apprise-api server**: `wiremock`-based, asserts request shape — `POST /notify/{config_key}`, `X-Apprise-Token` header presence, form-encoded body containing `title`, `body`, `type` (one of `info|warning|failure`), `format=markdown`, and the expected `tag` set (severity tier + `host-{host}` + rule-defined tag).
 - **Quiet hours**: fixture clock injection (existing `app::time::Clock` trait); send a `warn` during quiet hours, assert no HTTP call; send a `critical`, assert HTTP call.
 - **Dedup**: send same trigger 5× in `dedup_window`, assert 1 HTTP call and `fire_count=5`.
-- **Tag composition**: rule with `tag="container"` on host `tootie` at severity `critical` produces `tag=critical,host-tootie,container,syslog` (order-insensitive assertion).
+- **Tag composition**: rule with `tag="container"` on host `nashost` at severity `critical` produces `tag=critical,host-nashost,container,syslog` (order-insensitive assertion).
 
 ### Digest snapshot tests
 

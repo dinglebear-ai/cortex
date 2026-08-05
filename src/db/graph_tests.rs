@@ -175,9 +175,9 @@ fn refresh_graph_projection_extracts_docker_from_metadata_and_source() {
         Some("cortex"),
         "container log",
     );
-    metadata_row.source_ip = "docker://dookie/abcdef/stdout".to_string();
+    metadata_row.source_ip = "docker://devhost/abcdef/stdout".to_string();
     metadata_row.metadata_json = Some(
-        r#"{"docker_host":"dookie","container_id":"abcdef","container_name":"cortex","compose_project":"infra","compose_service":"cortex"}"#.to_string(),
+        r#"{"docker_host":"devhost","container_id":"abcdef","container_name":"cortex","compose_project":"infra","compose_service":"cortex"}"#.to_string(),
     );
     let mut malformed_row = make_entry(
         "2026-01-01T00:01:00Z",
@@ -185,7 +185,7 @@ fn refresh_graph_projection_extracts_docker_from_metadata_and_source() {
         Some("other"),
         "container log",
     );
-    malformed_row.source_ip = "docker://dookie/bad-json/stderr".to_string();
+    malformed_row.source_ip = "docker://devhost/bad-json/stderr".to_string();
     malformed_row.metadata_json = Some("{not-json".to_string());
 
     insert_logs_batch(&pool, &[metadata_row, malformed_row]).unwrap();
@@ -322,7 +322,7 @@ fn alias_lookup_deduplicates_multiple_sources_for_the_same_entity() {
         "INSERT INTO graph_entities
              (entity_type, canonical_key, display_label, source_kind, source_id,
               trust_level, first_seen_at, last_seen_at)
-         VALUES ('host', 'dookie', 'dookie', 'heartbeat', '42', 'verified',
+         VALUES ('host', 'devhost', 'devhost', 'heartbeat', '42', 'verified',
                  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
         [],
     )
@@ -333,7 +333,7 @@ fn alias_lookup_deduplicates_multiple_sources_for_the_same_entity() {
             "INSERT INTO graph_entity_aliases
                  (entity_id, alias_type, alias_key, alias_value, source_kind,
                   trust_level, first_seen_at, last_seen_at)
-             VALUES (?1, 'hostname', 'dookie', 'dookie', ?2, 'verified',
+             VALUES (?1, 'hostname', 'devhost', 'devhost', ?2, 'verified',
                      '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
             rusqlite::params![entity_id, source_kind],
         )
@@ -341,7 +341,7 @@ fn alias_lookup_deduplicates_multiple_sources_for_the_same_entity() {
     }
     drop(conn);
 
-    let candidates = find_graph_entities_by_alias(&pool, "hostname", "dookie", 20).unwrap();
+    let candidates = find_graph_entities_by_alias(&pool, "hostname", "devhost", 20).unwrap();
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].entity.id, entity_id);
 }
@@ -667,7 +667,7 @@ fn agent_command_row_creates_verified_session_host_and_inferred_project_edges() 
         &pool,
         &[make_agent_command_entry(
             "2026-01-01T00:00:00Z",
-            "dookie",
+            "devhost",
             "claude",
             "sess-7",
             "/home/jmagar/workspace/cortex",
@@ -727,16 +727,21 @@ fn agent_command_session_converges_with_transcript_session_entity() {
     let pool = init_pool(&test_storage_config(dir.path().join("graph-converge.db"))).unwrap();
 
     // Transcript event: clean project "cortex", same tool + session id.
-    let mut transcript = make_entry("2026-01-01T00:00:00Z", "dookie", Some("claude"), "thinking");
+    let mut transcript = make_entry(
+        "2026-01-01T00:00:00Z",
+        "devhost",
+        Some("claude"),
+        "thinking",
+    );
     transcript.ai_tool = Some("claude".to_string());
     transcript.ai_project = Some("cortex".to_string());
     transcript.ai_session_id = Some("sess-9".to_string());
-    transcript.source_ip = "agent://dookie".to_string();
+    transcript.source_ip = "agent://devhost".to_string();
 
     // Agent-command row: raw cwd, same session id → must converge on one entity.
     let cmd = make_agent_command_entry(
         "2026-01-01T00:01:00Z",
-        "dookie",
+        "devhost",
         "claude",
         "sess-9",
         "/home/jmagar/workspace/cortex",
@@ -766,7 +771,7 @@ fn agent_command_incremental_rebuild_adds_no_duplicate_edges() {
         &pool,
         &[make_agent_command_entry(
             "2026-01-01T00:00:00Z",
-            "dookie",
+            "devhost",
             "claude",
             "sess-3",
             "/home/jmagar/workspace/cortex",
@@ -784,7 +789,7 @@ fn agent_command_incremental_rebuild_adds_no_duplicate_edges() {
         &pool,
         &[make_agent_command_entry(
             "2026-01-01T00:02:00Z",
-            "dookie",
+            "devhost",
             "claude",
             "sess-3",
             "/home/jmagar/workspace/cortex",
@@ -833,7 +838,7 @@ fn agent_command_git_commit_creates_commit_session_and_project_edges() {
         &pool,
         &[make_git_commit_agent_entry(
             "2026-01-01T00:00:00Z",
-            "dookie",
+            "devhost",
             "sess-7",
             "/home/jmagar/workspace/cortex",
         )],
@@ -893,7 +898,7 @@ fn non_git_command_creates_no_commit_entity() {
         &pool,
         &[make_agent_command_entry(
             "2026-01-01T00:00:00Z",
-            "dookie",
+            "devhost",
             "claude",
             "sess-7",
             "/home/jmagar/workspace/cortex",
@@ -920,11 +925,11 @@ fn shell_history_git_commit_links_commit_to_host() {
 
     let mut entry = make_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         Some("zsh"),
         "git commit -am wip",
     );
-    entry.source_ip = "shell-history://dookie/jacob/zsh".to_string();
+    entry.source_ip = "shell-history://devhost/jacob/zsh".to_string();
     entry.metadata_json = Some(r#"{"source_kind":"shell-history"}"#.to_string());
     insert_logs_batch(&pool, &[entry]).unwrap();
     refresh_graph_projection(&pool).unwrap();
@@ -938,7 +943,7 @@ fn shell_history_git_commit_links_commit_to_host() {
         )
         .unwrap();
     assert!(
-        commit_key.starts_with("dookie:"),
+        commit_key.starts_with("devhost:"),
         "shell commit keyed by host: {commit_key}"
     );
     assert_eq!(
@@ -958,11 +963,11 @@ fn docker_compose_label_no_longer_projects_legacy_service_topology() {
 
     let mut row = make_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         Some("axon-qdrant"),
         "started",
     );
-    row.source_ip = "docker-event://dookie/axon-qdrant".to_string();
+    row.source_ip = "docker-event://devhost/axon-qdrant".to_string();
     row.metadata_json = Some(
         r#"{"source_kind":"docker-event","compose_project":"axon","compose_service":"qdrant"}"#
             .to_string(),
@@ -972,7 +977,7 @@ fn docker_compose_label_no_longer_projects_legacy_service_topology() {
 
     let conn = pool.get().unwrap();
     // Hard break: central-pull docker labels no longer synthesize legacy
-    // `service` topology (`dookie:axon:qdrant`) or compose_project edges to
+    // `service` topology (`devhost:axon:qdrant`) or compose_project edges to
     // it. Canonical service identity requires agent-docker structured
     // metadata or verified inventory (resolver decisions).
     assert_eq!(
@@ -1076,8 +1081,8 @@ fn shell_history_row_creates_user_accessed_host() {
     let dir = tempfile::tempdir().unwrap();
     let pool = init_pool(&test_storage_config(dir.path().join("graph-user-shell.db"))).unwrap();
 
-    let mut entry = make_entry("2026-01-01T00:00:00Z", "dookie", Some("zsh"), "ls -la");
-    entry.source_ip = "shell-history://dookie/jacob/zsh".to_string();
+    let mut entry = make_entry("2026-01-01T00:00:00Z", "devhost", Some("zsh"), "ls -la");
+    entry.source_ip = "shell-history://devhost/jacob/zsh".to_string();
     entry.metadata_json = Some(r#"{"source_kind":"shell-history"}"#.to_string());
     insert_logs_batch(&pool, &[entry]).unwrap();
     refresh_graph_projection(&pool).unwrap();
@@ -1090,7 +1095,7 @@ fn shell_history_row_creates_user_accessed_host() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(user_key, "dookie:jacob");
+    assert_eq!(user_key, "devhost:jacob");
     assert_eq!(
         count(
             &conn,
@@ -1108,7 +1113,7 @@ fn adguard_row_creates_device_accessed_domain() {
 
     let mut entry = make_entry(
         "2026-01-01T00:00:00Z",
-        "squirts",
+        "edgehost",
         Some("adguard-query"),
         "dns",
     );
@@ -1148,7 +1153,7 @@ fn authelia_row_creates_user_authenticated_as_host() {
 
     let mut entry = make_entry(
         "2026-01-01T00:00:00Z",
-        "squirts",
+        "edgehost",
         Some("authelia"),
         "auth ok",
     );
@@ -1164,7 +1169,7 @@ fn authelia_row_creates_user_authenticated_as_host() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(user_key, "squirts:alice");
+    assert_eq!(user_key, "edgehost:alice");
     assert_eq!(
         count(
             &conn,
@@ -1286,12 +1291,12 @@ fn graph_projection_emits_service_instance_not_nested_service_key() {
     .unwrap();
     let mut entry = make_entry(
         "2026-01-01T00:00:00Z",
-        "tootie",
+        "nashost",
         Some("plex/plex/plex"),
         "Plex started",
     );
     entry.metadata_json = Some(
-        r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
+        r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
             .to_string(),
     );
     insert_logs_batch(&pool, &[entry]).unwrap();
@@ -1307,7 +1312,7 @@ fn graph_projection_emits_service_instance_not_nested_service_key() {
     assert_eq!(
         count(
             &conn,
-            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'tootie/plex'"
+            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'nashost/plex'"
         ),
         1
     );
@@ -1321,7 +1326,7 @@ fn graph_projection_emits_service_instance_not_nested_service_key() {
     assert_eq!(
         count(
             &conn,
-            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service' AND canonical_key IN ('tootie:plex', 'tootie:plex:plex')"
+            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service' AND canonical_key IN ('nashost:plex', 'nashost:plex:plex')"
         ),
         0
     );
@@ -1347,39 +1352,39 @@ fn canonical_plex_proof_fixture_projects_only_resolver_identity() {
     };
     let mut tootie_plex = make_entry(
         "2026-01-01T00:00:00Z",
-        "tootie",
+        "nashost",
         Some("plex/plex/plex"),
         "Plex started",
     );
-    tootie_plex.metadata_json = Some(agent_docker_meta("tootie"));
+    tootie_plex.metadata_json = Some(agent_docker_meta("nashost"));
     let mut shart_plex = make_entry(
         "2026-01-01T00:01:00Z",
-        "shart",
+        "backuphost",
         Some("plex/plex/plex"),
         "Plex replica started",
     );
-    shart_plex.metadata_json = Some(agent_docker_meta("shart"));
+    shart_plex.metadata_json = Some(agent_docker_meta("backuphost"));
     // Raw syslog labels that merely contain "plex": never logical services.
     let complex = make_entry(
         "2026-01-01T00:02:00Z",
-        "tootie",
+        "nashost",
         Some("complex"),
         "complex event",
     );
     let plex_backup = make_entry(
         "2026-01-01T00:03:00Z",
-        "tootie",
+        "nashost",
         Some("plex-backup"),
         "backup ran",
     );
     // AI command row whose project path mentions plex.
     let mut ai_row = make_entry(
         "2026-01-01T00:04:00Z",
-        "dookie",
+        "devhost",
         Some("claude"),
         "edited compose file",
     );
-    ai_row.source_ip = "agent-command://dookie/claude/sess-plex".to_string();
+    ai_row.source_ip = "agent-command://devhost/claude/sess-plex".to_string();
     ai_row.ai_tool = Some("claude".to_string());
     ai_row.ai_project = Some("/home/jmagar/workspace/plex-tools".to_string());
     ai_row.ai_session_id = Some("sess-plex".to_string());
@@ -1402,21 +1407,21 @@ fn canonical_plex_proof_fixture_projects_only_resolver_identity() {
     assert_eq!(
         count(
             &conn,
-            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'tootie/plex'"
+            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'nashost/plex'"
         ),
         1
     );
     assert_eq!(
         count(
             &conn,
-            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'shart/plex'"
+            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'backuphost/plex'"
         ),
         1
     );
     assert_eq!(
         count(
             &conn,
-            "SELECT COUNT(*) FROM graph_entities WHERE canonical_key IN ('tootie:plex', 'tootie:plex:plex', 'plex/plex/plex')"
+            "SELECT COUNT(*) FROM graph_entities WHERE canonical_key IN ('nashost:plex', 'nashost:plex:plex', 'plex/plex/plex')"
         ),
         0
     );
@@ -1458,18 +1463,19 @@ fn extract_log_row_parses_metadata_json_exactly_once_per_row() {
     // (extract_agent_command_row), and a plain row carrying
     // metadata_json.agent_docker (extract_agent_docker_row's resolver path).
     let mut docker_row = make_entry("2026-01-01T00:00:00Z", "docker-host", Some("cortex"), "log");
-    docker_row.source_ip = "docker://dookie/abcdef/stdout".to_string();
+    docker_row.source_ip = "docker://devhost/abcdef/stdout".to_string();
     docker_row.metadata_json = Some(
-        r#"{"docker_host":"dookie","container_id":"abcdef","container_name":"cortex"}"#.to_string(),
+        r#"{"docker_host":"devhost","container_id":"abcdef","container_name":"cortex"}"#
+            .to_string(),
     );
 
     let mut agent_command_row = make_entry(
         "2026-01-01T00:01:00Z",
-        "dookie",
+        "devhost",
         Some("claude"),
         "ran a command",
     );
-    agent_command_row.source_ip = "agent-command://dookie/claude/sess-parse".to_string();
+    agent_command_row.source_ip = "agent-command://devhost/claude/sess-parse".to_string();
     agent_command_row.ai_tool = Some("claude".to_string());
     agent_command_row.ai_session_id = Some("sess-parse".to_string());
     agent_command_row.metadata_json =
@@ -1477,12 +1483,12 @@ fn extract_log_row_parses_metadata_json_exactly_once_per_row() {
 
     let mut agent_docker_row = make_entry(
         "2026-01-01T00:02:00Z",
-        "tootie",
+        "nashost",
         Some("plex/plex/plex"),
         "Plex started",
     );
     agent_docker_row.metadata_json = Some(
-        r#"{"agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","stream":"stdout"}}"#
+        r#"{"agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","stream":"stdout"}}"#
             .to_string(),
     );
 
@@ -1490,7 +1496,7 @@ fn extract_log_row_parses_metadata_json_exactly_once_per_row() {
     // it (returning None), not fail partially in some extractors and
     // succeed in others from independent re-parses.
     let mut malformed_row = make_entry("2026-01-01T00:03:00Z", "docker-host", Some("x"), "log");
-    malformed_row.source_ip = "docker://dookie/badjson/stderr".to_string();
+    malformed_row.source_ip = "docker://devhost/badjson/stderr".to_string();
     malformed_row.metadata_json = Some("{not-json".to_string());
 
     insert_logs_batch(

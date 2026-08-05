@@ -80,5 +80,5 @@ Files:   9 changed, 45 insertions(+), 29 deletions(-)
 
 - Open PR: `fix/code-review-utf8-storage-enforcement` → `main`
 - Consider bumping MSRV from 1.86 to 1.91 to enable `str::floor_char_boundary`
-- Investigate 12 alert-level events on `STEAMY` (WSL relay errors seen in live tool test)
+- Investigate 12 alert-level events on `WINHOST` (WSL relay errors seen in live tool test)
 - Evaluate extracting `truncate()` to `src/util.rs` to eliminate remaining duplication between `mcp.rs` and `syslog.rs`

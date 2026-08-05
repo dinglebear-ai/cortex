@@ -158,7 +158,7 @@ Those rsyslog deploy edits appear unrelated to the runtime observability patch.
 The current dirty deploy changes do the following:
 
 - Add deployment instructions for shared `deploy/rsyslog/11-imfile.conf`.
-- Replace placeholder SWAG paths with verified squirts paths under `/mnt/appdata/swag/log/...`.
+- Replace placeholder SWAG paths with verified edgehost paths under `/mnt/appdata/swag/log/...`.
 - Replace placeholder Authelia path with `/mnt/appdata/authelia/logs/authelia.log`.
 - Replace placeholder AdGuard query log path with `/mnt/appdata/adguard/var/data/querylog.json`.
 - Remove per-source `module(load="imfile")` and `MaxMessageSize` settings from source drop-ins.

@@ -70,7 +70,7 @@ resolution:
 | `incident_id` | string (UUIDv7) | `incidents.incident_id` | Stable per incident, never reused. |
 | `signature_hash` | string (blake3 hex, 32 chars) | `incidents.signature_hash` | Host-scoped. |
 | `signature_hash_xhost` | string (blake3 hex, 32 chars) | `incidents.signature_hash_xhost` | Host stripped — cross-host similarity. |
-| `host` | string | `incidents.hostname` | E.g. `dookie`, `jenny`. |
+| `host` | string | `incidents.hostname` | E.g. `devhost`, `jenny`. |
 | `app_name` | string | `incidents.app_name` | E.g. `kernel`, `dockerd`, `fail2ban`. |
 | `source` | string | `incidents.source` | Epic B source tag, e.g. `kernel.oom`. |
 | `first_seen` | string (RFC 3339) | `incidents.first_seen` | UTC, second precision. |
@@ -97,11 +97,11 @@ resolution:
 
 These are inline fixtures. `tests/fixtures/incidents/{a,b,c}.md` should match these byte-for-byte once the renderer lands.
 
-### 3.1 Kernel OOM — dookie, Plex container OOM-killed
+### 3.1 Kernel OOM — devhost, Plex container OOM-killed
 
 ```
 INCIDENT 0192f8a4-7c11-7c2b-9f3d-1e5a4b2c9d01
-host=dookie app=kernel source=kernel.oom
+host=devhost app=kernel source=kernel.oom
 window=2026-05-15T02:14:08Z..2026-05-15T02:14:34Z (26s) event_count=4
 severity_max=err
 signature: kernel: Out of memory: Killed process <n> (<process>) total-vm:<n>kB
@@ -128,7 +128,7 @@ sample lines:
 
 ```
 INCIDENT 0192f8a5-1eaa-7c22-8d44-7c2e8f10a3b2
-host=tootie app=dockerd source=docker_event
+host=nashost app=dockerd source=docker_event
 window=2026-05-15T14:02:00Z..2026-05-15T14:11:42Z (582s) event_count=3
 severity_max=err
 signature: docker_event action=die container=<name> exitCode=<n>
@@ -154,7 +154,7 @@ sample lines:
 
 ```
 INCIDENT 0192f8a5-9b3c-7c11-a058-3d4e7c1f9a05
-host=squirts app=fail2ban source=fail2ban
+host=edgehost app=fail2ban source=fail2ban
 window=2026-05-15T07:44:00Z..2026-05-15T07:48:51Z (291s) event_count=14
 severity_max=notice
 signature: fail2ban Ban <ip> jail=<jail>
@@ -212,7 +212,7 @@ Every point in `incidents` carries this payload (in addition to the embedded car
   "incident_id": "0192f8a4-7c11-7c2b-9f3d-1e5a4b2c9d01",
   "signature_hash": "8c4f1ae6d3b9742a0e51c8f6b29d4a73",
   "signature_hash_xhost": "2f9a17c4e08bd56123c7f4ea88b91d05",
-  "host": "dookie",
+  "host": "devhost",
   "app_name": "kernel",
   "source": "kernel.oom",
   "first_seen_ts": 1747276448,

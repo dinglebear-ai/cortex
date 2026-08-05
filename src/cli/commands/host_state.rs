@@ -34,7 +34,7 @@ pub(crate) fn parse_host_state_args(args: &[String]) -> Result<HostStateArgs> {
                 )
             );
         } else {
-            // A bare positional binds to --host (e.g. `cortex state host dookie`).
+            // A bare positional binds to --host (e.g. `cortex state host devhost`).
             positionals.push(arg);
         }
     }

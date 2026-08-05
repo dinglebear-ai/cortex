@@ -12,11 +12,21 @@ fn host_entry(name: &str, first: &str, last: &str, count: i64) -> HostEntry {
 #[test]
 fn dedupe_hosts_folds_case_variants() {
     let out = dedupe_hosts(vec![
-        host_entry("SHART", "2026-06-01T00:00:00Z", "2026-06-10T00:00:00Z", 10),
-        host_entry("shart", "2026-06-02T00:00:00Z", "2026-06-12T00:00:00Z", 5),
+        host_entry(
+            "BACKUPHOST",
+            "2026-06-01T00:00:00Z",
+            "2026-06-10T00:00:00Z",
+            10,
+        ),
+        host_entry(
+            "backuphost",
+            "2026-06-02T00:00:00Z",
+            "2026-06-12T00:00:00Z",
+            5,
+        ),
     ]);
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].hostname, "shart");
+    assert_eq!(out[0].hostname, "backuphost");
     assert_eq!(out[0].log_count, 15);
     assert_eq!(out[0].first_seen, "2026-06-01T00:00:00Z"); // earliest
     assert_eq!(out[0].last_seen, "2026-06-12T00:00:00Z"); // latest
@@ -26,20 +36,20 @@ fn dedupe_hosts_folds_case_variants() {
 fn dedupe_hosts_folds_fqdn_into_existing_short_name() {
     let out = dedupe_hosts(vec![
         host_entry(
-            "tootie",
+            "nashost",
             "2026-06-01T00:00:00Z",
             "2026-06-10T00:00:00Z",
             100,
         ),
         host_entry(
-            "tootie.manatee-triceratops.ts.net",
+            "nashost.example.ts.net",
             "2026-06-03T00:00:00Z",
             "2026-06-09T00:00:00Z",
             7,
         ),
     ]);
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].hostname, "tootie");
+    assert_eq!(out[0].hostname, "nashost");
     assert_eq!(out[0].log_count, 107);
 }
 
@@ -67,9 +77,9 @@ fn dedupe_hosts_leaves_ambiguous_self_identifiers_untouched() {
             "2026-06-10T00:00:00Z",
             3,
         ),
-        host_entry("dookie", "2026-06-01T00:00:00Z", "2026-06-11T00:00:00Z", 9),
+        host_entry("devhost", "2026-06-01T00:00:00Z", "2026-06-11T00:00:00Z", 9),
         host_entry(
-            "dookie:jmagar",
+            "devhost:jmagar",
             "2026-06-01T00:00:00Z",
             "2026-06-05T00:00:00Z",
             2,
@@ -77,8 +87,8 @@ fn dedupe_hosts_leaves_ambiguous_self_identifiers_untouched() {
     ]);
     let names: std::collections::HashSet<&str> = out.iter().map(|h| h.hostname.as_str()).collect();
     assert!(names.contains("localhost"));
-    assert!(names.contains("dookie"));
-    assert!(names.contains("dookie:jmagar")); // colon, no dot → not folded into dookie
+    assert!(names.contains("devhost"));
+    assert!(names.contains("devhost:jmagar")); // colon, no dot → not folded into devhost
     assert_eq!(out.len(), 3);
 }
 
@@ -87,10 +97,10 @@ fn dedupe_hosts_excludes_blank_hostnames() {
     let out = dedupe_hosts(vec![
         host_entry("", "2026-06-01T00:00:00Z", "2026-06-10T00:00:00Z", 3),
         host_entry("   ", "2026-06-01T00:00:00Z", "2026-06-10T00:00:00Z", 4),
-        host_entry("dookie", "2026-06-01T00:00:00Z", "2026-06-11T00:00:00Z", 9),
+        host_entry("devhost", "2026-06-01T00:00:00Z", "2026-06-11T00:00:00Z", 9),
     ]);
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].hostname, "dookie");
+    assert_eq!(out[0].hostname, "devhost");
 }
 
 #[test]

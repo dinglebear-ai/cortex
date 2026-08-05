@@ -58,7 +58,7 @@ fn collect_claude_settings_parses_configured_hooks() {
             }"#,
         );
 
-        let collected = collect_hook_config("dookie", "2026-06-01T00:00:00.000Z");
+        let collected = collect_hook_config("devhost", "2026-06-01T00:00:00.000Z");
         assert_eq!(collected.len(), 1);
         let row = &collected[0];
         assert_eq!(row.ai_tool, "claude");
@@ -84,7 +84,7 @@ fn collect_codex_hooks_parses_configured_groups() {
             }"#,
         );
 
-        let collected = collect_hook_config("dookie", "2026-06-01T00:00:00.000Z");
+        let collected = collect_hook_config("devhost", "2026-06-01T00:00:00.000Z");
         assert_eq!(collected.len(), 1);
         let row = &collected[0];
         assert_eq!(row.ai_tool, "codex");
@@ -105,7 +105,7 @@ fn collect_codex_trust_state_parses_trusted_hashes() {
             "[hooks.state]\n\"stop:cleanup\" = \"abc123\"\n",
         );
 
-        let collected = collect_hook_config("dookie", "2026-06-01T00:00:00.000Z");
+        let collected = collect_hook_config("devhost", "2026-06-01T00:00:00.000Z");
         assert_eq!(collected.len(), 1);
         let row = &collected[0];
         assert_eq!(row.ai_tool, "codex");
@@ -120,7 +120,7 @@ fn collect_codex_trust_state_parses_trusted_hashes() {
 #[serial_test::serial(hook_config_home_env)]
 fn missing_files_yield_empty_collection_not_an_error() {
     with_temp_home(|_home| {
-        let collected = collect_hook_config("dookie", "2026-06-01T00:00:00.000Z");
+        let collected = collect_hook_config("devhost", "2026-06-01T00:00:00.000Z");
         assert!(collected.is_empty());
     });
 }
@@ -130,7 +130,7 @@ fn missing_files_yield_empty_collection_not_an_error() {
 fn malformed_json_is_skipped_not_fatal() {
     with_temp_home(|home| {
         write_file(home, ".claude/settings.json", "{not valid json");
-        let collected = collect_hook_config("dookie", "2026-06-01T00:00:00.000Z");
+        let collected = collect_hook_config("devhost", "2026-06-01T00:00:00.000Z");
         assert!(collected.is_empty());
     });
 }
@@ -152,9 +152,9 @@ fn collect_and_store_is_idempotent() {
         let storage = StorageConfig::for_test(dir.path().join("hook-config-test.db"));
         let pool = init_pool(&storage).unwrap();
 
-        let first = collect_and_store(&pool, "dookie", "2026-06-01T00:00:00.000Z").unwrap();
+        let first = collect_and_store(&pool, "devhost", "2026-06-01T00:00:00.000Z").unwrap();
         assert_eq!(first, 1);
-        let second = collect_and_store(&pool, "dookie", "2026-06-01T00:00:00.000Z").unwrap();
+        let second = collect_and_store(&pool, "devhost", "2026-06-01T00:00:00.000Z").unwrap();
         assert_eq!(
             second, 0,
             "repeated collection at the same timestamp must be idempotent"

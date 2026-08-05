@@ -23,7 +23,7 @@ fn insert_claude_hook_log_row(pool: &DbPool, message: &str) -> i64 {
     let conn = pool.get().unwrap();
     conn.execute(
         "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id)
-         VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', ?1, ?1, 'transcript://claude_project', 'claude', 'cortex', 'sess-1')",
+         VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', ?1, ?1, 'transcript://claude_project', 'claude', 'cortex', 'sess-1')",
         rusqlite::params![message],
     )
     .unwrap();
@@ -104,7 +104,7 @@ async fn codex_rows_are_skipped_entirely() {
     let conn = pool.get().unwrap();
     conn.execute(
         "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id)
-         VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', ?1, ?1, 'transcript://codex_session', 'codex', 'cortex', 'sess-1')",
+         VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', ?1, ?1, 'transcript://codex_session', 'codex', 'cortex', 'sess-1')",
         rusqlite::params![HOOK_ATTACHMENT_JSON],
     )
     .unwrap();

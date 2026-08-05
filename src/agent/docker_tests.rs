@@ -120,7 +120,7 @@ fn container_identity_metadata_carries_compose_context() {
         ),
     ]);
     let metadata = container_identity_metadata(
-        "tootie",
+        "nashost",
         "abcdef1234567890",
         "plex",
         "stdout",
@@ -128,7 +128,7 @@ fn container_identity_metadata_carries_compose_context() {
         &labels,
     );
     assert_eq!(metadata["source_kind"], "agent-docker");
-    assert_eq!(metadata["agent_docker"]["host"], "tootie");
+    assert_eq!(metadata["agent_docker"]["host"], "nashost");
     assert_eq!(metadata["agent_docker"]["container_id"], "abcdef1234567890");
     assert_eq!(metadata["agent_docker"]["compose_project"], "plex");
     assert_eq!(metadata["agent_docker"]["compose_service"], "plex");
@@ -155,7 +155,7 @@ fn long_compose_app_name_still_has_structured_metadata() {
     let app_name = container_app_name("very-long-container-name-for-plex", &labels);
     assert!(app_name.len() > 48);
     let metadata = container_identity_metadata(
-        "tootie",
+        "nashost",
         "abcdef1234567890",
         "very-long-container-name-for-plex",
         "stderr",

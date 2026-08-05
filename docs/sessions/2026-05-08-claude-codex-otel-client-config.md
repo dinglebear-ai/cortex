@@ -2,7 +2,7 @@
 
 Date: 2026-05-08
 Repo: `/home/jmagar/workspace/syslog-mcp`
-Host context: local dev host with syslog MCP receiver reachable at `100.88.16.79:3100`
+Host context: local dev host with syslog MCP receiver reachable at `198.51.100.1:3100`
 
 ## Summary
 
@@ -13,8 +13,8 @@ The receiver endpoint was verified from code before finalizing the client config
 - `src/otlp.rs` mounts OTLP/HTTP routes at `/v1/logs`, `/v1/metrics`, and `/v1/traces`.
 - `src/main.rs` mounts that OTLP router on the same HTTP server as MCP.
 - The correct client endpoints are therefore:
-  - Claude Code base OTLP endpoint: `http://100.88.16.79:3100`
-  - Codex log exporter endpoint: `http://100.88.16.79:3100/v1/logs`
+  - Claude Code base OTLP endpoint: `http://198.51.100.1:3100`
+  - Codex log exporter endpoint: `http://198.51.100.1:3100/v1/logs`
 
 ## Files Changed
 
@@ -40,7 +40,7 @@ Effective redacted values verified with `jq`:
   "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
   "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
   "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-  "OTEL_EXPORTER_OTLP_ENDPOINT": "http://100.88.16.79:3100",
+  "OTEL_EXPORTER_OTLP_ENDPOINT": "http://198.51.100.1:3100",
   "OTEL_EXPORTER_OTLP_HEADERS": "<set>",
   "OTEL_LOGS_EXPORTER": "otlp",
   "OTEL_METRICS_EXPORTER": "otlp",
@@ -67,7 +67,7 @@ environment = "homelab"
 log_user_prompt = true
 metrics_exporter = "none"
 trace_exporter = "none"
-exporter = { otlp-http = { endpoint = "http://100.88.16.79:3100/v1/logs", protocol = "binary", headers = { Authorization = "Bearer <redacted>" } } }
+exporter = { otlp-http = { endpoint = "http://198.51.100.1:3100/v1/logs", protocol = "binary", headers = { Authorization = "Bearer <redacted>" } } }
 ```
 
 The Codex OTLP header syntax was checked against the official Codex config reference:
@@ -79,7 +79,7 @@ The Codex OTLP header syntax was checked against the official Codex config refer
 Receiver health was checked with:
 
 ```bash
-curl -sS --max-time 3 http://100.88.16.79:3100/health | jq '{status, otlp_logs_received, otlp_decode_errors}'
+curl -sS --max-time 3 http://198.51.100.1:3100/health | jq '{status, otlp_logs_received, otlp_decode_errors}'
 ```
 
 Latest observed result:
@@ -94,8 +94,8 @@ Latest observed result:
 
 OTLP auth and route behavior were verified directly:
 
-- `POST http://100.88.16.79:3100/v1/logs` without auth returned `401`.
-- `POST http://100.88.16.79:3100/v1/logs` with the configured bearer header returned `200`.
+- `POST http://198.51.100.1:3100/v1/logs` without auth returned `401`.
+- `POST http://198.51.100.1:3100/v1/logs` with the configured bearer header returned `200`.
 
 Claude Code ingest was confirmed in SQLite:
 
@@ -108,9 +108,9 @@ Claude Code ingest was confirmed in SQLite:
 Codex-related rows were observed after setup, but they were tagged as `app_name=node` rather than `app_name=codex`:
 
 ```text
-2026-05-08T22:37:56.300Z | dookie | node | info | Embedded agent failed before reply: No API key found for provider "openai"...
-2026-05-08T22:37:56.299Z | dookie | node | info | [model-fallback/decision] model fallback decision...
-2026-05-08T22:37:56.299Z | dookie | node | info | [diagnostic] lane task error...
+2026-05-08T22:37:56.300Z | devhost | node | info | Embedded agent failed before reply: No API key found for provider "openai"...
+2026-05-08T22:37:56.299Z | devhost | node | info | [model-fallback/decision] model fallback decision...
+2026-05-08T22:37:56.299Z | devhost | node | info | [diagnostic] lane task error...
 ```
 
 `codex debug models` also loaded the updated config successfully.

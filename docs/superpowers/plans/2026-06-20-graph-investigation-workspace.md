@@ -552,7 +552,7 @@ BAM request shape:
 
 ```json
 {
-  "host": "squirts",
+  "host": "edgehost",
   "from": "2026-06-20T02:10:00Z",
   "to": "2026-06-20T02:20:00Z",
   "baseline_from": "2026-06-19T02:10:00Z",

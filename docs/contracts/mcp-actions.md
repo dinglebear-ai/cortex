@@ -192,7 +192,7 @@ When the agent is online but does not advertise the probe in its capability hand
 
 Request:
 ```json
-{ "action": "agent_status", "host": "dookie" }
+{ "action": "agent_status", "host": "devhost" }
 ```
 
 Response:
@@ -202,7 +202,7 @@ Response:
   "result": {
     "agents": [{
       "host_id": "9c9c2b6e-4f1a-7f0a-bbb1-3f9d70cd0e91",
-      "hostname": "dookie",
+      "hostname": "devhost",
       "connection_state": "Active",
       "agent_version": "0.1.0",
       "kernel": "6.8.0-40-generic",
@@ -270,7 +270,7 @@ Response:
 
 Request:
 ```json
-{ "action": "alerts_ack", "rule_id": "container_die", "fingerprint": "plex@tootie" }
+{ "action": "alerts_ack", "rule_id": "container_die", "fingerprint": "plex@nashost" }
 ```
 
 Response:
@@ -365,7 +365,7 @@ Response:
 
 **Source:** epic F §8.2.
 
-**Purpose:** Natural-language question over the incident corpus + correlated AI sessions, answered by `axon ask` with synthesis. Used for "what causes qbittorrent to keep dying on squirts?" style queries. Resolves to a Qdrant collection scoped to `incidents` (locked decision F-§13.1).
+**Purpose:** Natural-language question over the incident corpus + correlated AI sessions, answered by `axon ask` with synthesis. Used for "what causes qbittorrent to keep dying on edgehost?" style queries. Resolves to a Qdrant collection scoped to `incidents` (locked decision F-§13.1).
 
 **Params:**
 
@@ -415,13 +415,13 @@ Response:
 **Example:**
 
 ```json
-{ "action": "ask_history", "query": "what causes qbittorrent to keep dying on squirts?", "host_filter": "squirts" }
+{ "action": "ask_history", "query": "what causes qbittorrent to keep dying on edgehost?", "host_filter": "edgehost" }
 ```
 ```json
 {
   "ok": true,
   "result": {
-    "answer": "qbittorrent on squirts has died 14 times in the last 90 days, exit_code=137 in 12 of them (OOM-kill). The pattern correlates with sustained memory pressure from Plex transcoding...",
+    "answer": "qbittorrent on edgehost has died 14 times in the last 90 days, exit_code=137 in 12 of them (OOM-kill). The pattern correlates with sustained memory pressure from Plex transcoding...",
     "citations": [
       { "type": "incident", "incident_id": "inc_2026-04-12T07:18Z_squirts_b7e2", "score": 0.81 },
       { "type": "session", "session_id": "sess_2026-04-12T07:30Z_jmagar_homelab-ops", "score": 0.65 }
@@ -554,7 +554,7 @@ Response:
 **Example:**
 
 ```json
-{ "action": "disk_blackholes", "host": "squirts", "top_n": 5 }
+{ "action": "disk_blackholes", "host": "edgehost", "top_n": 5 }
 ```
 ```json
 {
@@ -641,7 +641,7 @@ Response:
 **Example:**
 
 ```json
-{ "action": "disk_usage", "host": "tootie" }
+{ "action": "disk_usage", "host": "nashost" }
 ```
 ```json
 {
@@ -731,7 +731,7 @@ Response:
 **Example:**
 
 ```json
-{ "action": "dns_status", "host": "steamy-wsl" }
+{ "action": "dns_status", "host": "winhost-wsl" }
 ```
 ```json
 {
@@ -761,7 +761,7 @@ Response:
 
 **Source:** epic D §8.3, §9.3.
 
-**Purpose:** Top-N processes by RSS. Answers "who's OOMing dookie".
+**Purpose:** Top-N processes by RSS. Answers "who's OOMing devhost".
 
 **Params:**
 
@@ -817,7 +817,7 @@ Response:
 **Example:**
 
 ```json
-{ "action": "mem_top", "host": "dookie", "n": 5 }
+{ "action": "mem_top", "host": "devhost", "n": 5 }
 ```
 ```json
 {
@@ -910,7 +910,7 @@ Response:
 **Example:**
 
 ```json
-{ "action": "network_neigh", "host": "tootie", "state_filter": ["FAILED", "STALE"] }
+{ "action": "network_neigh", "host": "nashost", "state_filter": ["FAILED", "STALE"] }
 ```
 ```json
 {
@@ -992,7 +992,7 @@ Response:
   "ok": true,
   "result": {
     "fires": [
-      { "rule_id": "container_die", "fingerprint": "plex@tootie", "fired_at": "2026-05-15T22:14:08Z", "severity": "critical", "log_id": 9852113, "log_excerpt": "container die abc123 (image=plex:latest, exitCode=137)" }
+      { "rule_id": "container_die", "fingerprint": "plex@nashost", "fired_at": "2026-05-15T22:14:08Z", "severity": "critical", "log_id": 9852113, "log_excerpt": "container die abc123 (image=plex:latest, exitCode=137)" }
     ]
   }
 }
@@ -1159,7 +1159,7 @@ Response:
 **Example:**
 
 ```json
-{ "action": "service_health", "host": "tootie", "kind": "all" }
+{ "action": "service_health", "host": "nashost", "kind": "all" }
 ```
 ```json
 {
@@ -1283,7 +1283,7 @@ Response:
       {
         "incident_id": "inc_2026-04-12T07:18Z_squirts_b7e2",
         "score": 0.81,
-        "hostname": "squirts",
+        "hostname": "edgehost",
         "app_name": "kernel",
         "source": "kernel.oom",
         "first_seen": "2026-04-12T07:18:14Z",
@@ -1291,7 +1291,7 @@ Response:
         "event_count": 4,
         "structured_fields": { "oom_victim_comm": "qbittorrent", "exit_code": 137 },
         "sample_log_ids": [4521000, 4521001],
-        "card_excerpt": "host=squirts app=kernel source=kernel.oom ...",
+        "card_excerpt": "host=edgehost app=kernel source=kernel.oom ...",
         "resolution_session_id": "sess_2026-04-12T07:30Z_jmagar"
       }
     ],
@@ -1511,8 +1511,8 @@ Existing `tool_get_status` (in `src/mcp/tools.rs` per spec C §10) gains two new
     "disconnected": 1,
     "revoked": 0,
     "fleet": [
-      { "hostname": "dookie", "connection_state": "Active", "last_seen": "2026-05-16T14:00:00Z", "lag_seq": 0 },
-      { "hostname": "squirts", "connection_state": "Disconnected", "last_seen": "2026-05-16T11:42:11Z", "lag_seq": 1240 }
+      { "hostname": "devhost", "connection_state": "Active", "last_seen": "2026-05-16T14:00:00Z", "lag_seq": 0 },
+      { "hostname": "edgehost", "connection_state": "Disconnected", "last_seen": "2026-05-16T11:42:11Z", "lag_seq": 1240 }
     ]
   }
 }

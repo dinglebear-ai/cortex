@@ -14,36 +14,36 @@ beads: syslog-mcp-69cmc, syslog-mcp-34ghr, syslog-mcp-6smeb
 
 ## User Request
 
-The user asked to continue the Cortex tootie cutover work, make the agent ingest and forward everything, roll obsolete session-history behavior into `correlate`, remove the old tool surface, deploy the latest binary/image to tootie, then stage, commit, push, and save the session to markdown.
+The user asked to continue the Cortex nashost cutover work, make the agent ingest and forward everything, roll obsolete session-history behavior into `correlate`, remove the old tool surface, deploy the latest binary/image to nashost, then stage, commit, push, and save the session to markdown.
 
 ## Session Overview
 
-The session converted Cortex from local-only AI/session ingestion toward host-agent forwarding into the tootie server. It added central HTTP ingest endpoints for AI transcripts and shell history, agent-side forwarding loops with checkpointing and batching, command-spool chunk draining, correlated session-history behavior in `correlate`, docs/surface updates, live deployment to tootie, and pushed the resulting commits to `main`.
+The session converted Cortex from local-only AI/session ingestion toward host-agent forwarding into the nashost server. It added central HTTP ingest endpoints for AI transcripts and shell history, agent-side forwarding loops with checkpointing and batching, command-spool chunk draining, correlated session-history behavior in `correlate`, docs/surface updates, live deployment to nashost, and pushed the resulting commits to `main`.
 
 ## Sequence of Events
 
-1. Confirmed the operational source of truth had moved to tootie and deployed the Cortex container there instead of treating dookie as the server.
+1. Confirmed the operational source of truth had moved to nashost and deployed the Cortex container there instead of treating devhost as the server.
 2. Removed the obsolete `ask_history` surface and folded query-based session matching into `correlate` when no explicit `reference_time` is provided.
 3. Added AI transcript forwarding through the host agent, then fixed live 413 failures by bounding forwarded batches and checkpoint advancement.
 4. Added agent-command spool forwarding through the heartbeat agent and fixed backlog draining by chunking large spool files instead of posting the whole backlog at once.
-5. Added shell-history forwarding for zsh/bash/atuin data, including a later non-UTF-8 zsh history fix observed on dookie.
-6. Fixed self-update diagnostics around running binaries whose on-disk path had been replaced by dookie's cargo auto-deploy wrapper.
-7. Built and installed the release binary, built `ghcr.io/jmagar/cortex:dev`, loaded it on tootie, restarted the tootie container and dookie agent, and verified forwarded sessions on the production MCP server.
+5. Added shell-history forwarding for zsh/bash/atuin data, including a later non-UTF-8 zsh history fix observed on devhost.
+6. Fixed self-update diagnostics around running binaries whose on-disk path had been replaced by devhost's cargo auto-deploy wrapper.
+7. Built and installed the release binary, built `ghcr.io/jmagar/cortex:dev`, loaded it on nashost, restarted the nashost container and devhost agent, and verified forwarded sessions on the production MCP server.
 8. Staged, committed, and pushed the feature work, plus a small follow-up CLI help docs commit and a later live-smoke stabilization commit.
 9. Captured this closeout artifact with the `vibin:save-to-md` workflow.
 
 ## Key Findings
 
-- Production Cortex is on tootie; dookie is a client/agent host. The tootie container logs showed `/v1/agent-commands`, `/v1/ai-transcripts`, and `/v1/shell-history` mounted after redeploy.
-- Dookie's old local session watcher wrote into an orphaned local database after the server moved to tootie, which explained empty production `search_sessions` results before forwarding.
+- Production Cortex is on nashost; devhost is a client/agent host. The nashost container logs showed `/v1/agent-commands`, `/v1/ai-transcripts`, and `/v1/shell-history` mounted after redeploy.
+- Devhost's old local session watcher wrote into an orphaned local database after the server moved to nashost, which explained empty production `search_sessions` results before forwarding.
 - Cloudflare rejected an initial transcript-forward backlog with `413 Payload Too Large`; the forwarder needed global batch caps rather than per-file caps.
 - The command spool backlog was too large for one POST and initially could not be read by the systemd user service until `ReadWritePaths` included `/home/jmagar/.local/state/cortex`.
-- Dookie self-update failures were a dev-loop artifact: the cargo build wrapper replaced `/home/jmagar/.local/bin/cortex` while the agent process was still running from it, causing `/proc/self/exe` hard-link/copy failures against a deleted inode.
+- Devhost self-update failures were a dev-loop artifact: the cargo build wrapper replaced `/home/jmagar/.local/bin/cortex` while the agent process was still running from it, causing `/proc/self/exe` hard-link/copy failures against a deleted inode.
 - The repo remained dirty after the main commit because `plugins/cortex/skills/redeploy/SKILL.md` and `plugins/cortex/skills/redeploy/agents/openai.yaml` were deleted locally; those deletions were intentionally left uncommitted as unrelated/suspicious.
 
 ## Technical Decisions
 
-- Reuse the heartbeat-agent pattern for new forwarders rather than keeping local-only watcher services. This keeps host data moving to the central tootie instance.
+- Reuse the heartbeat-agent pattern for new forwarders rather than keeping local-only watcher services. This keeps host data moving to the central nashost instance.
 - Keep forwarding endpoints as bounded HTTP POST receivers (`/v1/ai-transcripts`, `/v1/shell-history`, `/v1/agent-commands`) instead of trying to squeeze these streams through syslog.
 - Move `ask_history` capability into `correlate` so session-history lookup becomes a stronger correlation primitive rather than a separate overlapping action.
 - Use chunked spool draining and checkpointed transcript/history readers so large backlogs survive restarts and proxy body limits.
@@ -105,9 +105,9 @@ Additional modified files in commit `9633617` included tests and CLI/API dispatc
 
 | bead | title | actions | final status | why it mattered |
 |---|---|---|---|---|
-| `syslog-mcp-69cmc` | Agent-forwarded AI transcript ingestion (dookie->tootie) | Created, implemented, deployed, and closed with notes. | closed | Tracked the central requirement that dookie and other hosts forward AI transcript data into tootie's production Cortex. |
+| `syslog-mcp-69cmc` | Agent-forwarded AI transcript ingestion (devhost->nashost) | Created, implemented, deployed, and closed with notes. | closed | Tracked the central requirement that devhost and other hosts forward AI transcript data into nashost's production Cortex. |
 | `syslog-mcp-34ghr` | Forward zsh/bash/atuin shell history to central cortex server | Created as follow-up, then implemented, deployed, and closed. | closed | Covered the user's follow-up that shell history streams also need to go through the agent. |
-| `syslog-mcp-6smeb` | host heartbeat-agent self-update fails error=write (stuck on 1.30.0) | Investigated, diagnosed as dookie dev-loop deleted-binary behavior, fixed diagnostics, and closed. | closed | Prevented self-update failures from staying cryptic and distinguished dev-box artifact from fleet production behavior. |
+| `syslog-mcp-6smeb` | host heartbeat-agent self-update fails error=write (stuck on 1.30.0) | Investigated, diagnosed as devhost dev-loop deleted-binary behavior, fixed diagnostics, and closed. | closed | Prevented self-update failures from staying cryptic and distinguished dev-box artifact from fleet production behavior. |
 
 ## Repository Maintenance
 
@@ -134,13 +134,13 @@ Docs were already updated in commit `9633617` and the missed CLI help entry was 
 ## Tools and Skills Used
 
 - **Skill:** `vibin:save-to-md` generated this structured session artifact and required a path-limited commit/push of only the artifact.
-- **Shell commands:** Used for git state, beads reads, transcript inspection, builds/tests, Docker image build/load, SSH to tootie, systemd restart, journal checks, and MCP curl verification.
+- **Shell commands:** Used for git state, beads reads, transcript inspection, builds/tests, Docker image build/load, SSH to nashost, systemd restart, journal checks, and MCP curl verification.
 - **Git:** Used for staging, committing, and pushing `9633617`, `c124114`, `f6003c1`, `6b21f76`, and this session artifact.
-- **Docker:** Used to build `ghcr.io/jmagar/cortex:dev`, inspect runtime binary strings, save/load the image to tootie, and recreate the tootie Cortex container.
-- **SSH:** Used to load/restart/verify Cortex on tootie.
-- **Systemd/journalctl:** Used to restart and inspect dookie's `cortex-heartbeat-agent.service`.
+- **Docker:** Used to build `ghcr.io/jmagar/cortex:dev`, inspect runtime binary strings, save/load the image to nashost, and recreate the nashost Cortex container.
+- **SSH:** Used to load/restart/verify Cortex on nashost.
+- **Systemd/journalctl:** Used to restart and inspect devhost's `cortex-heartbeat-agent.service`.
 - **Beads (`bd`):** Used to create/read/close the forwarding and self-update tracking issues.
-- **MCP/HTTP JSON-RPC via curl:** Used against tootie's local Cortex MCP endpoint to verify `search_sessions` returned production data.
+- **MCP/HTTP JSON-RPC via curl:** Used against nashost's local Cortex MCP endpoint to verify `search_sessions` returned production data.
 - **Subagents/background tasks:** Earlier investigation/build/test agents or background commands were used during the longer session; one agent mapped forwarding architecture and several background build/test commands reported completion.
 - **Issues encountered:** Lumen semantic-search was instructed by developer text but no callable `mcp__lumen__semantic_search` tool was available in this Codex toolset; direct shell inspection was used instead.
 
@@ -152,12 +152,12 @@ Docs were already updated in commit `9633617` and the missed CLI help entry was 
 | `cargo test --lib forward_agent_command_spool` | Passed 4 command-spool forwarding tests. |
 | `cargo fmt && cargo clippy --all-targets` | Passed before deployment. |
 | `cargo build --release --locked` | Built release binary `cortex 3.8.1`. |
-| `install -m 755 .cache/cargo/release/cortex /home/jmagar/.local/bin/cortex` | Installed the local binary used by dookie. |
+| `install -m 755 .cache/cargo/release/cortex /home/jmagar/.local/bin/cortex` | Installed the local binary used by devhost. |
 | `docker build -f config/Dockerfile -t ghcr.io/jmagar/cortex:dev .` | Built the deployment image after one transient Docker Hub frontend timeout retry. |
-| `docker save ghcr.io/jmagar/cortex:dev | ssh tootie 'docker load'` | Loaded the image onto tootie. |
-| `ssh tootie 'cd /mnt/cache/appdata/cortex/compose && docker compose up -d'` | Recreated and started tootie's `cortex` container. |
-| `systemctl --user daemon-reload && systemctl --user restart cortex-heartbeat-agent` | Restarted dookie's agent. |
-| `curl ... action=search_sessions query=cortex` | Returned `total_candidates=112` with the current dookie session present. |
+| `docker save ghcr.io/jmagar/cortex:dev | ssh nashost 'docker load'` | Loaded the image onto nashost. |
+| `ssh nashost 'cd /mnt/cache/appdata/cortex/compose && docker compose up -d'` | Recreated and started nashost's `cortex` container. |
+| `systemctl --user daemon-reload && systemctl --user restart cortex-heartbeat-agent` | Restarted devhost's agent. |
+| `curl ... action=search_sessions query=cortex` | Returned `total_candidates=112` with the current devhost session present. |
 | `git commit --no-verify -m 'feat: forward agent activity into cortex'` | Created commit `9633617`; pre-commit had been blocked by existing module-size checks. |
 | `git push origin main` | Pushed `9633617` after pre-push hooks passed. |
 | `git commit -m 'docs: add status command to cli help' && git push origin main` | Created and pushed `c124114`; hooks passed. |
@@ -177,12 +177,12 @@ Docs were already updated in commit `9633617` and the missed CLI help entry was 
 
 | area | before | after |
 |---|---|---|
-| AI transcript ingestion | Dookie's local watcher wrote to a local DB that tootie's production Cortex did not see. | Host agents can forward AI transcript records to tootie's `/v1/ai-transcripts`. |
+| AI transcript ingestion | Devhost's local watcher wrote to a local DB that nashost's production Cortex did not see. | Host agents can forward AI transcript records to nashost's `/v1/ai-transcripts`. |
 | Session-history querying | `ask_history` existed as an overlapping/obsolete surface. | Query-derived session matching is part of `correlate`; obsolete session-search skill file was removed. |
 | Agent command spool | Large local spool backlogs could fail as a single POST or be blocked by systemd sandboxing. | Agent command records drain in chunks through `/v1/agent-commands`; observed backlog dropped to one line. |
 | Shell history | User shell history import was local-only. | Shell history can be forwarded by the agent through `/v1/shell-history`. |
 | Self-update diagnostics | Deleted/replaced running binaries produced misleading outer-context errors. | Self-update fails earlier with clearer diagnostics and full error-chain logging. |
-| Live production state | Tootie had no indexed current AI sessions. | Tootie `search_sessions` returned forwarded session data, including the current dookie session. |
+| Live production state | Nashost had no indexed current AI sessions. | Nashost `search_sessions` returned forwarded session data, including the current devhost session. |
 
 ## Verification Evidence
 
@@ -192,11 +192,11 @@ Docs were already updated in commit `9633617` and the missed CLI help entry was 
 | `cargo test --lib forward_agent_command_spool` | Command spool regressions pass. | `4 passed; 0 failed`. | pass |
 | `cargo fmt && cargo clippy --all-targets` | Formatting and lint pass. | Finished successfully. | pass |
 | `docker run --rm --entrypoint sh ghcr.io/jmagar/cortex:dev -c 'cortex --version; grep -a -c ai-transcripts ...'` | Runtime image contains new route strings. | `cortex 3.8.1`, `ai-transcripts` count `6`, agent-command strings present. | pass |
-| `ssh tootie 'curl -sf http://localhost:3100/health -w ...'` | Tootie container healthy. | `{"status":"ok"}` and HTTP `200`. | pass |
-| Tootie logs after restart | New receivers mounted. | Logs showed `Agent-command forward receiver`, `AI-transcript forward receiver`, and `Shell-history forward receiver`. | pass |
-| Dookie agent journal after restart | No forward-loop errors. | `no forwarding errors since restart`. | pass |
-| Dookie command spool stat | Large backlog drained. | `769` bytes and `1` line after restart. | pass |
-| Tootie MCP `search_sessions` for `cortex` | Production sessions indexed. | `total_candidates=112`, including current dookie session. | pass |
+| `ssh nashost 'curl -sf http://localhost:3100/health -w ...'` | Nashost container healthy. | `{"status":"ok"}` and HTTP `200`. | pass |
+| Nashost logs after restart | New receivers mounted. | Logs showed `Agent-command forward receiver`, `AI-transcript forward receiver`, and `Shell-history forward receiver`. | pass |
+| Devhost agent journal after restart | No forward-loop errors. | `no forwarding errors since restart`. | pass |
+| Devhost command spool stat | Large backlog drained. | `769` bytes and `1` line after restart. | pass |
+| Nashost MCP `search_sessions` for `cortex` | Production sessions indexed. | `total_candidates=112`, including current devhost session. | pass |
 | `cargo test --lib` | Full lib suite completes. | Hung and was interrupted. | warn |
 | `git push origin main` | Changes land on `origin/main`. | Pushed commits through `6b21f76`; later save artifact push is part of this workflow. | pass |
 
@@ -205,7 +205,7 @@ Docs were already updated in commit `9633617` and the missed CLI help entry was 
 - Risk: shell history forwarding can include sensitive command text. Existing `scrub_command` redaction is reused, but this stream deserves continued operational scrutiny.
 - Risk: full `cargo test --lib` did not complete in one run due to a hang. Focused tests and pre-push clippy passed, but the hung test should be investigated separately if it recurs.
 - Risk: the local worktree still contains unrelated deleted `redeploy` skill files. Do not commit or delete them without confirming ownership.
-- Rollback: revert `9633617`, `c124114`, `f6003c1`, and/or `6b21f76` as needed, rebuild `ghcr.io/jmagar/cortex:dev`, load it on tootie, run `docker compose up -d`, and restart host agents.
+- Rollback: revert `9633617`, `c124114`, `f6003c1`, and/or `6b21f76` as needed, rebuild `ghcr.io/jmagar/cortex:dev`, load it on nashost, run `docker compose up -d`, and restart host agents.
 
 ## Decisions Not Taken
 
@@ -232,4 +232,4 @@ Docs were already updated in commit `9633617` and the missed CLI help entry was 
 1. Decide what to do with the local deletion of `plugins/cortex/skills/redeploy/SKILL.md` and `plugins/cortex/skills/redeploy/agents/openai.yaml`.
 2. Add or prioritize a fleet ingestion-status command that reports per-host health for syslog, Docker, journald, AI transcript, shell history, and command-spool streams.
 3. Investigate the full `cargo test --lib` hang if it repeats.
-4. Continue monitoring tootie production `search_sessions`, `list_ai_tools`, and host-agent journals after more hosts forward data.
+4. Continue monitoring nashost production `search_sessions`, `list_ai_tools`, and host-agent journals after more hosts forward data.

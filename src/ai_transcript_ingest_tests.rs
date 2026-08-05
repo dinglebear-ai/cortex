@@ -34,7 +34,7 @@ fn test_app_with(
 fn sample_record() -> serde_json::Value {
     serde_json::json!({
         "timestamp": "2026-07-09T00:00:00Z",
-        "hostname": "dookie",
+        "hostname": "devhost",
         "ai_tool": "claude",
         "ai_project": "/home/jmagar/workspace/cortex",
         "ai_session_id": "sess-1",

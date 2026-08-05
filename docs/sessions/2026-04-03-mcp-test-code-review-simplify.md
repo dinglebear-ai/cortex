@@ -16,7 +16,7 @@ End-to-end quality pass on the syslog-mcp codebase: live smoke-tested all six MC
 
 | Time | Activity |
 |------|----------|
-| Start | OAuth auth flow for `syslog.tootie.tv` MCP endpoint |
+| Start | OAuth auth flow for `syslog.example.internal` MCP endpoint |
 | +5 min | Live tool test: all 6 MCP tools exercised against production DB |
 | +15 min | `/beagle-rust:review-rust` — loaded 4 skills, reviewed 5 source files |
 | +35 min | `rust-pro` agent dispatched to fix all 6 review findings |
@@ -71,15 +71,15 @@ End-to-end quality pass on the syslog-mcp codebase: live smoke-tested all six MC
 
 ```bash
 # Live tool test
-curl -s https://syslog.tootie.tv/health
+curl -s https://syslog.example.internal/health
 # → {"status":"ok"}
 
 # MCP tools via OAuth-authenticated session
 mcp__syslog-mcp__get_stats      → 4.9M logs, 22 hosts, 2.6GB DB, write_blocked=false
-mcp__syslog-mcp__list_hosts     → 6 active hosts (dookie dominant at 4.4M logs)
+mcp__syslog-mcp__list_hosts     → 6 active hosts (devhost dominant at 4.4M logs)
 mcp__syslog-mcp__tail_logs n=5  → live tailscale + kernel AppArmor entries
-mcp__syslog-mcp__get_errors     → STEAMY 12 alerts, dookie 1906 warnings
-mcp__syslog-mcp__search_logs query=error limit=3  → WSL relay errors on STEAMY
+mcp__syslog-mcp__get_errors     → WINHOST 12 alerts, devhost 1906 warnings
+mcp__syslog-mcp__search_logs query=error limit=3  → WSL relay errors on WINHOST
 mcp__syslog-mcp__list_hosts     → all hosts with timestamps
 
 # Verification after fixes
@@ -110,7 +110,7 @@ rtk cargo test
 |---------|----------|--------|--------|
 | `cargo clippy --all-targets --all-features -- -D warnings` | No errors | No issues found | ✅ |
 | `cargo test` | 70 passed | 70 passed (0.31s) | ✅ |
-| `curl https://syslog.tootie.tv/health` | `{"status":"ok"}` | `{"status":"ok"}` | ✅ |
+| `curl https://syslog.example.internal/health` | `{"status":"ok"}` | `{"status":"ok"}` | ✅ |
 | `mcp__syslog-mcp__get_stats` | DB stats returned | 4.9M logs, 22 hosts | ✅ |
 | `mcp__syslog-mcp__tail_logs` | 5 recent entries | 5 entries returned | ✅ |
 | `mcp__syslog-mcp__search_logs query=error` | FTS5 results | 3 results returned | ✅ |
@@ -142,14 +142,14 @@ N/A — No Axon embed/retrieve or vector search was performed during this sessio
 ## Open Questions
 
 - **Timestamp-as-hostname artifacts**: `list_hosts` returns entries like `"2026-03-29T02:45:44.291Z"` as hostnames (from early testing). These have `log_count: 1` each and are harmless, but they pollute the hosts table. No cleanup mechanism exists.
-- **`STEAMY` 12 alerts**: From today's `get_errors` run — 12 alert-level events on STEAMY. Source is WSL relay errors. Worth investigating if they are recurring.
-- **`dookie` AppArmor denials**: Continuous `snap.tailscale.tailscaled` ptrace denials in the live tail. Volume is high (many per second). Not a new finding but worth monitoring.
+- **`WINHOST` 12 alerts**: From today's `get_errors` run — 12 alert-level events on WINHOST. Source is WSL relay errors. Worth investigating if they are recurring.
+- **`devhost` AppArmor denials**: Continuous `snap.tailscale.tailscaled` ptrace denials in the live tail. Volume is high (many per second). Not a new finding but worth monitoring.
 
 ---
 
 ## Next Steps
 
 1. Consider bumping MSRV to 1.91 to enable `str::floor_char_boundary` and other modern std APIs.
-2. Investigate the 12 alert-level events on `STEAMY` (WSL relay).
+2. Investigate the 12 alert-level events on `WINHOST` (WSL relay).
 3. Add a cleanup job or TTL for the timestamp-as-hostname test artifacts in the `hosts` table.
 4. Consider extracting `truncate()` to a shared `src/util.rs` when the next cross-module utility is needed.

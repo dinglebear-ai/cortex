@@ -407,16 +407,16 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('reverse_proxy', 'proxy:example.tootie.tv', 'example.tootie.tv',
-             'app_inventory', 'proxy:example.tootie.tv', 'verified')",
+         VALUES ('reverse_proxy', 'proxy:example.example.internal', 'example.example.internal',
+             'app_inventory', 'proxy:example.example.internal', 'verified')",
         [],
     )
     .unwrap();
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('domain', 'example.tootie.tv', 'example.tootie.tv',
-             'app_inventory', 'example.tootie.tv', 'verified')",
+         VALUES ('domain', 'example.example.internal', 'example.example.internal',
+             'app_inventory', 'example.example.internal', 'verified')",
         [],
     )
     .unwrap();
@@ -477,7 +477,7 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
         "INSERT INTO graph_relationships
             (relationship_key, src_entity_id, dst_entity_id, relationship_type,
              reason_code, trust_level, confidence, evidence_count)
-         VALUES ('reverse_proxy:example.tootie.tv->domain:example.tootie.tv',
+         VALUES ('reverse_proxy:example.example.internal->domain:example.example.internal',
              ?1, ?2, 'exposes_domain', 'reverse_proxy_config',
              'verified', 0.90, 1)",
         rusqlite::params![proxy_id, domain_id],
@@ -514,7 +514,7 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let proxy_rel_id: i64 = conn
         .query_row(
             "SELECT id FROM graph_relationships
-             WHERE relationship_key = 'reverse_proxy:example.tootie.tv->domain:example.tootie.tv'",
+             WHERE relationship_key = 'reverse_proxy:example.example.internal->domain:example.example.internal'",
             [],
             |row| row.get(0),
         )
@@ -523,10 +523,10 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
         "INSERT INTO graph_relationship_evidence
             (relationship_id, evidence_key, source_kind, source_id, observed_at,
              reason_code, trust_level, safe_excerpt, evidence_count)
-         VALUES (?1, 'proxy:example.tootie.tv:route',
-             'app_inventory', 'proxy:example.tootie.tv',
+         VALUES (?1, 'proxy:example.example.internal:route',
+             'app_inventory', 'proxy:example.example.internal',
              '2026-01-01T00:00:00Z', 'reverse_proxy_config',
-             'verified', 'example.tootie.tv routes through proxy config', 1)",
+             'verified', 'example.example.internal routes through proxy config', 1)",
         [proxy_rel_id],
     )
     .unwrap();
@@ -724,8 +724,8 @@ fn migration_30_widens_old_graph_constraints_and_preserves_rows() {
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('compose_project', 'squirts:edge', 'edge',
-             'app_inventory', 'compose:squirts', 'verified')",
+         VALUES ('compose_project', 'edgehost:edge', 'edge',
+             'app_inventory', 'compose:edgehost', 'verified')",
         [],
     )
     .unwrap();
@@ -741,7 +741,7 @@ fn migration_30_widens_old_graph_constraints_and_preserves_rows() {
         "INSERT INTO graph_relationship_evidence
             (relationship_id, evidence_key, source_kind, source_id, observed_at,
              reason_code, trust_level, safe_excerpt, evidence_count)
-         VALUES (?1, 'inventory:route', 'app_inventory', 'proxy:squirts',
+         VALUES (?1, 'inventory:route', 'app_inventory', 'proxy:edgehost',
              '2026-01-01T00:00:00Z', 'reverse_proxy_config',
              'verified', 'proxy route', 1)",
         rusqlite::params![relationship_id],
@@ -796,7 +796,7 @@ fn graph_lookup_indexes_support_expected_query_plans() {
     let entity_plan = plan_details(
         "EXPLAIN QUERY PLAN
          SELECT id FROM graph_entities
-         WHERE entity_type = 'host' AND canonical_key = 'dookie'",
+         WHERE entity_type = 'host' AND canonical_key = 'devhost'",
     );
     assert!(
         entity_plan
@@ -808,7 +808,7 @@ fn graph_lookup_indexes_support_expected_query_plans() {
     let alias_plan = plan_details(
         "EXPLAIN QUERY PLAN
          SELECT entity_id FROM graph_entity_aliases
-         WHERE alias_type = 'hostname' AND alias_key = 'dookie'",
+         WHERE alias_type = 'hostname' AND alias_key = 'devhost'",
     );
     assert!(
         alias_plan
@@ -1090,7 +1090,7 @@ fn migration_32_covers_graph_to_log_join() {
     let join_plan = plan_details(
         "EXPLAIN QUERY PLAN
          SELECT id FROM logs
-         WHERE hostname IN ('dookie', 'squirts')
+         WHERE hostname IN ('devhost', 'edgehost')
            AND app_name = 'swag'
            AND timestamp BETWEEN '2026-06-18T00:00:00Z' AND '2026-06-18T01:00:00Z'",
     );
@@ -2088,7 +2088,7 @@ fn graph_schema_accepts_entity_resolution_vocabulary() {
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
          VALUES
             ('logical_service', 'plex', 'plex', 'resolver', 'fixture', 'verified'),
-            ('service_instance', 'tootie/plex', 'tootie/plex', 'resolver', 'fixture', 'verified')",
+            ('service_instance', 'nashost/plex', 'nashost/plex', 'resolver', 'fixture', 'verified')",
         [],
     )
     .unwrap();
@@ -2138,8 +2138,8 @@ fn migration_41_cleans_legacy_service_rows_from_populated_db() {
             "INSERT INTO graph_entities
                 (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
              VALUES
-                ('service', 'tootie:plex', 'plex', 'log', 'fixture', 'inferred'),
-                ('service', 'tootie:plex:plex', 'tootie/plex/plex', 'log', 'fixture', 'inferred'),
+                ('service', 'nashost:plex', 'plex', 'log', 'fixture', 'inferred'),
+                ('service', 'nashost:plex:plex', 'nashost/plex/plex', 'log', 'fixture', 'inferred'),
                 ('app', 'plex/plex/plex', 'plex/plex/plex', 'log', 'fixture', 'claimed'),
                 ('app', 'kernel', 'kernel', 'log', 'fixture', 'claimed')",
             [],
@@ -2236,8 +2236,8 @@ fn migration_41_prunes_relationships_evidence_and_aliases_touching_legacy_entiti
             .unwrap();
         };
 
-        let legacy = insert_entity("service", "tootie:plex");
-        let host = insert_entity("host", "tootie");
+        let legacy = insert_entity("service", "nashost:plex");
+        let host = insert_entity("host", "nashost");
         let app = insert_entity("app", "kernel");
         let legacy_rel = insert_rel("legacy:runs_on:host", legacy, host);
         insert_evidence(legacy_rel, "legacy-evidence");

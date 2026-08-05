@@ -104,21 +104,21 @@ fn docker_ingest_toml_hosts_parse() {
         checkpoint_interval_ms = 1000
 
         [[docker_ingest.hosts]]
-        name = "tootie"
-        base_url = "http://tootie:2375"
+        name = "nashost"
+        base_url = "http://nashost:2375"
 
         [[docker_ingest.hosts]]
-        name = "squirts"
-        base_url = "http://squirts:2375"
+        name = "edgehost"
+        base_url = "http://edgehost:2375"
     "#;
 
     let config: Config = toml::from_str(raw).unwrap();
     assert!(config.docker_ingest.enabled);
     assert_eq!(config.docker_ingest.hosts.len(), 2);
-    assert_eq!(config.docker_ingest.hosts[0].name, "tootie");
-    assert_eq!(config.docker_ingest.hosts[0].base_url, "http://tootie:2375");
-    assert_eq!(config.docker_ingest.hosts[1].name, "squirts");
-    assert_eq!(config.docker_ingest.hosts[1].base_url, "http://squirts:2375");
+    assert_eq!(config.docker_ingest.hosts[0].name, "nashost");
+    assert_eq!(config.docker_ingest.hosts[0].base_url, "http://nashost:2375");
+    assert_eq!(config.docker_ingest.hosts[1].name, "edgehost");
+    assert_eq!(config.docker_ingest.hosts[1].base_url, "http://edgehost:2375");
 }
 
 #[test]
@@ -135,11 +135,11 @@ fn docker_ingest_rejects_duplicate_host_names() {
     config.docker_ingest.enabled = true;
     config.docker_ingest.hosts = vec![
         DockerHostConfig {
-            name: "tootie".into(),
-            base_url: "http://tootie:2375".into(),
+            name: "nashost".into(),
+            base_url: "http://nashost:2375".into(),
         },
         DockerHostConfig {
-            name: "tootie".into(),
+            name: "nashost".into(),
             base_url: "http://10.0.0.10:2375".into(),
         },
     ];
@@ -557,17 +557,17 @@ fn test_pool() -> Arc<db::DbPool> {
 #[test]
 fn checkpoint_round_trip() {
     let pool = test_pool();
-    save_checkpoint(&pool, "tootie", "abc123", "2026-05-05T01:02:03.456789Z").unwrap();
-    let loaded = load_checkpoint(&pool, "tootie", "abc123").unwrap();
+    save_checkpoint(&pool, "nashost", "abc123", "2026-05-05T01:02:03.456789Z").unwrap();
+    let loaded = load_checkpoint(&pool, "nashost", "abc123").unwrap();
     assert_eq!(loaded.as_deref(), Some("2026-05-05T01:02:03.456789Z"));
 }
 
 #[test]
 fn checkpoint_is_scoped_by_host_and_container() {
     let pool = test_pool();
-    save_checkpoint(&pool, "tootie", "abc123", "2026-05-05T01:02:03Z").unwrap();
-    assert_eq!(load_checkpoint(&pool, "squirts", "abc123").unwrap(), None);
-    assert_eq!(load_checkpoint(&pool, "tootie", "def456").unwrap(), None);
+    save_checkpoint(&pool, "nashost", "abc123", "2026-05-05T01:02:03Z").unwrap();
+    assert_eq!(load_checkpoint(&pool, "edgehost", "abc123").unwrap(), None);
+    assert_eq!(load_checkpoint(&pool, "nashost", "def456").unwrap(), None);
 }
 ```
 
@@ -709,7 +709,7 @@ fn meta() -> ContainerMeta {
 #[test]
 fn stdout_frame_maps_to_info_log_entry() {
     let entry = log_output_to_entry(
-        "tootie",
+        "nashost",
         &meta(),
         LogOutput::StdOut {
             message: b"2026-05-05T01:02:03.123456789Z started nginx\n".to_vec().into(),
@@ -719,19 +719,19 @@ fn stdout_frame_maps_to_info_log_entry() {
     .unwrap();
 
     assert_eq!(entry.timestamp, "2026-05-05T01:02:03.123456789Z");
-    assert_eq!(entry.hostname, "tootie");
+    assert_eq!(entry.hostname, "nashost");
     assert_eq!(entry.facility.as_deref(), Some("local0"));
     assert_eq!(entry.severity, "info");
     assert_eq!(entry.app_name.as_deref(), Some("edge/nginx/nginx-1"));
     assert_eq!(entry.process_id.as_deref(), Some("abcdef123456"));
     assert_eq!(entry.message, "started nginx");
-    assert_eq!(entry.source_ip, "docker://tootie/abcdef1234567890/stdout");
+    assert_eq!(entry.source_ip, "docker://nashost/abcdef1234567890/stdout");
 }
 
 #[test]
 fn stderr_frame_maps_to_warning_log_entry() {
     let entry = log_output_to_entry(
-        "squirts",
+        "edgehost",
         &meta(),
         LogOutput::StdErr {
             message: b"2026-05-05T01:02:04Z failed health check\n".to_vec().into(),
@@ -742,13 +742,13 @@ fn stderr_frame_maps_to_warning_log_entry() {
 
     assert_eq!(entry.severity, "warning");
     assert_eq!(entry.message, "failed health check");
-    assert_eq!(entry.source_ip, "docker://squirts/abcdef1234567890/stderr");
+    assert_eq!(entry.source_ip, "docker://edgehost/abcdef1234567890/stderr");
 }
 
 #[test]
 fn non_output_frames_are_ignored() {
     let entry = log_output_to_entry(
-        "tootie",
+        "nashost",
         &meta(),
         LogOutput::Console {
             message: b"ignored\n".to_vec().into(),
@@ -1346,12 +1346,12 @@ Add host-file example:
 
 ```toml
 [[hosts]]
-name = "tootie"
-base_url = "http://tootie:2375"
+name = "nashost"
+base_url = "http://nashost:2375"
 
 [[hosts]]
-name = "squirts"
-base_url = "http://squirts:2375"
+name = "edgehost"
+base_url = "http://edgehost:2375"
 ```
 
 - [ ] **Step 2: Add setup docs**
@@ -1380,8 +1380,8 @@ ALLOW_RESTARTS=0
 Verify from the syslog-mcp host:
 
 ```bash
-curl http://tootie:2375/_ping
-curl 'http://tootie:2375/containers/json?all=true'
+curl http://nashost:2375/_ping
+curl 'http://nashost:2375/containers/json?all=true'
 ```
 ```
 
@@ -1416,7 +1416,7 @@ git add README.md docs/SETUP.md docs/CONFIG.md docs/mcp/ENV.md CHANGELOG.md .env
 git commit -m "docs: document docker socket ingest"
 ```
 
-## Task 10: Integration Verification Against `tootie` and `squirts`
+## Task 10: Integration Verification Against `nashost` and `edgehost`
 
 **Files:**
 - Create local untracked config for manual verification: `docker-hosts.local.toml`
@@ -1428,12 +1428,12 @@ Create `docker-hosts.local.toml`:
 
 ```toml
 [[hosts]]
-name = "tootie"
-base_url = "http://tootie:2375"
+name = "nashost"
+base_url = "http://nashost:2375"
 
 [[hosts]]
-name = "squirts"
-base_url = "http://squirts:2375"
+name = "edgehost"
+base_url = "http://edgehost:2375"
 ```
 
 Keep this file untracked.
@@ -1464,17 +1464,17 @@ In another shell:
 ```bash
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tail_logs","arguments":{"source_ip":"docker://tootie","n":5}}}' | jq .
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tail_logs","arguments":{"source_ip":"docker://nashost","n":5}}}' | jq .
 ```
 
 If `source_ip` exact filtering cannot prefix-match, use:
 
 ```bash
 sqlite3 /tmp/syslog-mcp-docker-ingest.db \
-  "SELECT hostname, app_name, source_ip, substr(message,1,80) FROM logs WHERE source_ip LIKE 'docker://tootie/%' ORDER BY id DESC LIMIT 5;"
+  "SELECT hostname, app_name, source_ip, substr(message,1,80) FROM logs WHERE source_ip LIKE 'docker://nashost/%' ORDER BY id DESC LIMIT 5;"
 ```
 
-Expected: rows with `hostname='tootie'` and `source_ip` beginning `docker://tootie/`.
+Expected: rows with `hostname='nashost'` and `source_ip` beginning `docker://nashost/`.
 
 - [ ] **Step 4: Verify replay checkpoint**
 
@@ -1487,15 +1487,15 @@ sqlite3 /tmp/syslog-mcp-docker-ingest.db \
   "SELECT host_name, substr(container_id,1,12), last_timestamp FROM docker_ingest_checkpoints ORDER BY host_name, container_id LIMIT 10;"
 ```
 
-Expected: checkpoints exist for `tootie` and `squirts` containers.
+Expected: checkpoints exist for `nashost` and `edgehost` containers.
 
 - [ ] **Step 5: Verify remote containers are not affected**
 
 On each host:
 
 ```bash
-ssh tootie 'docker compose logs --tail=1 2>/dev/null || docker logs --tail=1 $(docker ps -q | head -n1)'
-ssh squirts 'docker compose logs --tail=1 2>/dev/null || docker logs --tail=1 $(docker ps -q | head -n1)'
+ssh nashost 'docker compose logs --tail=1 2>/dev/null || docker logs --tail=1 $(docker ps -q | head -n1)'
+ssh edgehost 'docker compose logs --tail=1 2>/dev/null || docker logs --tail=1 $(docker ps -q | head -n1)'
 ```
 
 Expected: Docker local logs still work because daemon logging driver was not changed.
@@ -1548,11 +1548,11 @@ Expected: all version-bearing files match. If the branch is going to be pushed, 
 ## Open Risks
 
 - Docker Engine `/containers/{id}/logs` is only supported for containers using `json-file` or `journald`; hosts using only Docker's `local` driver may need a live verification pass. If `local` does not support the API on these hosts, use `journald` or `json-file` for containers that must be centrally ingested.
-- `source_ip` filters are exact-match today. Docker rows use `docker://host/container/stream`, so prefix filtering would require a separate future query enhancement if MCP users need `source_ip=docker://tootie` to match all tootie containers.
+- `source_ip` filters are exact-match today. Docker rows use `docker://host/container/stream`, so prefix filtering would require a separate future query enhancement if MCP users need `source_ip=docker://nashost` to match all nashost containers.
 - `CONTAINERS=1` grants read access to all container endpoints under the proxy's container API section, not only logs. Keep port `2375` firewalled to trusted networks.
 
 ## Self-Review
 
-- Spec coverage: the plan covers remote Docker hosts, docker-socket-proxy permissions, Docker API endpoints, stream/replay behavior, syslog-mcp field mapping, runtime wiring, checkpoints, documentation, and verification against `tootie`/`squirts`.
+- Spec coverage: the plan covers remote Docker hosts, docker-socket-proxy permissions, Docker API endpoints, stream/replay behavior, syslog-mcp field mapping, runtime wiring, checkpoints, documentation, and verification against `nashost`/`edgehost`.
 - Placeholder scan: no task relies on unstated implementation details; each code task names files, concrete commands, and expected results.
 - Type consistency: `DockerIngestConfig`, `DockerHostConfig`, `ContainerMeta`, `IngestTx`, and checkpoint function names are introduced before later tasks use them.

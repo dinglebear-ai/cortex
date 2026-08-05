@@ -5,7 +5,7 @@ use serde_json::json;
 fn normalizes_remote_docker_inspect() {
     let mut out = CollectorOutput::new("remote_docker");
     normalize_inspect(
-        "dookie",
+        "devhost",
         &json!([{
             "Id": "abc",
             "Name": "/axon",
@@ -14,7 +14,7 @@ fn normalizes_remote_docker_inspect() {
                 "Env": ["TOKEN=secret", "RUST_LOG=info"],
                 "Labels": {
                     "com.docker.compose.project": "axon",
-                    "traefik.http.routers.axon.rule": "Host(`axon.tootie.tv`)"
+                    "traefik.http.routers.axon.rule": "Host(`axon.example.internal`)"
                 }
             },
             "State": {"Status": "running", "Health": {"Status": "healthy"}},
@@ -36,7 +36,7 @@ fn normalizes_remote_docker_inspect() {
         service
             .domains
             .iter()
-            .any(|domain| domain == "axon.tootie.tv")
+            .any(|domain| domain == "axon.example.internal")
     );
     assert_eq!(out.networks[0].members, vec!["axon"]);
 }
@@ -45,8 +45,8 @@ fn normalizes_remote_docker_inspect() {
 fn normalizes_compact_inspect_lines() {
     let mut out = CollectorOutput::new("remote_docker");
     normalize_inspect_lines(
-        "squirts",
-        "\"abc\"\t\"/swag\"\t\"linuxserver/swag\"\t\"running\"\t\"\"\t{\"com.docker.compose.project\":\"swag\",\"traefik.http.routers.swag.rule\":\"Host(`swag.tootie.tv`)\"}\t{\"443/tcp\":[{\"HostIp\":\"0.0.0.0\",\"HostPort\":\"443\"}]}\t{\"proxy\":{}}\t[{\"Source\":\"/mnt/appdata/swag\",\"Destination\":\"/config\",\"RW\":true}]\t[\"URL=redacted\",\"PUID=99\"]\n",
+        "edgehost",
+        "\"abc\"\t\"/swag\"\t\"linuxserver/swag\"\t\"running\"\t\"\"\t{\"com.docker.compose.project\":\"swag\",\"traefik.http.routers.swag.rule\":\"Host(`swag.example.internal`)\"}\t{\"443/tcp\":[{\"HostIp\":\"0.0.0.0\",\"HostPort\":\"443\"}]}\t{\"proxy\":{}}\t[{\"Source\":\"/mnt/appdata/swag\",\"Destination\":\"/config\",\"RW\":true}]\t[\"URL=redacted\",\"PUID=99\"]\n",
         &mut out,
     );
 
@@ -59,6 +59,6 @@ fn normalizes_compact_inspect_lines() {
         service
             .domains
             .iter()
-            .any(|domain| domain == "swag.tootie.tv")
+            .any(|domain| domain == "swag.example.internal")
     );
 }

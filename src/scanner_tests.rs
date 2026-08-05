@@ -1659,7 +1659,7 @@ async fn end_to_end_ingest_then_backfill_is_idempotent_across_both_paths() {
         let conn = pool.get().unwrap();
         conn.execute(
             "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id)
-             VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', ?1, ?1, 'transcript://codex_session', 'codex', 'cortex', 'sess-2')",
+             VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', ?1, ?1, 'transcript://codex_session', 'codex', 'cortex', 'sess-2')",
             rusqlite::params!["<skill><name>web-app-testing</name></skill> testing now"],
         )
         .unwrap();
@@ -1697,7 +1697,7 @@ async fn end_to_end_ingest_then_backfill_is_idempotent_across_both_paths() {
         let metadata_json = serde_json::json!({ "line_no": 0 }).to_string();
         conn.execute(
             "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json)
-             VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', 'ran report', 'ran report', 'transcript://claude_project', 'claude', 'cortex', 'sess-4', ?1, ?2)",
+             VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', 'ran report', 'ran report', 'transcript://claude_project', 'claude', 'cortex', 'sess-4', ?1, ?2)",
             rusqlite::params![legacy_claude_file.to_string_lossy().to_string(), metadata_json],
         )
         .unwrap();

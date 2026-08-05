@@ -111,7 +111,7 @@ Executed the full 7-task plan via a dedicated implementation agent, then ran two
 
 | area | before | after |
 |---|---|---|
-| graph identity | `service:tootie:plex`, `service:tootie:plex:plex`, `app:plex/plex/plex` | `logical_service:plex`, `service_instance:tootie/plex`, `instance_of` edges; legacy shapes rejected with `rejected_legacy_shape` |
+| graph identity | `service:nashost:plex`, `service:nashost:plex:plex`, `app:plex/plex/plex` | `logical_service:plex`, `service_instance:nashost/plex`, `instance_of` edges; legacy shapes rejected with `rejected_legacy_shape` |
 | topic_correlate plex | host-splitting fan-out over all host logs | service-instance predicates with `inclusion_reason`/`resolver_status`/`fallback_kind`; explicit degraded host fallback only |
 | docker identity source | app-label string surgery | structured `metadata_json.agent_docker` from host agents (optional source-prefix anti-spoof gate) |
 | migration | n/a | migration 41 rebuilds graph tables excluding legacy rows; marks projection stale (operator must rebuild) |
@@ -141,7 +141,7 @@ Executed the full 7-task plan via a dedicated implementation agent, then ran two
 ## Open Questions
 
 - Should the agent stop emitting the `proj/svc/name` triplet APP-NAME now that identity rides metadata (`syslog-mcp-5k1zb`)? Affects not-yet-upgraded agents' graph identity.
-- Production deploy scheduling for migration 41 + rebuild on tootie (off-peak, backup first — runbook in openwiki/inventory-graph.md).
+- Production deploy scheduling for migration 41 + rebuild on nashost (off-peak, backup first — runbook in openwiki/inventory-graph.md).
 
 ## Addendum: CodeRabbit round (post-log)
 

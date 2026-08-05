@@ -226,7 +226,7 @@ pub(crate) fn parse_tail(args: &[String]) -> Result<CliCommand> {
                 )?)
             }
             _ if arg.starts_with('-') => bail!("unknown tail option: {arg}"),
-            // A bare positional binds to --host (e.g. `cortex tail dookie`); the
+            // A bare positional binds to --host (e.g. `cortex tail devhost`); the
             // result count is set with -n/--limit.
             _ => positionals.push(arg),
         }

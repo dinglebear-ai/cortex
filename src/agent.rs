@@ -66,7 +66,7 @@ pub struct AgentStreamsConfig {
 impl AgentStreamsConfig {
     /// Derive the syslog target from an HTTP heartbeat target URL.
     ///
-    /// `http://dookie:3100` → `dookie:1514`
+    /// `http://devhost:3100` → `devhost:1514`
     pub fn syslog_target_from_heartbeat(heartbeat_target: &str) -> Option<String> {
         let s = heartbeat_target.trim_end_matches('/');
         let host_part = s

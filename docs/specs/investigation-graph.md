@@ -147,12 +147,12 @@ unbounded row per raw event forever.
 Example:
 
 ```text
-relationship: container tootie/<container_id> runs_on service tootie/sabnzbd/sabnzbd
+relationship: container nashost/<container_id> runs_on service nashost/sabnzbd/sabnzbd
 reason: docker_service_label
 trust: inferred
-evidence source: logs row with source_ip=docker://tootie/sabnzbd/stdout
+evidence source: logs row with source_ip=docker://nashost/sabnzbd/stdout
 metadata path: metadata_json.compose_service
-safe excerpt: tootie/sabnzbd/sabnzbd
+safe excerpt: nashost/sabnzbd/sabnzbd
 ```
 
 ## Query Surfaces

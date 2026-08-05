@@ -448,7 +448,7 @@ Run `cortex --help` and command-specific `--help` for the generated command tree
 Examples:
 
 ```bash
-cortex search "oom killer" --host dookie --since 1h
+cortex search "oom killer" --host devhost --since 1h
 cortex filter --severity err --since 6h
 cortex timeline --since 24h
 cortex sessions search "migration failure"

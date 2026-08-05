@@ -65,7 +65,7 @@ fn proxy_parser_resolves_swag_set_variables() {
         r#"
 server {
     server_name adguard.example.test;
-    set $upstream_app 100.75.111.118;
+    set $upstream_app 198.51.100.3;
     set $upstream_port 3010;
     set $upstream_proto http;
     proxy_pass $upstream_proto://$upstream_app:$upstream_port;
@@ -74,7 +74,7 @@ server {
     );
 
     assert_eq!(routes[0].server_names, vec!["adguard.example.test"]);
-    assert_eq!(routes[0].upstreams, vec!["http://100.75.111.118:3010"]);
+    assert_eq!(routes[0].upstreams, vec!["http://198.51.100.3:3010"]);
 }
 
 #[test]
@@ -105,18 +105,18 @@ fn remote_compose_body_preserves_source_host_and_path() {
     paths.ensure_private_dirs().unwrap();
 
     let (artifact, project) = collect_compose_body(
-        Some("dookie".to_string()),
-        "dookie:/home/jmagar/compose/docker-compose.yaml".to_string(),
+        Some("devhost".to_string()),
+        "devhost:/home/jmagar/compose/docker-compose.yaml".to_string(),
         "services:\n  axon:\n    ports:\n      - \"3000:3000\"\n".to_string(),
         &paths,
         "run",
     )
     .unwrap();
 
-    assert_eq!(artifact.source_host.as_deref(), Some("dookie"));
+    assert_eq!(artifact.source_host.as_deref(), Some("devhost"));
     assert_eq!(
         artifact.source_path.as_deref(),
-        Some("dookie:/home/jmagar/compose/docker-compose.yaml")
+        Some("devhost:/home/jmagar/compose/docker-compose.yaml")
     );
     assert_eq!(project.services, vec!["axon"]);
 }
