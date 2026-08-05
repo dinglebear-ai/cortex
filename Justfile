@@ -23,6 +23,16 @@ check:
     cargo check
     bash scripts/check-rust-module-size.sh --limit 500
 
+# AO-001: parse/compile/validate the Agent Observatory planning contracts
+# (JSON, SQL, Rust, TypeScript) and fail on unresolved placeholders.
+check-agent-observatory-contracts:
+    bash scripts/check-agent-observatory-contracts.sh
+
+# ENV-004: confirm the deprecated CORTEX_AGENT_AI_TRANSCRIPTS env var only
+# appears in the approved allowlist locations.
+validate-transcript-forward-env-rename:
+    bash scripts/validate-transcript-forward-env-rename.sh
+
 lint:
     cargo clippy -- -D warnings
 
