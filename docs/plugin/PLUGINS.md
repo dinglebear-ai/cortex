@@ -1,3 +1,9 @@
+---
+title: "Plugin Manifest Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 <!--
 plugin: cortex
 surface: plugin-manifests

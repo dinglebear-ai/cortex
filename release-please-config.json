@@ -76,7 +76,11 @@
           "path": "packages/cortex-rmcp/package.json",
           "jsonpath": "$.binaryVersion"
         },
-        "packages/cortex-rmcp/package.json"
+        {
+          "type": "json",
+          "path": "packages/cortex-rmcp/package.json",
+          "jsonpath": "$.version"
+        }
       ]
     }
   },

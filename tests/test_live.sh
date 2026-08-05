@@ -425,7 +425,7 @@ phase_protocol() {
 
   # initialize
   local init_resp
-  init_resp="$(mcp_post '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test_live.sh","version":"1.0.0"}}}')" || init_resp=""
+  init_resp="$(mcp_post '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test_live.sh","version":"1.0.0"}}}')" || init_resp=""
 
   assert_jq "initialize — protocolVersion present"    "${init_resp}" '.result.protocolVersion'
   assert_jq "initialize — serverInfo.name present"    "${init_resp}" '.result.serverInfo.name'
@@ -620,7 +620,15 @@ phase_tools() {
   assert_jq "cortex sessions — count field present" "${sessions_result}" '.count != null'
   assert_jq "cortex sessions — sessions field is array" "${sessions_result}" '.sessions | type' "array"
   if [[ "${AI_SEEDED}" == true ]]; then
-    assert_jq "cortex sessions — seeded AI project appears" "${sessions_result}" \
+    # The unbounded sessions action intentionally reads a periodically refreshed
+    # rollup. Query the seeded fixture through an explicit time window so this
+    # assertion uses the exact live path instead of racing rollup refresh timing.
+    local seeded_sessions_result
+    seeded_sessions_result="$(call_tool cortex "$(jq -nc \
+      --arg project "${AI_SMOKE_PROJECT}" \
+      '{"action":"sessions","project":$project,"since":"2026-05-11T00:00:00Z","until":"2026-05-13T00:00:00Z","limit":10}')")" \
+      || seeded_sessions_result=""
+    assert_jq "cortex sessions — seeded AI project appears" "${seeded_sessions_result}" \
       "any(.sessions[]?; .project == \"${AI_SMOKE_PROJECT}\")" "true"
   fi
 
@@ -931,6 +939,29 @@ run_http_mode() {
 }
 
 # ---------------------------------------------------------------------------
+# Wait for the eager hourly timeline rollup before comparing local and HTTP
+# transports. The server intentionally performs its first refresh 10 seconds
+# after startup; without this gate, the local call can observe the empty rollup
+# immediately before the HTTP call observes the freshly populated one.
+# ---------------------------------------------------------------------------
+wait_for_timeline_rollup() {
+  local token="$1"
+  local response=""
+  local attempt
+  for attempt in {1..120}; do
+    response="$(curl -sf --max-time 3 \
+      -H "Authorization: Bearer ${token}" \
+      "${BASE_URL}/api/timeline?bucket=hour" 2>/dev/null || true)"
+    if jq -e '.rollup_as_of | select(type == "string" and length > 0)' \
+      <<<"${response}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Phase 5 — CLI parity (bead cortex-0p8r.10)
 # For each HTTP-supported CLI command, run both local + --http transports
 # and assert their JSON shapes agree after filtering volatile fields. This
@@ -1002,6 +1033,11 @@ phase_cli_parity() {
   for pair in "${pairs[@]}"; do
     label="${pair%%|*}"
     args="${pair#*|}"
+    if [[ "${label}" == "timeline --bucket hour" ]] \
+      && ! wait_for_timeline_rollup "${cli_token}"; then
+      _fail "cli parity: ${label} (timeline rollup not ready after 120s)"
+      continue
+    fi
     if [[ -n "${CLI_PARITY_CONTAINER}" ]]; then
       # shellcheck disable=SC2086  # word splitting on $args is intentional
       local_out="$(docker exec "${CLI_PARITY_CONTAINER}" env -u CORTEX_USE_HTTP RUST_LOG=off cortex ${args} --json 2>&1)"

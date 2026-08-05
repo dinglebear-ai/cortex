@@ -1,6 +1,6 @@
 {
   "name": "cortex",
-  "description": "Syslog management via MCP",
+  "description": "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.",
   "author": {
     "name": "jmagar"
   },

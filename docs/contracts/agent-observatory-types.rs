@@ -349,13 +349,13 @@ mod tests {
     #[test]
     fn run_key_is_length_prefixed_and_stable() {
         assert_eq!(
-            run_key("dookie", "Claude", "session-1").unwrap(),
-            "v1|6:dookie|6:claude|9:session-1"
+            run_key("devhost", "Claude", "session-1").unwrap(),
+            "v1|7:devhost|6:claude|9:session-1"
         );
     }
 
     #[test]
     fn empty_run_key_part_is_rejected() {
-        assert!(run_key("dookie", "", "session-1").is_err());
+        assert!(run_key("devhost", "", "session-1").is_err());
     }
 }

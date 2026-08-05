@@ -29,17 +29,17 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  SOLDR_CACHE_DIR: ${{ github.workspace }}/../.soldr-cache
 
 jobs:
   cortex-linux:
     name: build cortex (linux)
-    runs-on: [self-hosted, unraid]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
 
       - name: cargo build --release --bin cortex
         run: cargo build --release --locked --bin cortex
@@ -62,10 +62,11 @@ jobs:
   cortex-windows:
     name: build cortex (windows)
     runs-on: windows-latest
-    # GitHub-hosted Windows job runs bare cargo (no soldr). Blank the repo's
+    timeout-minutes: 60
+    # GitHub-hosted Windows job runs bare cargo (no kache). Blank the repo's
     # .cargo/config.toml rustc-wrapper here — it's a Linux bash sccache shim
     # that can't execute as a rustc wrapper on Windows. The self-hosted Linux
-    # jobs route through soldr instead, so this disabler is scoped to just this
+    # jobs route through kache instead, so this disabler is scoped to just this
     # job now rather than the whole workflow.
     env:
       CARGO_BUILD_RUSTC_WRAPPER: ""
@@ -103,7 +104,8 @@ jobs:
   publish:
     name: publish github release
     needs: [cortex-linux, cortex-windows]
-    runs-on: [self-hosted, unraid]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     # Tag pushes publish automatically. workflow_dispatch stays dry-run unless
     # a human explicitly passes publish=true on a tagged ref.
     if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event.inputs.publish == 'true')
@@ -137,7 +139,8 @@ jobs:
   npm:
     name: publish npm launcher
     needs: publish
-    runs-on: [self-hosted, unraid]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event.inputs.publish == 'true')
     permissions:
       contents: read
@@ -148,6 +151,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Validate npm publication identity
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami >/dev/null
 
       - name: Verify npm package version matches release tag
         id: npm-version
@@ -174,7 +182,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if npm view "cortex-rmcp@${{ steps.npm-version.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "@dinglebear/cortex@${{ steps.npm-version.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -191,7 +199,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.npm-version.outputs.version }}"
-          package="cortex-rmcp@${version}"
+          package="@dinglebear/cortex@${version}"
           for attempt in {1..18}; do
             cache="$(mktemp -d)"
             if npm view "$package" version >/dev/null 2>&1 && npm_config_cache="$cache" npx -y "$package" --version; then

@@ -360,7 +360,7 @@ async fn rmcp_initialize_advertises_prompts_capability() {
             13,
             "initialize",
             Some(json!({
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": "2025-11-25",
                 "capabilities": {},
                 "clientInfo": {"name": "syslog-test", "version": "1.0"}
             })),
@@ -1587,19 +1587,17 @@ fn embedded_widget_content_matches_resource_declaration() {
     use rmcp::model::{ResourceContents, Role};
 
     let content = super::embedded_widget_content();
-    let embedded = content
-        .as_resource()
-        .expect("widget block must be an embedded resource");
-    // rmcp 3.0 dropped ContentBlock::audience(); annotations now hang off the
-    // individual content-block variant (here EmbeddedResource).
     assert_eq!(
-        embedded
-            .annotations
-            .as_ref()
+        content
+            .as_resource()
+            .and_then(|embedded| embedded.annotations.as_ref())
             .and_then(|annotations| annotations.audience.as_ref()),
         Some(&vec![Role::User]),
         "widget block must be user-audience so audience-aware hosts keep it out of model context"
     );
+    let embedded = content
+        .as_resource()
+        .expect("widget block must be an embedded resource");
     let ResourceContents::TextResourceContents {
         uri,
         mime_type,

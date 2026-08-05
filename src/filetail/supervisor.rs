@@ -134,7 +134,8 @@ impl FileTailSupervisor {
 
     fn build_task(&self, source: FileTailSource) -> (String, TailTask) {
         let id = source.id.clone();
-        let task_source = source.clone();
+        let initial_source = source.clone();
+        let task_source = source;
         let status = Arc::new(Mutex::new(FileTailStatus {
             id: id.clone(),
             running: true,
@@ -149,10 +150,9 @@ impl FileTailSupervisor {
         let token = self.token.clone();
         let registry = Arc::clone(&self.registry);
         let max_line_bytes = self.max_line_bytes;
-        let task_id = id.clone();
         let handle = tokio::spawn(async move {
             tail_file_loop(
-                task_id,
+                initial_source,
                 registry,
                 ingest,
                 token,
@@ -178,19 +178,21 @@ impl FileTailSupervisor {
 }
 
 async fn tail_file_loop(
-    source_id: String,
+    initial_source: FileTailSource,
     registry: Arc<FileTailRegistry>,
     ingest: IngestTx,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
     max_line_bytes: usize,
 ) {
+    let source_id = initial_source.id.clone();
+    let mut initial_source = Some(initial_source);
     loop {
         if token.is_cancelled() {
             status.lock().running = false;
             return;
         }
-        let source = match registry.get(&source_id) {
+        let live_source = match registry.get(&source_id) {
             Ok(Some(source)) if source.enabled => source,
             Ok(_) => {
                 status.lock().running = false;
@@ -212,6 +214,10 @@ async fn tail_file_loop(
                 }
                 continue;
             }
+        };
+        let source = match initial_source.take() {
+            Some(source) if source.same_definition(&live_source) => source,
+            _ => live_source,
         };
         match tail_file_until_cancelled(
             &source,

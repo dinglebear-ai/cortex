@@ -1,3 +1,9 @@
+---
+title: "Common MCP Code Patterns -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Common MCP Code Patterns -- cortex
 
 Reusable patterns in the cortex implementation.

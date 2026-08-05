@@ -1,3 +1,9 @@
+---
+title: "Connect to MCP -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Connect to MCP -- cortex
 
 How to connect to the cortex server from every supported client.

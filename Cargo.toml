@@ -1,27 +1,58 @@
 [workspace]
-members = ["xtask"]
-resolver = "2"
+members = [".", "xtask"]
+resolver = "3"
 
 [workspace.package]
-
-# Fleet edition (ADR-0002). Members inherit via edition.workspace = true.
 edition = "2024"
-# Fleet MSRV — the floor this repo supports. A separate promise from
-# rust-toolchain.toml's channel, which is what we BUILD with. Both are
-# 1.97.1 as of 2026-07-29 (ADR-0001 toolchain, ADR-0024 MSRV).
 rust-version = "1.97.1"
+authors = ["dinglebear.ai <hello@dinglebear.ai>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://cortex.dinglebear.ai"
+repository = "https://github.com/dinglebear-ai/cortex"
+
+[workspace.dependencies]
+rmcp = { version = "=3.1.0", default-features = false }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
+invalid_rust_codeblocks = "deny"
+bare_urls = "warn"
+unescaped_backticks = "warn"
+redundant_explicit_links = "warn"
+
+[workspace.lints.rust]
+missing_docs = "allow"
+missing_crate_level_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+mod_module_files = "deny"
+missing_safety_doc = "deny"
+
 [package]
 name = "cortex"
-version = "3.11.1"
+version = "3.11.3"
 edition.workspace = true
 rust-version.workspace = true
-categories = ["command-line-utilities", "development-tools"]
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories = ["command-line-utilities", "development-tools::debugging", "database", "network-programming", "parsing"]
 keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
-repository = "https://github.com/dinglebear-ai/cortex"
-homepage = "https://github.com/dinglebear-ai/cortex#readme"
-license = "MIT"
-description = "Rust MCP/HTTP log aggregation platform for syslog, Docker logs, OTLP ingest, SQLite search, and AI transcript correlation."
+description = "Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS."
+publish = false
 autobins = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [[bin]]
 name = "cortex"
@@ -47,9 +78,9 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 # HTTP / MCP transport
 axum = "0.8"
-# Exact pin: a caret range is how this repo silently drifted off its declared
-# version before (full-review BM2). `=` keeps Cargo.toml and Cargo.lock honest.
-rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
+# Declared bound matches what Cargo.lock actually resolves (1.7.x) so docs,
+# lockfile, and code agree (full-review BM2).
+rmcp = { workspace = true, features = [
   "server",
   "macros",
   "transport-streamable-http-server",
@@ -79,6 +110,7 @@ bytes = "1"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml_ng = "0.10"
 
 # Query-string serializer/deserializer that handles `Vec<String>` from repeated
 # `?terms[]=a&terms[]=b` params (and `terms=a&terms=b`), unlike the default
@@ -142,6 +174,9 @@ notify = "8.2.0"
 libc = "0.2"
 rustix = { version = "1", features = ["fs"] }
 
+[lints]
+workspace = true
+
 [features]
 test-support = []
 
@@ -167,7 +202,7 @@ serial_test = "3"
 # tests so backoff sleeps advance instantly instead of in real time.
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
-rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
+rmcp = { workspace = true, features = [
   "client",
   "transport-child-process",
 ] }

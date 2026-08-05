@@ -52,7 +52,6 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: "0"
-  SOLDR_CACHE_DIR: ${{ github.workspace }}/../.soldr-cache
 
 concurrency:
   group: release-please-main
@@ -61,7 +60,8 @@ concurrency:
 jobs:
   release-please:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-ops
+    timeout-minutes: 15
     permissions:
       contents: write       # required to create release commits and tags
       pull-requests: write  # required to create and update release PRs
@@ -83,7 +83,8 @@ jobs:
   release-pr-fixup:
     needs: release-please
     if: ${{ needs.release-please.outputs.prs_created == 'true' }}
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-ops
+    timeout-minutes: 15
     permissions:
       contents: write  # required to push the fixup commit to the release PR branch
     steps:
@@ -92,8 +93,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ fromJson(needs.release-please.outputs.pr).headBranchName }}
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
       - name: Sync regex-based version files and verify
         run: |
           set -euo pipefail

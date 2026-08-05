@@ -210,7 +210,7 @@ async fn integration_initialize() {
         1,
         "initialize",
         Some(serde_json::json!({
-            "protocolVersion": "2025-03-26",
+            "protocolVersion": "2025-11-25",
             "capabilities": {},
             "clientInfo": {"name": "route-test", "version": "1.0"}
         })),

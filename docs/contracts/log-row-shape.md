@@ -1,3 +1,9 @@
+---
+title: "`LogBatchEntry` — Canonical Log Row Shape"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # `LogBatchEntry` — Canonical Log Row Shape
 
 **Status:** contract — source of truth

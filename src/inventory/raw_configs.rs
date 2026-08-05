@@ -1,9 +1,10 @@
 use anyhow::Result;
 use chrono::Utc;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::inventory::collectors::CollectorOutput;
 use crate::inventory::limits::MAX_RAW_ARTIFACT_BYTES;
@@ -14,35 +15,41 @@ use crate::inventory::schema::{
 use crate::inventory::ssh::SshContext;
 use crate::inventory::storage::{InventoryPaths, write_artifact};
 
+#[path = "raw_configs_nginx.rs"]
+mod nginx;
+use nginx::substitute_nginx_variables;
+
 pub struct CollectOptions<'a> {
     pub compose_paths: &'a [PathBuf],
     pub proxy_paths: &'a [PathBuf],
+    pub adguard_paths: &'a [PathBuf],
     pub ssh_config: Option<&'a Path>,
     pub ssh_hosts: &'a [String],
     pub ssh_context: &'a SshContext,
     pub paths: &'a InventoryPaths,
     pub run_id: &'a str,
-    pub timeout: Duration,
+    pub probe_timeout: Duration,
+    pub collector_timeout: Duration,
 }
 
 pub async fn collect(options: CollectOptions<'_>) -> CollectorOutput {
     let compose_paths = options.compose_paths.to_vec();
     let proxy_paths = options.proxy_paths.to_vec();
+    let adguard_paths = options.adguard_paths.to_vec();
     let paths = options.paths.clone();
     let run_id = options.run_id.to_string();
     let local_paths = paths.clone();
     let local_run_id = run_id.clone();
-    let mut out = tokio::task::spawn_blocking(move || {
-        collect_blocking(&compose_paths, &proxy_paths, &local_paths, &local_run_id)
-    })
-    .await
-    .unwrap_or_else(|error| {
-        let mut out = CollectorOutput::new("raw_configs");
-        out.warn(
-            "task",
-            format!("raw config collection task failed: {error}"),
-        );
-        out
+    let local_deadline = Instant::now() + soft_collector_budget(options.collector_timeout);
+    let local = tokio::task::spawn_blocking(move || {
+        collect_blocking(
+            &compose_paths,
+            &proxy_paths,
+            &adguard_paths,
+            &local_paths,
+            &local_run_id,
+            local_deadline,
+        )
     });
     let remote = crate::inventory::remote_configs::collect(
         options.ssh_config,
@@ -50,9 +57,18 @@ pub async fn collect(options: CollectOptions<'_>) -> CollectorOutput {
         options.ssh_context,
         &paths,
         &run_id,
-        options.timeout,
-    )
-    .await;
+        options.probe_timeout,
+        options.collector_timeout,
+    );
+    let (local, remote) = tokio::join!(local, remote);
+    let mut out = local.unwrap_or_else(|error| {
+        let mut out = CollectorOutput::new("raw_configs");
+        out.warn(
+            "task",
+            format!("raw config collection task failed: {error}"),
+        );
+        out
+    });
     merge_output(&mut out, remote);
     out
 }
@@ -60,20 +76,28 @@ pub async fn collect(options: CollectOptions<'_>) -> CollectorOutput {
 fn collect_blocking(
     compose_paths: &[PathBuf],
     proxy_paths: &[PathBuf],
+    adguard_paths: &[PathBuf],
     paths: &InventoryPaths,
     run_id: &str,
+    deadline: Instant,
 ) -> CollectorOutput {
     let mut out = CollectorOutput::new("raw_configs");
-    for path in expand_files(compose_paths, &["yml", "yaml"]) {
-        match collect_compose_file(&path, paths, run_id) {
-            Ok((artifact, project)) => {
+    for path in expand_adguard_files(adguard_paths) {
+        if stop_local_collection(&mut out, deadline, "AdGuard") {
+            return out;
+        }
+        match crate::inventory::adguard::collect_file(&path, paths, run_id) {
+            Ok((artifact, service)) => {
                 out.artifacts.push(artifact);
-                out.compose_projects.push(project);
+                out.services.push(service);
             }
-            Err(error) => out.warn("compose", error.to_string()),
+            Err(error) => out.warn("adguard", error.to_string()),
         }
     }
     for path in expand_files(proxy_paths, &["conf"]) {
+        if stop_local_collection(&mut out, deadline, "reverse proxy") {
+            return out;
+        }
         match collect_proxy_file(&path, paths, run_id) {
             Ok((artifact, routes)) => {
                 out.artifacts.push(artifact);
@@ -82,7 +106,40 @@ fn collect_blocking(
             Err(error) => out.warn("reverse_proxy", error.to_string()),
         }
     }
+    for path in expand_files(compose_paths, &["yml", "yaml"]) {
+        if stop_local_collection(&mut out, deadline, "Compose") {
+            return out;
+        }
+        match collect_compose_file(&path, paths, run_id) {
+            Ok((artifact, project)) => {
+                out.artifacts.push(artifact);
+                out.compose_projects.push(project);
+            }
+            Err(error) => out.warn("compose", error.to_string()),
+        }
+    }
     out
+}
+
+fn stop_local_collection(out: &mut CollectorOutput, deadline: Instant, phase: &str) -> bool {
+    if Instant::now() < deadline {
+        return false;
+    }
+    out.warn(
+        "local_config_deadline",
+        format!(
+            "local raw config deadline reached before {phase} collection completed; preserved completed results"
+        ),
+    );
+    true
+}
+
+fn soft_collector_budget(timeout: Duration) -> Duration {
+    if timeout.is_zero() {
+        return timeout;
+    }
+    let margin_ms = (timeout.as_millis() / 20).clamp(1, 250) as u64;
+    timeout.saturating_sub(Duration::from_millis(margin_ms))
 }
 
 fn collect_compose_file(
@@ -249,15 +306,39 @@ fn parse_compose_project(path: &Path, body: &str) -> ComposeProject {
 }
 
 fn parse_proxy_routes(path: &Path, body: &str) -> Vec<ReverseProxyRoute> {
+    let mut variables = BTreeMap::new();
     let mut server_names = Vec::new();
+    let mut raw_upstreams = Vec::new();
+    for line in body.lines() {
+        let uncommented = line.split('#').next().unwrap_or_default();
+        for raw_directive in uncommented.split(';') {
+            let directive = raw_directive
+                .rsplit('{')
+                .next()
+                .unwrap_or(raw_directive)
+                .trim();
+            if let Some(rest) = directive.strip_prefix("server_name ") {
+                for name in rest.split_whitespace() {
+                    push_unique(&mut server_names, name.to_string());
+                }
+            }
+            if let Some(rest) = directive.strip_prefix("set $") {
+                let mut parts = rest.split_whitespace();
+                if let (Some(name), Some(value)) = (parts.next(), parts.next()) {
+                    variables.insert(name.to_string(), value.to_string());
+                }
+            }
+            if let Some(rest) = directive.strip_prefix("proxy_pass ") {
+                raw_upstreams.push(rest.trim().to_string());
+            }
+        }
+    }
     let mut upstreams = Vec::new();
-    for directive in body.split(';').map(str::trim) {
-        if let Some(rest) = directive.strip_prefix("server_name ") {
-            server_names.extend(rest.split_whitespace().map(ToString::to_string));
-        }
-        if let Some(rest) = directive.strip_prefix("proxy_pass ") {
-            upstreams.push(rest.to_string());
-        }
+    for upstream in raw_upstreams {
+        push_unique(
+            &mut upstreams,
+            substitute_nginx_variables(&upstream, &variables),
+        );
     }
     if server_names.is_empty() && upstreams.is_empty() {
         return Vec::new();
@@ -272,6 +353,12 @@ fn parse_proxy_routes(path: &Path, body: &str) -> Vec<ReverseProxyRoute> {
             Utc::now().to_rfc3339(),
         ),
     }]
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !values.contains(&value) {
+        values.push(value);
+    }
 }
 
 fn parse_port_line(line: &str) -> Option<PortMapping> {
@@ -302,6 +389,17 @@ fn extract_domainish(line: &str) -> Vec<String> {
     line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-'))
         .filter(|part| part.contains('.') && part.len() > 3)
         .map(ToString::to_string)
+        .collect()
+}
+
+fn expand_adguard_files(paths: &[PathBuf]) -> Vec<PathBuf> {
+    expand_files(paths, &["yaml", "yml"])
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| matches!(name, "config.yaml" | "AdGuardHome.yaml"))
+        })
         .collect()
 }
 

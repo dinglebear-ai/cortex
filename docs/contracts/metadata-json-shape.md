@@ -1,3 +1,9 @@
+---
+title: "`metadata_json` Shape Contract"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # `metadata_json` Shape Contract
 
 **Status:** Contract — source of truth

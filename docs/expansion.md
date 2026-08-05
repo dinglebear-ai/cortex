@@ -1,3 +1,9 @@
+---
+title: "cortex expansion · session bootstrap"
+created: 2026-05-06
+updated: 2026-07-30
+---
+
 # cortex expansion · session bootstrap
 
 > Briefing doc to load at session start. Captures fleet topology, current

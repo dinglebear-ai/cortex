@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.3](https://github.com/dinglebear-ai/cortex/compare/v3.11.2...v3.11.3) (2026-08-03)
+
+
+### Fixed
+
+* **ci:** preserve existing Kache config ([#159](https://github.com/dinglebear-ai/cortex/issues/159)) ([f721a50](https://github.com/dinglebear-ai/cortex/commit/f721a50577c961aed00f48376a5bfb96c9c53966))
+* **release:** invoke cortex in container smoke ([#165](https://github.com/dinglebear-ai/cortex/issues/165)) ([5ca85ca](https://github.com/dinglebear-ai/cortex/commit/5ca85ca875da4ad7fddb22c2da10abc3726b498a))
+* **release:** keep registry description schema-compliant ([#169](https://github.com/dinglebear-ai/cortex/issues/169)) ([0cc5b13](https://github.com/dinglebear-ai/cortex/commit/0cc5b13cd92503fb2fb0dcd6b0b7b97e2f31da22))
+* **release:** publish MCP metadata with dinglebear.ai ([f018f0f](https://github.com/dinglebear-ai/cortex/commit/f018f0fab7e189352226c4a76d2713107f2bf255))
+
+## [3.11.2](https://github.com/dinglebear-ai/cortex/compare/v3.11.1...v3.11.2) (2026-08-02)
+
+
+### Fixed
+
+* **agent:** harden self-update without blocking heartbeats ([#156](https://github.com/dinglebear-ai/cortex/issues/156)) ([35ce512](https://github.com/dinglebear-ai/cortex/commit/35ce51257930718bdf62bfb43ffdf7c67d48dd76))
+* **ci:** centralize release-only container publishing ([#149](https://github.com/dinglebear-ai/cortex/issues/149)) ([3d75d10](https://github.com/dinglebear-ai/cortex/commit/3d75d109cc3531d1b18c9d32c4059566651cd863))
+* **ci:** drop the stale gitleaks contract assertions ([fd0525a](https://github.com/dinglebear-ai/cortex/commit/fd0525aa2c28cf3fcc6aa0edc759a19daa9e6336))
+* **ci:** enforce documentation and identity contracts ([ab5ef39](https://github.com/dinglebear-ai/cortex/commit/ab5ef392329735990a55e1f3819b69f19ea36753))
+* correct at-limit CRLF framing and address PR review findings ([76a9814](https://github.com/dinglebear-ai/cortex/commit/76a9814fc709de2327323616540b18dcd4a2dcf9))
+* enforce repository contracts and reduce query module debt ([aa7e991](https://github.com/dinglebear-ai/cortex/commit/aa7e991d303d1ddf60cfe97435baa35c30e784b6))
+* **filetail:** distinguish append growth from replacement ([#161](https://github.com/dinglebear-ai/cortex/issues/161)) ([337f608](https://github.com/dinglebear-ai/cortex/commit/337f608ff5dea34a66a1b1d53626c3908a5918cb))
+* **filetail:** preserve reconciled checkpoint on first open ([#157](https://github.com/dinglebear-ai/cortex/issues/157)) ([2086823](https://github.com/dinglebear-ai/cortex/commit/20868234a016ec33d54c9d7e00f2f2421e04dae5))
+* finish the ghcr namespace migration and bound Gemini parse warnings ([1bf8257](https://github.com/dinglebear-ai/cortex/commit/1bf8257372e5eb73d21d72ef80e65b201fe53eeb))
+* finish the ghcr namespace migration and bound Gemini parse warnings ([98de4dd](https://github.com/dinglebear-ai/cortex/commit/98de4dddc08bc37ab2ce64f8416a33dd5a0dbeec))
+* harden transcript warnings, hostname resolution, and TCP framing ([78f11d1](https://github.com/dinglebear-ai/cortex/commit/78f11d1f46edfcdb66f7c584c04fa58d14da2563))
+* **inventory:** preserve results and collect DNS settings ([#154](https://github.com/dinglebear-ai/cortex/issues/154)) ([d54194e](https://github.com/dinglebear-ai/cortex/commit/d54194e09af942fe5a51ca316cf55965b66effb0))
+* **npm:** resync the packaged README with the repo README ([c11391d](https://github.com/dinglebear-ai/cortex/commit/c11391d457c9a2b773283f645b630e62eb364155))
+* publish npm launcher as @dinglebear/cortex ([7b36683](https://github.com/dinglebear-ai/cortex/commit/7b366835e8fead61fcbf107a8909f732e7518286))
+* **release:** use explicit npm version updater ([#158](https://github.com/dinglebear-ai/cortex/issues/158)) ([aed693b](https://github.com/dinglebear-ai/cortex/commit/aed693becb3a5b31294481a514c6d770e2cff7f2))
+* **release:** use scalar Cargo package versions ([#162](https://github.com/dinglebear-ai/cortex/issues/162)) ([b951591](https://github.com/dinglebear-ai/cortex/commit/b9515913c37aecd1afb7f783edfe724578de56a8))
+* **security:** patch quinn and restrict workflow tokens ([94bf0de](https://github.com/dinglebear-ai/cortex/commit/94bf0def9c9420cce3f82a3c1ba5cf3f2d59f207))
+* **xtask:** preserve pre-push toolchain environment ([8d495b9](https://github.com/dinglebear-ai/cortex/commit/8d495b98f9f88887bf77f57a2b037927cd54e672))
+
+
+### Changed
+
+* **db:** extract host queries ([dc6c693](https://github.com/dinglebear-ai/cortex/commit/dc6c693c9409301c30db74945cafd21af79f058f))
+
 ## [3.11.1](https://github.com/jmagar/cortex/compare/v3.11.0...v3.11.1) (2026-07-17)
 
 

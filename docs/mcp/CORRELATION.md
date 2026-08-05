@@ -1,3 +1,9 @@
+---
+title: "Correlation Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Correlation Reference -- cortex
 
 cortex has several correlation-style actions. They all work against the

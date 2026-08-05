@@ -1,3 +1,9 @@
+---
+title: "cortex CLI Performance Report"
+created: 2026-05-28
+updated: 2026-07-30
+---
+
 # cortex CLI Performance Report
 
 Generated: 2026-05-28 | DB size: ~31 GB (~8.1M pages) | Log count: ~4.9M rows

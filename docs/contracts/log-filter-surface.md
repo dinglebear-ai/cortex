@@ -1,3 +1,9 @@
+---
+title: "Log Filter Surface Contract"
+created: 2026-05-24
+updated: 2026-07-30
+---
+
 # Log Filter Surface Contract
 
 Status: v1 contract, implemented by `cortex filter`, `GET /api/filter`, and MCP `action=filter`.

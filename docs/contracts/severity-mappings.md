@@ -1,3 +1,9 @@
+---
+title: "Severity Vocabulary Mappings Contract"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # Severity Vocabulary Mappings Contract
 
 **Status:** Contract — source of truth

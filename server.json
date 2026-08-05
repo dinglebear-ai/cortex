@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "ai.dinglebear/cortex-rmcp",
+  "name": "ai.dinglebear/cortex",
   "title": "Cortex RMCP",
-  "description": "Rust MCP server for homelab logs, syslog, Docker logs, FTS search, and AI transcript correlation.",
-  "version": "3.11.1",
+  "description": "Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.",
+  "version": "3.11.3",
   "websiteUrl": "https://github.com/dinglebear-ai/cortex",
   "repository": {
     "url": "https://github.com/dinglebear-ai/cortex",
@@ -24,8 +24,8 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "cortex-rmcp",
-      "version": "3.11.1",
+      "identifier": "@dinglebear/cortex",
+      "version": "3.11.3",
       "runtimeHint": "npx",
       "packageArguments": [
         {
@@ -67,7 +67,7 @@
           "format": "string",
           "isRequired": false,
           "isSecret": false,
-          "placeholder": "v3.11.1"
+          "placeholder": "v3.11.3"
         },
         {
           "name": "CORTEX_RMCP_REPO",
@@ -105,12 +105,12 @@
       "namespace": "ai.dinglebear",
       "dnsDomain": "dinglebear.ai",
       "distribution": {
-        "npm": "cortex-rmcp@3.11.1",
-        "nodePackage": "cortex-rmcp",
-        "ociImage": "ghcr.io/dinglebear-ai/cortex:v3.11.1"
+        "npm": "@dinglebear/cortex@3.11.3",
+        "nodePackage": "@dinglebear/cortex",
+        "ociImage": "ghcr.io/dinglebear-ai/cortex:v3.11.3"
       },
       "buildInfo": {
-        "version": "3.11.1",
+        "version": "3.11.3",
         "repository": "https://github.com/dinglebear-ai/cortex"
       }
     }

@@ -37,7 +37,7 @@ v1|<host-length>:<host>|<tool-length>:<tool>|<session-length>:<native-session-id
 Example:
 
 ```text
-v1|6:dookie|6:claude|36:00112233-4455-6677-8899-aabbccddeeff
+v1|7:devhost|6:claude|36:00112233-4455-6677-8899-aabbccddeeff
 ```
 
 Input components are trimmed, Unicode-preserving, and length-counted in UTF-8 bytes. Empty host, tool, or session is invalid. Canonical tools are lower-case `claude`, `codex`, `gemini`, or `unknown:<normalized>`.

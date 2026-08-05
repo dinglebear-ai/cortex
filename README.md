@@ -6,7 +6,9 @@
 [![crates.io](https://img.shields.io/crates/v/cortex)](https://crates.io/crates/cortex)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Cortex is a self-hosted observability and investigation system for homelabs and small fleets.** It collects logs and operational evidence, stores them in SQLite with FTS5 search, and exposes one shared intelligence layer through CLI, REST, MCP, and a bundled browser workspace.
+Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.
+
+It collects logs and operational evidence, stores them in SQLite with FTS5 search, and exposes one shared intelligence layer through CLI, REST, MCP, and a bundled browser workspace.
 
 Cortex began as a syslog receiver. It now covers network logs, Docker, managed files, OpenTelemetry logs, host heartbeats, fleet inventory, shell and agent activity, and Claude, Codex, and Gemini transcripts. It correlates those sources into timelines, incidents, and an evidence-backed topology graph without making the graph a second source of truth.
 
@@ -52,14 +54,14 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 The npm launcher is the fastest path for local CLI and stdio MCP use:
 
 ```bash
-npx -y cortex-rmcp --help
-npx -y cortex-rmcp mcp
+npx -y @dinglebear/cortex --help
+npx -y @dinglebear/cortex mcp
 ```
 
 Install it permanently with:
 
 ```bash
-npm install --global cortex-rmcp
+npm install --global @dinglebear/cortex
 cortex --version
 ```
 
@@ -321,7 +323,7 @@ Error detection is disabled by default. When enabled, it scans bounded batches, 
 
 The native inventory subsystem can collect and normalize evidence from:
 
-- Local Compose and reverse-proxy configuration
+- Local and remote Compose, reverse-proxy, and AdGuard Home configuration
 - Local process, storage, project, and raw configuration inventories
 - SSH sessions to remote fleet hosts
 - Local and remote Docker endpoints
@@ -719,8 +721,8 @@ Maintenance operations are single-flight and separately limited from heavy read 
 | --- | --- |
 | Canonical source repository | `dinglebear-ai/cortex` |
 | Native binary and CLI | `cortex` |
-| npm launcher | `cortex-rmcp` |
-| MCP Registry server name | `ai.dinglebear/cortex-rmcp` |
+| npm launcher | `@dinglebear/cortex` |
+| MCP Registry server name | `ai.dinglebear/cortex` |
 | Published OCI image | `ghcr.io/dinglebear-ai/cortex:v<version>` |
 
 The source repository and its published artifacts both live under the `dinglebear-ai` organization. The legacy `jmagar` namespace is retired: `scripts/check-public-identity.sh` fails the build on any tracked file that reintroduces it, and the release workflow derives the MCP Registry OCI identifier from the same `REGISTRY`/`IMAGE_NAME` it pushes to, so the two cannot drift apart again.

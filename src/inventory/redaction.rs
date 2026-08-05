@@ -154,6 +154,11 @@ fn secret_regexes() -> &'static [Regex] {
             // URI userinfo (scheme://user:pass@host)
             Regex::new(r#"(?i)([a-z][a-z0-9+.-]*://)[^/@\s:]+(?::[^/@\s]*)?@"#)
                 .expect("static URI userinfo regex"),
+            // Sensitive URL query parameters, including generic `key=`.
+            Regex::new(
+                r#"(?i)([?&](?:api[_-]?key|x[_-]?api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passphrase|psk|client[_-]?secret|key)=)[^&#\s\"']+"#,
+            )
+            .expect("static URL query secret regex"),
             // Authorization / Bearer headers
             Regex::new(r#"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)[A-Za-z0-9._~+/=-]{12,}"#)
                 .expect("static authorization regex"),

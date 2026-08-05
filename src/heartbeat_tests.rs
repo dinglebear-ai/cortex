@@ -372,7 +372,7 @@ fn platform_self_servable_only_linux_x86_64() {
     assert!(platform_self_servable("linux", "amd64"));
     assert!(platform_self_servable("Linux", "x86_64"));
     assert!(!platform_self_servable("windows", "x86_64"));
-    assert!(!platform_self_servable("linux", "aarch64"));
+    assert!(!platform_self_servable("linux", "riscv64"));
 }
 
 #[test]

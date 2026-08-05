@@ -1,3 +1,9 @@
+---
+title: "Deploy Runbook — cortex"
+created: 2026-03-30
+updated: 2026-07-30
+---
+
 # Deploy Runbook — cortex
 
 ## Rolling Update

@@ -1,3 +1,9 @@
+---
+title: "Configuration Reference -- cortex"
+created: 2026-04-04
+updated: 2026-07-30
+---
+
 # Configuration Reference -- cortex
 
 Complete configuration reference. cortex uses compiled defaults, optional

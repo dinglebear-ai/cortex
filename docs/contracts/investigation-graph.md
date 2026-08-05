@@ -1,3 +1,9 @@
+---
+title: "Investigation Graph Contract"
+created: 2026-06-02
+updated: 2026-07-30
+---
+
 # Investigation Graph Contract
 
 ## 1. Purpose And Status

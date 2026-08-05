@@ -1,3 +1,9 @@
+---
+title: "Live Smoke Testing (mcporter) -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Live Smoke Testing (mcporter) -- cortex
 
 End-to-end verification against a running cortex server. Complements unit tests in [TESTS.md](TESTS.md).

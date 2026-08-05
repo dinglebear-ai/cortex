@@ -1,3 +1,9 @@
+---
+title: "Transport Methods Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Transport Methods Reference -- cortex
 
 ## Overview

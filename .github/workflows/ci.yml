@@ -16,12 +16,11 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  SOLDR_CACHE_DIR: ${{ github.workspace }}/../.soldr-cache
 
 jobs:
   changes:
     name: Changes
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-ops
     outputs:
       all: ${{ steps.classify.outputs.all }}
       docs: ${{ steps.classify.outputs.docs }}
@@ -80,14 +79,14 @@ jobs:
 
   version-sync:
     name: Version Sync
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-ops
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.skills == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.workflow == 'true' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
 
       # Drives release/components.toml: every version-bearing file must agree
       # with Cargo.toml, and plugin manifests must carry no top-level version.
@@ -105,14 +104,14 @@ jobs:
 
   fmt:
     name: Formatting
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-rust
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
         with:
           components: rustfmt
 
@@ -121,14 +120,14 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-rust
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
         with:
           components: clippy
 
@@ -137,14 +136,14 @@ jobs:
 
   test:
     name: Tests
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-rust
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
 
       - name: Install nextest
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
@@ -167,7 +166,7 @@ jobs:
 
   docs-contract:
     name: Docs Contract
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-ops
     needs: [changes]
     # check-public-identity.sh scans server.json, mcpb/manifest.json,
     # .claude-plugin/*, plugins/*, config/* and scripts/* — none of which
@@ -184,8 +183,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
 
       - name: Verify documentation contracts
         # These focused tests compile docs embedded with include_str!, catching
@@ -198,14 +197,14 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-rust
     needs: [changes, test]
     if: ${{ needs.changes.outputs.rust == 'true' && needs.test.result == 'success' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Rust + soldr
-        uses: ./.github/actions/setup-rust-soldr
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
         with:
           components: llvm-tools-preview
 
@@ -219,7 +218,7 @@ jobs:
 
   deny:
     name: Dependency Check (cargo-deny)
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-rust
     needs: [changes]
     if: ${{ needs.changes.outputs.security == 'true' }}
     steps:
@@ -232,7 +231,7 @@ jobs:
 
   mcp-integration:
     name: MCP Integration Tests
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-system
     needs: [changes, test]
     if: ${{ needs.test.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.mcp == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
@@ -244,7 +243,7 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-ops
     if: always()
     needs:
       - changes
@@ -280,7 +279,7 @@ jobs:
 
   npm:
     name: npm launcher
-    runs-on: [self-hosted, unraid]
+    runs-on: ci-pool-typescript
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' }}
     steps:

@@ -1,3 +1,9 @@
+---
+title: "Cortex Security Model"
+created: 2026-06-07
+updated: 2026-07-30
+---
+
 # Cortex Security Model
 
 This document collects operator-facing trust assumptions that are otherwise

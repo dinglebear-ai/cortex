@@ -1,3 +1,9 @@
+---
+title: "OAuth Authentication"
+created: 2026-05-08
+updated: 2026-07-30
+---
+
 # OAuth Authentication
 
 cortex supports Google OAuth 2.0 for MCP clients. Both bearer and OAuth modes leave `/health` unauthenticated and honour the same scope-based tool dispatch.

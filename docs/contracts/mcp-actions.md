@@ -1,3 +1,9 @@
+---
+title: "MCP Actions Contract — Superpowers Epics D / E / F"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # MCP Actions Contract — Superpowers Epics D / E / F
 
 **Status:** Historical epic design contract. The current production MCP surface

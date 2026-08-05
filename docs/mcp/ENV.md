@@ -1,3 +1,9 @@
+---
+title: "Environment Variable Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Environment Variable Reference -- cortex
 
 Concise reference. See [CONFIG.md](../CONFIG.md) for full documentation including config.toml overlay and validation rules.

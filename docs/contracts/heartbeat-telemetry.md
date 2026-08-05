@@ -1,3 +1,9 @@
+---
+title: "Heartbeat Telemetry Contract (V1 Pre-Implementation)"
+created: 2026-05-24
+updated: 2026-07-30
+---
+
 # Heartbeat Telemetry Contract (V1 Pre-Implementation)
 
 ## 1. Purpose And Status

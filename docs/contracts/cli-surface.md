@@ -1,3 +1,9 @@
+---
+title: "CLI Surface Contract — `cortex` Subcommands Added by Superpowers Epics"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # CLI Surface Contract — `cortex` Subcommands Added by Superpowers Epics
 
 This file is a contract derived from:

@@ -10,7 +10,7 @@ use rmcp::{
     model::{
         Annotations, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         EmbeddedResource, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
-        Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, Meta,
+        Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, MetaObject,
         PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
         ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
     },
@@ -448,10 +448,6 @@ fn widget_embed_enabled() -> bool {
 /// The query widget as an embedded resource content block, annotated
 /// `audience: ["user"]` so audience-aware hosts keep it out of model context.
 fn embedded_widget_content() -> ContentBlock {
-    // rmcp 3.0 moved annotations from the `Annotated<RawContent>` wrapper onto
-    // each ContentBlock variant's own struct, so the audience hint is now set on
-    // the EmbeddedResource instead of the content block. The wire shape is
-    // unchanged: {"type":"resource","resource":{…},"annotations":{"audience":["user"]}}.
     ContentBlock::Resource(
         EmbeddedResource::new(
             ResourceContents::text(
@@ -464,7 +460,7 @@ fn embedded_widget_content() -> ContentBlock {
     )
 }
 
-fn cortex_tool_meta() -> Meta {
+fn cortex_tool_meta() -> MetaObject {
     let mut meta = Map::new();
     // Both formats the MCP Apps SDK tells hosts to check: the flat
     // `ui/resourceUri` key (ext-apps `RESOURCE_URI_META_KEY`) and the nested
@@ -480,7 +476,7 @@ fn cortex_tool_meta() -> Meta {
             "visibility": ["model", "app"],
         }),
     );
-    Meta(meta)
+    MetaObject(meta)
 }
 
 fn rmcp_tool_definitions() -> Result<Vec<Tool>, ErrorData> {

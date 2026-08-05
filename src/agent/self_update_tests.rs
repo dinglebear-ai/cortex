@@ -125,6 +125,128 @@ fn ensure_binary_still_present_ok_when_exe_exists() {
     assert!(ensure_binary_still_present(&exe).is_ok());
 }
 
+#[tokio::test]
+async fn download_binary_accepts_authenticated_body() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/binary"))
+        .and(header("authorization", "Bearer secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"cortex".to_vec()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_update_client().unwrap();
+    let bytes = download_binary(
+        &client,
+        &format!("{}/binary", server.uri()),
+        Some("secret"),
+        64,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(bytes, b"cortex");
+}
+
+#[tokio::test]
+async fn download_binary_rejects_oversized_content_length() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/binary"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0_u8; 16]))
+        .mount(&server)
+        .await;
+
+    let client = build_update_client().unwrap();
+    let error = download_binary(
+        &client,
+        &format!("{}/binary", server.uri()),
+        None,
+        8,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("content length 16 exceeds 8-byte limit"));
+}
+
+#[tokio::test]
+async fn download_binary_times_out_waiting_for_first_byte() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = socket.write_all(b"x").await;
+    });
+
+    let client = build_update_client().unwrap();
+    let error = download_binary(
+        &client,
+        &format!("http://{address}/binary"),
+        None,
+        8,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("first byte exceeded"));
+}
+
+#[tokio::test]
+async fn download_binary_times_out_when_stream_stalls() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nx")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = socket.write_all(b"y").await;
+    });
+
+    let client = build_update_client().unwrap();
+    let error = download_binary(
+        &client,
+        &format!("http://{address}/binary"),
+        None,
+        8,
+        Duration::from_secs(1),
+        Duration::from_millis(20),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("download stalled"));
+}
+
 #[cfg(unix)]
 #[test]
 fn validate_binary_accepts_matching_version_and_rejects_mismatch() {

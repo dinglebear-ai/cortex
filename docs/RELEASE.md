@@ -1,3 +1,9 @@
+---
+title: "Release Checklist"
+created: 2026-06-07
+updated: 2026-07-30
+---
+
 # Release Checklist
 
 Use this checklist before merging release-bound work. CI covers hermetic gates;

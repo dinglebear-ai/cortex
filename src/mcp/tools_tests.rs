@@ -133,6 +133,7 @@ fn graph_inventory_fixture() -> HomelabInventory {
         }],
         env_keys: vec!["URL".to_string()],
         labels: Default::default(),
+        details: Default::default(),
     });
     inventory.compose_projects.push(ComposeProject {
         name: "edge".to_string(),

@@ -1,3 +1,9 @@
+---
+title: "Incident Card Contract"
+created: 2026-05-16
+updated: 2026-07-30
+---
+
 # Incident Card Contract
 
 **Epic:** `cortex-h6da` (RAG over Historical Incidents and AI Sessions)

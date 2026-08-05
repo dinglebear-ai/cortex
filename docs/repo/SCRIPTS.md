@@ -1,3 +1,9 @@
+---
+title: "Scripts Reference -- cortex"
+created: "2026-07-30"
+updated: "2026-07-30"
+---
+
 # Scripts Reference -- cortex
 
 Scripts used for maintenance, setup, and testing. The plugin ships no Claude
