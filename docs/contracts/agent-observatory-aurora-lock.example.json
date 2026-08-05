@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "registry": {
+    "repository": "dinglebear-ai/aurora",
+    "source_revision": "19e87c6b26dd32eb3be3db4d8b6fb32c99cd1d6d",
+    "immutable_url_template": "https://raw.githubusercontent.com/dinglebear-ai/aurora/{sha}/public/r/{name}.json",
+    "mutable_discovery_url_template": "https://aurora.tootie.tv/r/{name}.json",
+    "package_version": "0.5.1"
+  },
+  "consumer": {
+    "installed_at": "2026-07-31T00:00:00.000Z",
+    "shadcn_version": "4.13.1",
+    "next_version": "16.2.11",
+    "react_version": "19.2.7",
+    "tailwind_version": "4.3.3"
+  },
+  "top_level_items": [
+    "aurora-base",
+    "aurora-sidebar-block",
+    "aurora-resizable-panels",
+    "aurora-data-table",
+    "aurora-filter-bar",
+    "aurora-timeline",
+    "aurora-chart",
+    "aurora-status-indicator",
+    "aurora-log-viewer",
+    "aurora-terminal-block",
+    "aurora-tool-calls",
+    "aurora-code-workspace",
+    "aurora-ai-conversation",
+    "aurora-ai-message",
+    "aurora-ai-agent",
+    "aurora-ai-plan",
+    "aurora-ai-task",
+    "aurora-ai-tool",
+    "aurora-ai-commit",
+    "aurora-ai-branch",
+    "aurora-empty-state",
+    "aurora-skeleton",
+    "aurora-spinner",
+    "aurora-sheet",
+    "aurora-dialog",
+    "aurora-tabs",
+    "aurora-tooltip",
+    "aurora-scroll-area",
+    "aurora-command-palette",
+    "aurora-breadcrumb",
+    "aurora-pagination",
+    "aurora-banner",
+    "aurora-toast"
+  ],
+  "resolved_items": [
+    {
+      "name": "aurora-base",
+      "type": "registry:base",
+      "source_sha256": "REPLACE_AFTER_PINNED_INSTALL",
+      "registry_dependencies": [],
+      "npm_dependencies": [],
+      "installed_files": []
+    }
+  ],
+  "files": [
+    {
+      "path": "components/ui/aurora/example.tsx",
+      "item": "aurora-example",
+      "source_path": "registry/aurora/ui/example.tsx",
+      "source_sha256": "REPLACE_AFTER_PINNED_INSTALL",
+      "installed_sha256": "REPLACE_AFTER_PINNED_INSTALL",
+      "locally_modified": false,
+      "modification_note": null
+    }
+  ],
+  "vendored_assets": [
+    {
+      "path": "public/fonts/aurora/inter-var.woff2",
+      "source_url": "https://aurora.tootie.tv/fonts/aurora/inter-var.woff2",
+      "source_revision": "19e87c6b26dd32eb3be3db4d8b6fb32c99cd1d6d",
+      "sha256": "REPLACE_AFTER_VENDORING"
+    }
+  ],
+  "audits": {
+    "full_sha": true,
+    "immutable_install_urls_only": true,
+    "all_files_present": false,
+    "all_hashes_verified": false,
+    "no_mutable_runtime_urls": false,
+    "no_parallel_primitives": false,
+    "transitive_graph_complete": false
+  }
+}

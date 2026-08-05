@@ -6,7 +6,7 @@ updated: 2026-07-30
 
 # ADR 001: SQLite Single-Writer Architecture
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-05-21
 
 ## Context
