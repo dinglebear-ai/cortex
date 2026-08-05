@@ -112,14 +112,22 @@ fn workflow_router_changes_force_full_ci() {
 }
 
 #[test]
-fn schedule_and_manual_runs_enable_everything() {
-    for event in ["schedule", "workflow_dispatch"] {
-        let out = classify(event, &[]);
-        for key in [
-            "all", "docs", "workflow", "rust", "web", "docker", "release", "skills", "security",
-            "mcp",
-        ] {
-            assert_eq!(out[key], "true", "{event} should enable {key}");
-        }
+fn manual_runs_enable_everything() {
+    let out = classify("workflow_dispatch", &[]);
+    for key in [
+        "all", "docs", "workflow", "rust", "web", "docker", "release", "skills", "security", "mcp",
+    ] {
+        assert_eq!(out[key], "true", "workflow_dispatch should enable {key}");
     }
+}
+
+#[test]
+fn scheduled_runs_enable_only_the_security_lane() {
+    let out = classify("schedule", &[]);
+    for key in [
+        "all", "docs", "workflow", "rust", "web", "docker", "release", "skills", "mcp",
+    ] {
+        assert_eq!(out[key], "false", "schedule should not enable {key}");
+    }
+    assert_eq!(out["security"], "true", "schedule exists for cargo-deny");
 }
