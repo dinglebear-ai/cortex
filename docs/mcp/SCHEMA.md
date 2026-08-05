@@ -1,7 +1,7 @@
 ---
 title: "Tool Schema Documentation -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: "2026-08-04"
 ---
 
 # Tool Schema Documentation -- cortex
@@ -89,7 +89,9 @@ selects one of these 54 actions:
 
 ## Schema Pattern
 
-The runtime tool definition is a flat action-dispatched JSON schema:
+The runtime tool definition is a hybrid action-dispatched JSON schema. Shared
+properties remain at the root for backward-compatible discovery, while exact
+per-action object branches are generated from `ACTION_SPECS` under `oneOf`:
 
 ```json
 {
@@ -119,14 +121,48 @@ The runtime tool definition is a flat action-dispatched JSON schema:
         "enum": ["...derived from ACTION_SPECS..."]
       }
     },
-    "required": ["action"]
+    "required": ["action"],
+    "oneOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": { "const": "project_context" },
+          "project": { "type": "string" },
+          "tool": { "type": "string" },
+          "limit": { "type": "integer" }
+        },
+        "required": ["action", "project"]
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": { "const": "list_ai_projects" },
+          "tool": { "type": "string" },
+          "since": { "type": "string" },
+          "until": { "type": "string" }
+        },
+        "required": ["action"]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "action": { "enum": ["...unmigrated actions..."] }
+        },
+        "required": ["action"]
+      }
+    ]
   }
 }
 ```
 
-All properties are declared at the top level because MCP clients receive one
-tool schema for the `cortex` super-tool. Per-action validation happens in the
-handler and service layers.
+Root properties remain available because MCP clients receive one schema for the
+`cortex` super-tool. `project_context` and `list_ai_projects` now have exact
+machine-enforced field sets generated from the action registry. Unmigrated
+actions use an explicit fallback branch that excludes those exact action names.
+Runtime request structs still use `deny_unknown_fields` as the final validation
+boundary.
 
 ## Common Arguments
 
@@ -195,8 +231,11 @@ All MCP tool responses use one text content block containing pretty-printed JSON
 }
 ```
 
-Validation failures usually surface as MCP invalid-params errors. Execution
-failures return tool errors with `isError: true`.
+Action validation failures and execution failures return tool errors with
+`isError: true`. Validation errors also include matching JSON text and
+`structuredContent` containing `kind: "invalid_param"`, `action`, `message`,
+and `retryable: false`. JSON-RPC errors are reserved for failures that prevent
+normal tool execution.
 
 ## Drift Checks
 
