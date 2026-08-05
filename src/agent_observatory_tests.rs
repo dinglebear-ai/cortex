@@ -6,7 +6,9 @@ fn planned_schema_and_projection_versions_are_locked() {
     assert_eq!(AGENT_OBSERVATORY_PROJECTION_VERSION, 1);
 }
 
-#[test]
-fn runtime_schema_does_not_claim_unimplemented_observatory_migrations() {
-    assert!(crate::db::KNOWN_SCHEMA_VERSION < AGENT_OBSERVATORY_SCHEMA_VERSION);
-}
+// Compile-time (not runtime) check: the runtime schema must never claim to have
+// already applied Agent Observatory migrations that don't exist yet. Both
+// constants are `const i64`, so this ordering is provable at compile time —
+// asserting it in `const _` catches drift at build time instead of only when
+// `cargo test` happens to run.
+const _: () = assert!(crate::db::KNOWN_SCHEMA_VERSION < AGENT_OBSERVATORY_SCHEMA_VERSION);
