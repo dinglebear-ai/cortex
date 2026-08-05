@@ -262,7 +262,10 @@ List distinct AI projects with counts, tools used, and first/last seen timestamp
 
 Required argument: `action = "list_ai_projects"`
 
-Optional arguments: `tool`, `from`, `to`.
+Optional arguments: `tool`, `since`, `until`.
+
+The generated MCP schema rejects unsupported fields such as `limit` before
+dispatch.
 
 ## cortex correlate
 
