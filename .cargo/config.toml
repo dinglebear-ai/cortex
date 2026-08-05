@@ -18,12 +18,6 @@
 xtask = "run --quiet --package xtask --"
 
 [build]
-# This wrapper preserves local sccache delegation and, after RELEASE builds of
-# the cortex bin only, atomically refreshes ~/.local/bin/cortex. Debug/test
-# builds never deploy, and the git-tracked plugin bundle is never written
-# (that's `just build-plugin`). A failed install never fails the compile.
-rustc-wrapper = "scripts/cargo-rustc-wrapper"
-
 # Non-standard target directory keeps Cargo artifacts out of the repo root so
 # Docker COPY instructions and bind mounts don't require an exclude for ./target.
 # See docs/RUST.md §Repo-specific overrides.
