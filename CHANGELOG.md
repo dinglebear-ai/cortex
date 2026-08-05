@@ -120,6 +120,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+### Licensing
+
+- Relicense Dinglebear-owned original work under AGPL-3.0-only and document separate commercial licensing; third-party material retains its original terms.
+
 ## [3.9.1] - 2026-07-12
 
 ## [3.8.1] - 2026-07-09
@@ -135,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Three new plugin skills filling gaps in the assessment/investigation skill family: `hook-friction-assessment` (analyzes `hook_investigate` evidence bundles, mirroring the existing mcp/skill friction-assessment pattern), `incidents` (triage for `unaddressed_errors`, `ack_error`/`unack_error`, `notifications_recent`, `similar_incidents`, `incident_context`), and `topology` (homelab topology/correlation queries via `map`, `host_state`, `fleet_state`, `correlate`, `correlate_state`, `graph`).
 
 ### Changed
+
 
 - Renamed all plugin skill directories to drop the redundant `cortex-` prefix (e.g. `cortex-troubleshoot` → `troubleshoot`), updating the `name:` frontmatter, sibling cross-references, `agents/openai.yaml` prompts, and the Rust `include_str!`/`SKILL_NAME` constants that embed three of these skills (`frustration-assessment`, `mcp-friction-assessment`, `skill-improvement-assessment`) into the binary at compile time.
 
