@@ -17,10 +17,29 @@ inputs:
   enable-cache:
     description: >-
       "true" (default) wires kache as RUSTC_WRAPPER and starts the daemon.
-      "false" leaves cargo bare — used by the GitHub-hosted native Windows job,
-      which cannot reach the shared remote.
+      "false" leaves cargo bare for jobs where compilation caching is unwanted.
     required: false
     default: "true"
+  s3-access-key:
+    description: Access key for an ephemeral runner's shared S3 cache profile.
+    required: false
+    default: ""
+  s3-secret-key:
+    description: Secret key for an ephemeral runner's shared S3 cache profile.
+    required: false
+    default: ""
+  s3-endpoint:
+    description: S3-compatible endpoint used when credentials are supplied.
+    required: false
+    default: "https://s3.tootie.tv"
+  s3-bucket:
+    description: S3 bucket containing the shared cache.
+    required: false
+    default: "kache"
+  s3-prefix:
+    description: Object prefix within the shared cache bucket.
+    required: false
+    default: "rust"
 
 runs:
   using: composite
@@ -73,7 +92,7 @@ runs:
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
 
-    # Pinned exactly. The private fleet and hosted CI share the 0.12.0 S3
+    # Pinned exactly. The private fleet and hosted CI share the 0.13.0 S3
     # object layout and daemon protocol. Floating this version could split cache
     # epochs or layouts without an obvious workflow failure. Bump deliberately,
     # never via tag drift.
@@ -81,7 +100,7 @@ runs:
       if: inputs.enable-cache == 'true' && runner.os == 'Linux'
       shell: bash
       env:
-        KACHE_VERSION: "0.12.0"
+        KACHE_VERSION: "0.13.0"
       run: |
         set -euo pipefail
         # Reuse any already-installed binary at the pinned version. Persistent
@@ -115,10 +134,16 @@ runs:
     - name: Configure kache
       if: inputs.enable-cache == 'true' && runner.os == 'Linux'
       shell: bash
+      env:
+        KACHE_S3_ACCESS_KEY: ${{ inputs.s3-access-key }}
+        KACHE_S3_SECRET_KEY: ${{ inputs.s3-secret-key }}
+        KACHE_S3_ENDPOINT: ${{ inputs.s3-endpoint }}
+        KACHE_S3_BUCKET: ${{ inputs.s3-bucket }}
+        KACHE_S3_PREFIX: ${{ inputs.s3-prefix }}
       run: |
         set -euo pipefail
         config_file="$HOME/.config/kache/config.toml"
-        credentials_file="$HOME/.aws/credentials"
+        host_credentials_file="$HOME/.aws/credentials"
         mkdir -p "$HOME/.config/kache"
 
         # Persistent hosts own their default store through systemd. Farm
@@ -143,8 +168,33 @@ runs:
               "$config_file" | head -n1
           )"
           [ -z "$configured_store" ] || cache_dir="$configured_store"
-        elif [ -r "$credentials_file" ] &&
-             grep -Eq '^[[:space:]]*\[kache\][[:space:]]*$' "$credentials_file"; then
+        elif [ -n "${KACHE_S3_ACCESS_KEY:-}" ] && [ -n "${KACHE_S3_SECRET_KEY:-}" ]; then
+          credentials_file="$RUNNER_TEMP/kache-aws-credentials"
+          umask 077
+          {
+            printf '[kache]\n'
+            printf 'aws_access_key_id = %s\n' "$KACHE_S3_ACCESS_KEY"
+            printf 'aws_secret_access_key = %s\n' "$KACHE_S3_SECRET_KEY"
+          } > "$credentials_file"
+          echo "AWS_SHARED_CREDENTIALS_FILE=$credentials_file" >> "$GITHUB_ENV"
+          cat > "$config_file" <<TOML
+        [cache]
+        local_store = "$cache_dir"
+        daemon_idle_timeout_secs = 0
+        prefetch_max_bytes = "8GiB"
+        local_max_size = "40GiB"
+
+        [cache.remote]
+        type = "s3"
+        bucket = "$KACHE_S3_BUCKET"
+        endpoint = "$KACHE_S3_ENDPOINT"
+        region = "us-east-1"
+        prefix = "$KACHE_S3_PREFIX"
+        profile = "kache"
+        TOML
+          echo "kache remote: s3://$KACHE_S3_BUCKET/$KACHE_S3_PREFIX via $KACHE_S3_ENDPOINT"
+        elif [ -r "$host_credentials_file" ] &&
+             grep -Eq '^[[:space:]]*\[kache\][[:space:]]*$' "$host_credentials_file"; then
           cat > "$config_file" <<TOML
         [cache]
         local_store = "$cache_dir"
@@ -190,7 +240,9 @@ runs:
         set -euo pipefail
         daemon_is_running() {
           local status
-          status="$(kache daemon status 2>&1)"
+          if ! status="$(kache daemon status 2>&1)"; then
+            return 1
+          fi
           grep -q "Daemon:" <<< "$status" && ! grep -q "not running" <<< "$status"
         }
 
@@ -199,20 +251,31 @@ runs:
         # use kache daemon restart, which also clears stale daemon state.
         if command -v systemctl >/dev/null 2>&1 && systemctl --user cat kache.service >/dev/null 2>&1; then
           echo "host-managed kache.service found - using systemd"
-          systemctl --user is-active --quiet kache.service || systemctl --user start kache.service
+          systemctl --user is-active --quiet kache.service || systemctl --user start kache.service || true
         else
-          daemon_is_running || kache daemon restart
+          daemon_is_running || kache daemon restart || true
         fi
 
         for _ in $(seq 1 30); do
           daemon_is_running && break
           sleep 1
         done
-        daemon_is_running || { echo "::error::kache daemon is not answering"; kache daemon status; exit 1; }
+        if ! daemon_is_running; then
+          echo "::warning::kache daemon is not answering; continuing without a compiler cache"
+          kache daemon status || true
+          {
+            echo "KACHE_DISABLED=true"
+            echo "RUSTC_WRAPPER="
+            echo "CARGO_BUILD_RUSTC_WRAPPER="
+            echo "CARGO_INCREMENTAL=1"
+          } >> "$GITHUB_ENV"
+          exit 0
+        fi
+        echo "KACHE_DISABLED=false" >> "$GITHUB_ENV"
         kache daemon
 
     - name: Print cache evidence
-      if: inputs.enable-cache == 'true' && runner.os == 'Linux'
+      if: inputs.enable-cache == 'true' && runner.os == 'Linux' && env.KACHE_DISABLED != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -230,7 +293,7 @@ runs:
     # baseline, `errors > 0` would go permanently red after one historical
     # store failure and `remote_hits > 0` would pass forever after one hit.
     - name: Baseline kache counters for the gate
-      if: inputs.enable-cache == 'true' && runner.os == 'Linux'
+      if: inputs.enable-cache == 'true' && runner.os == 'Linux' && env.KACHE_DISABLED != 'true'
       shell: bash
       run: |
         set -euo pipefail
