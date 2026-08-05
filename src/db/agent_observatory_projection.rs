@@ -9,6 +9,8 @@ pub use types::{
     AgentWorktreeEvidenceUpsert,
 };
 
+#[path = "agent_observatory_projection_counters.rs"]
+mod counters;
 #[path = "agent_observatory_projection_sql.rs"]
 mod sql;
 
@@ -250,7 +252,7 @@ fn write_inner(
     }
 
     if event_inserted {
-        run = sql::apply_event_counters(&tx, run.id, &event)?;
+        run = counters::apply_event_counters(&tx, run.id, &event)?;
     }
     let materialized_state_changed =
         run_changed || actor_changed || evidence_changed || event_inserted;

@@ -1,0 +1,146 @@
+//! Classification of canonical log rows into Agent Observatory transcript projections.
+
+use crate::ai_project::normalize_ai_project_path;
+use crate::db::LogEntry;
+use serde_json::Value;
+
+pub const MAX_TRANSCRIPT_MESSAGE_BYTES: usize = 64 * 1024;
+pub const MAX_TRANSCRIPT_METADATA_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptSkipReason {
+    InvalidLogId,
+    MissingHostname,
+    MissingAiTool,
+    UnsupportedTool,
+    MissingSessionId,
+    MissingTranscriptPath,
+    InvalidTimestamp,
+    InvalidReceivedAt,
+    MetadataTooLarge,
+    InvalidMetadataJson,
+    MetadataNotObject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptSkipDiagnostic {
+    pub log_id: i64,
+    pub reason: TranscriptSkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptLogProjection {
+    pub log_id: i64,
+    pub timestamp: String,
+    pub received_at: String,
+    pub hostname: String,
+    pub tool: String,
+    pub provider_tool: String,
+    pub project: Option<String>,
+    pub session_id: String,
+    pub transcript_path: String,
+    pub process_id: Option<String>,
+    pub severity: String,
+    pub app_name: Option<String>,
+    pub source_ip: String,
+    pub message: String,
+    pub message_truncated: bool,
+    pub metadata_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptLogClassification {
+    Project(Box<TranscriptLogProjection>),
+    Skip(TranscriptSkipDiagnostic),
+}
+
+fn skip(log_id: i64, reason: TranscriptSkipReason) -> TranscriptLogClassification {
+    TranscriptLogClassification::Skip(TranscriptSkipDiagnostic { log_id, reason })
+}
+
+fn required(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn canonical_known_tool(value: &str) -> Option<String> {
+    let normalized = value.trim().to_lowercase();
+    matches!(normalized.as_str(), "claude" | "codex" | "gemini").then_some(normalized)
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_string(), true)
+}
+
+pub fn classify_transcript_log(row: &LogEntry) -> TranscriptLogClassification {
+    if row.id <= 0 {
+        return skip(row.id, TranscriptSkipReason::InvalidLogId);
+    }
+    let hostname = row.hostname.trim();
+    if hostname.is_empty() {
+        return skip(row.id, TranscriptSkipReason::MissingHostname);
+    }
+    let Some(provider_tool) = required(row.ai_tool.as_deref()) else {
+        return skip(row.id, TranscriptSkipReason::MissingAiTool);
+    };
+    let Some(tool) = canonical_known_tool(provider_tool) else {
+        return skip(row.id, TranscriptSkipReason::UnsupportedTool);
+    };
+    let Some(session_id) = required(row.ai_session_id.as_deref()) else {
+        return skip(row.id, TranscriptSkipReason::MissingSessionId);
+    };
+    let Some(transcript_path) = required(row.ai_transcript_path.as_deref()) else {
+        return skip(row.id, TranscriptSkipReason::MissingTranscriptPath);
+    };
+    if chrono::DateTime::parse_from_rfc3339(&row.timestamp).is_err() {
+        return skip(row.id, TranscriptSkipReason::InvalidTimestamp);
+    }
+    if chrono::DateTime::parse_from_rfc3339(&row.received_at).is_err() {
+        return skip(row.id, TranscriptSkipReason::InvalidReceivedAt);
+    }
+
+    let metadata_json = match row.metadata_json.as_deref() {
+        None | Some("") => "{}".to_string(),
+        Some(value) if value.len() > MAX_TRANSCRIPT_METADATA_BYTES => {
+            return skip(row.id, TranscriptSkipReason::MetadataTooLarge);
+        }
+        Some(value) => match serde_json::from_str::<Value>(value) {
+            Ok(Value::Object(_)) => value.to_string(),
+            Ok(_) => return skip(row.id, TranscriptSkipReason::MetadataNotObject),
+            Err(_) => return skip(row.id, TranscriptSkipReason::InvalidMetadataJson),
+        },
+    };
+    let project = required(row.ai_project.as_deref())
+        .map(normalize_ai_project_path)
+        .filter(|project| !project.is_empty());
+    let (message, message_truncated) = truncate_utf8(&row.message, MAX_TRANSCRIPT_MESSAGE_BYTES);
+
+    TranscriptLogClassification::Project(Box::new(TranscriptLogProjection {
+        log_id: row.id,
+        timestamp: row.timestamp.clone(),
+        received_at: row.received_at.clone(),
+        hostname: hostname.to_string(),
+        tool,
+        provider_tool: provider_tool.to_string(),
+        project,
+        session_id: session_id.to_string(),
+        transcript_path: transcript_path.to_string(),
+        process_id: row.process_id.clone(),
+        severity: row.severity.trim().to_string(),
+        app_name: row.app_name.clone(),
+        source_ip: row.source_ip.clone(),
+        message,
+        message_truncated,
+        metadata_json,
+    }))
+}
+
+#[cfg(test)]
+#[path = "classifier_tests.rs"]
+mod tests;

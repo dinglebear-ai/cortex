@@ -1,6 +1,6 @@
 //! SQL primitives for one atomic Agent Observatory projection write.
 
-use super::super::{AgentEventKind, AgentRunEventRow, AgentRunRow, AgentRunWorktreeEvidenceRow};
+use super::super::{AgentRunEventRow, AgentRunRow, AgentRunWorktreeEvidenceRow};
 use anyhow::{Context, Result, bail};
 use rusqlite::types::Type;
 use rusqlite::{OptionalExtension, Row, Transaction, params};
@@ -212,36 +212,81 @@ pub(super) fn upsert_run(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                  ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
          ON CONFLICT(run_key) DO UPDATE SET
-             provider_tool=excluded.provider_tool, parent_run_id=excluded.parent_run_id,
-             previous_run_id=excluded.previous_run_id,
-             primary_worktree_id=excluded.primary_worktree_id,
-             transcript_path=excluded.transcript_path, process_id=excluded.process_id,
-             status=excluded.status, status_reason=excluded.status_reason,
-             status_observed_at=excluded.status_observed_at, started_at=excluded.started_at,
-             last_activity_at=excluded.last_activity_at, ended_at=excluded.ended_at,
-             primary_branch=excluded.primary_branch, start_head_sha=excluded.start_head_sha,
-             current_head_sha=excluded.current_head_sha,
-             projection_version=excluded.projection_version,
-             freshness_json=excluded.freshness_json, metadata_json=excluded.metadata_json,
+             provider_tool=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN COALESCE(excluded.provider_tool, agent_runs.provider_tool)
+                 ELSE agent_runs.provider_tool END,
+             parent_run_id=COALESCE(agent_runs.parent_run_id, excluded.parent_run_id),
+             previous_run_id=COALESCE(agent_runs.previous_run_id, excluded.previous_run_id),
+             primary_worktree_id=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN COALESCE(excluded.primary_worktree_id, agent_runs.primary_worktree_id)
+                 ELSE agent_runs.primary_worktree_id END,
+             transcript_path=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN COALESCE(excluded.transcript_path, agent_runs.transcript_path)
+                 ELSE agent_runs.transcript_path END,
+             process_id=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN COALESCE(excluded.process_id, agent_runs.process_id)
+                 ELSE agent_runs.process_id END,
+             status=CASE
+                 WHEN excluded.status_observed_at >= agent_runs.status_observed_at
+                 THEN excluded.status ELSE agent_runs.status END,
+             status_reason=CASE
+                 WHEN excluded.status_observed_at >= agent_runs.status_observed_at
+                 THEN excluded.status_reason ELSE agent_runs.status_reason END,
+             status_observed_at=MAX(agent_runs.status_observed_at, excluded.status_observed_at),
+             started_at=MIN(agent_runs.started_at, excluded.started_at),
+             last_activity_at=MAX(agent_runs.last_activity_at, excluded.last_activity_at),
+             ended_at=CASE
+                 WHEN excluded.ended_at IS NULL THEN agent_runs.ended_at
+                 WHEN agent_runs.ended_at IS NULL THEN excluded.ended_at
+                 ELSE MAX(agent_runs.ended_at, excluded.ended_at) END,
+             primary_branch=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN COALESCE(excluded.primary_branch, agent_runs.primary_branch)
+                 ELSE agent_runs.primary_branch END,
+             start_head_sha=COALESCE(agent_runs.start_head_sha, excluded.start_head_sha),
+             current_head_sha=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN COALESCE(excluded.current_head_sha, agent_runs.current_head_sha)
+                 ELSE agent_runs.current_head_sha END,
+             projection_version=MAX(agent_runs.projection_version, excluded.projection_version),
+             freshness_json=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN excluded.freshness_json ELSE agent_runs.freshness_json END,
+             metadata_json=CASE
+                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 THEN excluded.metadata_json ELSE agent_runs.metadata_json END,
              updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE agent_runs.provider_tool IS NOT excluded.provider_tool
-            OR agent_runs.parent_run_id IS NOT excluded.parent_run_id
-            OR agent_runs.previous_run_id IS NOT excluded.previous_run_id
-            OR agent_runs.primary_worktree_id IS NOT excluded.primary_worktree_id
-            OR agent_runs.transcript_path IS NOT excluded.transcript_path
-            OR agent_runs.process_id IS NOT excluded.process_id
-            OR agent_runs.status IS NOT excluded.status
-            OR agent_runs.status_reason IS NOT excluded.status_reason
-            OR agent_runs.status_observed_at IS NOT excluded.status_observed_at
-            OR agent_runs.started_at IS NOT excluded.started_at
-            OR agent_runs.last_activity_at IS NOT excluded.last_activity_at
-            OR agent_runs.ended_at IS NOT excluded.ended_at
-            OR agent_runs.primary_branch IS NOT excluded.primary_branch
-            OR agent_runs.start_head_sha IS NOT excluded.start_head_sha
-            OR agent_runs.current_head_sha IS NOT excluded.current_head_sha
-            OR agent_runs.projection_version IS NOT excluded.projection_version
-            OR agent_runs.freshness_json IS NOT excluded.freshness_json
-            OR agent_runs.metadata_json IS NOT excluded.metadata_json",
+         WHERE (excluded.last_activity_at >= agent_runs.last_activity_at AND (
+                 agent_runs.provider_tool IS NOT
+                     COALESCE(excluded.provider_tool, agent_runs.provider_tool)
+              OR agent_runs.primary_worktree_id IS NOT
+                     COALESCE(excluded.primary_worktree_id, agent_runs.primary_worktree_id)
+              OR agent_runs.transcript_path IS NOT
+                     COALESCE(excluded.transcript_path, agent_runs.transcript_path)
+              OR agent_runs.process_id IS NOT
+                     COALESCE(excluded.process_id, agent_runs.process_id)
+              OR agent_runs.primary_branch IS NOT
+                     COALESCE(excluded.primary_branch, agent_runs.primary_branch)
+              OR agent_runs.current_head_sha IS NOT
+                     COALESCE(excluded.current_head_sha, agent_runs.current_head_sha)
+              OR agent_runs.freshness_json IS NOT excluded.freshness_json
+              OR agent_runs.metadata_json IS NOT excluded.metadata_json))
+            OR (excluded.status_observed_at >= agent_runs.status_observed_at AND (
+                 agent_runs.status IS NOT excluded.status
+              OR agent_runs.status_reason IS NOT excluded.status_reason
+              OR agent_runs.status_observed_at IS NOT excluded.status_observed_at))
+            OR (agent_runs.parent_run_id IS NULL AND excluded.parent_run_id IS NOT NULL)
+            OR (agent_runs.previous_run_id IS NULL AND excluded.previous_run_id IS NOT NULL)
+            OR agent_runs.started_at > excluded.started_at
+            OR agent_runs.last_activity_at < excluded.last_activity_at
+            OR (excluded.ended_at IS NOT NULL
+                AND agent_runs.ended_at IS NOT excluded.ended_at)
+            OR (agent_runs.start_head_sha IS NULL AND excluded.start_head_sha IS NOT NULL)
+            OR agent_runs.projection_version < excluded.projection_version",
         params![
             key,
             input.native_session_id,
@@ -421,36 +466,10 @@ pub(super) fn insert_event(
     Ok((row, inserted))
 }
 
-pub(super) fn apply_event_counters(
-    tx: &Transaction<'_>,
-    run_id: i64,
-    event: &AgentRunEventRow,
-) -> Result<AgentRunRow> {
-    let error_increment = i64::from(event.event_kind == AgentEventKind::Error);
-    tx.execute(
-        "UPDATE agent_runs SET last_event_id=?1, event_count=event_count+1,
-             error_count=error_count+?2,
-             first_source_log_id=CASE
-                 WHEN ?3 IS NULL THEN first_source_log_id
-                 WHEN first_source_log_id IS NULL OR first_source_log_id > ?3 THEN ?3
-                 ELSE first_source_log_id END,
-             last_source_log_id=CASE
-                 WHEN ?3 IS NULL THEN last_source_log_id
-                 WHEN last_source_log_id IS NULL OR last_source_log_id < ?3 THEN ?3
-                 ELSE last_source_log_id END,
-             last_activity_at=MAX(last_activity_at, ?4),
-             updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?5",
-        params![
-            event.id,
-            error_increment,
-            event.source_log_id,
-            event.observed_at,
-            run_id
-        ],
-    )?;
+pub(super) fn run_by_id(tx: &Transaction<'_>, run_id: i64) -> Result<AgentRunRow> {
     let sql = format!("SELECT {RUN_COLUMNS} FROM agent_runs WHERE id = ?1");
     tx.query_row(&sql, [run_id], run_row)
-        .context("query run after event counters")
+        .context("query run by ID")
 }
 
 pub(super) fn insert_outbox(

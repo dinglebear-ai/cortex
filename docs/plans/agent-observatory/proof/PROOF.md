@@ -409,3 +409,14 @@ GREEN result: 3 focused tests passed; injected failure after event insert left z
 GATE: missing worktree resolution rolled back the entire transaction; first/last source log IDs and last_event_id matched the inserted event; deterministic identity helpers produced the expected run/actor/event keys
 REGRESSION: all 14 Agent Observatory DB tests, 2 model tests, and 56 database/schema tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, and fixed-string no-random identity audit passed
+
+## AO-036 Project transcript log rows
+commit/worktree SHA: 84b890de (task started)
+RED: classifier/projector tests imported transcript caps, classification/diagnostic types, classify_transcript_log, projection outcome, and project_transcript_log before implementation
+RED result: whole-lib compile failed with every classifier and projector surface unresolved
+GREEN: added a pure canonical-log classifier for Claude/Codex/Gemini plus an atomic transcript projector using existing ai_tool/project/session/transcript_path fields, 64 KiB UTF-8-safe message and metadata caps, normalized project paths, deterministic logs-derived event keys, and no guessed worktree
+GREEN result: Claude two-row fixture produced one durable run with two events, Codex and Gemini produced one run/event each, expected run/event keys and timestamps matched, and exact replay emitted no event or outbox
+FIX: out-of-order replay exposed run-state rewind; projection run upsert now preserves earliest start, latest activity/status/provider metadata, and only fills historical links without erasing them
+GATE: missing session, unsupported provider, and malformed metadata returned typed skip diagnostics with zero writes; classifier/projector contain no scanner or filesystem parser calls
+REGRESSION: all 64 Agent Observatory tests, all Agent Observatory DB tests, 56 database/schema tests, AI project normalization tests, and 162 config tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, provider-file static audit, and 64 KiB <= 256 KiB cap audit passed
