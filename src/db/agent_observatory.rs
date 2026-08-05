@@ -11,6 +11,14 @@ pub use commits::{
     reconcile_git_commits, upsert_git_commits,
 };
 
+#[path = "agent_observatory_projection.rs"]
+mod projection;
+pub use projection::{
+    AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionOutboxRow,
+    AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert,
+    AgentWorktreeEvidenceUpsert, write_agent_projection,
+};
+
 #[path = "agent_observatory_observations.rs"]
 mod observations;
 pub use observations::{

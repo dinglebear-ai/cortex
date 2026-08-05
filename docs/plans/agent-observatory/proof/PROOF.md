@@ -399,3 +399,13 @@ GREEN result: 6 focused supervisor tests passed; 100 overflow notifications prod
 GATE: failed full reconcile requeued bounded repair while direct repository actions continued; completion and zero/overflowing interval errors are typed; all scheduler tests use injected time with no sleeps
 REGRESSION: 19 watcher tests, all 62 Git observer tests, and 162 config tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, and no-sleep static audit passed
+
+## AO-035 Add run/event/evidence DB write transaction
+commit/worktree SHA: 5155601e (task started)
+RED: transaction tests imported run/actor/worktree-evidence/event/outbox inputs, result rows, write_agent_projection, and an after-event-insert fault seam before implementation
+RED result: compile failed with every projection write type and entry point unresolved
+GREEN: added one BEGIN IMMEDIATE transaction that constructs deterministic run/actor/event/evidence/outbox keys, null-safe upserts materialized state, inserts events conflict-safely, updates run event/error/source counters only for a new event, and emits outbox only for a material change
+GREEN result: 3 focused tests passed; injected failure after event insert left zero run/actor/evidence/event/outbox rows, retry created exactly one of each, exact replay preserved IDs and emitted no outbox, and a status-only update emitted one new outbox without double-counting the event
+GATE: missing worktree resolution rolled back the entire transaction; first/last source log IDs and last_event_id matched the inserted event; deterministic identity helpers produced the expected run/actor/event keys
+REGRESSION: all 14 Agent Observatory DB tests, 2 model tests, and 56 database/schema tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, and fixed-string no-random identity audit passed
