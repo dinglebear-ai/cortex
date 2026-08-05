@@ -103,17 +103,22 @@ The daemon must still be running somewhere to ingest logs into that database.
 
 ## MCPB bundle
 
-Build a Linux MCP Bundle from the existing stdio server:
+Build an MCP Bundle from the existing stdio server:
 
 ```bash
 just build-mcpb
+# or explicitly:
+bash scripts/build-mcpb.sh --target linux
+bash scripts/build-mcpb.sh --target windows
 ```
 
-The generated `dist/cortex-<version>-linux.mcpb` bundles the release
-`cortex` binary and launches it as:
+The generated `dist/cortex-<version>-<target>.mcpb` bundles the release
+`cortex` binary for that target and launches it as:
 
 ```bash
 server/cortex mcp
+# Windows bundles launch:
+server/cortex.exe mcp
 ```
 
 The bundle is query-only. It reads `cortex.db` from the configured data
