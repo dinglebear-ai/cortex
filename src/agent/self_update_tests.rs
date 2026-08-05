@@ -46,10 +46,10 @@ fn join_url_normalizes_slashes() {
     );
     assert_eq!(
         join_url(
-            "https://cortex.tootie.tv",
+            "https://cortex.example.internal",
             "/v1/agent/binary?os=linux&arch=x86_64"
         ),
-        "https://cortex.tootie.tv/v1/agent/binary?os=linux&arch=x86_64"
+        "https://cortex.example.internal/v1/agent/binary?os=linux&arch=x86_64"
     );
 }
 
@@ -101,7 +101,7 @@ fn backup_current_binary_uses_unique_backup_paths() {
 
 #[test]
 fn ensure_binary_still_present_errors_with_clear_diagnosis_when_exe_vanished() {
-    // Regression: dookie's agent logged a bare, unhelpful ENOENT ("back up
+    // Regression: devhost's agent logged a bare, unhelpful ENOENT ("back up
     // current binary to ...") for hours because a concurrent `cargo build
     // --release` replaced the exact path the running agent was exec'd from
     // (~/.local/bin/cortex was a dev-only symlink into the build output).

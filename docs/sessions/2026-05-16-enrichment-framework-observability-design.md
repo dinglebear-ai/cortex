@@ -22,7 +22,7 @@ Extremely long session covering: full brainstorm → 6 design specs + 21 contrac
 ## Sequence of Events
 
 1. **ELI5 of mnemo search** — explained `search_ai_sessions` FTS5 query + session grouping in `src/db/queries.rs:290–404`
-2. **Brainstorm session** — identified 7 concrete pain points (OOM on dookie, silent Docker failures, /var/log fills, disk blackholes, IP contention, WSL DNS, subnet collisions); proposed agent-mode + WS + enrichment architecture
+2. **Brainstorm session** — identified 7 concrete pain points (OOM on devhost, silent Docker failures, /var/log fills, disk blackholes, IP contention, WSL DNS, subnet collisions); proposed agent-mode + WS + enrichment architecture
 3. **Created 6 epics** in beads: Enrichment (B/1wjr P1), Agent mode (A/qgnx P2), API pollers (C/awvr P2), Probe registry (D/fue9 P2), Digest+notifications (E/h6dg P2), RAG over incidents (F/h6da P3); wired dependencies
 4. **Dispatched 6 parallel research agents** → wrote 6 design specs (180K total) in `docs/superpowers/specs/`
 5. **Iterated on specs** — resolved open questions (Apprise not gotify, `axon ask` collection scoping, host_metrics→metrics_gauge, token rotation, mark_incident_resolved, idx_logs_ts_tag); applied targeted spec patches

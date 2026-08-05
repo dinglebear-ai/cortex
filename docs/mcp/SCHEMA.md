@@ -151,7 +151,7 @@ handler and service layers.
 | `limit`, `offset` | Action-specific bounds; `offset` is for `apps` and `source_ips` pagination |
 | `host_limit`, `per_host_limit`, `section_limit`, `include_sections` | Node and inventory-section bounds for `map`; `per_host_limit` is accepted for v1 compatibility and ignored by map v2 |
 | `mode`, `host`, `domain`, `service`, `answer_limit`, `evidence_sample_limit`, `payload_budget` | Map snapshot mode and graph-backed map answer controls: `host_services`, `domain_routes`, and `service_dependencies` |
-| `mode`, `entity_id`, `entity_type`, `key`, `alias_type`, `alias_key`, `depth`, `evidence_id`, `evidence_sample_limit`, `payload_budget` | Graph controls. Targeted modes require exactly one lookup strategy: `entity_id`, `entity_type` + `key`, or `alias_type` + `alias_key`. `evidence` requires `evidence_id`. Service identity is `logical_service` (`key=plex`) or `service_instance` (`key=tootie/plex`); legacy nested keys (`tootie:plex`, `tootie:plex:plex`, `plex/plex/plex`) are rejected with `rejected_legacy_shape`. |
+| `mode`, `entity_id`, `entity_type`, `key`, `alias_type`, `alias_key`, `depth`, `evidence_id`, `evidence_sample_limit`, `payload_budget` | Graph controls. Targeted modes require exactly one lookup strategy: `entity_id`, `entity_type` + `key`, or `alias_type` + `alias_key`. `evidence` requires `evidence_id`. Service identity is `logical_service` (`key=plex`) or `service_instance` (`key=nashost/plex`); legacy nested keys (`nashost:plex`, `nashost:plex:plex`, `plex/plex/plex`) are rejected with `rejected_legacy_shape`. |
 
 ## Correlation Arguments
 

@@ -168,7 +168,7 @@ the row count defaults to **50**.
 
 ```bash
 cortex tail                       # 50 most recent across all hosts
-cortex tail dookie                # bare positional → --host dookie
+cortex tail devhost                # bare positional → --host devhost
 cortex tail nas --app kernel -n 100
 ```
 
@@ -857,8 +857,8 @@ Update an already-configured Cortex deployment. Configure the update profile
 once:
 
 ```bash
-cortex update config server --host tootie --home /mnt/cache/appdata/cortex
-cortex update config clients --hosts dookie,shart,squirts --target https://cortex.tootie.tv --docker
+cortex update config server --host nashost --home /mnt/cache/appdata/cortex
+cortex update config clients --hosts devhost,backuphost,edgehost --target https://cortex.example.internal --docker
 ```
 
 The profile lives at `~/.cortex/deployments.toml` by default. A successful
@@ -898,9 +898,9 @@ cortex setup deploy preflight
 cortex setup deploy preflight --json
 cortex setup deploy local
 cortex setup deploy local --dry-run --json
-cortex setup deploy remote tootie --dry-run
-cortex setup deploy remote --home /mnt/cache/appdata/cortex tootie
-cortex setup deploy remote tootie --json
+cortex setup deploy remote nashost --dry-run
+cortex setup deploy remote --home /mnt/cache/appdata/cortex nashost
+cortex setup deploy remote nashost --json
 ```
 
 `setup deploy preflight` and `setup deploy local --dry-run` do not mutate Docker state.
@@ -910,7 +910,7 @@ pulls the configured image, starts the stack, and checks `/health`.
 remote deploy writes/replaces `.env`, the managed Compose YAML, and
 `config/Dockerfile` under the selected remote home. The default remote home is
 `~/.cortex`; use `--home PATH` for hosts whose runtime is stored elsewhere, such
-as tootie's `/mnt/cache/appdata/cortex`. Non-dry-run remote deploy preserves
+as nashost's `/mnt/cache/appdata/cortex`. Non-dry-run remote deploy preserves
 existing remote env values from `<home>/.env` or legacy `<home>/compose/.env`
 but deliberately drops `CORTEX_VERSION` so the release-managed Compose template
 owns the image tag. After migrating a legacy compose-local env file, remote
@@ -1000,7 +1000,7 @@ Return the latest bounded heartbeat state for one host. A bare positional
 argument is a hostname (shorthand for `--host`).
 
 ```bash
-cortex state host tootie          # bare positional → --host tootie
+cortex state host nashost          # bare positional → --host nashost
 cortex state host --host-id host-a --limit 5 --json
 ```
 
@@ -1040,7 +1040,7 @@ reference time. Bounded by default; never performs a full-history scan.
 
 ```bash
 cortex correlate state --reference-time 2026-01-01T12:00:00Z --window-minutes 10
-cortex correlate state --reference-time 2026-01-01T12:00:00Z --host tootie --severity-min warning --json
+cortex correlate state --reference-time 2026-01-01T12:00:00Z --host nashost --severity-min warning --json
 ```
 
 Flags:
@@ -1060,16 +1060,16 @@ Resolve a derived graph entity by canonical type/key or by alias. Ambiguous
 aliases return candidates instead of silently choosing one.
 
 ```bash
-cortex entity host tootie
-cortex entity host:tootie --json
+cortex entity host nashost
+cortex entity host:nashost --json
 cortex entity logical_service plex
-cortex entity service_instance tootie/plex
-cortex entity --alias-type hostname --alias-key tootie
+cortex entity service_instance nashost/plex
+cortex entity --alias-type hostname --alias-key nashost
 ```
 
 Canonical service identity is `logical_service` (`plex`) plus
-`service_instance` (`tootie/plex`). Legacy nested service identities such as
-`tootie:plex` or `tootie:plex:plex` are rejected with
+`service_instance` (`nashost/plex`). Legacy nested service identities such as
+`nashost:plex` or `nashost:plex:plex` are rejected with
 `rejected_legacy_shape`.
 
 Flags:
@@ -1093,15 +1093,15 @@ reason, evidence counts, safe samples, projection status, truncation reason,
 and follow-up commands.
 
 ```bash
-cortex graph around host tootie
-cortex graph around host:tootie --limit 25
+cortex graph around host nashost
+cortex graph around host:nashost --limit 25
 cortex graph around logical_service:plex
-cortex graph around service_instance tootie/plex
+cortex graph around service_instance nashost/plex
 cortex graph around --entity-id 42 --json
 ```
 
-Service topics use `logical_service:plex` / `service_instance:tootie/plex`;
-`tootie:plex` and `tootie:plex:plex` return `rejected_legacy_shape`.
+Service topics use `logical_service:plex` / `service_instance:nashost/plex`;
+`nashost:plex` and `nashost:plex:plex` return `rejected_legacy_shape`.
 
 Flags:
 
@@ -1127,8 +1127,8 @@ reason, and follow-up graph commands. Low-confidence output avoids causal
 claims.
 
 ```bash
-cortex graph explain host tootie
-cortex graph explain host:tootie --depth 2 --beam-width 20
+cortex graph explain host nashost
+cortex graph explain host:nashost --depth 2 --beam-width 20
 cortex graph explain --entity-id 42 --json
 ```
 

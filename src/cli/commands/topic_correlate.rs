@@ -35,7 +35,7 @@ pub(crate) fn parse_topic_correlate(args: &[String]) -> Result<CliCommand> {
         } else if parsed.topic.is_none() {
             parsed.topic = Some(arg);
         } else {
-            // Additional bare terms extend the topic (e.g. `dookie dns adguard`).
+            // Additional bare terms extend the topic (e.g. `devhost dns adguard`).
             let topic = parsed.topic.get_or_insert_with(String::new);
             topic.push(' ');
             topic.push_str(&arg);

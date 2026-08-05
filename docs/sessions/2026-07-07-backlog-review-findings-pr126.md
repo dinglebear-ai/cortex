@@ -13,7 +13,7 @@ beads: syslog-mcp-4n4a6, syslog-mcp-7j61f, syslog-mcp-q6a2j, syslog-mcp-uail9
 
 ## User Request
 
-Continuing from a prior compacted session: after PR #123 (shell/agent CLI rename + forwarding + stale-timer detection) merged, and after live-verifying/fixing the original target bug (`syslog-mcp-4n4a6`) on the `dookie` host, the user asked to "address all those beads" — meaning fully resolve the 3 backlog beads filed during PR #123's review sweep (`syslog-mcp-7j61f`, `syslog-mcp-q6a2j`, `syslog-mcp-uail9`), not just leave them as documented follow-ups.
+Continuing from a prior compacted session: after PR #123 (shell/agent CLI rename + forwarding + stale-timer detection) merged, and after live-verifying/fixing the original target bug (`syslog-mcp-4n4a6`) on the `devhost` host, the user asked to "address all those beads" — meaning fully resolve the 3 backlog beads filed during PR #123's review sweep (`syslog-mcp-7j61f`, `syslog-mcp-q6a2j`, `syslog-mcp-uail9`), not just leave them as documented follow-ups.
 
 ## Session Overview
 
@@ -71,7 +71,7 @@ Implemented, tested, and merged fixes for all 3 backlog beads via a new PR #126 
 
 | Bead | Title | Action | Final Status | Why |
 |---|---|---|---|---|
-| `syslog-mcp-4n4a6` | agent-command wrapper + self-ingest guard use pre-rename CLI grammar | Already closed prior to this session's start (live-verified/fixed on `dookie` in the immediately preceding turn) | CLOSED | Original target bug; carried into this session's context only for confirmation |
+| `syslog-mcp-4n4a6` | agent-command wrapper + self-ingest guard use pre-rename CLI grammar | Already closed prior to this session's start (live-verified/fixed on `devhost` in the immediately preceding turn) | CLOSED | Original target bug; carried into this session's context only for confirmation |
 | `syslog-mcp-7j61f` | `validate_agent_command_binary` blocks Tokio worker via sync `Command::output()` in async fn | Closed with evidence citing PR #126 / commit `1bf6b67` | CLOSED | Fixed via `spawn_blocking` wrapper; verified by existing test `run_shell_agent_setup_rejects_stale_cortex_binary_before_writing` plus full suite pass |
 | `syslog-mcp-q6a2j` | `entry_exists` check-then-insert dedup race, now network-exposed via `/v1/agent-commands` | Closed with evidence citing PR #126 / commit `1bf6b67` | CLOSED | Fixed via batch query + in-batch `HashSet`; new regression test `import_agent_command_records_dedupes_within_same_batch` |
 | `syslog-mcp-uail9` | runtime merge test only covers 2 of ~6 routers chained in `serve_mcp()` | Closed with evidence citing PR #126 / commit `1bf6b67` | CLOSED | Fixed via new test `full_serve_mcp_router_chain_merges_without_panicking`; all 20 runtime tests pass |

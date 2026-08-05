@@ -164,14 +164,14 @@ fn host_filters_accept_the_canonical_name_returned_by_list_hosts() {
         &[
             make_entry(
                 "2026-01-01T00:00:01Z",
-                "The-Mothership",
+                "The-Gatewayhost",
                 "info",
                 "case variant",
             ),
-            make_entry("2026-01-01T00:00:02Z", "tootie", "info", "short name"),
+            make_entry("2026-01-01T00:00:02Z", "nashost", "info", "short name"),
             make_entry(
                 "2026-01-01T00:00:03Z",
-                "tootie.example.test",
+                "nashost.example.test",
                 "info",
                 "fqdn variant",
             ),
@@ -180,29 +180,29 @@ fn host_filters_accept_the_canonical_name_returned_by_list_hosts() {
     .unwrap();
 
     let hosts = list_hosts(&pool).unwrap();
-    assert!(hosts.iter().any(|host| host.hostname == "the-mothership"));
-    assert!(hosts.iter().any(|host| host.hostname == "tootie"));
+    assert!(hosts.iter().any(|host| host.hostname == "the-gatewayhost"));
+    assert!(hosts.iter().any(|host| host.hostname == "nashost"));
 
-    let case_rows = tail_logs(&pool, Some("the-mothership"), None, None, None, 10).unwrap();
+    let case_rows = tail_logs(&pool, Some("the-gatewayhost"), None, None, None, 10).unwrap();
     assert_eq!(case_rows.len(), 1);
-    assert_eq!(case_rows[0].hostname, "The-Mothership");
+    assert_eq!(case_rows[0].hostname, "The-Gatewayhost");
 
-    let alias_rows = tail_logs(&pool, Some("tootie"), None, None, None, 10).unwrap();
+    let alias_rows = tail_logs(&pool, Some("nashost"), None, None, None, 10).unwrap();
     assert_eq!(alias_rows.len(), 2);
     assert!(
         alias_rows
             .iter()
-            .any(|row| row.hostname == "tootie.example.test")
+            .any(|row| row.hostname == "nashost.example.test")
     );
 
     let params = SearchParams {
-        host: Some("the-mothership".to_string()),
+        host: Some("the-gatewayhost".to_string()),
         limit: Some(10),
         ..Default::default()
     };
     let filtered = search_logs(&pool, &params).unwrap();
     assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].hostname, "The-Mothership");
+    assert_eq!(filtered[0].hostname, "The-Gatewayhost");
 }
 
 #[test]
@@ -849,34 +849,34 @@ fn search_logs_filters_by_source_ip_prefix_without_fts() {
     let (pool, _dir) = test_pool();
     let mut docker_stdout = make_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "info",
         "container stdout line",
     );
-    docker_stdout.source_ip = "docker://dookie/cortex/stdout".into();
+    docker_stdout.source_ip = "docker://devhost/cortex/stdout".into();
 
     let mut docker_stderr = make_entry(
         "2026-01-01T00:00:01Z",
-        "dookie",
+        "devhost",
         "warning",
         "container stderr line",
     );
-    docker_stderr.source_ip = "docker://dookie/cortex/stderr".into();
+    docker_stderr.source_ip = "docker://devhost/cortex/stderr".into();
 
     let mut other = make_entry(
         "2026-01-01T00:00:02Z",
-        "dookie",
+        "devhost",
         "info",
         "different container line",
     );
-    other.source_ip = "docker://dookie/other/stdout".into();
+    other.source_ip = "docker://devhost/other/stdout".into();
 
     insert_logs_batch(&pool, &[docker_stdout, docker_stderr, other]).unwrap();
 
     let rows = search_logs(
         &pool,
         &SearchParams {
-            source_ip_prefix: Some("docker://dookie/cortex/".into()),
+            source_ip_prefix: Some("docker://devhost/cortex/".into()),
             ..Default::default()
         },
     )
@@ -885,24 +885,29 @@ fn search_logs_filters_by_source_ip_prefix_without_fts() {
     assert_eq!(rows.len(), 2);
     assert!(
         rows.iter()
-            .all(|row| row.source_ip.starts_with("docker://dookie/cortex/"))
+            .all(|row| row.source_ip.starts_with("docker://devhost/cortex/"))
     );
 }
 
 #[test]
 fn search_logs_filters_by_event_action_column() {
     let (pool, _dir) = test_pool();
-    let mut die = make_entry("2026-01-01T00:00:00Z", "dookie", "notice", "container died");
-    die.source_ip = "docker-event://dookie/cortex/die".into();
+    let mut die = make_entry(
+        "2026-01-01T00:00:00Z",
+        "devhost",
+        "notice",
+        "container died",
+    );
+    die.source_ip = "docker-event://devhost/cortex/die".into();
     die.event_action = Some("die".into());
 
     let mut start = make_entry(
         "2026-01-01T00:00:01Z",
-        "dookie",
+        "devhost",
         "notice",
         "container started",
     );
-    start.source_ip = "docker-event://dookie/cortex/start".into();
+    start.source_ip = "docker-event://devhost/cortex/start".into();
     start.event_action = Some("start".into());
 
     insert_logs_batch(&pool, &[die, start]).unwrap();
@@ -1838,7 +1843,7 @@ fn list_ai_sessions_groups_by_project_tool_session_and_hostname() {
         &[
             LogBatchEntry {
                 timestamp: "2026-05-11T00:00:00Z".into(),
-                hostname: "dookie".into(),
+                hostname: "devhost".into(),
                 facility: Some("local7".into()),
                 severity: "info".into(),
                 app_name: Some("codex-transcript".into()),
@@ -1862,7 +1867,7 @@ fn list_ai_sessions_groups_by_project_tool_session_and_hostname() {
             },
             LogBatchEntry {
                 timestamp: "2026-05-11T00:01:00Z".into(),
-                hostname: "dookie".into(),
+                hostname: "devhost".into(),
                 facility: Some("local7".into()),
                 severity: "info".into(),
                 app_name: Some("codex-transcript".into()),

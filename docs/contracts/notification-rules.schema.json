@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cortex.tootie.tv/contracts/notification-rules.schema.json",
+  "$id": "https://cortex.example.internal/contracts/notification-rules.schema.json",
   "title": "cortex notification rule",
   "description": "Contract derived from docs/superpowers/specs/2026-05-16-digest-notifications-design.md §4-§7. Changing it requires updating the spec first. Validates a single rule object as it appears in a [[notifications.rules]] TOML array. Decoders should TOML-parse first, then validate each element against this schema.",
 

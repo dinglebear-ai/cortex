@@ -68,7 +68,7 @@ The enrichment fields (`http_status`, `auth_outcome`, `dns_blocked`, `event_acti
 |---|---|---|---|
 | Syslog (UDP) | `syslog-udp` | `src/syslog/listener.rs` UDP path | `udp://203.0.113.7:48132` |
 | Syslog (TCP) | `syslog-tcp` | `src/syslog/listener.rs` TCP path | `tcp://203.0.113.7:51422` |
-| Agent | `agent` | per-host agent WS (`cortex-qgnx`) | `agent://dookie/` |
+| Agent | `agent` | per-host agent WS (`cortex-qgnx`) | `agent://devhost/` |
 | Docker stream | `docker-stream` | `src/docker_ingest/` `log_output_to_entry` | `docker://rkx/postgres/stdout` |
 | Docker event | `docker-event` | `src/docker_ingest/` `docker_event_to_entry` | `docker-event://rkx/postgres/die` |
 | OTLP | `otlp` | `src/otlp.rs` | `otlp://10.0.0.5/<service.name>` |

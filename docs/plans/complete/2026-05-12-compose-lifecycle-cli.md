@@ -150,7 +150,7 @@ If live ownership and the requested/cwd ownership disagree, mutating commands mu
 
 The service must canonicalize compose paths before comparing them, validate that label-referenced compose files still exist, and reject surprising symlink/path mismatches for mutating commands unless explicitly overridden.
 
-When exact container-name lookup fails, `status` and `doctor` should also look for candidate containers by Compose labels such as `com.docker.compose.service=cortex` and `io.modelcontextprotocol.server.name=tv.tootie/cortex`. If multiple candidates exist, report ambiguity and do not pick one for mutation without explicit target flags.
+When exact container-name lookup fails, `status` and `doctor` should also look for candidate containers by Compose labels such as `com.docker.compose.service=cortex` and `io.modelcontextprotocol.server.name=tv.nashost/cortex`. If multiple candidates exist, report ambiguity and do not pick one for mutation without explicit target flags.
 
 ## Mutation Safety Rules
 

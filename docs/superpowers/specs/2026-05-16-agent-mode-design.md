@@ -11,7 +11,7 @@
 
 ### Goal
 
-Add a second, **first-class** ingest path to `syslog-mcp`: a persistent, authenticated, bidirectional channel between the central server (`tootie`) and a lightweight agent process running on each homelab host (`dookie`, `squirts`, `steamy-wsl`, `vivobook-wsl`, plus future nodes). The channel is **JSON-RPC 2.0 over WebSocket**, terminated by `wss://` in production.
+Add a second, **first-class** ingest path to `syslog-mcp`: a persistent, authenticated, bidirectional channel between the central server (`nashost`) and a lightweight agent process running on each homelab host (`devhost`, `edgehost`, `winhost-wsl`, `laptophost-wsl`, plus future nodes). The channel is **JSON-RPC 2.0 over WebSocket**, terminated by `wss://` in production.
 
 The agent must:
 
@@ -24,7 +24,7 @@ The agent must:
 - **Not** replacing the UDP/TCP syslog listener. Routers, switches, printers, embedded gear, and anything else that can't run the agent continue to land on `:1514` exactly as today.
 - **Not** designing the probe registry contents. This spec only defines the RPC plumbing that carries probe requests/responses.
 - **Not** redesigning storage, FTS5, retention, or the SQL schema for `logs`. Agent rows tag themselves via `source_kind="agent"` and otherwise use the existing path.
-- **Not** TLS termination inside the agent or server in v1. Production deployments terminate `wss://` at SWAG (reverse proxy) on `tootie`; agents speak `wss://syslog.tootie.tv/ws/agent`. Loopback `ws://` is permitted for dev.
+- **Not** TLS termination inside the agent or server in v1. Production deployments terminate `wss://` at SWAG (reverse proxy) on `nashost`; agents speak `wss://syslog.example.internal/ws/agent`. Loopback `ws://` is permitted for dev.
 
 ---
 
@@ -32,7 +32,7 @@ The agent must:
 
 ```text
 ┌───────────────────────────────────────────────────────────────────────┐
-│                              tootie                                   │
+│                              nashost                                   │
 │                                                                       │
 │  rsyslog forwarders ──UDP/TCP :1514──►  ┌─────────────────────────┐   │
 │  (routers, IoT, hosts                   │ syslog/listener.rs      │   │
@@ -42,8 +42,8 @@ The agent must:
 │                                                      │ (mpsc)         │
 │                                                      ▼                │
 │  agents ───── wss://…/ws/agent ──►  ┌────────────────────────────┐    │
-│  (dookie, squirts,                  │ mcp/ws_agent.rs (NEW)      │    │
-│   steamy-wsl, …)                    │  - axum WS upgrade         │    │
+│  (devhost, edgehost,                  │ mcp/ws_agent.rs (NEW)      │    │
+│   winhost-wsl, …)                    │  - axum WS upgrade         │    │
 │                                     │  - JSON-RPC 2.0 codec      │    │
 │                                     │  - per-conn task           │    │
 │                                     │  - probe dispatcher        │    │
@@ -316,7 +316,7 @@ The unauthenticated socket window is bounded by `handshake_timeout = 5s` and an 
 
 ### 6.2 Token lifecycle
 
-- **Issuance:** `cortex admin agent issue --host dookie` on the server prints a one-time token (32 bytes, base64url). Server stores only its hash (BLAKE3 of the raw token) in `agents.token_hash`. A pending row is inserted with `connection_state = NeverConnected`.
+- **Issuance:** `cortex admin agent issue --host devhost` on the server prints a one-time token (32 bytes, base64url). Server stores only its hash (BLAKE3 of the raw token) in `agents.token_hash`. A pending row is inserted with `connection_state = NeverConnected`.
 - **Bootstrap on agent:** an operator pastes the token into `/etc/syslog-agent/token` (mode 0600), or feeds it via `syslog-agent register --token <…>` which writes the same file.
 - **Storage on agent:** plain file on disk, perms 0600, owned by the dedicated `syslog-agent` user. Not encrypted at rest — tailnet trust + filesystem perms are the boundary, matching every other agent in this class (Promtail, Filebeat).
 - **Rotation:** `cortex admin agent rotate --host-id <uuid>` issues a new token; server keeps both old and new `token_hash` for `rotation_grace_secs` (default 300). After grace, old hash is dropped.
@@ -369,7 +369,7 @@ Connection state in `agents` is updated on:
 - `agent.hello` accepted → `Active`, `last_handshake = now`.
 - WS close (any reason) → `Disconnected`, `last_disconnect = now`, `last_disconnect_reason = "<code> <msg>"`.
 
-This **is** the heartbeat — no separate `silent_hosts` table polling. The server can answer "is dookie reachable?" with a single `SELECT connection_state FROM agents WHERE hostname = 'dookie'`.
+This **is** the heartbeat — no separate `silent_hosts` table polling. The server can answer "is devhost reachable?" with a single `SELECT connection_state FROM agents WHERE hostname = 'devhost'`.
 
 ---
 
@@ -384,7 +384,7 @@ This **is** the heartbeat — no separate `silent_hosts` table polling. The serv
 | `rusqlite` (separate DB)            | Already in tree, well-known                                 | Heavyweight for a FIFO; same-process write contention with future agent SQL features |
 | Append-only file + manifest         | Tiny, transparent                                           | We'd re-implement durability, rotation, fsck — not worth it |
 
-**Choice: `redb`.** Active maintenance beats `sled`'s recent stagnation; ACID semantics map cleanly to "advance cursor only after server ACK"; pure-Rust dep with no C build deps simplifies cross-compiling the agent for `steamy-wsl` and `vivobook-wsl`.
+**Choice: `redb`.** Active maintenance beats `sled`'s recent stagnation; ACID semantics map cleanly to "advance cursor only after server ACK"; pure-Rust dep with no C build deps simplifies cross-compiling the agent for `winhost-wsl` and `laptophost-wsl`.
 
 ### 8.2 Schema
 
@@ -687,9 +687,9 @@ If duplicates do appear, downstream search queries can filter on `source_ip LIKE
 2. **Multi-tenant scope.** Spec assumes one trust domain per server. If we ever add Anthropic-issued homelab fleets sharing a server, we need an `agent_group` column and per-group probe whitelists. **Out of scope.**
 3. **Agent → MCP feature parity.** Should agent be able to subscribe to log streams *back* from the server (for cross-host correlation queries)? Tempting but bloats v1. Flag for v2.
 4. ~~**`metrics.push` storage.**~~ **RESOLVED 2026-05-16 (bead `syslog-mcp-swv9`):** Earlier resolution pre-created a `host_metrics` table here so Epic D would avoid a schema bump. On cross-cutting review we found that table redundant with Epic D's `metrics_gauge` (same purpose: scalar samples per `(host_id, metric_name)` over time). Final decision: **no Epic A migration creates a metrics table**. Epic D's `metrics_gauge` is the canonical target for probe gauges AND any future `metrics.push` writes. V1 still drops incoming `metrics.push` payloads on the floor (see §4 of this spec). When a future v2 wants to wire `metrics.push` to storage, it routes the payload into `metrics_gauge` directly — no migration needed because Epic D already creates the table. Contract: `docs/contracts/db-additions.sql` (Epic D section).
-5. **Compression.** `Capabilities.compression: ["zstd"]` declared but unused in v1. Worth wiring through if any agent host produces > 10 MiB/min steady-state — `dookie`'s Plex logs might. **Decision deferred** until we measure.
+5. **Compression.** `Capabilities.compression: ["zstd"]` declared but unused in v1. Worth wiring through if any agent host produces > 10 MiB/min steady-state — `devhost`'s Plex logs might. **Decision deferred** until we measure.
 6. **Bootstrap UX.** One-time tokens via copy-paste vs. printing a `wireguard-style` invite URL the agent can read. Lean toward QR/URL for the next epic.
-7. ~~**`cortex agent` CLI subcommand surface.**~~ **RESOLVED — IN SCOPE.** Server-side CLI subcommands (run on `tootie`, operate on the central DB):
+7. ~~**`cortex agent` CLI subcommand surface.**~~ **RESOLVED — IN SCOPE.** Server-side CLI subcommands (run on `nashost`, operate on the central DB):
    - `cortex agent list` — table of agents: host_id, hostname, connection_state, last_handshake, agent_version
    - `cortex agent issue --host=<h>` — generate and print a one-time enrollment token; record `token_hash` row in `agents` with `connection_state=NeverConnected`
    - `cortex agent revoke <host_id>` — set `connection_state=Revoked`, server-side kicks any active connection

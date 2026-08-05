@@ -12,7 +12,7 @@ This document is the V1 wire contract derived from the agent-mode design spec at
 
 ## 2. Wire framing
 
-- **Transport.** RFC 6455 WebSocket. Production deployments use `wss://syslog.tootie.tv/ws/agent` terminated by SWAG; loopback `ws://` is allowed only when `agent.allow_insecure = true`.
+- **Transport.** RFC 6455 WebSocket. Production deployments use `wss://syslog.example.internal/ws/agent` terminated by SWAG; loopback `ws://` is allowed only when `agent.allow_insecure = true`.
 - **Subprotocol.** Client offers `Sec-WebSocket-Protocol: cortex.v1`. Server confirms the same. Mismatched subprotocol → HTTP `400` and the upgrade is refused.
 - **Encoding.** WebSocket **text** frames. Payload is UTF-8 JSON. Binary frames are reserved for a future compressed log-batch transport and MUST be rejected with close code `1003` in V1.
 - **Compression.** No frame-level or payload-level compression in V1 (no `permessage-deflate`, no zstd application-layer compression). Agents may advertise `compression: ["zstd"]` in `capabilities` but the V1 server ignores the hint.
@@ -165,7 +165,7 @@ Example request:
   "params": {
     "protocol_version": 1,
     "agent_version": "0.1.0",
-    "hostname": "dookie.lan",
+    "hostname": "devhost.lan",
     "host_id": "2b9a0b3a-7e3c-4d2a-9c0e-9bbf5d3a1f01",
     "platform": { "os": "linux", "arch": "x86_64", "kernel": "6.6.21", "distro": "Ubuntu 24.04" },
     "capabilities": {
@@ -501,7 +501,7 @@ Example:
     "ts": "2026-05-16T19:43:00.000Z",
     "samples": [
       { "name": "load1",        "value": 0.42 },
-      { "name": "mem_used_pct", "value": 38.1, "labels": { "host": "dookie" } }
+      { "name": "mem_used_pct", "value": 38.1, "labels": { "host": "devhost" } }
     ]
   }
 }

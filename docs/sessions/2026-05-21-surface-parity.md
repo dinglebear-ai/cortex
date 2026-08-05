@@ -23,7 +23,7 @@ Audited all three tool surfaces (CLI, REST API, MCP) and produced a full feature
 ## Sequence of Events
 
 1. Checked recent errors via `syslog errors` — found FreshRSS PostgreSQL schema errors (recurring every 15min), Arcane auto-heal socket errors, Tracearr 401s, and Chrome/browserless logging stats at `err` level
-2. Brought down FreshRSS stack on squirts (`docker compose down`) — user no longer uses it
+2. Brought down FreshRSS stack on edgehost (`docker compose down`) — user no longer uses it
 3. Fixed Chrome/browserless log level by adding `DEBUG=browserless:*,-browserless:server` env var, then user requested stopping the container entirely — brought it down
 4. Investigated Arcane auto-heal errors — identified race between `docker-client-refresh` and `auto-heal` jobs (v1.19.4 bug, latest image, no upstream fix)
 5. Investigated error signature management — discovered `unaddressed_errors`/`ack_error`/`unack_error` MCP actions exist but error scanner had never run (notifications disabled in deployed `.env`)
@@ -110,7 +110,7 @@ gh pr create --title "feat: surface parity..."
 | Test notification | MCP session only | `syslog --http notify test` / `POST /api/notifications/test` |
 | Notifications history | MCP session only | `syslog notify recent` / `GET /api/notifications/recent` |
 | Error detection | Disabled (scanner never ran) | Enabled, 60s interval |
-| Apprise notifications | Disabled | Enabled, URL `http://100.120.242.29:8766` |
+| Apprise notifications | Disabled | Enabled, URL `http://198.51.100.2:8766` |
 
 ## Verification Evidence
 
@@ -147,7 +147,7 @@ gh pr create --title "feat: surface parity..."
 
 **Follow-on tasks:**
 - Apply ingest queue config fix: `write_channel_capacity=100000`, `batch_size=500`, `reconnect_initial_ms=5000` in `/home/jmagar/.syslog-mcp/.env`
-- Reduce log levels for prowlarr, tracearr, scrutiny on tootie to `Warn`
+- Reduce log levels for prowlarr, tracearr, scrutiny on nashost to `Warn`
 - Update `mcp-actions-current.md` §2 table to include 5 new actions (count: 29 → 34)
 - Add live smoke coverage for mutating POST routes (`/api/errors/ack`, `/api/errors/unack`, `/api/notifications/test`)
 - Close beads issues `syslog-mcp-clq5` and `syslog-mcp-neke` once PR #40 merges

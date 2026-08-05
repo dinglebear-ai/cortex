@@ -8,8 +8,8 @@ fn test_looks_like_timestamp_true() {
 
 #[test]
 fn test_looks_like_timestamp_false() {
-    assert!(!looks_like_timestamp("The Mothership"));
-    assert!(!looks_like_timestamp("dookie"));
+    assert!(!looks_like_timestamp("The Gatewayhost"));
+    assert!(!looks_like_timestamp("devhost"));
     assert!(!looks_like_timestamp("unknown"));
     assert!(!looks_like_timestamp(""));
     assert!(!looks_like_timestamp("192.168.1.1"));
@@ -18,10 +18,10 @@ fn test_looks_like_timestamp_false() {
 #[test]
 fn test_parse_syslog_unifi_cef_hostname() {
     // Real-world UniFi OS RFC 5424 message: timestamp in hostname field, device name split
-    // across app_name ("The") and message body ("Mothership CEF:0|...")
-    let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
+    // across app_name ("The") and message body ("Gatewayhost CEF:0|...")
+    let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
     let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
-    assert_eq!(parsed.hostname, "The Mothership");
+    assert_eq!(parsed.hostname, "The Gatewayhost");
     assert_eq!(parsed.app_name.as_deref(), Some("Test Syslog"));
     assert_eq!(parsed.message, "Test Syslog");
     let metadata: serde_json::Value =
@@ -57,10 +57,10 @@ fn test_cef_ext_value_simple() {
 
 #[test]
 fn test_cef_ext_value_with_spaces_in_value() {
-    let ext = "UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX";
+    let ext = "UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX";
     assert_eq!(
         cef_ext_value(ext, "UNIFIdeviceName"),
-        Some("The Mothership".to_string())
+        Some("The Gatewayhost".to_string())
     );
 }
 
@@ -78,18 +78,18 @@ fn test_cef_ext_value_missing_key() {
 
 #[test]
 fn test_extract_cef_fields_test_syslog() {
-    let text = "The Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
+    let text = "The Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
     let cef = extract_cef_fields(text);
-    assert_eq!(cef.hostname, Some("The Mothership".to_string()));
+    assert_eq!(cef.hostname, Some("The Gatewayhost".to_string()));
     assert_eq!(cef.app_name, Some("Test Syslog".to_string()));
     assert_eq!(cef.message, Some("Test Syslog".to_string()));
 }
 
 #[test]
 fn test_extract_cef_fields_config_change() {
-    let text = "The Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1005|Admin Made Config Changes|2|UNIFIhost=Host UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20";
+    let text = "The Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1005|Admin Made Config Changes|2|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20";
     let cef = extract_cef_fields(text);
-    assert_eq!(cef.hostname, Some("The Mothership".to_string()));
+    assert_eq!(cef.hostname, Some("The Gatewayhost".to_string()));
     assert_eq!(cef.app_name, Some("Admin Made Config Changes".to_string()));
     assert!(
         cef.message
@@ -127,7 +127,7 @@ fn test_cef_ext_value_long_msg() {
 #[test]
 fn test_cef_ext_value_no_substring_match() {
     // "name" must not match inside "UNIFIdeviceName"
-    let ext = "UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX";
+    let ext = "UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX";
     assert_eq!(cef_ext_value(ext, "name"), None);
 }
 
@@ -323,7 +323,7 @@ fn test_parse_syslog_rfc3164_severity_debug() {
 fn test_parse_syslog_cef_branch_fires() {
     let raw = concat!(
         "<166>1 2024-10-11T10:00:00Z 2024-10-11T10:00:00Z ",
-        "The - - - Mothership ",
+        "The - - - Gatewayhost ",
         "CEF:0|Ubiquiti|UniFi OS|5.0|E|SomeEvent|5|",
         "UNIFIdeviceName=MyDevice msg=event occurred"
     );
@@ -344,7 +344,7 @@ fn test_parse_syslog_raw_field_preserved() {
 
 #[test]
 fn unifi_device_name_is_hostname_but_source_ip_remains_network_sender() {
-    let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIdeviceName=trusted-router msg=hello";
+    let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIdeviceName=trusted-router msg=hello";
     let parsed = parse_syslog(raw, "198.51.100.44:5514".to_string());
 
     assert_eq!(parsed.hostname, "trusted-router");

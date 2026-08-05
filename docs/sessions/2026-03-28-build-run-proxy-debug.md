@@ -10,9 +10,9 @@
 
 Built and ran the syslog-mcp binary directly (outside Docker), fixed two bugs:
 1. MCP OAuth discovery returned an empty 404 body causing client JSON parse errors
-2. SWAG nginx proxy pointed to wrong IP (`10.1.0.8`) and wrong port (`8005`) instead of `10.1.0.6:3100`
+2. SWAG nginx proxy pointed to wrong IP (`192.0.2.8`) and wrong port (`8005`) instead of `192.0.2.6:3100`
 
-Both fixes resulted in a working authenticated connection from claude.ai to `https://syslog.tootie.tv/mcp`.
+Both fixes resulted in a working authenticated connection from claude.ai to `https://syslog.example.internal/mcp`.
 
 ---
 
@@ -24,7 +24,7 @@ Both fixes resulted in a working authenticated connection from claude.ai to `htt
 4. **Binary running** — `SYSLOG_MCP_STORAGE__DB_PATH=$(pwd)/data/syslog.db ./target/release/syslog-mcp` → healthy on `:3100`, 13k→213k logs ingested
 5. **OAuth 404 bug** — Client (claude.ai) hits `/.well-known/oauth-authorization-server`, gets `404` with empty body, JSON parser throws "Unexpected EOF"
 6. **OAuth fix** — Added axum `.fallback()` handler returning `{"error":"not_found"}` JSON on all unmatched routes
-7. **Proxy diagnosis** — SWAG nginx config had `10.1.0.8:8005` for both `$upstream` and `$mcp_upstream`; actual server is `10.1.0.6:3100`
+7. **Proxy diagnosis** — SWAG nginx config had `192.0.2.8:8005` for both `$upstream` and `$mcp_upstream`; actual server is `192.0.2.6:3100`
 8. **Proxy fix** — Used SWAG MCP tool to update config; also removed `authelia-server.conf` / `authelia-location.conf` includes that conflict with OAuth gateway pattern
 9. **Verified working** — Health check `200`, user confirmed connection success
 
@@ -35,7 +35,7 @@ Both fixes resulted in a working authenticated connection from claude.ai to `htt
 - `mcp.rs:82-87` — Router had no fallback; axum default 404 returns `content-length: 0` which breaks MCP client JSON parser
 - `syslog-mcp.subdomain.conf` — `$mcp_upstream_app`/`$mcp_upstream_port` are the variables used by `location /mcp`, NOT `$upstream_app`/`$upstream_port` — updating only the main upstream left `/mcp` still broken
 - `syslog-mcp.subdomain.conf` — Had `include /config/nginx/authelia-server.conf` and `authelia-location.conf` in `location /`; `unifi.subdomain.conf` (working reference) uses `auth_request /_oauth_verify` directly — Authelia redirects to login page on 401 instead of returning JSON, which breaks OAuth clients
-- Local machine LAN IP is `10.1.0.6`, not `10.1.0.8` as hardcoded in the proxy config
+- Local machine LAN IP is `192.0.2.6`, not `192.0.2.8` as hardcoded in the proxy config
 - syslog-mcp default config uses `/data/syslog.db` which is the Docker container path; running locally requires `SYSLOG_MCP_STORAGE__DB_PATH` override
 
 ---
@@ -54,7 +54,7 @@ Both fixes resulted in a working authenticated connection from claude.ai to `htt
 | File | Change |
 |------|--------|
 | `src/mcp.rs:82-91` | Added `.fallback()` handler returning `(404, JSON {"error":"not_found"})` |
-| `squirts:/mnt/appdata/swag/nginx/proxy-confs/syslog-mcp.subdomain.conf` | Fixed IP `10.1.0.8→10.1.0.6`, port `8005→3100` for both `$upstream` and `$mcp_upstream`; removed Authelia includes; `location /` now uses `auth_request /_oauth_verify` |
+| `edgehost:/mnt/appdata/swag/nginx/proxy-confs/syslog-mcp.subdomain.conf` | Fixed IP `192.0.2.8→192.0.2.6`, port `8005→3100` for both `$upstream` and `$mcp_upstream`; removed Authelia includes; `location /` now uses `auth_request /_oauth_verify` |
 
 ---
 
@@ -92,8 +92,8 @@ ss -tlnp | grep -E '3100|1514'
 |----------|--------|-------|
 | `/.well-known/oauth-authorization-server` | `404` empty body → client parse error | `404` `{"error":"not_found"}` → client proceeds without auth |
 | Any unknown path | `404` empty body | `404` `{"error":"not_found"}` |
-| `https://syslog.tootie.tv/mcp` | Proxied to `10.1.0.8:8005` (wrong host/port) | Proxied to `10.1.0.6:3100` (correct) |
-| `https://syslog.tootie.tv/` | Authelia auth → HTML redirect on 401 | OAuth gateway auth → JSON 401 |
+| `https://syslog.example.internal/mcp` | Proxied to `192.0.2.8:8005` (wrong host/port) | Proxied to `192.0.2.6:3100` (correct) |
+| `https://syslog.example.internal/` | Authelia auth → HTML redirect on 401 | OAuth gateway auth → JSON 401 |
 
 ---
 
@@ -104,14 +104,14 @@ ss -tlnp | grep -E '3100|1514'
 | `curl http://localhost:3100/health` | `{"status":"ok",...}` | `{"status":"ok","stats":{"total_logs":213778,...}}` | ✅ |
 | `curl http://localhost:3100/.well-known/oauth-authorization-server` | JSON body | `{"error":"not_found"}` | ✅ |
 | `ss -tlnp \| grep 3100` | `0.0.0.0:3100` | `0.0.0.0:3100` bound | ✅ |
-| SWAG health_check `syslog.tootie.tv` | `200` | `200` (436ms) | ✅ |
+| SWAG health_check `syslog.example.internal` | `200` | `200` (436ms) | ✅ |
 | claude.ai `/mcp` reconnect | Connected | User confirmed working | ✅ |
 
 ---
 
 ## Risks and Rollback
 
-- **Proxy change rollback**: SWAG MCP created backup `syslog-mcp.subdomain.conf.backup.20260328_105537_590486_44fdcea5` on squirts — restore with SWAG MCP `edit` action using backup content
+- **Proxy change rollback**: SWAG MCP created backup `syslog-mcp.subdomain.conf.backup.20260328_105537_590486_44fdcea5` on edgehost — restore with SWAG MCP `edit` action using backup content
 - **Binary is running detached**: PID 777298; not managed by systemd/Docker. Will not survive reboot. Run `docker compose up -d` to return to managed deployment.
 - **DB file ownership**: `data/syslog.db` is now owned by `jmagar` (not `root`). If Docker is restarted, the container (running as root) will still have write access since it's the owner. No risk.
 
@@ -119,7 +119,7 @@ ss -tlnp | grep -E '3100|1514'
 
 ## Decisions Not Taken
 
-- **Full OAuth 2.0 implementation** — Would require `/authorize`, `/token` endpoints backed by real auth. Overkill for homelab; OAuth gateway on squirts handles this externally.
+- **Full OAuth 2.0 implementation** — Would require `/authorize`, `/token` endpoints backed by real auth. Overkill for homelab; OAuth gateway on edgehost handles this externally.
 - **Downgrade to protocol `2024-11-05`** — Would sidestep OAuth discovery entirely. Rejected: the server correctly claims 2025-03-26; the fix should be at the right layer (valid JSON 404).
 - **Keep Authelia on syslog proxy** — Would work for browser-based access but breaks programmatic MCP clients that expect JSON 401.
 - **Run via `docker compose`** — User explicitly brought the stack down to run the latest binary directly. Docker image not rebuilt this session.
@@ -129,7 +129,7 @@ ss -tlnp | grep -E '3100|1514'
 ## Open Questions
 
 - Is there a systemd unit or startup script for the binary, or is Docker the intended production deployment?
-- Should `10.1.0.6` be replaced with the container/service name (e.g., `syslog-mcp`) if the binary moves back to Docker on the same network as SWAG?
+- Should `192.0.2.6` be replaced with the container/service name (e.g., `syslog-mcp`) if the binary moves back to Docker on the same network as SWAG?
 - The `authelia-server.conf` include was removed — if Authelia is desired for the web UI at `/`, a separate non-MCP vhost or location block may be needed.
 
 ---
@@ -138,4 +138,4 @@ ss -tlnp | grep -E '3100|1514'
 
 - Rebuild Docker image with the `mcp.rs` fallback fix: `docker compose build && docker compose up -d`
 - Update `docker-compose.yml` or add a `.env` to ensure `SYSLOG_MCP_STORAGE__DB_PATH` is correct if the binary path changes
-- Consider pinning `10.1.0.6` as a named constant or using Docker DNS name once back on compose
+- Consider pinning `192.0.2.6` as a named constant or using Docker DNS name once back on compose

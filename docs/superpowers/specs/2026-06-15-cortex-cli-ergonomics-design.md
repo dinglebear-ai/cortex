@@ -33,7 +33,7 @@ There is no *interaction model*, just 46 flat actions addressed by memory.
 
 ## Non-goals (explicitly out of scope)
 
-- Natural-language CLI front door (`cortex "errors on dookie last hour"`). NL belongs
+- Natural-language CLI front door (`cortex "errors on devhost last hour"`). NL belongs
   at the agent/MCP layer, not the CLI.
 - Interactive TUI/REPL. Possible later; not part of this design.
 - High-level workflow verbs (`cortex triage <host>`, `cortex why`). Deferred to
@@ -121,8 +121,8 @@ identically everywhere.
   `cortex errors` → recent window; `cortex search "oom"` → limit 50.
 - A positional binds to each action's obvious primary arg, declared in `ACTION_SPECS`:
   - `cortex search "oom killer"` (positional → `--query`)
-  - `cortex tail dookie` (positional → `--host`)
-  - `cortex host-state dookie` (positional → `--host`)
+  - `cortex tail devhost` (positional → `--host`)
+  - `cortex host-state devhost` (positional → `--host`)
 - Defaults and the positional mapping are metadata on the action spec, not per-command
   special-casing.
 

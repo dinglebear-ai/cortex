@@ -242,7 +242,7 @@ fn ingest_summary_aggregates_cardinality_overflow() {
 }
 #[test]
 fn source_addr_ip_strips_socket_ports() {
-    assert_eq!(source_addr_ip("100.75.111.118:49238"), "100.75.111.118");
+    assert_eq!(source_addr_ip("198.51.100.3:49238"), "198.51.100.3");
     assert_eq!(
         source_addr_ip("[fd7a:115c:a1e0::4f32:104f]:1514"),
         "fd7a:115c:a1e0::4f32:104f"
@@ -253,26 +253,26 @@ fn source_addr_ip_strips_socket_ports() {
 #[test]
 fn summarize_top_senders_pairs_hostnames_with_source_ips() {
     let counts = HashMap::from([
-        (("dookie".to_string(), "172.19.0.1".to_string()), 29),
-        (("squirts".to_string(), "100.75.111.118".to_string()), 15),
-        (("vivobook".to_string(), "100.104.50.17".to_string()), 28),
+        (("devhost".to_string(), "172.19.0.1".to_string()), 29),
+        (("edgehost".to_string(), "198.51.100.3".to_string()), 15),
+        (("laptophost".to_string(), "198.51.100.5".to_string()), 28),
     ]);
 
     assert_eq!(
         summarize_top_senders(&counts, 0, 2),
-        "dookie@172.19.0.1=29, vivobook@100.104.50.17=28"
+        "devhost@172.19.0.1=29, laptophost@198.51.100.5=28"
     );
 }
 
 #[test]
 fn summarize_top_senders_includes_other_bucket_deterministically() {
     let counts = HashMap::from([
-        (("dookie".to_string(), "172.19.0.1".to_string()), 29),
-        (("vivobook".to_string(), "100.104.50.17".to_string()), 28),
+        (("devhost".to_string(), "172.19.0.1".to_string()), 29),
+        (("laptophost".to_string(), "198.51.100.5".to_string()), 28),
     ]);
 
     assert_eq!(
         summarize_top_senders(&counts, 31, 2),
-        "__other__@__other__=31, dookie@172.19.0.1=29"
+        "__other__@__other__=31, devhost@172.19.0.1=29"
     );
 }

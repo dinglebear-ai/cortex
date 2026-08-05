@@ -30,9 +30,9 @@ Wide-ranging operations session covering: CLAUDE.md quality audit and improvemen
 8. **Named-volume split-brain prevention**: added `name: ${SYSLOG_MCP_VOLUME_NAME:-syslog-mcp-data}` to volume declaration; added `volume_name` field to `MountInfo`; replaced "error if not bind" with name-based check; added pre-flight guard in `validate_mutation` refusing `syslog compose up` when running container uses unexpected volume name; updated doctor to accept correctly-named volumes
 9. **Merged PR #39** via `gh pr merge 39 --squash --delete-branch`; pushed `v0.27.1` tag; watched build workflow; pulled and deployed `ghcr.io/jmagar/syslog-mcp:0.27.1` to production
 10. **Hostname normalization**:
-    - `SYSLOG_DOCKER_HOSTS`: changed `100.88.16.79` → `dookie` in `~/.syslog-mcp/.env`
+    - `SYSLOG_DOCKER_HOSTS`: changed `198.51.100.1` → `devhost` in `~/.syslog-mcp/.env`
     - `localhost` in AI transcript entries: `src/scanner.rs:553` hardcoded `"localhost"` → `local_hostname()` using `gethostname(2)` via libc
-    - DB backfill: `UPDATE logs SET hostname='dookie' WHERE hostname IN ('localhost','100.88.16.79')` + `hosts` table merge (76,968 rows)
+    - DB backfill: `UPDATE logs SET hostname='devhost' WHERE hostname IN ('localhost','198.51.100.1')` + `hosts` table merge (76,968 rows)
 11. **Local timezone display**: added `local_ts()` helper in `src/cli.rs`; applied to all human-readable print functions
 12. **v0.27.2 release** via `just publish patch`; removed `data/` dir from repo root; removed dev override from `~/.syslog-mcp/compose/`; confirmed `syslog doctor` clean; pruned stale remote branch ref
 
@@ -80,8 +80,8 @@ Wide-ranging operations session covering: CLAUDE.md quality audit and improvemen
 # DB backfill
 sqlite3 ~/.syslog-mcp/data/syslog.db << 'EOF'
 BEGIN IMMEDIATE;
-UPDATE logs SET hostname = 'dookie' WHERE hostname = 'localhost';
-UPDATE logs SET hostname = 'dookie' WHERE hostname = '100.88.16.79';
+UPDATE logs SET hostname = 'devhost' WHERE hostname = 'localhost';
+UPDATE logs SET hostname = 'devhost' WHERE hostname = '198.51.100.1';
 -- hosts table merge + cleanup
 COMMIT;
 EOF
@@ -114,8 +114,8 @@ docker compose ... up -d syslog-mcp
 | Area | Before | After |
 |------|--------|-------|
 | `syslog hosts` timestamps | UTC RFC3339 (`2026-05-21T06:02:51.777Z`) | Local time (`2026-05-21 02:02:51 -04:00`) |
-| AI transcript hostname | `localhost` for all entries | Actual machine hostname (`dookie`) |
-| Docker host log hostname | `100.88.16.79` for dookie container logs | `dookie` |
+| AI transcript hostname | `localhost` for all entries | Actual machine hostname (`devhost`) |
+| Docker host log hostname | `198.51.100.1` for devhost container logs | `devhost` |
 | `syslog compose up` with stale volume | Silently created second orphaned database | Hard error naming actual vs expected volume |
 | `syslog doctor` on named volume | Error: `/data is a volume (not a bind mount)` | OK if volume name matches; Error only on unexpected name |
 | `syslog compose up` on dev image | `runtime_current` error: `0.27.1 != 0.27.1` | Passes — dev image and repo dir accepted |
@@ -125,7 +125,7 @@ docker compose ... up -d syslog-mcp
 | Command | Expected | Actual | Status |
 |---------|----------|--------|--------|
 | `syslog doctor` | All checks passed | All checks passed | ✓ |
-| `syslog hosts` | `dookie` only, no IP or localhost | `dookie`, `squirts`, `tootie`, `shart`, `vivobook`, `STEAMY` | ✓ |
+| `syslog hosts` | `devhost` only, no IP or localhost | `devhost`, `edgehost`, `nashost`, `backuphost`, `laptophost`, `WINHOST` | ✓ |
 | `docker inspect syslog-mcp --format '{{.Config.Image}}'` | `ghcr.io/jmagar/syslog-mcp:0.27.1` | `ghcr.io/jmagar/syslog-mcp:0.27.1` | ✓ |
 | `cargo test` | 899 passed | 899 passed | ✓ |
 | `gh pr checks 39` | All green | All green | ✓ |
@@ -143,5 +143,5 @@ docker compose ... up -d syslog-mcp
 **Follow-on tasks:**
 - After CI publishes `ghcr.io/jmagar/syslog-mcp:0.27.2`: update `SYSLOG_MCP_VERSION=0.27.1` → `0.27.2` in `~/.syslog-mcp/.env` and run `syslog compose up`
 - Monitor `syslog hosts` to confirm UniFi gateway appears and identify its hostname
-- Consider retroactive rename of `STEAMY` → `steamy` (lowercase) if desired — same SQL pattern as dookie backfill
+- Consider retroactive rename of `WINHOST` → `winhost` (lowercase) if desired — same SQL pattern as devhost backfill
 - `syslog setup repair` does not propagate the `name:` volume fix to the installed compose when it already exists — consider adding version-aware compose update logic to setup.rs

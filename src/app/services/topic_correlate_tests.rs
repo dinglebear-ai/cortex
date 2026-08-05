@@ -71,12 +71,12 @@ async fn seeded_service() -> (CortexService, Arc<crate::db::DbPool>, tempfile::T
         &[
             agent_command_log(
                 "2026-01-01T00:00:00Z",
-                "dookie",
+                "devhost",
                 "sess-7",
                 "/home/jmagar/workspace/axon",
             ),
-            syslog("2026-01-01T00:01:00Z", "dookie", "swag"),
-            syslog("2026-01-01T00:02:00Z", "squirts", "authelia"),
+            syslog("2026-01-01T00:01:00Z", "devhost", "swag"),
+            syslog("2026-01-01T00:02:00Z", "edgehost", "authelia"),
         ],
     )
     .unwrap();
@@ -108,8 +108,8 @@ async fn topic_resolves_project_and_builds_timeline() {
     );
     // Graph expansion reaches the host the session ran on.
     assert!(
-        resp.discovered_hosts.contains(&"dookie".to_string()),
-        "expansion must discover dookie: {:?}",
+        resp.discovered_hosts.contains(&"devhost".to_string()),
+        "expansion must discover devhost: {:?}",
         resp.discovered_hosts
     );
     // Timeline carries the agent-command row (Claude worked on axon).
@@ -120,7 +120,7 @@ async fn topic_resolves_project_and_builds_timeline() {
         "timeline must include the agent-command lane"
     );
     // Unrelated host's logs are not pulled in.
-    assert!(resp.timeline.iter().all(|t| t.hostname != "squirts"));
+    assert!(resp.timeline.iter().all(|t| t.hostname != "edgehost"));
 }
 
 #[tokio::test]
@@ -146,7 +146,7 @@ async fn topic_multi_term_resolves_host_and_project() {
     let (svc, _pool, _dir) = seeded_service().await;
 
     let req = TopicCorrelateRequest {
-        topic: "dookie axon".to_string(),
+        topic: "devhost axon".to_string(),
         ..Default::default()
     };
     let resp = svc.topic_correlate(req).await.unwrap();
@@ -155,7 +155,7 @@ async fn topic_multi_term_resolves_host_and_project() {
         .iter()
         .map(|e| e.entity_type.as_str())
         .collect();
-    assert!(types.contains("host"), "dookie → host: {types:?}");
+    assert!(types.contains("host"), "devhost → host: {types:?}");
     assert!(types.contains("ai_project"), "axon → ai_project: {types:?}");
 }
 
@@ -166,7 +166,7 @@ async fn topic_source_kind_filter_restricts_timeline() {
     let (svc, _pool, _dir) = seeded_service().await;
 
     let req = TopicCorrelateRequest {
-        topic: "dookie".to_string(),
+        topic: "devhost".to_string(),
         since: Some("2026-01-01T00:00:00Z".into()),
         until: Some("2026-01-01T01:00:00Z".into()),
         source_kinds: Some(vec!["syslog-udp".to_string()]),
@@ -189,7 +189,7 @@ async fn topic_source_kind_accepts_string_form() {
     let (svc, _pool, _dir) = seeded_service().await;
 
     let req: TopicCorrelateRequest = serde_json::from_value(serde_json::json!({
-        "topic": "dookie",
+        "topic": "devhost",
         "since": "2026-01-01T00:00:00Z",
         "until": "2026-01-01T01:00:00Z",
         "source_kinds": "syslog-udp"
@@ -213,7 +213,7 @@ async fn topic_source_kind_rejects_invalid_filter() {
     let (svc, _pool, _dir) = seeded_service().await;
 
     let req = TopicCorrelateRequest {
-        topic: "dookie".to_string(),
+        topic: "devhost".to_string(),
         source_kinds: Some(vec!["syslog".to_string()]),
         ..Default::default()
     };
@@ -232,7 +232,7 @@ async fn topic_source_kind_rejects_request_with_any_invalid_kind() {
     // A single bad value rejects the whole request (no silent dropping), and the
     // error names every invalid kind.
     let req = TopicCorrelateRequest {
-        topic: "dookie".to_string(),
+        topic: "devhost".to_string(),
         source_kinds: Some(vec![
             "syslog-udp".to_string(),
             "nope".to_string(),
@@ -273,16 +273,16 @@ fn source_kinds_deserializer_rejects_non_string_values() {
 async fn topic_plex_uses_service_instance_without_host_wide_fanout() {
     let _guard = crate::db::graph::GRAPH_TEST_LOCK.lock();
     let (svc, pool, _dir) = test_service();
-    let mut plex = syslog("2026-01-01T00:01:00Z", "tootie", "plex/plex/plex");
+    let mut plex = syslog("2026-01-01T00:01:00Z", "nashost", "plex/plex/plex");
     plex.message = "Plex library scan".to_string();
     plex.raw = "Plex library scan".to_string();
     plex.metadata_json = Some(
-        r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
+        r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
             .to_string(),
     );
     insert_logs_batch(
         &pool,
-        &[syslog("2026-01-01T00:00:00Z", "tootie", "kernel"), plex],
+        &[syslog("2026-01-01T00:00:00Z", "nashost", "kernel"), plex],
     )
     .unwrap();
     crate::db::graph::refresh_graph_projection(&pool).unwrap();
@@ -308,13 +308,13 @@ async fn topic_plex_uses_service_instance_without_host_wide_fanout() {
             .iter()
             .any(|row| row.message.contains("Plex library scan"))
     );
-    // No silent host-wide fan-out: the kernel row on tootie stays out.
+    // No silent host-wide fan-out: the kernel row on nashost stays out.
     assert!(
         !resp
             .timeline
             .iter()
             .any(|row| row.app_name.as_deref() == Some("kernel")),
-        "topic plex must not fan out to all tootie logs: {:?}",
+        "topic plex must not fan out to all nashost logs: {:?}",
         resp.timeline
     );
     assert!(resp.timeline.iter().all(|row| {
@@ -326,7 +326,7 @@ async fn topic_plex_uses_service_instance_without_host_wide_fanout() {
 #[tokio::test]
 async fn topic_rejects_legacy_service_shapes() {
     let (svc, _pool, _dir) = test_service();
-    for topic in ["tootie:plex", "tootie:plex:plex", "plex/plex/plex"] {
+    for topic in ["nashost:plex", "nashost:plex:plex", "plex/plex/plex"] {
         let err = svc
             .topic_correlate(TopicCorrelateRequest {
                 topic: topic.to_string(),
@@ -346,14 +346,14 @@ async fn topic_service_instance_fallback_to_host_context_is_explicit() {
     // The plex service instance exists in the graph (via agent-docker
     // identity), but the only logs in the window are host-context rows that
     // no service-instance predicate matches.
-    let mut plex = syslog("2026-01-01T00:01:00Z", "tootie", "plex/plex/plex");
+    let mut plex = syslog("2026-01-01T00:01:00Z", "nashost", "plex/plex/plex");
     plex.metadata_json = Some(
-        r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
+        r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
             .to_string(),
     );
     insert_logs_batch(
         &pool,
-        &[syslog("2026-01-01T00:00:00Z", "tootie", "kernel"), plex],
+        &[syslog("2026-01-01T00:00:00Z", "nashost", "kernel"), plex],
     )
     .unwrap();
     crate::db::graph::refresh_graph_projection(&pool).unwrap();
@@ -383,10 +383,10 @@ async fn topic_service_instance_fallback_to_host_context_is_explicit() {
 async fn topic_defaults_since_to_one_hour_before_until() {
     let _guard = crate::db::graph::GRAPH_TEST_LOCK.lock();
     let (svc, pool, _dir) = test_service();
-    let mut older = syslog("2026-01-01T00:30:00Z", "dookie", "cortex");
+    let mut older = syslog("2026-01-01T00:30:00Z", "devhost", "cortex");
     older.message = "outside default window".into();
     older.raw = older.message.clone();
-    let mut recent = syslog("2026-01-01T01:30:00Z", "dookie", "cortex");
+    let mut recent = syslog("2026-01-01T01:30:00Z", "devhost", "cortex");
     recent.message = "inside default window".into();
     recent.raw = recent.message.clone();
     insert_logs_batch(&pool, &[older, recent]).unwrap();
@@ -394,7 +394,7 @@ async fn topic_defaults_since_to_one_hour_before_until() {
 
     let response = svc
         .topic_correlate(TopicCorrelateRequest {
-            topic: "dookie".into(),
+            topic: "devhost".into(),
             until: Some("2026-01-01T02:00:00Z".into()),
             ..Default::default()
         })

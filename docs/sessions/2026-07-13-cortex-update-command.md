@@ -14,7 +14,7 @@ beads: syslog-mcp-jlih1
 
 ## User Request
 
-The user wanted a canonical update path for an already configured Cortex server, preferring an operator command like `cortex update` over repeatedly spelling out `cortex setup deploy remote --home /mnt/cache/appdata/cortex tootie`. The user explicitly asked to use `superpowers:writing-plans` and then `vibin:work-it`.
+The user wanted a canonical update path for an already configured Cortex server, preferring an operator command like `cortex update` over repeatedly spelling out `cortex setup deploy remote --home /mnt/cache/appdata/cortex nashost`. The user explicitly asked to use `superpowers:writing-plans` and then `vibin:work-it`.
 
 ## Session Overview
 
@@ -22,17 +22,17 @@ This session wrote and pushed an implementation plan, created an isolated `.work
 
 ## Sequence of Events
 
-1. Wrote the plan at `docs/superpowers/plans/2026-07-13-cortex-update-command.md` and pushed it on `codex/restore-dookie-session-ingest`.
+1. Wrote the plan at `docs/superpowers/plans/2026-07-13-cortex-update-command.md` and pushed it on `codex/restore-devhost-session-ingest`.
 2. Created the feature worktree `.worktrees/cortex-update-command` on branch `codex/cortex-update-command`.
 3. Implemented the update profile, update runner, `cortex update` CLI surface, docs, and tests across focused commits.
-4. Opened PR #132 against `codex/restore-dookie-session-ingest`.
+4. Opened PR #132 against `codex/restore-devhost-session-ingest`.
 5. Ran review waves and follow-up simplification, then addressed findings around client profile preservation, dry-run validation, token handling, remote env read failures, and secret redaction.
 6. Ran focused and broad verification: formatting, update/deploy/setup test slices, full library tests, bin tests, integration targets, clippy, doc tests, version sync, and diff hygiene.
 7. Saved this session note before the final broad `git add .` step required by `vibin:work-it`.
 
 ## Key Findings
 
-- `cortex setup deploy remote --home ... tootie` is a correct low-level primitive, but it is too setup-shaped for routine updates; the operator UX belongs behind `cortex update`.
+- `cortex setup deploy remote --home ... nashost` is a correct low-level primitive, but it is too setup-shaped for routine updates; the operator UX belongs behind `cortex update`.
 - Client agent updates originally risked dropping existing optional heartbeat/AI-transcript forwarding settings because the setup env writer did not preserve the full optional key vocabulary (`src/setup/heartbeat_agent.rs:110`, `src/heartbeat_agent.rs:25`).
 - Remote agent env reads could fail open because a missing or failed SSH capture was treated like an empty env, which could erase or omit a required heartbeat token (`src/agent_deploy.rs:330`, `src/agent_deploy.rs:396`).
 - Client dry-runs could report success for an explicit but nonexistent agent binary; saved profiles also needed validation when loaded, not only when written (`src/update.rs:165`, `src/update.rs:384`).
@@ -41,7 +41,7 @@ This session wrote and pushed an implementation plan, created an isolated `.work
 ## Technical Decisions
 
 - Kept `cortex setup deploy remote` as the explicit install/deploy primitive and added `cortex update` as the repeatable operator path for already configured machines.
-- Made update configuration profile-backed so tootie's home path, host, docker command, and journald mode can be remembered once and reused.
+- Made update configuration profile-backed so nashost's home path, host, docker command, and journald mode can be remembered once and reused.
 - Preserved omitted saved client profile values when rerunning `cortex update config clients`, rather than treating omitted flags as a reset.
 - Required existing client heartbeat tokens only for `cortex update clients`; normal `cortex setup deploy agent` remains the repair/install path where a token may be supplied explicitly.
 - Centralized optional heartbeat-agent env keys in `heartbeat_agent::OPTIONAL_ENV_KEYS` so setup and deploy update paths preserve the same knobs.
@@ -109,7 +109,7 @@ This session note is committed alone by contract. Code and docs hardening change
 | command | result |
 |---|---|
 | `git status --short --branch` | Confirmed branch `codex/cortex-update-command` and 10 dirty files before session note |
-| `gh pr view --json number,title,url,headRefName,baseRefName,state,statusCheckRollup` | Confirmed PR #132 open against `codex/restore-dookie-session-ingest`; visible checks included CodeRabbit success, GitGuardian success, and cubic neutral |
+| `gh pr view --json number,title,url,headRefName,baseRefName,state,statusCheckRollup` | Confirmed PR #132 open against `codex/restore-devhost-session-ingest`; visible checks included CodeRabbit success, GitGuardian success, and cubic neutral |
 | `bd show syslog-mcp-jlih1 --json` | Confirmed bead is `in_progress` |
 | `find docs/plans docs/superpowers/plans -maxdepth 2 -type f` | Confirmed active plan file and existing plan inventory |
 | `git worktree list --porcelain` | Confirmed active main, base, and feature worktrees |
@@ -133,7 +133,7 @@ This session note is committed alone by contract. Code and docs hardening change
 
 | area | before | after |
 |---|---|---|
-| Server updates | Operator had to repeat `cortex setup deploy remote --home ... tootie` | Operator can configure once and run `cortex update` |
+| Server updates | Operator had to repeat `cortex setup deploy remote --home ... nashost` | Operator can configure once and run `cortex update` |
 | Server profile | No remembered remote update profile | Profile stores host/home/docker/journald defaults |
 | Client profile config | Omitted flags could wipe saved values | Omitted target/docker/journald values preserve previous saved config |
 | Client dry-run | Explicit bad binary path could still appear successful | Explicit binary path is validated before deploy planning |
@@ -158,7 +158,7 @@ This session note is committed alone by contract. Code and docs hardening change
 
 - The final hardening batch was not yet committed at this artifact save point; rollback before the code commit would be `git restore` on the dirty files, preserving the already pushed implementation commits.
 - The update-client token requirement may surface previously hidden misconfigured agents; the intended repair path is `cortex setup deploy agent --heartbeat-token ...`, not bypassing the update check.
-- The PR targets `codex/restore-dookie-session-ingest`, not `main`, because the current work builds on the earlier dookie session ingest branch.
+- The PR targets `codex/restore-devhost-session-ingest`, not `main`, because the current work builds on the earlier devhost session ingest branch.
 
 ## Decisions Not Taken
 

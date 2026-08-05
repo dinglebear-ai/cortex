@@ -113,7 +113,7 @@ fn unauthorized_warning_rate_limit_suppresses_repeats_per_key() {
     let mut warnings = test_lru(1024);
     let now = std::time::Instant::now();
     let interval = std::time::Duration::from_secs(60);
-    let key = "100.88.16.79|bearer|abcdef123456|otel".to_string();
+    let key = "198.51.100.1|bearer|abcdef123456|otel".to_string();
 
     assert!(record_unauthorized_warning(
         &mut warnings,

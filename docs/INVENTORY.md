@@ -223,9 +223,9 @@ The MCP `map` action defaults to the bounded snapshot. Set `mode` to ask
 topology questions backed by the graph projection:
 
 ```json
-{"action":"map","mode":"host_services","host":"squirts"}
-{"action":"map","mode":"domain_routes","domain":"adguard.tootie.tv"}
-{"action":"map","mode":"service_dependencies","host":"squirts","service":"swag"}
+{"action":"map","mode":"host_services","host":"edgehost"}
+{"action":"map","mode":"domain_routes","domain":"adguard.example.internal"}
+{"action":"map","mode":"service_dependencies","host":"edgehost","service":"swag"}
 {"action":"map","mode":"findings","finding_limit":25}
 ```
 

@@ -33,7 +33,7 @@ cortex compose logs --tail 20
 
 ## Automatic Local Deploy
 
-The active dookie deployment is the local source-built Compose stack
+The active devhost deployment is the local source-built Compose stack
 (`docker-compose.yml`, image `cortex-cortex`). GitHub publishes GHCR images, but
 that does not update this local stack by itself. Install the user timer below to
 keep the server aligned with `origin/main`:
@@ -220,5 +220,5 @@ sudo systemctl enable --now cortex-backup.timer
 Keep backups on a different disk or host than the live database — a full-disk
 or dead-drive event otherwise takes the backups with it. A simple pattern is
 an rsync step after the timer fires (e.g. `rsync -a ~/.cortex/backups/
-backup-host:/backups/cortex/`, in this homelab: replicate to `shart`), or
+backup-host:/backups/cortex/`, in this homelab: replicate to `backuphost`), or
 point `BACKUP_DIR` at a mount that is itself replicated.

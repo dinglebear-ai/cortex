@@ -12,7 +12,7 @@ fn investigation_human_output_includes_findings_context_and_related_incidents() 
                 "tool": "codex",
                 "project": "cortex",
                 "session_id": "session-1",
-                "hostname": "dookie",
+                "hostname": "devhost",
                 "first_seen": "2026-07-16T12:00:00Z",
                 "last_seen": "2026-07-16T12:01:00Z",
                 "duration_secs": 60,

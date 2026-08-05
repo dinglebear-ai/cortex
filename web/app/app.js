@@ -31,15 +31,15 @@
   const seed = {
     nodes: [
       { data: { id: "cortex", label: "cortex", kind: "service", status: "degraded" } },
-      { data: { id: "dookie", label: "dookie", kind: "host", status: "unknown" } },
-      { data: { id: "squirts", label: "squirts", kind: "host", status: "unknown" } },
-      { data: { id: "tootie", label: "tootie", kind: "host", status: "unknown" } },
+      { data: { id: "devhost", label: "devhost", kind: "host", status: "unknown" } },
+      { data: { id: "edgehost", label: "edgehost", kind: "host", status: "unknown" } },
+      { data: { id: "nashost", label: "nashost", kind: "host", status: "unknown" } },
       { data: { id: "sqlite", label: "SQLite WAL", kind: "store", status: "unknown" } },
     ],
     edges: [
-      { data: { id: "dookie-cortex", source: "dookie", target: "cortex", label: "serves" } },
-      { data: { id: "squirts-cortex", source: "squirts", target: "cortex", label: "forwards" } },
-      { data: { id: "tootie-cortex", source: "tootie", target: "cortex", label: "forwards" } },
+      { data: { id: "devhost-cortex", source: "devhost", target: "cortex", label: "serves" } },
+      { data: { id: "edgehost-cortex", source: "edgehost", target: "cortex", label: "forwards" } },
+      { data: { id: "nashost-cortex", source: "nashost", target: "cortex", label: "forwards" } },
       { data: { id: "cortex-sqlite", source: "cortex", target: "sqlite", label: "stores" } },
     ],
   };

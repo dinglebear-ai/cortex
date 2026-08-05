@@ -15,18 +15,18 @@ fn ssh_host_parser_keeps_concrete_hosts_only() {
         r#"
 Host *
   IdentityFile ~/.ssh/id_ed25519
-Host tootie shart
+Host nashost backuphost
   User root
 Host github.com
   HostName ssh.github.com
-Host steamy-*
+Host winhost-*
   User jmagar
-Host dookie
+Host devhost
   User jmagar
 "#,
     );
 
-    assert_eq!(hosts, vec!["tootie", "shart", "dookie"]);
+    assert_eq!(hosts, vec!["nashost", "backuphost", "devhost"]);
     assert!(warnings.is_empty());
 }
 
@@ -35,7 +35,7 @@ fn ssh_args_ignore_newer_config_options_before_loading_config() {
     let args = SshContext::new(SshOptions::for_config(Some(std::path::Path::new(
         "/tmp/ssh_config",
     ))))
-    .ssh_args("tootie", "true")
+    .ssh_args("nashost", "true")
     .unwrap();
 
     assert_eq!(args[0], "-o");
@@ -47,7 +47,7 @@ fn ssh_args_ignore_newer_config_options_before_loading_config() {
 #[test]
 fn ssh_args_allow_busy_hosts_the_full_bounded_probe_window() {
     let args = SshContext::new(SshOptions::default())
-        .ssh_args("dookie", "true")
+        .ssh_args("devhost", "true")
         .unwrap();
 
     assert!(args.contains(&"ServerAliveInterval=10".to_string()));
@@ -68,13 +68,13 @@ fn ssh_args_reject_option_like_hosts_and_use_strict_host_keys_by_default() {
         SshOptions::default()
             .with_known_hosts(Some(std::path::PathBuf::from("/tmp/cortex_known_hosts"))),
     )
-    .ssh_args("tootie", "true")
+    .ssh_args("nashost", "true")
     .unwrap();
 
     assert!(args.contains(&"StrictHostKeyChecking=yes".to_string()));
     assert!(args.contains(&"UserKnownHostsFile=/tmp/cortex_known_hosts".to_string()));
     assert!(args.contains(&"--".to_string()));
-    assert_eq!(args[args.len() - 2], "tootie");
+    assert_eq!(args[args.len() - 2], "nashost");
 }
 
 #[test]
@@ -155,13 +155,13 @@ fn configured_hosts_reports_rejected_explicit_hosts() {
     let resolution = configured_hosts(
         None,
         &[
-            "tootie".to_string(),
+            "nashost".to_string(),
             "-oProxyCommand=bad".to_string(),
             "bad host".to_string(),
         ],
     );
 
-    assert_eq!(resolution.hosts, vec!["tootie"]);
+    assert_eq!(resolution.hosts, vec!["nashost"]);
     assert!(resolution.explicit_hosts_configured);
     assert_eq!(resolution.warnings.len(), 2);
     assert!(
@@ -215,7 +215,7 @@ fn ssh_options_reject_invalid_zero_values() {
     );
 
     let args = SshContext::new(SshOptions::default().with_connect_timeout_secs(7).unwrap())
-        .ssh_args("tootie", "true")
+        .ssh_args("nashost", "true")
         .unwrap();
     assert!(args.contains(&"ConnectTimeout=7".to_string()));
     assert!(!args.contains(&"ConnectTimeout=0".to_string()));
@@ -224,8 +224,8 @@ fn ssh_options_reject_invalid_zero_values() {
 #[test]
 fn retry_jitter_differs_by_host_and_is_bounded() {
     let initial = Duration::from_millis(100);
-    let a = backoff_delay_for_host("tootie", initial, 1);
-    let b = backoff_delay_for_host("squirts", initial, 1);
+    let a = backoff_delay_for_host("nashost", initial, 1);
+    let b = backoff_delay_for_host("edgehost", initial, 1);
     let base = backoff_delay(initial, 1);
 
     assert_ne!(a, b, "host-keyed jitter should desynchronize retries");

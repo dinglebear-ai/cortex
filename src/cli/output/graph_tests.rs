@@ -338,12 +338,12 @@ fn graph_output_formats_resolver_entity_types_as_first_class_rows() {
 
     let instance = entity_line(
         "entity",
-        &graph_entity(2, "service_instance", "tootie/plex"),
+        &graph_entity(2, "service_instance", "nashost/plex"),
     );
     assert!(instance.contains("service_instance"));
-    assert!(instance.contains("tootie/plex"));
+    assert!(instance.contains("nashost/plex"));
 
-    let summary = entity_summary_label(&graph_summary(3, "service_instance", "tootie/plex"));
+    let summary = entity_summary_label(&graph_summary(3, "service_instance", "nashost/plex"));
     assert!(summary.contains("service_instance"));
-    assert!(summary.contains("tootie/plex"));
+    assert!(summary.contains("nashost/plex"));
 }

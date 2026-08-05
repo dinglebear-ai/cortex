@@ -661,7 +661,7 @@ grep -n "syslog\|SYSLOG" .claude-plugin/plugin.json
 Key fields to check:
 - `"name"` → should be `"cortex"` (was `"syslog"`)
 - `"repository"` → should be `https://github.com/jmagar/cortex`
-- `"id"` → should be `"tv.tootie/cortex"` (was `"tv.tootie/syslog-mcp"`)
+- `"id"` → should be `"tv.nashost/cortex"` (was `"tv.nashost/syslog-mcp"`)
 - `"mcpServers"` path → update `syslog` → `cortex` in the path string
 - `"hooks"` path → same
 - `"skills"` path → same
@@ -871,7 +871,7 @@ Expected: dry run succeeds, confirming the new remote works.
 
 - [ ] **Step 5: Update the Labby gateway entry**
 
-On dookie, update the MCP gateway config to point to the new repo/tool name:
+On devhost, update the MCP gateway config to point to the new repo/tool name:
 ```bash
 lab gateway reload
 ```

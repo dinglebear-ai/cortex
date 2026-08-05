@@ -109,7 +109,7 @@ The repository was fast-forwarded after remote session-log commits landed, and a
 | `syslog-mcp-ir6xh` | Integrate active Cortex branches and clean worktrees | Created/claimed/closed during merge cleanup | Closed | Tracked the "do not lose work" merge/cleanup task |
 | `syslog-mcp-jlih1` | Add cortex update operator workflow | Read as relevant completed work | Closed | The update-command branch merged into `main` |
 | `syslog-mcp-tchr5` | Document Cortex graph projection coverage | Read as relevant completed work | Closed | Captures the graph-coverage documentation requested earlier in the session |
-| `syslog-mcp-mhkai` | Support remote deploy home override | Read as relevant completed work | Closed | Captures the tootie deploy-home support merged in this session history |
+| `syslog-mcp-mhkai` | Support remote deploy home override | Read as relevant completed work | Closed | Captures the nashost deploy-home support merged in this session history |
 | `syslog-mcp-vkln9` | Add canonical entity resolution for investigation graph | Observed as closed on the active PR #133 workstream | Closed | The milestone was implemented on open PR #133, not merged during this closeout |
 | `syslog-mcp-k5i1x`, `syslog-mcp-4hfzi`, `syslog-mcp-k9jnf`, `syslog-mcp-csukc`, `syslog-mcp-5k1zb`, `syslog-mcp-9n4g8`, `syslog-mcp-sfm5o`, `syslog-mcp-6ipjl` | PR #133 review/implementation follow-ups | Read during maintenance pass; no tracker mutation in this save turn | Closed | Evidence that the active PR #133 worktree is live, reviewed, and already tracked |
 

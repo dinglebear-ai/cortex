@@ -2070,7 +2070,7 @@ pub fn list_llm_invocations(
           evidence_counts_json: Some(r#"{"total_incidents":1}"#.to_string()),
           prompt_bytes: Some(128),
           status: "running".to_string(),
-          metadata_json: Some(r#"{"host":"dookie","pid":123}"#.to_string()),
+          metadata_json: Some(r#"{"host":"devhost","pid":123}"#.to_string()),
       }
   }
 

@@ -157,11 +157,11 @@ fn any_value_int_and_bool_stringify() {
 #[test]
 fn build_entries_extracts_resource_attrs() {
     let peer = "127.0.0.1:12345".parse().unwrap();
-    let req = sample_request("dookie", "claude-code", "tool_call started", 9);
+    let req = sample_request("devhost", "claude-code", "tool_call started", 9);
     let entries = build_entries(&req, peer);
     assert_eq!(entries.len(), 1);
     let e = &entries[0];
-    assert_eq!(e.hostname, "dookie");
+    assert_eq!(e.hostname, "devhost");
     assert_eq!(e.app_name.as_deref(), Some("claude-code"));
     assert_eq!(e.message, "tool_call started");
     assert_eq!(e.severity, "info");
@@ -173,7 +173,7 @@ fn build_entries_extracts_resource_attrs() {
     assert_eq!(metadata["peer_ip"], "127.0.0.1");
     assert_eq!(metadata["peer_port"], 12345);
     assert_eq!(metadata["service_name"], "claude-code");
-    assert_eq!(metadata["resource_attributes"]["host.name"], "dookie");
+    assert_eq!(metadata["resource_attributes"]["host.name"], "devhost");
 }
 
 #[test]
@@ -248,12 +248,12 @@ fn build_entries_handles_multiple_resource_logs() {
     let peer = "10.0.0.1:9999".parse().unwrap();
     let req = ExportLogsServiceRequest {
         resource_logs: vec![
-            sample_request("dookie", "claude-code", "msg one", 9)
+            sample_request("devhost", "claude-code", "msg one", 9)
                 .resource_logs
                 .into_iter()
                 .next()
                 .unwrap(),
-            sample_request("squirts", "codex", "msg two", 17)
+            sample_request("edgehost", "codex", "msg two", 17)
                 .resource_logs
                 .into_iter()
                 .next()
@@ -262,8 +262,8 @@ fn build_entries_handles_multiple_resource_logs() {
     };
     let entries = build_entries(&req, peer);
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].hostname, "dookie");
-    assert_eq!(entries[1].hostname, "squirts");
+    assert_eq!(entries[0].hostname, "devhost");
+    assert_eq!(entries[1].hostname, "edgehost");
     assert_eq!(entries[1].severity, "err");
 }
 
@@ -274,7 +274,7 @@ fn build_entries_extracts_ai_metadata_from_attributes() {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
                 attributes: vec![
-                    kv("host.name", av_string("tootie")),
+                    kv("host.name", av_string("nashost")),
                     kv("service.name", av_string("claude-code")),
                     kv("session.id", av_string("res-session-123")),
                 ],
@@ -309,7 +309,7 @@ fn build_entries_extracts_ai_metadata_from_attributes() {
     let entries = build_entries(&req, peer);
     assert_eq!(entries.len(), 1);
     let e = &entries[0];
-    assert_eq!(e.hostname, "tootie");
+    assert_eq!(e.hostname, "nashost");
     assert_eq!(e.app_name.as_deref(), Some("claude-code"));
     assert_eq!(e.ai_tool, None);
     assert_eq!(e.ai_session_id.as_deref(), Some("log-session-456"));
@@ -326,7 +326,7 @@ fn build_entries_extracts_ai_tool_from_explicit_attribute() {
     let req = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
-                attributes: vec![kv("host.name", av_string("tootie"))],
+                attributes: vec![kv("host.name", av_string("nashost"))],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
             }),
@@ -361,7 +361,7 @@ fn build_entries_ignores_unknown_or_oversized_ai_tool() {
     let req = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
-                attributes: vec![kv("host.name", av_string("tootie"))],
+                attributes: vec![kv("host.name", av_string("nashost"))],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
             }),
@@ -455,7 +455,7 @@ fn build_entries_skips_string_table_indexed_keys_instead_of_colliding() {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
                 attributes: vec![
-                    kv("host.name", av_string("tootie")),
+                    kv("host.name", av_string("nashost")),
                     KeyValue {
                         key: String::new(),
                         value: Some(av_string("unresolvable-1")),
@@ -493,11 +493,11 @@ fn build_entries_skips_string_table_indexed_keys_instead_of_colliding() {
 
     let entries = build_entries(&req, peer);
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].hostname, "tootie");
+    assert_eq!(entries[0].hostname, "nashost");
     let metadata: serde_json::Value =
         serde_json::from_str(entries[0].metadata_json.as_deref().unwrap()).unwrap();
     let resource_attrs = &metadata["resource_attributes"];
-    assert_eq!(resource_attrs["host.name"], "tootie");
+    assert_eq!(resource_attrs["host.name"], "nashost");
     // Both string-table-indexed attributes are skipped rather than
     // colliding onto (and clobbering each other via) an "" key.
     assert!(resource_attrs.get("").is_none());
@@ -510,7 +510,7 @@ fn build_entries_ignores_oversized_ai_project_and_session_id() {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
                 attributes: vec![
-                    kv("host.name", av_string("tootie")),
+                    kv("host.name", av_string("nashost")),
                     kv("project.path", av_string(&"p".repeat(513))),
                     kv("session.id", av_string(&"s".repeat(129))),
                 ],

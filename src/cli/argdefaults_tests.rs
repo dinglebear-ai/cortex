@@ -3,8 +3,8 @@ use super::*;
 #[test]
 fn bind_positional_returns_value_for_action_with_positional() {
     // tail binds a bare positional to --host.
-    let bound = positional_value("tail", &["dookie".to_string()]).unwrap();
-    assert_eq!(bound.as_deref(), Some("dookie"));
+    let bound = positional_value("tail", &["devhost".to_string()]).unwrap();
+    assert_eq!(bound.as_deref(), Some("devhost"));
 }
 
 #[test]

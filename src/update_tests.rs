@@ -1,9 +1,9 @@
 use super::*;
 use serial_test::serial;
 
-const SERVER_HOST: &str = "tootie";
+const SERVER_HOST: &str = "nashost";
 const SERVER_HOME: &str = "/mnt/cache/appdata/cortex";
-const CLIENT_HOSTS: &[&str] = &["dookie", "shart"];
+const CLIENT_HOSTS: &[&str] = &["devhost", "backuphost"];
 
 struct EnvGuard {
     name: &'static str,
@@ -52,7 +52,7 @@ fn configure_test_clients_profile(path: &Path, hosts: Vec<String>) {
     configure_clients_profile(
         Some(path),
         hosts,
-        Some("https://cortex.tootie.tv".to_string()),
+        Some("https://cortex.example.internal".to_string()),
         Some(true),
         None,
     )
@@ -87,7 +87,7 @@ fn update_profile_round_trips_server_and_clients() {
         }),
         clients: ClientsUpdateProfile {
             hosts: client_hosts(),
-            target: Some("https://cortex.tootie.tv".to_string()),
+            target: Some("https://cortex.example.internal".to_string()),
             docker: Some(true),
             journald: None,
         },
@@ -108,8 +108,8 @@ fn configure_server_profile_validates_and_preserves_clients() {
         &UpdateProfile {
             server: None,
             clients: ClientsUpdateProfile {
-                hosts: vec!["dookie".to_string()],
-                target: Some("https://cortex.tootie.tv".to_string()),
+                hosts: vec!["devhost".to_string()],
+                target: Some("https://cortex.example.internal".to_string()),
                 docker: Some(true),
                 journald: Some(false),
             },
@@ -122,7 +122,7 @@ fn configure_server_profile_validates_and_preserves_clients() {
     let server = updated.server.as_ref().unwrap();
     assert_eq!(server.host, SERVER_HOST);
     assert_eq!(server.home, SERVER_HOME);
-    assert_eq!(updated.clients.hosts, vec!["dookie"]);
+    assert_eq!(updated.clients.hosts, vec!["devhost"]);
 }
 
 #[test]
@@ -149,21 +149,26 @@ fn configure_clients_profile_merges_omitted_options() {
     let path = profile_path(&dir);
     configure_clients_profile(
         Some(&path),
-        vec!["dookie".to_string()],
-        Some("https://cortex.tootie.tv".to_string()),
+        vec!["devhost".to_string()],
+        Some("https://cortex.example.internal".to_string()),
         Some(true),
         Some(false),
     )
     .unwrap();
 
-    let updated =
-        configure_clients_profile(Some(&path), vec!["shart".to_string()], None, None, None)
-            .unwrap();
+    let updated = configure_clients_profile(
+        Some(&path),
+        vec!["backuphost".to_string()],
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
-    assert_eq!(updated.clients.hosts, vec!["shart"]);
+    assert_eq!(updated.clients.hosts, vec!["backuphost"]);
     assert_eq!(
         updated.clients.target.as_deref(),
-        Some("https://cortex.tootie.tv")
+        Some("https://cortex.example.internal")
     );
     assert_eq!(updated.clients.docker, Some(true));
     assert_eq!(updated.clients.journald, Some(false));
@@ -176,7 +181,7 @@ fn configure_clients_profile_rejects_invalid_target() {
 
     let error = configure_clients_profile(
         Some(&path),
-        vec!["dookie".to_string()],
+        vec!["devhost".to_string()],
         Some("not a url".to_string()),
         None,
         None,
@@ -359,7 +364,7 @@ fn update_clients_marks_report_error_when_a_client_deploy_fails() {
     let path = profile_path(&dir);
     configure_test_clients_profile(&path, client_hosts());
     let mut runner = FakeUpdateRunner {
-        fail_client: Some("shart".to_string()),
+        fail_client: Some("backuphost".to_string()),
         ..FakeUpdateRunner::default()
     };
 
@@ -400,7 +405,7 @@ fn update_clients_dry_run_marks_missing_probe_as_error() {
     configure_test_clients_profile(&path, hosts.clone());
     let mut runner = FakeUpdateRunner {
         probes: vec![crate::agent_deploy::HostProbe {
-            host: "dookie".to_string(),
+            host: "devhost".to_string(),
             reachable: true,
             cortex_version: Some("3.9.1".to_string()),
             agent_active: Some(true),
@@ -413,7 +418,7 @@ fn update_clients_dry_run_marks_missing_probe_as_error() {
     assert!(report.has_errors);
     assert_eq!(report.clients.len(), 2);
     assert!(report.clients.iter().any(|result| {
-        result.host == "shart" && !result.ok && result.detail.contains("timed out")
+        result.host == "backuphost" && !result.ok && result.detail.contains("timed out")
     }));
 }
 
@@ -452,7 +457,7 @@ fn update_clients_revalidates_loaded_profile_target() {
         &UpdateProfile {
             server: None,
             clients: ClientsUpdateProfile {
-                hosts: vec!["dookie".to_string()],
+                hosts: vec!["devhost".to_string()],
                 target: Some("notaurl".to_string()),
                 docker: None,
                 journald: None,
@@ -474,7 +479,7 @@ fn update_all_stops_before_clients_when_server_fails() {
     let dir = tempfile::tempdir().unwrap();
     let path = profile_path(&dir);
     configure_test_server_profile(&path);
-    configure_clients_profile(Some(&path), vec!["dookie".to_string()], None, None, None).unwrap();
+    configure_clients_profile(Some(&path), vec!["devhost".to_string()], None, None, None).unwrap();
     let mut runner = FakeUpdateRunner {
         fail_server: true,
         ..FakeUpdateRunner::default()

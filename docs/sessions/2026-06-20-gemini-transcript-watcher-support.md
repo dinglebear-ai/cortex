@@ -14,21 +14,21 @@ beads: syslog-mcp-6g5bt, syslog-mcp-cpeie, syslog-mcp-fs2k6
 # Cortex Gemini transcript watcher support
 
 ## User Request
-Investigate the Cortex issues around squirts transcript permission storms, Docker socket oddness, remote Docker capability checks, schema/help drift, `usage_blocks`, and noisy `unaddressed_errors`; then work `syslog-mcp-cpeie` and `syslog-mcp-fs2k6` through Lavra and save the session.
+Investigate the Cortex issues around edgehost transcript permission storms, Docker socket oddness, remote Docker capability checks, schema/help drift, `usage_blocks`, and noisy `unaddressed_errors`; then work `syslog-mcp-cpeie` and `syslog-mcp-fs2k6` through Lavra and save the session.
 
 ## Session Overview
-Cortex investigation and remediation closed three beads. The review-finding work shipped topic/correlate schema fixes, `usage_blocks` limit support, remote Docker event unsupported-host observability, and warning-noise filtering. The live squirts transcript storm was fixed by replacing the stale rsyslog imfile tail with the supported user-level Cortex AI watcher. The final work added first-class Gemini transcript ingestion to the watcher and scanner, including whole-file Gemini chat parsing, `.gemini/tmp` root support, setup/doctor coverage, docs, tests, and a version bump to `1.33.0`.
+Cortex investigation and remediation closed three beads. The review-finding work shipped topic/correlate schema fixes, `usage_blocks` limit support, remote Docker event unsupported-host observability, and warning-noise filtering. The live edgehost transcript storm was fixed by replacing the stale rsyslog imfile tail with the supported user-level Cortex AI watcher. The final work added first-class Gemini transcript ingestion to the watcher and scanner, including whole-file Gemini chat parsing, `.gemini/tmp` root support, setup/doctor coverage, docs, tests, and a version bump to `1.33.0`.
 
 ## Sequence of Events
 1. Investigated live Cortex issues from June 19/20 logs and closed `syslog-mcp-6g5bt` with code fixes in commit `1a225af`.
-2. Worked `syslog-mcp-cpeie` on squirts by disabling the stale rsyslog transcript tail and verifying the supported `cortex-ai-watch.service` indexed Claude/Codex sessions without post-restart permission errors.
+2. Worked `syslog-mcp-cpeie` on edgehost by disabling the stale rsyslog transcript tail and verifying the supported `cortex-ai-watch.service` indexed Claude/Codex sessions without post-restart permission errors.
 3. Created/followed `syslog-mcp-fs2k6` because the retired rsyslog drop-in had also tailed Gemini chat JSON files.
 4. Added `SourceKind::GeminiSession`, `.gemini/tmp` default root support, whole-file Gemini JSON parsing, and watcher setup/doctor support in commit `1fb9afc`.
 5. Ran focused and full verification, handled review/self-review findings, closed the bead, pushed Beads, and pushed branch `codex/fix-cortex-review-findings`.
 6. Ran the `save-to-md` maintenance pass and wrote this session artifact as a path-limited docs commit.
 
 ## Key Findings
-- Live squirts rsyslog was reading `/home/jmagar/.claude/projects/*/*.jsonl` as `rsyslog`, but those transcript files are owned by the user and mode `600`; `syslog-mcp-cpeie` records the replacement with the host-local watcher.
+- Live edgehost rsyslog was reading `/home/jmagar/.claude/projects/*/*.jsonl` as `rsyslog`, but those transcript files are owned by the user and mode `600`; `syslog-mcp-cpeie` records the replacement with the host-local watcher.
 - Gemini chat transcripts are whole-file JSON at `~/.gemini/tmp/*/chats/session-*.json`, not JSONL; the parser therefore uses a file-level path in `src/scanner/gemini.rs:18`.
 - Gemini files may have `projectHash` without a cwd/project path; the parser stores that as `gemini://project/<hash>` so AI session inventory queries can see it (`src/scanner/gemini.rs:30`).
 - The scanner model now includes `gemini_root` in doctor output and `GeminiSession` in source-kind handling (`src/scanner.rs:127`, `src/scanner.rs:174`).
@@ -36,7 +36,7 @@ Cortex investigation and remediation closed three beads. The review-finding work
 - User-facing docs now describe Claude/Codex/Gemini roots, Gemini `session-*.json`, and the `gemini://project/<hash>` fallback (`README.md:503`, `docs/CLI.md:353`).
 
 ## Technical Decisions
-- Implemented Gemini support rather than documenting non-support because the old squirts rsyslog drop-in had been tailing Gemini chats and the maintained replacement needed equivalent coverage.
+- Implemented Gemini support rather than documenting non-support because the old edgehost rsyslog drop-in had been tailing Gemini chats and the maintained replacement needed equivalent coverage.
 - Parsed Gemini chat files as whole-file JSON because the observed sample had top-level session metadata plus a `messages[]` array.
 - Used `projectHash` as a stable synthetic project only when no cwd/project path exists, preserving queryability without inventing a filesystem path.
 - Kept the watcher host-local; Docker Compose still owns only the server/query runtime, while transcript roots remain user-home paths.
@@ -84,7 +84,7 @@ Cortex investigation and remediation closed three beads. The review-finding work
 | bead | title | action(s) | final status | why it mattered |
 |---|---|---|---|---|
 | `syslog-mcp-6g5bt` | Investigate Cortex log ingestion and correlation papercuts | Worked and closed | closed | Tracked the original Cortex issue bundle: schema/help drift, `usage_blocks`, remote Docker capability checks, and warning-noise filtering. |
-| `syslog-mcp-cpeie` | Fix squirts transcript tailing permissions | Worked and closed | closed | Replaced the stale rsyslog transcript tail with user-level `cortex-ai-watch.service` on squirts and verified no post-restart permission storm. |
+| `syslog-mcp-cpeie` | Fix edgehost transcript tailing permissions | Worked and closed | closed | Replaced the stale rsyslog transcript tail with user-level `cortex-ai-watch.service` on edgehost and verified no post-restart permission storm. |
 | `syslog-mcp-fs2k6` | Add Gemini transcript support to Cortex AI watcher | Claimed, commented, worked, closed | closed | Added first-class Gemini watcher/indexer support so the supported replacement covers what the old rsyslog drop-in had tailed. |
 
 ## Repository Maintenance
@@ -129,7 +129,7 @@ Cortex investigation and remediation closed three beads. The review-finding work
 ## Behavior Changes (Before/After)
 | area | before | after |
 |---|---|---|
-| Squirts transcript ingestion | rsyslog tried to read user-owned Claude transcript JSONL files and hit permission storms | supported user-level Cortex AI watcher handles transcript ingestion |
+| Edgehost transcript ingestion | rsyslog tried to read user-owned Claude transcript JSONL files and hit permission storms | supported user-level Cortex AI watcher handles transcript ingestion |
 | Gemini transcripts | old rsyslog drop-in tailed Gemini chat files, but supported watcher indexed Claude/Codex only | watcher/scanner supports `~/.gemini/tmp/*/chats/session-*.json` |
 | AI session inventory | Gemini files with only `projectHash` would have no project and be invisible to project inventory filters | Gemini fallback project is `gemini://project/<hash>` |
 | Remote Docker events on unsupported hosts | hosts without Docker could continue noisy/opaque retry behavior | unsupported remote Docker events are surfaced as warning/counter state |
@@ -154,7 +154,7 @@ Cortex investigation and remediation closed three beads. The review-finding work
 
 ## Decisions Not Taken
 - Did not restore rsyslog access to transcript files via ACLs/groups; the supported user-level Cortex watcher is a better match for private user transcript roots.
-- Did not document Gemini as unsupported; live squirts evidence showed the old tail path had been trying to ingest Gemini chats.
+- Did not document Gemini as unsupported; live edgehost evidence showed the old tail path had been trying to ingest Gemini chats.
 - Did not move old `docs/plans/*` files to `complete/`; none were clearly completed by this session.
 - Did not stage or modify `docs/superpowers/plans/2026-06-20-graph-investigation-workspace.md`; it was unrelated and pre-existing in the worktree.
 

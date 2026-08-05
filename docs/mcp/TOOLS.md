@@ -130,7 +130,7 @@ Use `mode = "host_services"` with `host`, `mode = "domain_routes"` with
 `service`, or `mode = "findings"` to get a `graph_answer` envelope with answer
 status, topology rows or findings, safe evidence, map follow-ups, and graph
 proof queries. `service_dependencies` targets resolve to `service_instance`
-keys (`tootie/plex`); legacy `host:service` identities are rejected with
+keys (`nashost/plex`); legacy `host:service` identities are rejected with
 `rejected_legacy_shape`.
 
 `mode = "findings"` supports `finding_limit`, `evidence_per_finding`, and

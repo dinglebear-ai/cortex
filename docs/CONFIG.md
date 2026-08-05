@@ -118,7 +118,7 @@ Current deployments use the host-local cortex agent: each deployed agent reads D
 Set `CORTEX_DOCKER_HOSTS` to a comma-separated list of hostnames. Each hostname becomes `http://<host>:2375` with insecure HTTP allowed — use only on trusted private networks.
 
 ```env
-CORTEX_DOCKER_HOSTS=squirts,tootie,dookie
+CORTEX_DOCKER_HOSTS=edgehost,nashost,devhost
 ```
 
 `CORTEX_DOCKER_HOSTS_FILE` (path to a legacy `[[hosts]]` TOML file) is still accepted as a fallback when `CORTEX_DOCKER_HOSTS` is not set.

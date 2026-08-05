@@ -33,7 +33,7 @@ fn insert_claude_row(pool: &DbPool, source: Option<(&str, usize)>) -> i64 {
             let metadata_json = serde_json::json!({ "line_no": line_no }).to_string();
             conn.execute(
                 "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json)
-                 VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', 'hi', 'hi', 'transcript://claude_project', 'claude', 'cortex', 'sess-1', ?1, ?2)",
+                 VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', 'hi', 'hi', 'transcript://claude_project', 'claude', 'cortex', 'sess-1', ?1, ?2)",
                 rusqlite::params![transcript_path, metadata_json],
             )
             .unwrap();
@@ -41,7 +41,7 @@ fn insert_claude_row(pool: &DbPool, source: Option<(&str, usize)>) -> i64 {
         None => {
             conn.execute(
                 "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json)
-                 VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', 'hi', 'hi', 'transcript://claude_project', 'claude', 'cortex', 'sess-1', NULL, NULL)",
+                 VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', 'hi', 'hi', 'transcript://claude_project', 'claude', 'cortex', 'sess-1', NULL, NULL)",
                 [],
             )
             .unwrap();

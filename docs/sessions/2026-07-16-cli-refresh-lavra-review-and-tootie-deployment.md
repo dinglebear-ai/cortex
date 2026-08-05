@@ -11,17 +11,17 @@ pr: "#138 Codex/cli refresh (https://github.com/jmagar/cortex/pull/138)"
 beads: syslog-mcp-2p6ea, syslog-mcp-40dyo, syslog-mcp-2p6ea.1, syslog-mcp-2p6ea.2, syslog-mcp-2p6ea.3, syslog-mcp-2p6ea.4, syslog-mcp-2p6ea.5, syslog-mcp-2p6ea.6, syslog-mcp-2p6ea.7, syslog-mcp-2p6ea.8, syslog-mcp-2p6ea.9, syslog-mcp-2p6ea.10, syslog-mcp-2p6ea.11, syslog-mcp-2p6ea.12, syslog-mcp-qql71, syslog-mcp-4qtox, syslog-mcp-g0gwt, syslog-mcp-hu4bu, syslog-mcp-o3yil
 ---
 
-# Cortex CLI refresh, Lavra review, and TOOTIE deployment
+# Cortex CLI refresh, Lavra review, and NASHOST deployment
 
 ## User Request
 
-Run every Cortex CLI command against live services, debug every unexpected failure, refresh the command surface around one-word command leaves and minimal flags, and preserve shared-layer parity across CLI, REST, and MCP. Then run Lavra review, fix every finding, deploy the latest binary to the local PATH and TOOTIE, raise the production database limit to 500 GB, and save the complete session.
+Run every Cortex CLI command against live services, debug every unexpected failure, refresh the command surface around one-word command leaves and minimal flags, and preserve shared-layer parity across CLI, REST, and MCP. Then run Lavra review, fix every finding, deploy the latest binary to the local PATH and NASHOST, raise the production database limit to 500 GB, and save the complete session.
 
 ## Session Overview
 
 The session rebuilt Cortex's CLI around domain-oriented namespaces and one-word leaves, repaired the live failures named by the user, and kept CLI, REST, and MCP as thin adapters over shared service behavior. An 11-agent Lavra review produced 31 raw findings, reconciled into 16 issue groups; all 16 were fixed and closed. PR #138 merged the work to `main` as `cf2291e1`.
 
-The merged Cortex 3.10.0 binary was then installed to `/home/jmagar/.local/bin/cortex` and packaged into a production image loaded directly onto TOOTIE. A direct Compose-template copy briefly resolved the wrong env-file path and triggered default storage cleanup; the container was stopped, the canonical `../.env` path restored, and production was verified healthy. The user subsequently raised the live database ceiling to 500 GiB with a 450 GiB recovery target.
+The merged Cortex 3.10.0 binary was then installed to `/home/jmagar/.local/bin/cortex` and packaged into a production image loaded directly onto NASHOST. A direct Compose-template copy briefly resolved the wrong env-file path and triggered default storage cleanup; the container was stopped, the canonical `../.env` path restored, and production was verified healthy. The user subsequently raised the live database ceiling to 500 GiB with a 450 GiB recovery target.
 
 ## Sequence of Events
 
@@ -30,9 +30,9 @@ The merged Cortex 3.10.0 binary was then installed to `/home/jmagar/.local/bin/c
 3. Ran the live CLI sweep and debugged file-tail reconciliation, stale heartbeat cache state, long-running integrity checks, passive checkpoint semantics, REST notification testing, empty assess datasets, and expected deferred operations.
 4. Ran the full Lavra review workflow with 11 agents, reconciled 31 raw findings into 16 beads, fixed every finding, and reran focused and broad verification.
 5. Proved the branch with 112 live CLI cases, 104 MCP smoke cases, REST smoke, Rust tests, clippy, version sync, plugin validation, and exact runtime-image parity; closed and pushed all review beads.
-6. Merged the CLI refresh through PR #138, fast-forwarded local `main`, built Cortex 3.10.0, installed it to PATH, restarted the dookie heartbeat agent, and built a container-compatible production image.
-7. Loaded the exact image onto TOOTIE and recreated Cortex. Detected that a raw template copy used `.env` relative to the remote `compose/` directory, stopped cleanup, corrected it to `../.env`, and verified the production environment inside the container.
-8. Raised TOOTIE's database settings from 50/45 GiB to 500/450 GiB, recreated Cortex, and verified zero startup deletions, healthy listeners, zero restarts, and no OOM.
+6. Merged the CLI refresh through PR #138, fast-forwarded local `main`, built Cortex 3.10.0, installed it to PATH, restarted the devhost heartbeat agent, and built a container-compatible production image.
+7. Loaded the exact image onto NASHOST and recreated Cortex. Detected that a raw template copy used `.env` relative to the remote `compose/` directory, stopped cleanup, corrected it to `../.env`, and verified the production environment inside the container.
+8. Raised NASHOST's database settings from 50/45 GiB to 500/450 GiB, recreated Cortex, and verified zero startup deletions, healthy listeners, zero restarts, and no OOM.
 9. Performed repository maintenance for this save: fixed one stale OpenWiki command, created a Dependabot follow-up bead, and removed the clean merged worktree plus obsolete local/remote branches.
 
 ## Key Findings
@@ -42,7 +42,7 @@ The merged Cortex 3.10.0 binary was then installed to `/home/jmagar/.local/bin/c
 - Session search needed FTS-first candidates plus a complete and freshly updated rollup. The optimized query begins at `src/db/queries.rs:1145`; live search dropped from exceeding 120 seconds to approximately 5-14 seconds, with a measured 7.56-second run.
 - REST notification testing diverged from MCP with a 501 response. `/api/notifications/test` now calls the same shared service path as MCP at `src/api.rs:165` and `src/api.rs:898`.
 - Integrity checks cannot truthfully complete inside a 120-second sweep on the roughly 48 GB database. The API now starts and polls background jobs at `src/api.rs:1794`; one full scan completed successfully in 73 minutes.
-- The TOOTIE deployment's canonical env is `/mnt/cache/appdata/cortex/.env`, while its installed Compose file must refer to `../.env`. Copying the repository template without the deployment transform omitted production limits and caused unintended cleanup.
+- The NASHOST deployment's canonical env is `/mnt/cache/appdata/cortex/.env`, while its installed Compose file must refer to `../.env`. Copying the repository template without the deployment transform omitted production limits and caused unintended cleanup.
 
 ## Technical Decisions
 
@@ -50,7 +50,7 @@ The merged Cortex 3.10.0 binary was then installed to `/home/jmagar/.local/bin/c
 - Honored the no-hyphen command requirement by migrating installed units and documentation instead of retaining compatibility aliases that would keep the old public grammar alive.
 - Made integrity checks asynchronous rather than weakening SQLite verification or extending every live sweep beyond its operational budget.
 - Treated checkpoint `busy` or incomplete frame counts as an observable incomplete result rather than an unconditional failure for passive mode.
-- Built TOOTIE's binary through `config/Dockerfile` instead of copying the host-linked executable into Debian, avoiding host/container libc divergence.
+- Built NASHOST's binary through `config/Dockerfile` instead of copying the host-linked executable into Debian, avoiding host/container libc divergence.
 - Loaded `ghcr.io/jmagar/cortex:3.10.0` directly and recreated with `--pull never` so a registry image with the same version tag could not replace the reviewed source build.
 
 ## Files Changed
@@ -227,11 +227,11 @@ tests/test_live.sh
 | Status | Path | Purpose | Evidence |
 | --- | --- | --- | --- |
 | modified | `openwiki/exposure-surfaces.md` | Replaced stale `cortex search-sessions` with `cortex sessions search` | `d7283f00` |
-| created | `docs/sessions/2026-07-16-cli-refresh-lavra-review-and-tootie-deployment.md` | Complete session artifact | save-to-md workflow |
+| created | `docs/sessions/2026-07-16-cli-refresh-lavra-review-and-nashost-deployment.md` | Complete session artifact | save-to-md workflow |
 | modified | `/home/jmagar/.local/bin/cortex` | Installed merged Cortex 3.10.0 release binary | SHA-256 `bb3d01d8ad93bf4faff4e902971f97606619b0bdafc04462c1b87eb55d2a0fac` |
-| modified | `/mnt/cache/appdata/cortex/compose/docker-compose.yml` on TOOTIE | Installed 3.10.0 image reference and canonical `../.env` path | live Compose inspection |
-| modified | `/mnt/cache/appdata/cortex/.env` on TOOTIE | Raised max/recovery database sizes to 512000/460800 MiB | live container environment |
-| created | `ghcr.io/jmagar/cortex:3.10.0` on local Docker and TOOTIE | Exact production image built from merged source | running image ID `sha256:83d6fe5e61476e33740037a6e1f21e5ac5a681a5cf765bb8c00912cbd812d0bb` on TOOTIE |
+| modified | `/mnt/cache/appdata/cortex/compose/docker-compose.yml` on NASHOST | Installed 3.10.0 image reference and canonical `../.env` path | live Compose inspection |
+| modified | `/mnt/cache/appdata/cortex/.env` on NASHOST | Raised max/recovery database sizes to 512000/460800 MiB | live container environment |
+| created | `ghcr.io/jmagar/cortex:3.10.0` on local Docker and NASHOST | Exact production image built from merged source | running image ID `sha256:83d6fe5e61476e33740037a6e1f21e5ac5a681a5cf765bb8c00912cbd812d0bb` on NASHOST |
 
 ## Beads Activity
 
@@ -288,7 +288,7 @@ tests/test_live.sh
 - **Lavra review skill and subagents.** Ran the exact Lavra review workflow with 11 review agents. The final goal-verifier agent was canceled after running too long, so completion was based on reconciled findings plus independent live and test evidence, not a claimed verifier pass.
 - **Shell and file tools.** Used `rg`, `sed`, `awk`, `jq`, `find`, `git`, `gh`, `bd`, `sqlite3`, `sha256sum`, and focused file reads. Manual repository edits used `apply_patch`.
 - **Rust toolchain.** Used Cargo release builds, focused tests, full `--all-features` tests, clippy with warnings denied, formatting/version checks, and the repo's release wrapper.
-- **Live runtime tools.** Used Docker, Docker Compose, SSH to TOOTIE, user systemd, `curl`, container logs/inspection, and ZFS snapshot inspection. Missing `XDG_RUNTIME_DIR`/DBus variables were supplied explicitly for noninteractive user-systemd calls.
+- **Live runtime tools.** Used Docker, Docker Compose, SSH to NASHOST, user systemd, `curl`, container logs/inspection, and ZFS snapshot inspection. Missing `XDG_RUNTIME_DIR`/DBus variables were supplied explicitly for noninteractive user-systemd calls.
 - **MCP and REST harnesses.** Used `scripts/smoke-test.sh`, `scripts/smoke-test-http.sh`, mcporter-backed MCP calls, and the 112-case live CLI sweep. Labby's local setup probe reported `localhost:8765` unreachable, but the review did not depend on that gateway path.
 - **Save skill.** Used `vibin:save-to-md` with the full Codex JSONL transcript. No browser automation or web search was used.
 
@@ -304,10 +304,10 @@ tests/test_live.sh
 | `cargo xtask check-version-sync` | All 14 version carriers passed |
 | `cargo build --release --locked` | Built Cortex 3.10.0 and atomically refreshed `~/.local/bin/cortex` |
 | `docker build -f config/Dockerfile -t ghcr.io/jmagar/cortex:3.10.0 .` | Built the production-compatible image from merged `main` |
-| `docker save ... | ssh tootie docker load` | Loaded the exact image on TOOTIE |
+| `docker save ... | ssh nashost docker load` | Loaded the exact image on NASHOST |
 | `docker compose ... up -d --force-recreate --pull never` | Recreated production without registry substitution |
 | `docker exec cortex ... CORTEX_MAX_DB_SIZE_MB ...` | Verified `512000` max and `460800` recovery values inside the live container |
-| `curl -fsS http://127.0.0.1:3100/health` on TOOTIE | Returned `{"status":"ok"}` |
+| `curl -fsS http://127.0.0.1:3100/health` on NASHOST | Returned `{"status":"ok"}` |
 | `bd dolt push` | Pushed completed review tracker state |
 | `git push origin --delete codex/cli-refresh` | Removed the merged remote topic branch |
 
@@ -320,7 +320,7 @@ tests/test_live.sh
 - REST notification testing returned 501 and redirected users to MCP. REST now calls the same shared notification service.
 - Session search and several analytics queries exceeded the sweep budget or selected stale results. FTS-first filtering, complete rollups, match-recency ordering, and bounded default windows resolved the live failures.
 - Noninteractive `systemctl --user` initially failed because DBus environment variables were absent. Supplying `/run/user/1000` and the user bus fixed the operational call.
-- The first TOOTIE Compose update copied `docker-compose.prod.yml` directly, leaving `env_file: .env` relative to `/mnt/cache/appdata/cortex/compose`. The live container therefore missed `/mnt/cache/appdata/cortex/.env` and ran two default-budget cleanup passes before being stopped. The installed Compose path was corrected to `../.env`, the container was force-recreated, and its production limits were verified from inside the process environment.
+- The first NASHOST Compose update copied `docker-compose.prod.yml` directly, leaving `env_file: .env` relative to `/mnt/cache/appdata/cortex/compose`. The live container therefore missed `/mnt/cache/appdata/cortex/.env` and ran two default-budget cleanup passes before being stopped. The installed Compose path was corrected to `../.env`, the container was force-recreated, and its production limits were verified from inside the process environment.
 - Observed cleanup counters prove at least 380,000 oldest telemetry rows were deleted across the two mistaken passes; the exact upper count is unknown because the replaced containers' final log counters were removed during recreation. Recent error-floor protections remained active.
 
 ## Behavior Changes (Before/After)
@@ -335,7 +335,7 @@ tests/test_live.sh
 | Notifications | REST returned 501 | REST and MCP use the same notification service |
 | Session search | Could exceed 120 seconds and order by session activity | Bounded FTS-first search ordered by match recency |
 | Atuin import | Required an explicit path | Resolves `ATUIN_DB_PATH`, XDG data home, or the standard history path |
-| Production version | TOOTIE ran Cortex 3.9.1 | TOOTIE runs the reviewed Cortex 3.10.0 image |
+| Production version | NASHOST ran Cortex 3.9.1 | NASHOST runs the reviewed Cortex 3.10.0 image |
 | Database ceiling | 50 GiB max, 45 GiB recovery | 500 GiB max, 450 GiB recovery |
 
 ## Verification Evidence
@@ -349,7 +349,7 @@ tests/test_live.sh
 | Clippy | No warnings | Passed with `-D warnings` | pass |
 | Plugin validation | All plugin checks pass | 48/48 passed | pass |
 | Runtime parity | Running image equals built image and version | Exact reviewed image and Cortex 3.10.0 | pass |
-| TOOTIE health | Healthy, no restart/OOM | `healthy`, restarts `0`, OOM `false` | pass |
+| NASHOST health | Healthy, no restart/OOM | `healthy`, restarts `0`, OOM `false` | pass |
 | Corrected storage startup | No cleanup under production limits | `deleted_rows=0` | pass |
 | 500 GiB configuration | 512000/460800 MiB in process env | Verified inside running container | pass |
 | Git closeout | Main clean and synchronized | PR #138 merged; maintenance commit pushed | pass |
@@ -389,5 +389,5 @@ tests/test_live.sh
 
 - **Unfinished session work:** none for the CLI refresh, Lavra findings, binary deployment, or 500 GiB production configuration.
 - **Tracked follow-up:** work `syslog-mcp-o3yil`, update or dismiss the affected `serde_with` dependency with evidence, and run the full Rust quality gates.
-- **Operational follow-up:** monitor TOOTIE database growth against the new 500 GiB ceiling and verify ZFS replication/snapshot coverage for `/mnt/cache/appdata/cortex/data`.
+- **Operational follow-up:** monitor NASHOST database growth against the new 500 GiB ceiling and verify ZFS replication/snapshot coverage for `/mnt/cache/appdata/cortex/data`.
 - **Documentation follow-up:** audit the three remaining unchecked plan files against current code before moving them to `docs/plans/complete/`.
