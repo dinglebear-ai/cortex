@@ -1350,20 +1350,20 @@ fn canonical_plex_proof_fixture_projects_only_resolver_identity() {
             r#"{{"source_kind":"agent-docker","agent_docker":{{"host":"{host}","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}}}"#
         )
     };
-    let mut tootie_plex = make_entry(
+    let mut nashost_plex = make_entry(
         "2026-01-01T00:00:00Z",
         "nashost",
         Some("plex/plex/plex"),
         "Plex started",
     );
-    tootie_plex.metadata_json = Some(agent_docker_meta("nashost"));
-    let mut shart_plex = make_entry(
+    nashost_plex.metadata_json = Some(agent_docker_meta("nashost"));
+    let mut backuphost_plex = make_entry(
         "2026-01-01T00:01:00Z",
         "backuphost",
         Some("plex/plex/plex"),
         "Plex replica started",
     );
-    shart_plex.metadata_json = Some(agent_docker_meta("backuphost"));
+    backuphost_plex.metadata_json = Some(agent_docker_meta("backuphost"));
     // Raw syslog labels that merely contain "plex": never logical services.
     let complex = make_entry(
         "2026-01-01T00:02:00Z",
@@ -1391,7 +1391,7 @@ fn canonical_plex_proof_fixture_projects_only_resolver_identity() {
 
     insert_logs_batch(
         &pool,
-        &[tootie_plex, shart_plex, complex, plex_backup, ai_row],
+        &[nashost_plex, backuphost_plex, complex, plex_backup, ai_row],
     )
     .unwrap();
     refresh_graph_projection(&pool).unwrap();

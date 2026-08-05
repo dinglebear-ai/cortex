@@ -423,7 +423,7 @@ Response:
   "result": {
     "answer": "qbittorrent on edgehost has died 14 times in the last 90 days, exit_code=137 in 12 of them (OOM-kill). The pattern correlates with sustained memory pressure from Plex transcoding...",
     "citations": [
-      { "type": "incident", "incident_id": "inc_2026-04-12T07:18Z_squirts_b7e2", "score": 0.81 },
+      { "type": "incident", "incident_id": "inc_2026-04-12T07:18Z_edgehost_b7e2", "score": 0.81 },
       { "type": "session", "session_id": "sess_2026-04-12T07:30Z_jmagar_homelab-ops", "score": 0.65 }
     ],
     "axon_job_id": "job_8f3a",
@@ -1281,7 +1281,7 @@ Response:
     "query_card": "synthesized query: qbittorrent OOM",
     "incidents": [
       {
-        "incident_id": "inc_2026-04-12T07:18Z_squirts_b7e2",
+        "incident_id": "inc_2026-04-12T07:18Z_edgehost_b7e2",
         "score": 0.81,
         "hostname": "edgehost",
         "app_name": "kernel",

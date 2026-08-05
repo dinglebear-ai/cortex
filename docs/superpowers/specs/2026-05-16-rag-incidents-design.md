@@ -179,7 +179,7 @@ sample lines:
 ### Worked Example B — Docker container die
 
 ```text
-INCIDENT inc_2026-05-15T14:02:03Z_squirts_b7e2
+INCIDENT inc_2026-05-15T14:02:03Z_edgehost_b7e2
 host=edgehost app=dockerd source=docker_event
 window=2026-05-15T14:02:00Z..2026-05-15T14:02:15Z (15s) event_count=2
 signature: docker_event action=die container=<name> exitCode=<n>
@@ -200,7 +200,7 @@ sample lines:
 ### Worked Example C — Fail2ban cluster
 
 ```text
-INCIDENT inc_2026-05-15T07:44:00Z_tootie_c1a3
+INCIDENT inc_2026-05-15T07:44:00Z_nashost_c1a3
 host=nashost app=fail2ban source=fail2ban
 window=2026-05-15T07:44:00Z..2026-05-15T07:48:51Z (291s) event_count=14
 signature: fail2ban Ban <ip> jail=<jail>
@@ -541,7 +541,7 @@ A `tests/fixtures/incidents/` directory with hand-curated incident families:
 For each fixture incident, a hand-annotated set of "correct similar incidents" (typically 3–5 within the same family on similar hosts). Stored as `tests/fixtures/incidents/gold.json`:
 
 ```json
-{"query_incident": "fix_oom_plex_jenny_01", "expected_hits": ["fix_oom_plex_jenny_02", "fix_oom_plex_squirts_01"], "must_not_hit": ["fix_swag_5xx_01"]}
+{"query_incident": "fix_oom_plex_jenny_01", "expected_hits": ["fix_oom_plex_jenny_02", "fix_oom_plex_edgehost_01"], "must_not_hit": ["fix_swag_5xx_01"]}
 ```
 
 ### Metrics

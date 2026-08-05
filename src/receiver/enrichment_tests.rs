@@ -550,7 +550,7 @@ fn malformed_agent_docker_meta_prefix_leaves_message_untouched() {
 #[serial(agent_docker_gate_blocked_counter)]
 fn agent_docker_meta_prefix_ignored_from_non_matching_source_ip() {
     let cfg = EnrichmentConfig {
-        agent_docker_source_prefixes: vec!["10.0.0.5".to_string(), "100.64.0.".to_string()],
+        agent_docker_source_prefixes: vec!["10.0.0.5".to_string(), "198.51.100.".to_string()],
         ..EnrichmentConfig::default()
     };
     let meta = r#"{"agent_docker":{"host":"nashost","container_id":"abc","container_name":"plex","stream":"stdout"}}"#;

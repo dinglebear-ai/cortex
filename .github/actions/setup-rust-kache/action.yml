@@ -31,7 +31,7 @@ inputs:
   s3-endpoint:
     description: S3-compatible endpoint used when credentials are supplied.
     required: false
-    default: "https://s3.tootie.tv"
+    default: "https://s3.example.internal"
   s3-bucket:
     description: S3 bucket containing the shared cache.
     required: false
