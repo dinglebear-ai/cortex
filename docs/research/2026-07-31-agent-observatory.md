@@ -1,3 +1,9 @@
+---
+title: "Agent Observatory Research Ledger"
+created: 2026-07-31
+updated: 2026-07-31
+---
+
 # Agent Observatory research ledger
 
 Status: complete planning research

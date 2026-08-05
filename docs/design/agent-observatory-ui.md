@@ -1,3 +1,9 @@
+---
+title: "Agent Observatory Next.js and Aurora UI Design"
+created: 2026-07-31
+updated: 2026-07-31
+---
+
 # Agent Observatory Next.js and Aurora UI design
 
 Status: proposed

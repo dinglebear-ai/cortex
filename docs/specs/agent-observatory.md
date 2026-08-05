@@ -1,3 +1,9 @@
+---
+title: "Cortex Agent Observatory Specification"
+created: 2026-07-31
+updated: 2026-07-31
+---
+
 # Cortex Agent Observatory specification
 
 Status: proposed
