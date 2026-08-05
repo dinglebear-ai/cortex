@@ -71,6 +71,20 @@ esac
 
 if [ "${NO_BUILD}" -eq 0 ]; then
   if [ -n "${RUST_TARGET}" ]; then
+    if ! rustup target list --installed 2>/dev/null | grep -qx "${RUST_TARGET}"; then
+      echo "error: rustup target '${RUST_TARGET}' is not installed." >&2
+      echo "  Install it with: rustup target add ${RUST_TARGET}" >&2
+      exit 1
+    fi
+    if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+      echo "error: mingw-w64 linker 'x86_64-w64-mingw32-gcc' not found on PATH." >&2
+      echo "  Cross-compiling to ${RUST_TARGET} requires a mingw-w64 toolchain." >&2
+      echo "  Install it with your package manager, e.g.:" >&2
+      echo "    Debian/Ubuntu: sudo apt install gcc-mingw-w64-x86-64" >&2
+      echo "    Fedora:        sudo dnf install mingw64-gcc" >&2
+      echo "    Arch:          sudo pacman -S mingw-w64-gcc" >&2
+      exit 1
+    fi
     cargo build --release --target "${RUST_TARGET}"
   else
     cargo build --release
