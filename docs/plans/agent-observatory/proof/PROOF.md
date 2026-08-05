@@ -379,3 +379,13 @@ PROOF: creating 10,000 source files did not change target count or content becau
 GATE: unique-path cap failed at observed 13 for limit 12; relative/parent paths, out-of-root worktrees, out-of-common control dirs, blank keys, duplicate keys, and zero caps were rejected with bounded errors
 REGRESSION: all 5 watch planner tests and all 48 Git observer tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-033 Implement debounced Git watcher queue
+commit/worktree SHA: b1b1b654 (task started)
+RED: watcher queue tests imported the event/action/options/error/sender/queue surfaces and git_watch_channel before implementation
+RED result: compile failed with every queue type and entry point unresolved
+GREEN: added a bounded Tokio mpsc sender, atomic overflow flag, longest-prefix WatchPlan routing, BTree-backed repository/discovery pending maps, injected-Instant debounce polling, and deterministic action ordering
+GREEN result: 8 focused queue tests passed, including 100-event coalescing at the last-event deadline, two-repository ordering, project-root discovery, linked-control creation routing, unrelated-path suppression, explicit rescan, channel overflow, and pending-map overflow
+GATE: overflow emits exactly one FullReconcile and clears buffered/pending work; queue and pending limits reject zero; all test timing uses injected Instant with no sleeps
+REGRESSION: 13 watcher tests, all 56 Git observer tests, and 162 config tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, and corrected no-sleep static audit passed

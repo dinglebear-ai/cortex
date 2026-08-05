@@ -1,5 +1,13 @@
 //! Pure bounded Git watch-set planning.
 
+#[path = "watcher_queue.rs"]
+mod queue;
+pub use queue::{
+    GitWatchAction, GitWatchEvent, GitWatchEventKind, GitWatchQueue, GitWatchQueueError,
+    GitWatchQueueErrorKind, GitWatchQueueOptions, GitWatchSender, WatchEnqueueResult,
+    git_watch_channel,
+};
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
