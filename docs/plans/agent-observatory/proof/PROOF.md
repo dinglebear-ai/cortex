@@ -431,3 +431,15 @@ FIX: Atuin now emits the distinct shell_history event/outbox kind; finished_at o
 GATE: agent-command cwd evidence is verified at 0.98 and may select primary; Atuin cwd-window evidence is claimed at 0.85 and never overrides the verified primary worktree; malformed, inconsistent, unsupported, or unscrubbed rows return typed diagnostics
 REGRESSION: all 72 Agent Observatory tests passed, including identity, lifecycle, attribution, transcript projection, command/shell projection, DB projection transactions, migrations, and configuration contracts
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-038 Project MCP, hook, skill, and LLM sources
+commit/worktree SHA: 61e9d05e (task started)
+RED: source-page and projector tests imported typed MCP, hook, skill, and LLM rows, bounded pages, stable cursors, projection outcomes, skip diagnostics, and project_agent_source before implementation
+RED result: whole-lib compile failed with the source paging, unique session lookup, and projector surfaces unresolved; all four durable source fixtures were absent from the run timeline
+GREEN: added bounded ascending pages for mcp_events, hook_events, skill_events, and llm_invocations plus atomic typed event, actor, evidence, and outbox projection using existing tool, session, project, and host fields
+GREEN result: 2 source-page tests and 2 projector tests passed; all four source kinds emitted exact canonical source IDs and typed event kinds, shared one deterministic run, created source actors, and replayed without duplicate events or outbox rows
+FIX: LLM pagination uses a stable started_at plus durable invocation ID cursor and remains correct across VACUUM; MCP tool, hook source, skill plugin, and LLM provider/model remain actor and payload data while the run provider_tool remains the owning AI provider
+GATE: pages are bounded to 1 through 500 rows; malformed cursors fail; unknown event labels use typed fallback; payloads are capped to 16 KiB with 4 KiB source-field caps; missing sessions and absent or ambiguous matching runs return typed skip diagnostics
+GATE: transcript-derived project paths create verified transcript_project_path evidence at 0.95; source actors preserve MCP server/tool, hook name, skill plugin/name, and LLM provider/model identities
+REGRESSION: all 76 Agent Observatory tests passed, including source paging, replay idempotence, VACUUM-stable cursors, provider identity preservation, projection transactions, schema migrations, attribution, lifecycle, command, shell, and transcript paths
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Agent Observatory JSON/SQL/TypeScript/placeholder contracts, and Cargo.toml/Cargo.lock no-diff gate passed

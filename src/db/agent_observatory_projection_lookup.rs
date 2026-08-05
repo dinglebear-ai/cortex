@@ -2,6 +2,7 @@
 
 use super::super::AgentRunRow;
 use super::sql;
+use crate::agent_observatory::identity::canonical_tool;
 use crate::db::pool::DbPool;
 use anyhow::{Context, Result, bail};
 use rusqlite::params;
@@ -93,6 +94,41 @@ pub fn find_unique_overlapping_projection_run(
     )?;
     let ids = statement
         .query_map(params![hostname.trim(), observed_at], |row| {
+            row.get::<_, i64>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    match ids.as_slice() {
+        [] => Ok(AgentProjectionRunMatch::None),
+        [id] => Ok(AgentProjectionRunMatch::Unique(Box::new(sql::run_by_id(
+            &connection,
+            *id,
+        )?))),
+        _ => Ok(AgentProjectionRunMatch::Ambiguous),
+    }
+}
+
+pub fn find_unique_projection_run_by_session(
+    pool: &DbPool,
+    tool: &str,
+    session_id: &str,
+) -> Result<AgentProjectionRunMatch> {
+    if tool.trim().is_empty() {
+        bail!("tool must be non-empty");
+    }
+    if session_id.trim().is_empty() {
+        bail!("session_id must be non-empty");
+    }
+    let canonical_tool = canonical_tool(tool)?;
+    let connection = pool.get().context("acquire database connection")?;
+    let mut statement = connection.prepare(
+        "SELECT id FROM agent_runs
+          WHERE tool = ?1
+            AND native_session_id = ?2
+            AND status IN ('starting','active','waiting','idle','stale')
+          ORDER BY id LIMIT 2",
+    )?;
+    let ids = statement
+        .query_map(params![canonical_tool, session_id.trim()], |row| {
             row.get::<_, i64>(0)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

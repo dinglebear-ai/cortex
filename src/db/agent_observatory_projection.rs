@@ -15,7 +15,7 @@ mod counters;
 mod lookup;
 pub use lookup::{
     AgentProjectionRunMatch, AgentProjectionWorktreeRef, find_active_projection_worktree,
-    find_unique_overlapping_projection_run,
+    find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
 };
 #[path = "agent_observatory_projection_sql.rs"]
 mod sql;

@@ -1,5 +1,11 @@
 //! Projection of classified source rows into Agent Observatory materialized state.
 
+#[path = "projector_sources.rs"]
+mod sources;
+pub use sources::{
+    SourceProjectionDiagnostic, SourceProjectionOutcome, SourceProjectionSkipReason,
+    project_agent_source,
+};
 #[path = "projector_commands.rs"]
 mod commands;
 pub use commands::{

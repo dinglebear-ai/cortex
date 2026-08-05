@@ -10,6 +10,12 @@ pub use commits::{
     GitCommitReachabilityUpdate, GitCommitUpsert, get_git_commit, list_git_commits,
     reconcile_git_commits, upsert_git_commits,
 };
+#[path = "agent_observatory_sources.rs"]
+mod sources;
+pub use sources::{
+    AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow, AgentSkillSourceRow, AgentSourceKind,
+    AgentSourcePage, AgentSourceRecord, page_agent_sources,
+};
 
 #[path = "agent_observatory_projection.rs"]
 mod projection;
@@ -18,7 +24,7 @@ pub use projection::{
     AgentProjectionRunMatch, AgentProjectionWorktreeRef, AgentProjectionWriteInput,
     AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
     find_active_projection_worktree, find_unique_overlapping_projection_run,
-    write_agent_projection,
+    find_unique_projection_run_by_session, write_agent_projection,
 };
 
 #[path = "agent_observatory_observations.rs"]
