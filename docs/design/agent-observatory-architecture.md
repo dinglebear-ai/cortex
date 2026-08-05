@@ -1,3 +1,9 @@
+---
+title: "Agent Observatory architecture"
+created: 2026-07-31
+updated: 2026-08-05
+---
+
 # Agent Observatory architecture
 
 Status: proposed
