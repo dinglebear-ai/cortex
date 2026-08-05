@@ -358,3 +358,13 @@ GREEN result: raw non-UTF8 stdout was preserved, two exact commits imported in c
 GATE: max_commits_per_transition uses --max-count=limit+1, returns CommitLimitReached, imports no partial rows, records no HEAD observation, and leaves the prior worktree HEAD unchanged
 REGRESSION: 4 process tests, 2 commit DB tests, all 42 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-031 Handle rewind, reset, rebase, and detached transitions
+commit/worktree SHA: 8d9c4bf3 (task started)
+RED: transactional reachability and real Git reset/rebase/detached fixtures imported new APIs and expected discarded commits to become unreachable without deleting historical rows
+RED result: compile failed with GitCommitReachabilityUpdate and reconcile_git_commits absent; after the DB seam was added the real reset fixture failed because the discarded commit remained reachable
+GREEN: added atomic commit upsert plus reachability updates, bounded two-sided old..new and new..old traversal, ancestry classification into fast_forward/rewind/rewrite, exact metadata import for new and displaced commits, repository-wide current-head reachability, and enriched non-fast-forward HEAD observations
+GREEN result: hard rewind, divergent rebase, and detached rewind preserved historical commits, updated the current worktree HEAD, toggled reachability correctly, recorded deterministic transition counts/kinds, and remained quiet on unchanged reconcile
+GATE: the recording runner observed no reset, rebase, checkout, switch, commit, or merge command issued by Cortex
+REGRESSION: 4 process tests, 3 commit DB tests, all 43 Git observer tests, 4 repository/worktree query tests, 2 Agent Observatory model tests, and 56 database/schema tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed

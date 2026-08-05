@@ -186,6 +186,9 @@ fn state_is_unchanged(
     ) {
         return false;
     }
+    if input.observation_kind == RepositoryObservationKind::Head {
+        return latest.new_head_sha == input.new_head_sha;
+    }
     latest.new_head_sha == input.new_head_sha
         && latest.summary == input.summary
         && latest.payload_json == input.payload_json

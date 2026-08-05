@@ -6,7 +6,10 @@ use std::str::FromStr;
 
 #[path = "agent_observatory_commits.rs"]
 mod commits;
-pub use commits::{GitCommitUpsert, get_git_commit, list_git_commits, upsert_git_commits};
+pub use commits::{
+    GitCommitReachabilityUpdate, GitCommitUpsert, get_git_commit, list_git_commits,
+    reconcile_git_commits, upsert_git_commits,
+};
 
 #[path = "agent_observatory_observations.rs"]
 mod observations;

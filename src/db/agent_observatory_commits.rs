@@ -13,6 +13,12 @@ const COMMIT_COLUMNS: &str =
      changed_paths_json, first_observed_at, last_observed_at, reachable, metadata_json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitCommitReachabilityUpdate {
+    pub sha: String,
+    pub reachable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitCommitUpsert {
     pub sha: String,
     pub parent_shas_json: String,
@@ -141,10 +147,11 @@ fn commit_by_sha(conn: &Connection, repository_id: i64, sha: &str) -> Result<Opt
         .context("query Git commit by SHA")
 }
 
-pub fn upsert_git_commits(
+pub fn reconcile_git_commits(
     pool: &DbPool,
     repository_key: &str,
     commits: &[GitCommitUpsert],
+    reachability: &[GitCommitReachabilityUpdate],
     observed_at: &str,
 ) -> Result<Vec<GitCommitRow>> {
     validate_observed_at(observed_at)?;
@@ -155,7 +162,16 @@ pub fn upsert_git_commits(
             bail!("duplicate commit SHA in batch");
         }
     }
-    if commits.is_empty() {
+    let mut update_shas = HashSet::new();
+    for update in reachability {
+        if !valid_object_id(&update.sha) {
+            bail!("reachability SHA must be a 40- or 64-byte hex object ID");
+        }
+        if !update_shas.insert(update.sha.as_str()) {
+            bail!("duplicate reachability SHA in batch");
+        }
+    }
+    if commits.is_empty() && reachability.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -212,8 +228,31 @@ pub fn upsert_git_commits(
                 .context("commit missing after upsert")?,
         );
     }
+    for update in reachability {
+        let changed = tx.execute(
+            "UPDATE git_commits
+                SET reachable = ?3, last_observed_at = ?4
+              WHERE repository_id = ?1 AND sha = ?2",
+            params![repository_id, update.sha, update.reachable, observed_at],
+        )?;
+        if changed != 1 {
+            bail!(
+                "Git commit not found for reachability update: {}",
+                update.sha
+            );
+        }
+    }
     tx.commit()?;
     Ok(rows)
+}
+
+pub fn upsert_git_commits(
+    pool: &DbPool,
+    repository_key: &str,
+    commits: &[GitCommitUpsert],
+    observed_at: &str,
+) -> Result<Vec<GitCommitRow>> {
+    reconcile_git_commits(pool, repository_key, commits, &[], observed_at)
 }
 
 pub fn get_git_commit(

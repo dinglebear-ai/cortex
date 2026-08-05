@@ -8,7 +8,9 @@ mod commit_import;
 mod lifecycle;
 #[path = "reconcile_support.rs"]
 mod support;
-use commit_import::{collect_fast_forward_commits, commit_upserts, transitions};
+use commit_import::{
+    ObservedCommitTransition, collect_commit_changes, commit_upserts, transitions,
+};
 use lifecycle::{lifecycle_observations, previous_worktrees};
 #[cfg(test)]
 pub(crate) use support::GitCommandResult;
@@ -25,8 +27,8 @@ use crate::agent_observatory::identity::{repository_key, worktree_key};
 use crate::db::DbPool;
 use crate::db::agent_observatory::{
     RepositoryObservationInput, RepositoryObservationKind, RepositoryUpsert,
-    RepositoryWorktreeUpsert, reconcile_repository, record_repository_observations_if_changed,
-    upsert_git_commits,
+    RepositoryWorktreeUpsert, reconcile_git_commits, reconcile_repository,
+    record_repository_observations_if_changed,
 };
 use crate::git_observer::porcelain::{
     StatusSummary, WorktreeRecord, parse_status_porcelain_v2, parse_worktree_porcelain,
@@ -327,7 +329,10 @@ async fn collect_repository<R: GitCommandRunner>(
     })
 }
 
-fn observations(snapshot: &RepositorySnapshot) -> Vec<RepositoryObservationInput> {
+fn observations(
+    snapshot: &RepositorySnapshot,
+    transitions: &[ObservedCommitTransition],
+) -> Vec<RepositoryObservationInput> {
     let mut inputs = Vec::with_capacity(1 + snapshot.worktrees.len() * 2);
     inputs.push(RepositoryObservationInput {
         worktree_key: None,
@@ -344,12 +349,43 @@ fn observations(snapshot: &RepositorySnapshot) -> Vec<RepositoryObservationInput
             summary: "worktree status changed".to_string(),
             payload_json: worktree.status_payload.clone(),
         });
+        let transition = transitions
+            .iter()
+            .find(|transition| transition.path == Path::new(&worktree.upsert.path));
+        let (summary, payload_json) = transition.map_or_else(
+            || {
+                (
+                    "worktree HEAD changed".to_string(),
+                    worktree.head_payload.clone(),
+                )
+            },
+            |transition| {
+                let summary = if transition.kind.is_fast_forward() {
+                    "worktree HEAD changed"
+                } else {
+                    "worktree HEAD changed (non-fast-forward)"
+                };
+                (
+                    summary.to_string(),
+                    json!({
+                        "detached": worktree.upsert.detached,
+                        "displaced_commit_count": transition.displaced_commit_count,
+                        "fast_forward": transition.kind.is_fast_forward(),
+                        "head_sha": transition.new_sha.as_str(),
+                        "new_commit_count": transition.new_commit_count,
+                        "old_head_sha": transition.old_sha.as_str(),
+                        "transition_kind": transition.kind.as_str(),
+                    })
+                    .to_string(),
+                )
+            },
+        );
         inputs.push(RepositoryObservationInput {
             worktree_key: Some(worktree.upsert.worktree_key.clone()),
             observation_kind: RepositoryObservationKind::Head,
             new_head_sha: worktree.upsert.head_sha.clone(),
-            summary: "worktree HEAD changed".to_string(),
-            payload_json: worktree.head_payload.clone(),
+            summary,
+            payload_json,
         });
     }
     inputs
@@ -398,20 +434,22 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
         .map(|worktree| worktree.upsert.clone())
         .collect::<Vec<_>>();
     let commit_transitions = transitions(&previous, &worktrees);
-    let parsed_commits =
-        match collect_fast_forward_commits(runner, &commit_transitions, options).await {
-            Ok(commits) => commits,
+    let commit_collection =
+        match collect_commit_changes(runner, &commit_transitions, &worktrees, options).await {
+            Ok(collection) => collection,
             Err(warning) => return Ok(RepositoryReconcileReport::warning(warning)),
         };
-    let commit_inputs = commit_upserts(&parsed_commits)?;
-    let imported_commits = upsert_git_commits(
+    let commit_inputs =
+        commit_upserts(&commit_collection.commits, &commit_collection.reachability)?;
+    let imported_commits = reconcile_git_commits(
         pool,
         &snapshot.repository.repository_key,
         &commit_inputs,
+        &commit_collection.reachability,
         observed_at,
     )?;
     let topology = reconcile_repository(pool, &snapshot.repository, &worktrees, observed_at)?;
-    let mut observation_inputs = observations(&snapshot);
+    let mut observation_inputs = observations(&snapshot, &commit_collection.transitions);
     observation_inputs.extend(lifecycle_observations(
         repository_existed,
         &previous,
@@ -435,6 +473,10 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
 #[cfg(test)]
 #[path = "reconcile_commits_tests.rs"]
 mod commit_tests;
+
+#[cfg(test)]
+#[path = "reconcile_rewrites_tests.rs"]
+mod rewrite_tests;
 
 #[cfg(test)]
 #[path = "reconcile_tests.rs"]

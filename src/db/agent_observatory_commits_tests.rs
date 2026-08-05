@@ -1,4 +1,7 @@
-use super::{GitCommitUpsert, get_git_commit, list_git_commits, upsert_git_commits};
+use super::{
+    GitCommitReachabilityUpdate, GitCommitUpsert, get_git_commit, list_git_commits,
+    reconcile_git_commits, upsert_git_commits,
+};
 use crate::config::StorageConfig;
 use crate::db::agent_observatory::{RepositoryUpsert, reconcile_repository};
 use crate::db::init_pool;
@@ -106,4 +109,84 @@ fn invalid_commit_batch_rolls_back_without_partial_rows() {
     .unwrap_err();
     assert!(error.to_string().contains("changed_paths_json"));
     assert!(list_git_commits(&pool, repo.id).unwrap().is_empty());
+}
+
+#[test]
+fn reachability_updates_are_atomic_and_preserve_commit_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("reachability.db"))).unwrap();
+    let repository = reconcile_repository(&pool, &repository(), &[], "2026-08-04T14:00:00.000Z")
+        .unwrap()
+        .repository;
+    let initial = upsert_git_commits(
+        &pool,
+        "repo-key",
+        &[
+            commit(SHA_ONE, "[]", "one"),
+            commit(SHA_TWO, &format!(r#"["{SHA_ONE}"]"#), "two"),
+        ],
+        "2026-08-04T14:01:00.000Z",
+    )
+    .unwrap();
+    let second_id = initial[1].id;
+    let second_first_seen = initial[1].first_observed_at.clone();
+
+    let updated = reconcile_git_commits(
+        &pool,
+        "repo-key",
+        &[],
+        &[GitCommitReachabilityUpdate {
+            sha: SHA_TWO.to_string(),
+            reachable: false,
+        }],
+        "2026-08-04T14:02:00.000Z",
+    )
+    .unwrap();
+    assert!(updated.is_empty());
+    let unreachable = get_git_commit(&pool, repository.id, SHA_TWO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(unreachable.id, second_id);
+    assert_eq!(unreachable.first_observed_at, second_first_seen);
+    assert_eq!(unreachable.last_observed_at, "2026-08-04T14:02:00.000Z");
+    assert!(!unreachable.reachable);
+
+    reconcile_git_commits(
+        &pool,
+        "repo-key",
+        &[],
+        &[GitCommitReachabilityUpdate {
+            sha: SHA_TWO.to_string(),
+            reachable: true,
+        }],
+        "2026-08-04T14:03:00.000Z",
+    )
+    .unwrap();
+    assert!(
+        get_git_commit(&pool, repository.id, SHA_TWO)
+            .unwrap()
+            .unwrap()
+            .reachable
+    );
+
+    let sha_three = "3333333333333333333333333333333333333333";
+    let missing = "4444444444444444444444444444444444444444";
+    let error = reconcile_git_commits(
+        &pool,
+        "repo-key",
+        &[commit(sha_three, "[]", "three")],
+        &[GitCommitReachabilityUpdate {
+            sha: missing.to_string(),
+            reachable: false,
+        }],
+        "2026-08-04T14:04:00.000Z",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains(missing));
+    assert!(
+        get_git_commit(&pool, repository.id, sha_three)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(list_git_commits(&pool, repository.id).unwrap().len(), 2);
 }
