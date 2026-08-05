@@ -374,7 +374,7 @@ pub(crate) fn check_transcript_forward_env_migration(
                 );
             }
             // Perform migration
-            migrate_legacy_only(env_path, &content, timer)
+            migrate_legacy_only(env_path, &content, legacy_line.unwrap(), timer)
         }
         (Some(current_val), Some(legacy_val)) => {
             if current_val == legacy_val {
@@ -415,14 +415,42 @@ pub(crate) fn check_transcript_forward_env_migration(
 
 /// Migrate legacy-only configuration by renaming the key atomically.
 /// Uses the same atomic write pattern as firstrun.rs.
-fn migrate_legacy_only(env_path: &Path, content: &str, timer: PhaseTimer) -> SetupPhase {
-    let new_content = content.replace(
-        &format!(
-            "{}=",
-            crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV
-        ),
-        &format!("{}=", crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV),
-    );
+///
+/// Only rewrites the single `legacy_line` identified by the same
+/// line-anchored `trim()` + `strip_prefix(KEY) + strip_prefix('=')` match
+/// used by the detection logic above, so incidental substring occurrences
+/// elsewhere in the file (e.g. a comment like
+/// `# migrated from CORTEX_AGENT_AI_TRANSCRIPTS=true`) are left untouched.
+fn migrate_legacy_only(
+    env_path: &Path,
+    content: &str,
+    legacy_line: usize,
+    timer: PhaseTimer,
+) -> SetupPhase {
+    use crate::heartbeat_agent::{AI_TRANSCRIPT_FORWARD_ENV, AI_TRANSCRIPT_FORWARD_LEGACY_ENV};
+
+    let rewritten_lines: Vec<String> = content
+        .lines()
+        .enumerate()
+        .map(|(line_num, line)| {
+            if line_num != legacy_line {
+                return line.to_string();
+            }
+            let trimmed = line.trim();
+            let leading_ws = &line[..line.len() - line.trim_start().len()];
+            let trailing_ws = &line[line.trim_end().len()..];
+            match trimmed.strip_prefix(AI_TRANSCRIPT_FORWARD_LEGACY_ENV) {
+                Some(rest) if rest.starts_with('=') => {
+                    format!("{leading_ws}{AI_TRANSCRIPT_FORWARD_ENV}{rest}{trailing_ws}")
+                }
+                _ => line.to_string(),
+            }
+        })
+        .collect();
+    let mut new_content = rewritten_lines.join("\n");
+    if content.ends_with('\n') && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
 
     match atomic_write_env_file(env_path, &new_content) {
         Ok(()) => timer.finish(

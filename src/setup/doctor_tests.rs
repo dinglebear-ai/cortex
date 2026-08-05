@@ -379,6 +379,40 @@ fn transcript_forward_migration_fix_renames_legacy_only() {
 
 #[cfg(unix)]
 #[test]
+fn transcript_forward_migration_fix_leaves_comment_substring_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+    // A comment mentioning the legacy key as a substring, plus the real
+    // legacy assignment. A whole-file str::replace would rewrite both;
+    // the line-anchored migration must touch only the actual assignment.
+    std::fs::write(
+        &env_path,
+        "# migrated from CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_AI_TRANSCRIPTS=true\n",
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&env_path).unwrap().permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&env_path, perms).unwrap();
+
+    let result = check_transcript_forward_env_migration(&env_path, true, true);
+
+    assert!(matches!(result.status, SetupStatus::Ok));
+
+    let content = std::fs::read_to_string(&env_path).unwrap();
+    assert_eq!(
+        content,
+        "# migrated from CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true\n"
+    );
+
+    // Verify permissions remain private
+    let new_perms = std::fs::metadata(&env_path).unwrap().permissions();
+    assert_eq!(new_perms.mode() & 0o777, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
 fn transcript_forward_migration_fix_removes_legacy_when_both_equal() {
     use std::os::unix::fs::PermissionsExt;
 
