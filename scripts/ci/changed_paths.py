@@ -45,9 +45,14 @@ def classify(event: str, paths: list[str]) -> dict[str, bool]:
     if not paths:
         return {key: True for key in OUTPUT_KEYS}
 
+    # `.github/actions/` belongs here: the composite actions provision the Rust
+    # toolchain and the kache wrapper for every Rust job, so changing one is a
+    # CI-routing change and takes the same fail-open-to-full-CI path below.
+    # Without this, an action-only commit classified as nothing and every job
+    # skipped -- which is how a broken kache pin reached main showing green.
     workflow = any_match(
         paths,
-        lambda p: starts(p, ".github/workflows/")
+        lambda p: starts(p, ".github/workflows/", ".github/actions/")
         or p
         in {
             "scripts/ci/changed_paths.py",

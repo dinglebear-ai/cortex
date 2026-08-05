@@ -98,6 +98,10 @@ fn launcher_and_installer_changes_enable_release_checks() {
 fn workflow_router_changes_force_full_ci() {
     for file in [
         ".github/workflows/ci.yml",
+        // Composite actions provision the toolchain and kache wrapper for every
+        // Rust job. An action-only commit used to classify as nothing at all, so
+        // every job skipped and the run reported green without compiling once.
+        ".github/actions/setup-rust-kache/action.yml",
         "scripts/ci/changed_paths.py",
         "tests/ci_changed_paths.rs",
     ] {
