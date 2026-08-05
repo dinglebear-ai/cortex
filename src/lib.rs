@@ -8,6 +8,7 @@
 pub mod agent;
 pub mod agent_command_ingest;
 pub mod agent_deploy;
+pub mod agent_observatory;
 pub(crate) mod ai_project;
 pub mod ai_transcript_ingest;
 pub mod ai_watch;
@@ -22,6 +23,7 @@ pub mod deploy;
 pub mod doctor;
 pub mod enrich;
 pub mod filetail;
+pub mod git_observer;
 pub(crate) mod hook_assessment;
 pub(crate) mod hook_config;
 pub(crate) mod skill_assessment;

@@ -161,7 +161,25 @@ fn write_heartbeat_agent_env(env_path: &Path) -> io::Result<SetupPhase> {
             shell_safe_value(&token)?
         ));
     }
+    let transcript_forward = std::env::var(heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV)
+        .ok()
+        .or_else(|| std::env::var(heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok())
+        .filter(|value| !value.trim().is_empty());
+    if let Some(value) = transcript_forward {
+        body.push_str(&format!(
+            "{}={}\n",
+            heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV,
+            shell_safe_value(&value)?
+        ));
+    }
     for key in heartbeat_agent::OPTIONAL_ENV_KEYS {
+        if matches!(
+            *key,
+            heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV
+                | heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV
+        ) {
+            continue;
+        }
         if let Ok(value) = std::env::var(key)
             && !value.trim().is_empty()
         {

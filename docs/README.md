@@ -27,11 +27,27 @@ Complete documentation for `cortex` -- a Rust syslog receiver and MCP server for
 
 | Directory | Scope |
 | --- | --- |
+| `contracts/` | Stable and proposed storage, API, type, and behavior contracts |
+| `design/` | Architecture and UI design documents |
 | `mcp/` | MCP server docs: auth, transport, tools, resources, testing, deployment |
 | `plugin/` | Plugin system docs: manifests, hooks, skills, commands, channels |
 | `repo/` | Repository docs: git conventions, scripts, memory, rules |
+| `research/` | Dated source and dependency research ledgers |
+| `specs/` | Normative feature specifications |
 | `stack/` | Technology stack docs: prerequisites, architecture, Rust dependencies |
 | `upstream/` | Upstream service docs (cortex is self-contained -- no external API) |
+
+### Proposed Agent Observatory package
+
+The Agent Observatory documents are an implementation-ready proposal, not a
+claim that the feature exists in Cortex 3.11.1. Start with:
+
+- [Research ledger](research/2026-07-31-agent-observatory.md)
+- [Architecture](design/agent-observatory-architecture.md)
+- [Next.js and Aurora UI design](design/agent-observatory-ui.md)
+- [Normative specification](specs/agent-observatory.md)
+- [Contract](contracts/agent-observatory.md) and companion SQL/JSON/OpenAPI/type fixtures
+- [116-task TDD implementation plan](plans/2026-07-31-agent-observatory-implementation.md)
 
 ### Preserved and archival directories
 

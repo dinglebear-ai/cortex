@@ -5,6 +5,7 @@ use crate::db::{
     TRUST_LEVELS, insert_logs_batch, is_known_entity_type, is_known_evidence_source_kind,
     is_known_reason_code, is_known_relationship_type, is_known_trust_level,
 };
+use rusqlite::OptionalExtension;
 
 fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
     StorageConfig::for_test(db_path)
@@ -365,6 +366,1179 @@ fn known_schema_version_matches_migration_head() {
     let info = read_schema_version_info(&pool).unwrap();
     assert_eq!(info.version, KNOWN_SCHEMA_VERSION);
     assert_eq!(info.known_version, KNOWN_SCHEMA_VERSION);
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-repositories.db"));
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repositories)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "repository_key",
+            "hostname",
+            "common_git_dir",
+            "primary_path",
+            "display_name",
+            "remote_url_hash",
+            "first_seen_at",
+            "last_seen_at",
+            "removed_at",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'repositories'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repositories_display")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repositories_host_seen")
+    );
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        rusqlite::params![
+            "v1|6:dookie|20:/workspace/cortex/.git",
+            "dookie",
+            "/workspace/cortex/.git",
+            "/workspace/cortex",
+            "cortex",
+            "2026-07-31T23:00:00.000Z",
+        ],
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "v1|6:dookie|20:/workspace/cortex/.git",
+                "other-host",
+                "/workspace/other/.git",
+                "/workspace/other",
+                "other",
+                "2026-07-31T23:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "repository_key must be globally unique"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "different-key",
+                "dookie",
+                "/workspace/cortex/.git",
+                "/workspace/cortex-copy",
+                "cortex-copy",
+                "2026-07-31T23:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "hostname/common_git_dir must identify one repository"
+    );
+    drop(conn);
+    drop(pool);
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(row_count, 1, "reopening must preserve repository rows");
+    let migration_44_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        migration_44_count, 1,
+        "completed migration 44 must remain marked exactly once"
+    );
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_worktree_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-worktrees.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        rusqlite::params![
+            "repo-key",
+            "dookie",
+            "/workspace/cortex/.git",
+            "/workspace/cortex",
+            "cortex",
+            "2026-08-01T01:00:00.000Z",
+        ],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repository_worktrees)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "worktree_key",
+            "repository_id",
+            "hostname",
+            "path",
+            "git_dir",
+            "branch_ref",
+            "branch_name",
+            "head_sha",
+            "upstream_ref",
+            "detached",
+            "bare",
+            "locked",
+            "lock_reason",
+            "prunable",
+            "prune_reason",
+            "dirty",
+            "staged_count",
+            "unstaged_count",
+            "untracked_count",
+            "ahead",
+            "behind",
+            "status_hash",
+            "first_seen_at",
+            "last_seen_at",
+            "removed_at",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, branch_ref,
+             branch_name, head_sha, upstream_ref, dirty, staged_count,
+             unstaged_count, untracked_count, ahead, behind, first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 2, 3, 4, 5, 6, ?10, ?10)",
+        rusqlite::params![
+            "worktree-key",
+            repository_id,
+            "dookie",
+            "/workspace/cortex",
+            "/workspace/cortex/.git",
+            "refs/heads/feat/agent-observatory",
+            "feat/agent-observatory",
+            "0123456789012345678901234567890123456789",
+            "refs/remotes/origin/feat/agent-observatory",
+            "2026-08-01T01:00:00.000Z",
+        ],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO repository_worktrees
+                (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "different-key",
+                repository_id,
+                "dookie",
+                "/workspace/cortex",
+                "/workspace/cortex/.git/worktrees/duplicate",
+                "2026-08-01T01:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "hostname/path must identify one worktree"
+    );
+
+    let state: (String, String, i64, i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT branch_name, head_sha, dirty, staged_count, unstaged_count,
+                    untracked_count, ahead
+             FROM repository_worktrees WHERE worktree_key = 'worktree-key'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            "feat/agent-observatory".to_string(),
+            "0123456789012345678901234567890123456789".to_string(),
+            1,
+            2,
+            3,
+            4,
+            5,
+        )
+    );
+
+    conn.execute("DELETE FROM repositories WHERE id = ?1", [repository_id])
+        .unwrap();
+    let remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repository_worktrees", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "repository deletion must cascade to worktrees"
+    );
+
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_observation_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-observations.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES ('repo-key', 'dookie', '/workspace/cortex/.git',
+                 '/workspace/cortex', 'cortex', ?1, ?1)",
+        ["2026-08-01T01:00:00.000Z"],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+         VALUES ('worktree-key', ?1, 'dookie', '/workspace/cortex',
+                 '/workspace/cortex/.git', ?2, ?2)",
+        rusqlite::params![repository_id, "2026-08-01T01:00:00.000Z"],
+    )
+    .unwrap();
+    let worktree_id = conn.last_insert_rowid();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repository_observations)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "observation_key",
+            "repository_id",
+            "worktree_id",
+            "observed_at",
+            "observation_kind",
+            "old_head_sha",
+            "new_head_sha",
+            "summary",
+            "payload_json",
+            "created_at",
+        ]
+    );
+
+    let insert = |key: &str, observed_at: &str, kind: &str| {
+        conn.execute(
+            "INSERT INTO repository_observations
+                (observation_key, repository_id, worktree_id, observed_at,
+                 observation_kind, summary, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '{}')",
+            rusqlite::params![key, repository_id, worktree_id, observed_at, kind, key],
+        )
+    };
+    insert("obs-1", "2026-08-01T01:00:00.000Z", "discovered").unwrap();
+    insert("obs-2", "2026-08-01T01:00:01.000Z", "status").unwrap();
+    insert("obs-3", "2026-08-01T01:00:01.000Z", "head").unwrap();
+
+    assert!(
+        insert("obs-1", "2026-08-01T01:00:02.000Z", "status").is_err(),
+        "observation_key must be globally unique"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO repository_observations
+                (observation_key, repository_id, observed_at, observation_kind, payload_json)
+             VALUES ('bad-json', ?1, ?2, 'error', '{')",
+            rusqlite::params![repository_id, "2026-08-01T01:00:03.000Z"],
+        )
+        .is_err(),
+        "payload_json must be valid JSON"
+    );
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT observation_key FROM repository_observations
+             WHERE repository_id = ?1
+             ORDER BY observed_at DESC, id DESC",
+        )
+        .unwrap()
+        .query_map([repository_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["obs-3", "obs-2", "obs-1"]);
+
+    let repo_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM repository_observations
+             WHERE repository_id = ?1
+             ORDER BY observed_at DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map([repository_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        repo_plan
+            .iter()
+            .any(|detail| detail.contains("idx_repository_observations_repo_time")),
+        "repository timeline query must use its chronological index: {repo_plan:?}"
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'repository_observations'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repository_observations_repo_time")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repository_observations_worktree_time")
+    );
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_git_commit_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-commits.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    for (key, common_dir, path, name) in [
+        ("repo-1", "/workspace/one/.git", "/workspace/one", "one"),
+        ("repo-2", "/workspace/two/.git", "/workspace/two", "two"),
+    ] {
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, 'dookie', ?2, ?3, ?4, ?5, ?5)",
+            rusqlite::params![key, common_dir, path, name, "2026-08-01T01:00:00.000Z"],
+        )
+        .unwrap();
+    }
+    let repo_one: i64 = conn
+        .query_row(
+            "SELECT id FROM repositories WHERE repository_key = 'repo-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let repo_two: i64 = conn
+        .query_row(
+            "SELECT id FROM repositories WHERE repository_key = 'repo-2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(git_commits)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "repository_id",
+            "sha",
+            "parent_shas_json",
+            "author_name",
+            "author_email_hash",
+            "authored_at",
+            "committed_at",
+            "subject",
+            "changed_files",
+            "insertions",
+            "deletions",
+            "changed_paths_json",
+            "first_observed_at",
+            "last_observed_at",
+            "reachable",
+            "metadata_json",
+        ]
+    );
+    assert!(
+        !columns
+            .iter()
+            .any(|name| matches!(name.as_str(), "diff" | "patch" | "blob" | "author_email"))
+    );
+
+    let sha = "0123456789012345678901234567890123456789";
+    let insert_commit = |repository_id: i64| {
+        conn.execute(
+            "INSERT INTO git_commits
+                (repository_id, sha, parent_shas_json, author_name, author_email_hash,
+                 authored_at, committed_at, subject, changed_files, insertions,
+                 deletions, changed_paths_json, first_observed_at, last_observed_at,
+                 metadata_json)
+             VALUES (?1, ?2, '[]', 'Cortex Test', 'sha256:test', ?3, ?3,
+                     'test commit', 2, 10, 3, '[\"src/lib.rs\"]', ?3, ?3, '{}')",
+            rusqlite::params![repository_id, sha, "2026-08-01T01:00:00.000Z"],
+        )
+    };
+    insert_commit(repo_one).unwrap();
+    assert!(
+        insert_commit(repo_one).is_err(),
+        "same SHA must dedupe within a repository"
+    );
+    insert_commit(repo_two).unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO git_commits
+                (repository_id, sha, parent_shas_json, changed_paths_json,
+                 first_observed_at, last_observed_at)
+             VALUES (?1, 'bad-json', '{', '[]', ?2, ?2)",
+            rusqlite::params![repo_one, "2026-08-01T01:00:00.000Z"],
+        )
+        .is_err(),
+        "commit JSON columns must reject invalid JSON"
+    );
+
+    conn.execute(
+        "UPDATE git_commits
+         SET reachable = 0, last_observed_at = ?1
+         WHERE repository_id = ?2 AND sha = ?3",
+        rusqlite::params!["2026-08-01T02:00:00.000Z", repo_one, sha],
+    )
+    .unwrap();
+    let state: (i64, String, String) = conn
+        .query_row(
+            "SELECT reachable, subject, last_observed_at FROM git_commits
+             WHERE repository_id = ?1 AND sha = ?2",
+            rusqlite::params![repo_one, sha],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            0,
+            "test commit".to_string(),
+            "2026-08-01T02:00:00.000Z".to_string()
+        )
+    );
+
+    let repo_one_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_commits WHERE repository_id = ?1",
+            [repo_one],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let repo_two_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_commits WHERE repository_id = ?1",
+            [repo_two],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!((repo_one_count, repo_two_count), (1, 1));
+
+    let index_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'idx_git_commits_repo_time'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_exists, 1);
+}
+
+#[test]
+fn migration_44_applies_from_schema_43_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("observatory-migration-44.db");
+    let config = test_storage_config(db_path.clone());
+
+    {
+        let pool = init_pool(&config).unwrap();
+        drop(pool);
+    }
+
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TABLE IF EXISTS git_commits;
+             DROP TABLE IF EXISTS repository_observations;
+             DROP TABLE IF EXISTS repository_worktrees;
+             DROP TABLE IF EXISTS repositories;
+             DELETE FROM schema_migrations WHERE version = 44;
+             INSERT OR REPLACE INTO stream_last_seen
+                 (hostname, source_kind, last_seen_at)
+             VALUES ('legacy-host', 'syslog-tcp', '2026-08-01T01:00:00.000Z');
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+    }
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let max_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        max_version, 47,
+        "schema 43 should upgrade to schema 47 (applying 44, 45, 46, 47)"
+    );
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+
+    for table in [
+        "repositories",
+        "repository_worktrees",
+        "repository_observations",
+        "git_commits",
+    ] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "migration 44 must create {table}");
+    }
+
+    let legacy_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM stream_last_seen
+             WHERE hostname = 'legacy-host' AND source_kind = 'syslog-tcp'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_rows, 1, "migration must preserve schema-43 data");
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(conn);
+    drop(pool);
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1, "reopening must not duplicate migration 44");
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_run_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-runs.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_runs)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "run_key",
+            "native_session_id",
+            "tool",
+            "provider_tool",
+            "hostname",
+            "parent_run_id",
+            "previous_run_id",
+            "primary_worktree_id",
+            "transcript_path",
+            "process_id",
+            "status",
+            "status_reason",
+            "status_observed_at",
+            "started_at",
+            "last_activity_at",
+            "ended_at",
+            "first_source_log_id",
+            "last_source_log_id",
+            "last_event_id",
+            "event_count",
+            "error_count",
+            "primary_branch",
+            "start_head_sha",
+            "current_head_sha",
+            "projection_version",
+            "freshness_json",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5, ?5)",
+        rusqlite::params![
+            "v1|6:dookie|6:claude|9:session-1",
+            "session-1",
+            "claude",
+            "dookie",
+            "2026-08-01T02:00:00.000Z",
+        ],
+    )
+    .unwrap();
+
+    let primary_worktree_id: Option<i64> = conn
+        .query_row(
+            "SELECT primary_worktree_id FROM agent_runs WHERE native_session_id = 'session-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(primary_worktree_id, None);
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_runs
+                (run_key, native_session_id, tool, hostname, status,
+                 status_observed_at, started_at, last_activity_at)
+             VALUES ('bad-status', 'session-2', 'claude', 'dookie',
+                     'running-ish', ?1, ?1, ?1)",
+            ["2026-08-01T02:00:01.000Z"],
+        )
+        .is_err(),
+        "unknown lifecycle status must be rejected"
+    );
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_runs
+                (run_key, native_session_id, tool, hostname, status,
+                 status_observed_at, started_at, last_activity_at)
+             VALUES ('different-run-key', 'session-1', 'claude', 'dookie',
+                     'idle', ?1, ?1, ?1)",
+            ["2026-08-01T02:00:02.000Z"],
+        )
+        .is_err(),
+        "host/tool/native-session identity must be unique"
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'agent_runs'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for expected in [
+        "idx_agent_runs_activity",
+        "idx_agent_runs_status_activity",
+        "idx_agent_runs_worktree_activity",
+        "idx_agent_runs_tool_host",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "missing {expected}"
+        );
+    }
+
+    let query_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM agent_runs
+             WHERE status = 'active'
+             ORDER BY last_activity_at DESC, id DESC
+             LIMIT 50",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        query_plan
+            .iter()
+            .any(|detail| detail.contains("idx_agent_runs_status_activity")),
+        "active-run query must use status/activity index: {query_plan:?}"
+    );
+
+    // Verify migration 47 is applied (schema includes OTLP tables)
+    let migration_47_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        migration_47_count, 1,
+        "migration 47 should be applied (OTLP metric points)"
+    );
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-run-evidence.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES ('repo-evidence', 'dookie', '/workspace/cortex/.git',
+                 '/workspace/cortex', 'cortex', ?1, ?1)",
+        ["2026-08-01T02:30:00.000Z"],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+    for (key, path) in [
+        ("wt-main", "/workspace/cortex"),
+        ("wt-feature", "/workspace/cortex/.worktrees/feature"),
+    ] {
+        conn.execute(
+            "INSERT INTO repository_worktrees
+                (worktree_key, repository_id, hostname, path, git_dir,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, 'dookie', ?3, ?4, ?5, ?5)",
+            rusqlite::params![
+                key,
+                repository_id,
+                path,
+                format!("{path}/.git"),
+                "2026-08-01T02:30:00.000Z",
+            ],
+        )
+        .unwrap();
+    }
+    let main_worktree: i64 = conn
+        .query_row(
+            "SELECT id FROM repository_worktrees WHERE worktree_key = 'wt-main'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let feature_worktree: i64 = conn
+        .query_row(
+            "SELECT id FROM repository_worktrees WHERE worktree_key = 'wt-feature'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-evidence', 'session-evidence', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T02:30:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    let actor_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_actors)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        actor_columns,
+        vec![
+            "id",
+            "actor_key",
+            "run_id",
+            "native_actor_id",
+            "actor_type",
+            "display_name",
+            "started_at",
+            "last_activity_at",
+            "ended_at",
+            "metadata_json",
+        ]
+    );
+    let evidence_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_worktrees)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        evidence_columns,
+        vec![
+            "id",
+            "relation_key",
+            "run_id",
+            "worktree_id",
+            "evidence_kind",
+            "evidence_source",
+            "trust_level",
+            "confidence",
+            "is_primary",
+            "first_seen_at",
+            "last_seen_at",
+            "metadata_json",
+        ]
+    );
+
+    conn.execute(
+        "INSERT INTO agent_run_actors
+            (actor_key, run_id, native_actor_id, actor_type, started_at, metadata_json)
+         VALUES ('actor-key-1', ?1, 'subagent-1', 'subagent', ?2, '{}')",
+        rusqlite::params![run_id, "2026-08-01T02:30:01.000Z"],
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_actors
+                (actor_key, run_id, native_actor_id, metadata_json)
+             VALUES ('actor-key-2', ?1, 'subagent-1', '{}')",
+            [run_id],
+        )
+        .is_err(),
+        "native actor identity must dedupe within one run"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_actors
+                (actor_key, run_id, native_actor_id, metadata_json)
+             VALUES ('actor-bad-json', ?1, 'subagent-2', '{')",
+            [run_id],
+        )
+        .is_err(),
+        "actor metadata must be valid JSON"
+    );
+
+    let insert_relation = |relation_key: &str,
+                           worktree_id: i64,
+                           evidence_kind: &str,
+                           evidence_source: &str,
+                           trust: &str,
+                           confidence: f64,
+                           is_primary: i64,
+                           last_seen: &str| {
+        conn.execute(
+            "INSERT INTO agent_run_worktrees
+                (relation_key, run_id, worktree_id, evidence_kind, evidence_source,
+                 trust_level, confidence, is_primary, first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            rusqlite::params![
+                relation_key,
+                run_id,
+                worktree_id,
+                evidence_kind,
+                evidence_source,
+                trust,
+                confidence,
+                is_primary,
+                last_seen,
+            ],
+        )
+    };
+    insert_relation(
+        "rel-verified",
+        main_worktree,
+        "hook_cwd",
+        "hook:1",
+        "verified",
+        1.0,
+        1,
+        "2026-08-01T02:30:02.000Z",
+    )
+    .unwrap();
+    insert_relation(
+        "rel-claimed",
+        feature_worktree,
+        "transcript_project_path",
+        "log:2",
+        "claimed",
+        0.8,
+        0,
+        "2026-08-01T02:30:03.000Z",
+    )
+    .unwrap();
+
+    assert!(
+        insert_relation(
+            "rel-duplicate",
+            main_worktree,
+            "hook_cwd",
+            "hook:1",
+            "verified",
+            0.9,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "the same evidence tuple must not create a second relation"
+    );
+    assert!(
+        insert_relation(
+            "rel-confidence-high",
+            main_worktree,
+            "other",
+            "source:high",
+            "inferred",
+            1.01,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "confidence above one must be rejected"
+    );
+    assert!(
+        insert_relation(
+            "rel-confidence-low",
+            main_worktree,
+            "other",
+            "source:low",
+            "inferred",
+            -0.01,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "negative confidence must be rejected"
+    );
+    assert!(
+        insert_relation(
+            "rel-bad-trust",
+            main_worktree,
+            "other",
+            "source:trust",
+            "magical",
+            0.5,
+            0,
+            "2026-08-01T02:30:04.000Z",
+        )
+        .is_err(),
+        "unknown trust levels must be rejected"
+    );
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT relation_key FROM agent_run_worktrees
+             WHERE run_id = ?1
+             ORDER BY is_primary DESC, confidence DESC, last_seen_at DESC, id",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["rel-verified", "rel-claimed"]);
+    let distinct_worktrees: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT worktree_id) FROM agent_run_worktrees WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(distinct_worktrees, 2, "one run may have worktree history");
+
+    for expected in [
+        "idx_agent_run_actors_run",
+        "idx_agent_run_worktrees_run",
+        "idx_agent_run_worktrees_worktree",
+    ] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [expected],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "missing {expected}");
+    }
+}
+
+#[test]
+fn schema_43_fixture_upgrades_to_47_and_preserves_legacy_rows() {
+    const FIXTURE: &str = include_str!("../../tests/fixtures/schema-43.sql");
+    assert!(!FIXTURE.contains("jmagar"));
+    assert!(!FIXTURE.contains("/home/"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("schema-43-upgrade.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(FIXTURE).unwrap();
+        let version: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 43);
+    }
+
+    let config = test_storage_config(db_path);
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, 47);
+
+    let legacy_log: (String, String, String) = conn
+        .query_row(
+            "SELECT hostname, message, ai_session_id FROM logs WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        legacy_log,
+        (
+            "fixture-host".to_string(),
+            "synthetic legacy log".to_string(),
+            "fixture-session".to_string(),
+        )
+    );
+
+    let rollup_count: i64 = conn
+        .query_row(
+            "SELECT event_count FROM ai_session_rollup
+             WHERE ai_project = 'fixture-project'
+               AND ai_tool = 'fixture-tool'
+               AND ai_session_id = 'fixture-session'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rollup_count, 1);
+
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
 }
 
 #[test]
@@ -2415,4 +3589,1540 @@ fn migration_42_widens_old_aliases_constraint_and_preserves_rows() {
         rusqlite::params![entity_id],
     )
     .unwrap();
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_run_events_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-events.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: table does not exist yet
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_events)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "event_key",
+            "run_id",
+            "actor_id",
+            "worktree_id",
+            "commit_id",
+            "observed_at",
+            "ingested_at",
+            "event_kind",
+            "source_kind",
+            "source_id",
+            "source_log_id",
+            "provider_sequence",
+            "trace_id",
+            "span_id",
+            "severity",
+            "title",
+            "summary",
+            "payload_json",
+            "content_scrubbed",
+            "created_at",
+        ]
+    );
+
+    // Insert a test run first for foreign key constraint
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-events-test', 'session-events', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T02:40:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Test unique event key constraint
+    conn.execute(
+        "INSERT INTO agent_run_events
+            (event_key, run_id, observed_at, ingested_at, event_kind,
+             source_kind, source_id, payload_json)
+         VALUES ('evt-1', ?1, ?2, ?2, 'lifecycle', 'test', 'src-1', '{}')",
+        rusqlite::params![run_id, "2026-08-01T02:40:01.000Z"],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES ('evt-1', ?1, ?2, ?2, 'command', 'test', 'src-2', '{}')",
+            rusqlite::params![run_id, "2026-08-01T02:40:02.000Z"],
+        )
+        .is_err(),
+        "duplicate event key must be rejected"
+    );
+
+    // Test invalid event kind rejection
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES ('evt-2', ?1, ?2, ?2, 'invalid_kind', 'test', 'src-3', '{}')",
+            rusqlite::params![run_id, "2026-08-01T02:40:03.000Z"],
+        )
+        .is_err(),
+        "invalid event kind must be rejected"
+    );
+
+    // Test JSON validation on payload
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES ('evt-3', ?1, ?2, ?2, 'command', 'test', 'src-4', '{invalid')",
+            rusqlite::params![run_id, "2026-08-01T02:40:04.000Z"],
+        )
+        .is_err(),
+        "invalid payload JSON must be rejected"
+    );
+
+    // Test 1000-event fixture for query plan and ordering
+    let mut events = Vec::new();
+    for i in 0..1000 {
+        let event_key = format!("evt-batch-{}", i);
+        events.push((event_key, run_id));
+    }
+
+    for (event_key, run_id) in &events {
+        conn.execute(
+            "INSERT INTO agent_run_events
+                (event_key, run_id, observed_at, ingested_at, event_kind,
+                 source_kind, source_id, payload_json)
+             VALUES (?1, ?2, datetime('now'), datetime('now'), 'command', 'test', ?3, '{}')",
+            rusqlite::params![event_key, run_id, format!("src-{}", event_key)],
+        )
+        .unwrap();
+    }
+
+    // Verify query uses index and returns stable ordering
+    let query_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+                  SELECT id, observed_at FROM agent_run_events
+                  WHERE run_id = ?1
+                  ORDER BY observed_at DESC, id DESC
+                  LIMIT 10",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert!(
+        query_plan
+            .iter()
+            .any(|detail| detail.contains("idx_agent_run_events_run_order")),
+        "query plan should use idx_agent_run_events_run_order index"
+    );
+
+    // Verify stable ordering
+    let mut prev_observed_at: Option<String> = None;
+    let mut prev_id: Option<i64> = None;
+
+    let results: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT id, observed_at FROM agent_run_events
+                  WHERE run_id = ?1
+                  ORDER BY observed_at DESC, id DESC
+                  LIMIT 100",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![run_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    for (id, observed_at) in results {
+        if let (Some(prev_id), Some(prev_observed)) = (prev_id, prev_observed_at) {
+            assert!(
+                observed_at <= prev_observed || (observed_at == prev_observed && id < prev_id),
+                "results should be ordered by observed_at DESC, id DESC"
+            );
+        }
+        prev_observed_at = Some(observed_at);
+        prev_id = Some(id);
+    }
+
+    // Verify indexes exist (excluding autoindexes created by UNIQUE constraints)
+    let indexes: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_run_events' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        indexes,
+        vec![
+            "idx_agent_run_events_run_kind",
+            "idx_agent_run_events_run_order",
+            "idx_agent_run_events_source_log",
+            "idx_agent_run_events_trace",
+        ]
+    );
+}
+
+#[test]
+fn init_pool_creates_agent_stream_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-outbox.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: table does not exist yet
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_stream_outbox)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "outbox_key",
+            "run_id",
+            "stream_event_type",
+            "expires_at",
+            "payload_json",
+            "created_at",
+        ]
+    );
+
+    // Insert test data for foreign key constraint
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-outbox-test', 'session-outbox', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:00:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Test unique outbox_key constraint
+    conn.execute(
+        "INSERT INTO agent_stream_outbox
+            (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+         VALUES ('outbox-1', ?1, 'lifecycle', ?2, '{}')",
+        rusqlite::params![run_id, "2026-08-01T03:01:00.000Z"],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_stream_outbox
+                (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+             VALUES ('outbox-1', ?1, 'command', ?2, '{}')",
+            rusqlite::params![run_id, "2026-08-01T03:02:00.000Z"],
+        )
+        .is_err(),
+        "duplicate outbox key must be rejected"
+    );
+
+    // Test JSON validation on payload
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_stream_outbox
+                (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+             VALUES ('outbox-2', ?1, 'command', ?2, '{invalid')",
+            rusqlite::params![run_id, "2026-08-01T03:03:00.000Z"],
+        )
+        .is_err(),
+        "invalid payload JSON must be rejected"
+    );
+
+    // Test cascade delete: when run is deleted, outbox rows are removed
+    conn.execute(
+        "INSERT INTO agent_stream_outbox
+            (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+         VALUES ('outbox-3', ?1, 'skill', ?2, '{}')",
+        rusqlite::params![run_id, "2026-08-01T03:04:00.000Z"],
+    )
+    .unwrap();
+
+    let outbox_count_before: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_stream_outbox WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        outbox_count_before, 2,
+        "should have 2 outbox rows (one duplicate failed)"
+    );
+
+    // Delete the run
+    conn.execute(
+        "DELETE FROM agent_runs WHERE id = ?1",
+        rusqlite::params![run_id],
+    )
+    .unwrap();
+
+    let outbox_count_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_stream_outbox WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        outbox_count_after, 0,
+        "all outbox rows should be cascade deleted"
+    );
+
+    // Verify query uses index and returns ascending order
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-outbox-query', 'session-outbox-query', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:05:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Insert 100 outbox events
+    for i in 0..100 {
+        let outbox_key = format!("outbox-query-{}", i);
+        conn.execute(
+            "INSERT INTO agent_stream_outbox
+                (outbox_key, run_id, stream_event_type, expires_at, payload_json)
+             VALUES (?1, ?2, 'command', datetime('now', '+1 hour'), '{}')",
+            rusqlite::params![outbox_key, run_id],
+        )
+        .unwrap();
+    }
+
+    let query_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+                  SELECT id FROM agent_stream_outbox
+                  WHERE run_id = ?1
+                  ORDER BY id ASC
+                  LIMIT 10",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert!(
+        query_plan
+            .iter()
+            .any(|detail| detail.contains("idx_agent_stream_outbox_run")),
+        "query plan should use idx_agent_stream_outbox_run index"
+    );
+
+    // Verify indexes exist
+    let indexes: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_stream_outbox' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        indexes,
+        vec![
+            "idx_agent_stream_outbox_expiry",
+            "idx_agent_stream_outbox_run",
+        ]
+    );
+}
+
+#[test]
+fn init_pool_creates_agent_run_commits_and_projection_cursors() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-commits.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // RED: tables do not exist yet
+    let commit_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_run_commits)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        commit_columns,
+        vec![
+            "id",
+            "relation_key",
+            "run_id",
+            "commit_id",
+            "worktree_id",
+            "evidence_kind",
+            "evidence_source",
+            "trust_level",
+            "confidence",
+            "first_seen_at",
+            "last_seen_at",
+            "metadata_json",
+        ]
+    );
+
+    let cursor_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(agent_projection_cursors)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        cursor_columns,
+        vec![
+            "id",
+            "cursor_type",
+            "source_name",
+            "cursor_value",
+            "updated_at",
+        ]
+    );
+
+    // Insert test data for foreign key constraints
+    conn.execute(
+        "INSERT INTO repositories (repository_key, hostname, common_git_dir, primary_path, display_name, first_seen_at, last_seen_at)
+         VALUES ('repo-test', 'dookie', '/tmp/repo', '/tmp/repo', 'Test Repo', ?1, ?2)",
+        ["2026-08-01T02:50:00.000Z", "2026-08-01T02:50:00.000Z"],
+    )
+    .unwrap();
+    let repo_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+         VALUES ('wt-main', ?1, 'dookie', '/tmp/repo', '/tmp/repo/.git', ?2, ?2)",
+        rusqlite::params![repo_id, "2026-08-01T02:50:01.000Z"],
+    )
+    .unwrap();
+    let worktree_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO git_commits
+            (repository_id, sha, parent_shas_json, subject, author_name,
+             first_observed_at, last_observed_at)
+         VALUES (?1, 'abc123', '[]', 'Test commit', 'Test Author', ?2, ?2)",
+        rusqlite::params![repo_id, "2026-08-01T02:50:02.000Z"],
+    )
+    .unwrap();
+    let commit_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('run-commits-test', 'session-commits', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T02:50:03.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    // Test unique relation_key constraint
+    conn.execute(
+        "INSERT INTO agent_run_commits
+            (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+             evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+         VALUES ('rel-1', ?1, ?2, ?3, 'git_head', 'git', 'verified', 0.95, ?4, ?4)",
+        rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:04.000Z"],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_commits
+                (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+                 evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+             VALUES ('rel-1', ?1, ?2, ?3, 'git_status', 'git', 'claimed', 0.5, ?4, ?4)",
+            rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:05.000Z"],
+        )
+        .is_err(),
+        "duplicate relation key must be rejected"
+    );
+
+    // Test trust level constraint
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_commits
+                (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+                 evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+             VALUES ('rel-2', ?1, ?2, ?3, 'git_head', 'git', 'invalid_trust', 0.9, ?4, ?4)",
+            rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:06.000Z"],
+        )
+        .is_err(),
+        "invalid trust level must be rejected"
+    );
+
+    // Test confidence range constraint
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_run_commits
+                (relation_key, run_id, commit_id, worktree_id, evidence_kind,
+                 evidence_source, trust_level, confidence, first_seen_at, last_seen_at)
+             VALUES ('rel-3', ?1, ?2, ?3, 'git_head', 'git', 'verified', 1.5, ?4, ?4)",
+            rusqlite::params![run_id, commit_id, worktree_id, "2026-08-01T02:50:07.000Z"],
+        )
+        .is_err(),
+        "confidence > 1.0 must be rejected"
+    );
+
+    // Verify seeded projection cursors (exactly 8 rows)
+    let cursor_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        cursor_count, 8,
+        "should have exactly 8 seeded projection cursors"
+    );
+
+    // Verify cursor types are correct
+    let cursor_types: Vec<String> = conn
+        .prepare("SELECT DISTINCT cursor_type FROM agent_projection_cursors ORDER BY cursor_type")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        cursor_types,
+        vec![
+            "agent_run_events",
+            "agent_runs",
+            "git_commits",
+            "otel_metric_points",
+            "otel_spans",
+            "repositories",
+            "repository_observations",
+            "repository_worktrees",
+        ]
+    );
+
+    // Verify INSERT OR IGNORE preserves existing cursors on repeated open
+    drop(conn);
+    drop(pool);
+
+    let pool2 = init_pool(&config).unwrap();
+    let conn2 = pool2.get().unwrap();
+
+    let cursor_count2: i64 = conn2
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        cursor_count2, 8,
+        "should still have exactly 8 cursors after reopen"
+    );
+
+    // Verify we can advance a cursor
+    conn2
+        .execute(
+            "UPDATE agent_projection_cursors
+                SET cursor_value = 'advanced-123', updated_at = '2026-08-01T03:00:00.000Z'
+              WHERE cursor_type = 'agent_runs' AND source_name = 'default'",
+            [],
+        )
+        .unwrap();
+
+    // Reopen again and verify the advanced cursor is preserved
+    drop(conn2);
+    drop(pool2);
+
+    let pool3 = init_pool(&config).unwrap();
+    let conn3 = pool3.get().unwrap();
+
+    let advanced_value: String = conn3
+        .query_row(
+            "SELECT cursor_value FROM agent_projection_cursors
+              WHERE cursor_type = 'agent_runs' AND source_name = 'default'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        advanced_value, "advanced-123",
+        "advanced cursor should be preserved"
+    );
+
+    // Verify indexes exist
+    let commit_indexes: Vec<String> = conn3
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_run_commits' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        commit_indexes,
+        vec!["idx_agent_run_commits_commit", "idx_agent_run_commits_run",]
+    );
+
+    let cursor_indexes: Vec<String> = conn3
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_projection_cursors' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(cursor_indexes, vec!["idx_agent_projection_cursors_type"]);
+}
+
+#[test]
+fn migration_45_completes_transactionally_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("migration-45.db");
+
+    // Manually create a schema-44 database by stopping before migration 45
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+    // Apply the base schema
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS logs (
+             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+             timestamp   TEXT NOT NULL,
+             hostname    TEXT NOT NULL,
+             facility    TEXT,
+             severity    TEXT NOT NULL,
+             app_name    TEXT,
+             process_id  TEXT,
+             message     TEXT NOT NULL,
+             raw         TEXT NOT NULL,
+             received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             source_ip   TEXT NOT NULL DEFAULT '',
+             ai_tool            TEXT,
+             ai_project         TEXT,
+             ai_session_id      TEXT,
+             ai_transcript_path TEXT,
+             metadata_json      TEXT
+         );
+         CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_hostname  ON logs(hostname);
+         CREATE INDEX IF NOT EXISTS idx_logs_severity  ON logs(severity);
+         CREATE INDEX IF NOT EXISTS idx_logs_app_name  ON logs(app_name);
+         CREATE INDEX IF NOT EXISTS idx_logs_host_time ON logs(hostname, timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_sev_time ON logs(severity, timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_app_name_timestamp ON logs(app_name, timestamp);
+         CREATE INDEX IF NOT EXISTS idx_logs_received_at ON logs(received_at);
+         CREATE INDEX IF NOT EXISTS idx_logs_hostname_received_at ON logs(hostname, received_at);
+         CREATE INDEX IF NOT EXISTS idx_logs_source_ip_timestamp ON logs(source_ip, timestamp);
+
+         CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
+             message,
+             content='logs',
+             content_rowid='id',
+             tokenize='porter unicode61'
+         );
+
+         CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
+             INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+         END;
+
+         CREATE TABLE IF NOT EXISTS hosts (
+             hostname    TEXT PRIMARY KEY,
+             first_seen  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             last_seen   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             log_count   INTEGER NOT NULL DEFAULT 0
+         );
+
+         CREATE TABLE IF NOT EXISTS schema_migrations (
+             version     INTEGER PRIMARY KEY,
+             applied_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );",
+    )
+    .unwrap();
+
+    // Manually insert migration 44 marker (simulating migration 44 was applied)
+    conn.execute("INSERT INTO schema_migrations (version) VALUES (44)", [])
+        .unwrap();
+
+    // Apply migration 44 tables manually
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS repositories (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_key      TEXT NOT NULL UNIQUE,
+             hostname            TEXT NOT NULL,
+             common_git_dir      TEXT NOT NULL,
+             primary_path        TEXT NOT NULL,
+             display_name        TEXT NOT NULL,
+             remote_url_hash     TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, common_git_dir)
+         );
+         CREATE INDEX IF NOT EXISTS idx_repositories_host_seen
+             ON repositories(hostname, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_repositories_display
+             ON repositories(display_name COLLATE NOCASE);
+
+         CREATE TABLE IF NOT EXISTS repository_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             worktree_key        TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             hostname            TEXT NOT NULL,
+             path                TEXT NOT NULL,
+             git_dir             TEXT NOT NULL,
+             branch_ref          TEXT,
+             branch_name         TEXT,
+             head_sha            TEXT,
+             upstream_ref        TEXT,
+             detached            INTEGER NOT NULL DEFAULT 0 CHECK (detached IN (0, 1)),
+             bare                INTEGER NOT NULL DEFAULT 0 CHECK (bare IN (0, 1)),
+             locked              INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+             lock_reason         TEXT,
+             prunable            INTEGER NOT NULL DEFAULT 0 CHECK (prunable IN (0, 1)),
+             prune_reason        TEXT,
+             dirty               INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+             staged_count        INTEGER NOT NULL DEFAULT 0 CHECK (staged_count >= 0),
+             unstaged_count      INTEGER NOT NULL DEFAULT 0 CHECK (unstaged_count >= 0),
+             untracked_count     INTEGER NOT NULL DEFAULT 0 CHECK (untracked_count >= 0),
+             ahead               INTEGER CHECK (ahead IS NULL OR ahead >= 0),
+             behind              INTEGER CHECK (behind IS NULL OR behind >= 0),
+             status_hash         TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(repository_id, path),
+             UNIQUE(repository_id, hostname, git_dir)
+         );
+         CREATE INDEX IF NOT EXISTS idx_repository_worktrees_repo
+             ON repository_worktrees(repository_id, last_seen_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_repository_worktrees_host
+             ON repository_worktrees(hostname, path);
+
+         CREATE TABLE IF NOT EXISTS repository_observations (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             observation_key    TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             observed_at         TEXT NOT NULL,
+             observed_from       TEXT NOT NULL,
+             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_repo_time
+             ON repository_observations(repository_id, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_worktree_time
+             ON repository_observations(worktree_id, observed_at DESC, id DESC);
+
+         CREATE TABLE IF NOT EXISTS git_commits (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             sha                 TEXT NOT NULL,
+             parent_shas_json    TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parent_shas_json)),
+             author_name         TEXT,
+             author_email_hash   TEXT,
+             authored_at         TEXT,
+             committed_at        TEXT,
+             subject             TEXT NOT NULL DEFAULT '',
+             changed_files       INTEGER CHECK (changed_files IS NULL OR changed_files >= 0),
+             insertions          INTEGER CHECK (insertions IS NULL OR insertions >= 0),
+             deletions           INTEGER CHECK (deletions IS NULL OR deletions >= 0),
+             changed_paths_json  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(changed_paths_json)),
+             first_observed_at   TEXT NOT NULL,
+             last_observed_at    TEXT NOT NULL,
+             reachable           INTEGER NOT NULL DEFAULT 1 CHECK (reachable IN (0, 1)),
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(repository_id, sha)
+         );
+         CREATE INDEX IF NOT EXISTS idx_git_commits_repo_time
+             ON git_commits(repository_id, committed_at DESC, id DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_runs (
+             id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+             run_key                 TEXT NOT NULL UNIQUE,
+             native_session_id       TEXT NOT NULL,
+             tool                    TEXT NOT NULL,
+             provider_tool           TEXT,
+             hostname                TEXT NOT NULL,
+             parent_run_id           INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             previous_run_id         INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             primary_worktree_id     INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             transcript_path         TEXT,
+             process_id              TEXT,
+             status                  TEXT NOT NULL CHECK (status IN (
+                 'starting', 'active', 'waiting', 'idle', 'stale',
+                 'completed', 'failed', 'abandoned'
+             )),
+             status_reason           TEXT NOT NULL DEFAULT '',
+             status_observed_at      TEXT NOT NULL,
+             started_at              TEXT NOT NULL,
+             last_activity_at        TEXT NOT NULL,
+             ended_at                TEXT,
+             first_source_log_id     INTEGER,
+             last_source_log_id      INTEGER,
+             last_event_id           INTEGER,
+             event_count             INTEGER NOT NULL DEFAULT 0 CHECK (event_count >= 0),
+             error_count             INTEGER NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+             primary_branch          TEXT,
+             start_head_sha          TEXT,
+             current_head_sha        TEXT,
+             projection_version      INTEGER NOT NULL DEFAULT 1,
+             freshness_json          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(freshness_json)),
+             metadata_json           TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, tool, native_session_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_activity
+             ON agent_runs(last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_status_activity
+             ON agent_runs(status, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree_activity
+             ON agent_runs(primary_worktree_id, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_tool_host
+             ON agent_runs(tool, hostname, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_actors (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             actor_key           TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             native_actor_id     TEXT NOT NULL,
+             actor_type          TEXT,
+             display_name        TEXT,
+             started_at          TEXT,
+             last_activity_at    TEXT,
+             ended_at            TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, native_actor_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_actors_run
+             ON agent_run_actors(run_id, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             relation_key        TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             worktree_id         INTEGER NOT NULL REFERENCES repository_worktrees(id) ON DELETE CASCADE,
+             evidence_kind       TEXT NOT NULL,
+             evidence_source     TEXT NOT NULL,
+             trust_level         TEXT NOT NULL CHECK (trust_level IN (
+                 'verified', 'claimed', 'correlated', 'inferred', 'refuted'
+             )),
+             confidence          REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+             is_primary          INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, worktree_id, evidence_kind, evidence_source)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_run
+             ON agent_run_worktrees(run_id, is_primary DESC, confidence DESC, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_worktree
+             ON agent_run_worktrees(worktree_id, last_seen_at DESC, run_id);",
+    )
+    .unwrap();
+
+    drop(conn);
+
+    // Now reopen the database - migration 45 should apply transactionally
+    let pool_45 = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
+    let conn_45 = pool_45.get().unwrap();
+
+    // Verify we're now at schema 47 (45 + 46 + 47 are applied automatically)
+    let schema_version_final: i64 = conn_45
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        schema_version_final, 47,
+        "should upgrade from schema 44 to schema 47 (applying 45, 46, 47)"
+    );
+
+    // Verify all migration 45 tables now exist
+    let tables_45: Vec<String> = conn_45
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        tables_45,
+        vec![
+            "agent_projection_cursors",
+            "agent_run_actors",
+            "agent_run_commits",
+            "agent_run_events",
+            "agent_run_worktrees",
+            "agent_runs",
+            "agent_stream_outbox",
+        ],
+        "should have all migration 45 agent tables"
+    );
+
+    // Verify seeded cursors exist
+    let cursor_count: i64 = conn_45
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(cursor_count, 8, "should have 8 seeded cursors");
+
+    drop(conn_45);
+    drop(pool_45);
+
+    // Verify idempotency: reopening should keep schema at 45 and not reapply migration
+    let pool_again = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
+    let conn_again = pool_again.get().unwrap();
+
+    let schema_version_again: i64 = conn_again
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        schema_version_again, 47,
+        "should remain at schema 47 after migrations 45, 46, 47"
+    );
+
+    let cursor_count_again: i64 = conn_again
+        .query_row("SELECT COUNT(*) FROM agent_projection_cursors", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        cursor_count_again, 8,
+        "should still have 8 cursors (not duplicated)"
+    );
+
+    // Verify migration 45 marker exists only once
+    let migration_45_count: i64 = conn_again
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 45",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        migration_45_count, 1,
+        "should have exactly one migration 45 marker"
+    );
+
+    // Verify foreign key checks pass
+    let fk_check: String = conn_again
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .unwrap_or("ok".to_string());
+    assert_eq!(fk_check, "ok", "foreign key checks should pass");
+
+    // Verify integrity checks pass
+    let integrity_result: String = conn_again
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity_result, "ok", "integrity checks should pass");
+}
+
+#[test]
+fn migration_45_fresh_database_applies_transactionally() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = StorageConfig::for_test(dir.path().join("migration-45-fresh.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    // Fresh database should be at schema 45
+    let schema_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(schema_version, 47, "fresh database should be at schema 47");
+
+    // Verify all migration 45 tables still exist (additive migrations preserve them)
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert_eq!(
+        tables,
+        vec![
+            "agent_projection_cursors",
+            "agent_run_actors",
+            "agent_run_commits",
+            "agent_run_events",
+            "agent_run_worktrees",
+            "agent_runs",
+            "agent_stream_outbox",
+        ],
+        "migration 47 should preserve all migration 45 tables"
+    );
+}
+
+// AO-014: migration 46 OTLP span table contract.
+#[test]
+fn migration_46_creates_otel_spans_table_and_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("migration-46-otel-spans.db");
+    let config = StorageConfig::for_test(db_path.clone());
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(otel_spans)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "trace_id",
+            "span_id",
+            "parent_span_id",
+            "trace_state",
+            "flags",
+            "span_name",
+            "span_kind",
+            "start_time_unix_nano",
+            "end_time_unix_nano",
+            "duration_nano",
+            "status_code",
+            "status_message",
+            "hostname",
+            "service_name",
+            "service_version",
+            "scope_name",
+            "scope_version",
+            "ai_tool",
+            "ai_project",
+            "ai_session_id",
+            "run_id",
+            "resource_json",
+            "attributes_json",
+            "events_json",
+            "links_json",
+            "received_at",
+            "content_scrubbed",
+        ]
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'otel_spans'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for expected in [
+        "idx_otel_spans_run_time",
+        "idx_otel_spans_service_time",
+        "idx_otel_spans_session_time",
+        "idx_otel_spans_trace",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "missing {expected}: {indexes:?}"
+        );
+    }
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('span-run', 'span-session', 'claude', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:00:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    let insert_span = |span_id: &str, start: i64| {
+        conn.execute(
+            "INSERT INTO otel_spans
+                (trace_id, span_id, parent_span_id, span_name, span_kind,
+                 start_time_unix_nano, end_time_unix_nano, duration_nano,
+                 hostname, service_name, ai_tool, ai_session_id, run_id,
+                 resource_json, attributes_json, events_json, links_json,
+                 received_at, content_scrubbed)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 100,
+                     'dookie', 'cortex', 'claude', 'span-session', ?7,
+                     '{}', '{\"worktree\":\"cortex\"}', '[]', '[]', ?8, 1)",
+            rusqlite::params![
+                "0123456789abcdef0123456789abcdef",
+                span_id,
+                "1111111111111111",
+                format!("span-{span_id}"),
+                start,
+                start + 100,
+                run_id,
+                "2026-08-01T03:00:00.000Z",
+            ],
+        )
+    };
+    insert_span("2222222222222222", 100).unwrap();
+    insert_span("3333333333333333", 200).unwrap();
+
+    assert!(
+        insert_span("2222222222222222", 300).is_err(),
+        "trace/span identity must deduplicate"
+    );
+    for (label, sql) in [
+        (
+            "trace length",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at)
+             VALUES ('short', '4444444444444444', 'bad-trace', 1, 1, 2, 1, 'now')",
+        ),
+        (
+            "span length",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at)
+             VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'short', 'bad-span', 1, 1, 2, 1, 'now')",
+        ),
+        (
+            "parent length",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, parent_span_id, span_name, span_kind,
+                 start_time_unix_nano, end_time_unix_nano, duration_nano, received_at)
+             VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '5555555555555555', 'short',
+                     'bad-parent', 1, 1, 2, 1, 'now')",
+        ),
+        (
+            "negative duration",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at)
+             VALUES ('cccccccccccccccccccccccccccccccc', '6666666666666666',
+                     'bad-duration', 1, 2, 1, -1, 'now')",
+        ),
+        (
+            "invalid JSON",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, resource_json, received_at)
+             VALUES ('dddddddddddddddddddddddddddddddd', '7777777777777777',
+                     'bad-json', 1, 1, 2, 1, '{', 'now')",
+        ),
+        (
+            "scrub flag",
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, received_at, content_scrubbed)
+             VALUES ('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', '8888888888888888',
+                     'bad-scrub', 1, 1, 2, 1, 'now', 2)",
+        ),
+    ] {
+        assert!(conn.execute(sql, []).is_err(), "{label} must be rejected");
+    }
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT span_id FROM otel_spans
+             WHERE run_id = ?1
+             ORDER BY start_time_unix_nano DESC, id DESC",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["3333333333333333", "2222222222222222"]);
+
+    let run_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM otel_spans
+             WHERE run_id = ?1
+             ORDER BY start_time_unix_nano DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        run_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_spans_run_time")),
+        "run timeline query must use its index: {run_plan:?}"
+    );
+
+    let trace_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT span_id FROM otel_spans
+             WHERE trace_id = ?1
+             ORDER BY start_time_unix_nano, span_id",
+        )
+        .unwrap()
+        .query_map(["0123456789abcdef0123456789abcdef"], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        trace_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_spans_trace")),
+        "trace query must use its index: {trace_plan:?}"
+    );
+
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 46",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+
+    conn.execute("DELETE FROM agent_runs WHERE id = ?1", [run_id])
+        .unwrap();
+    let null_run_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM otel_spans WHERE run_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(null_run_count, 2, "run deletion must preserve spans");
+
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+
+    drop(conn);
+    drop(pool);
+    let reopened = init_pool(&StorageConfig::for_test(db_path)).unwrap();
+    let reopened_conn = reopened.get().unwrap();
+    let marker_count: i64 = reopened_conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 46",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1, "migration 46 must be idempotent");
+}
+
+// AO-015: migration 47 OTLP metric-point table contract.
+#[test]
+fn migration_47_creates_otel_metric_points_table_and_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("migration-47-otel-metrics.db");
+    let config = StorageConfig::for_test(db_path.clone());
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(otel_metric_points)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "point_key",
+            "metric_name",
+            "description",
+            "unit",
+            "instrument_kind",
+            "aggregation_temporality",
+            "monotonic",
+            "start_time_unix_nano",
+            "time_unix_nano",
+            "hostname",
+            "service_name",
+            "service_version",
+            "scope_name",
+            "scope_version",
+            "ai_tool",
+            "ai_project",
+            "ai_session_id",
+            "run_id",
+            "resource_json",
+            "attributes_json",
+            "value_json",
+            "exemplars_json",
+            "received_at",
+            "content_scrubbed",
+        ]
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'otel_metric_points'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for expected in [
+        "idx_otel_metric_points_name_time",
+        "idx_otel_metric_points_run_time",
+        "idx_otel_metric_points_session_time",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "missing {expected}: {indexes:?}"
+        );
+    }
+
+    conn.execute(
+        "INSERT INTO agent_runs
+            (run_key, native_session_id, tool, hostname, status,
+             status_observed_at, started_at, last_activity_at)
+         VALUES ('metric-run', 'metric-session', 'codex', 'dookie',
+                 'active', ?1, ?1, ?1)",
+        ["2026-08-01T03:30:00.000Z"],
+    )
+    .unwrap();
+    let run_id = conn.last_insert_rowid();
+
+    let insert_point = |point_key: &str, metric_name: &str, kind: &str, time: i64| {
+        conn.execute(
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, description, unit, instrument_kind,
+                 aggregation_temporality, monotonic, start_time_unix_nano,
+                 time_unix_nano, hostname, service_name, ai_tool,
+                 ai_session_id, run_id, resource_json, attributes_json,
+                 value_json, exemplars_json, received_at, content_scrubbed)
+             VALUES (?1, ?2, 'fixture', 'ms', ?3, 2, 0, ?4, ?5,
+                     'dookie', 'cortex', 'codex', 'metric-session', ?6,
+                     '{}', '{}', ?7, '[]', ?8, 1)",
+            rusqlite::params![
+                point_key,
+                metric_name,
+                kind,
+                time - 10,
+                time,
+                run_id,
+                "{\"value\":42.0}",
+                "2026-08-01T03:30:00.000Z",
+            ],
+        )
+    };
+    insert_point("point-1", "agent.latency", "gauge", 100).unwrap();
+    insert_point("point-2", "agent.latency", "histogram", 200).unwrap();
+
+    assert!(
+        insert_point("point-1", "agent.latency", "gauge", 300).is_err(),
+        "point_key must deduplicate"
+    );
+    assert!(
+        insert_point("bad-kind", "agent.latency", "invalid_kind", 300).is_err(),
+        "unknown instrument kind must be rejected"
+    );
+
+    for (label, sql, params) in [
+        (
+            "resource JSON",
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 resource_json, value_json, received_at)
+             VALUES (?1, 'agent.bad', 'gauge', 300, ?2, '{}', 'now')",
+            ("bad-resource", "{"),
+        ),
+        (
+            "value JSON",
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 value_json, received_at)
+             VALUES (?1, 'agent.bad', 'sum', 301, ?2, 'now')",
+            ("bad-value", "{"),
+        ),
+        (
+            "exemplars JSON",
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 value_json, exemplars_json, received_at)
+             VALUES (?1, 'agent.bad', 'summary', 302, '{}', ?2, 'now')",
+            ("bad-exemplars", "{"),
+        ),
+    ] {
+        assert!(
+            conn.execute(sql, rusqlite::params![params.0, params.1])
+                .is_err(),
+            "{label} must be rejected"
+        );
+    }
+
+    assert!(
+        conn.execute(
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, monotonic,
+                 time_unix_nano, value_json, received_at)
+             VALUES ('bad-monotonic', 'agent.bad', 'sum', 2, 303, '{}', 'now')",
+            [],
+        )
+        .is_err(),
+        "monotonic must be null, zero, or one"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano,
+                 value_json, received_at, content_scrubbed)
+             VALUES ('bad-scrub', 'agent.bad', 'gauge', 304, '{}', 'now', 2)",
+            [],
+        )
+        .is_err(),
+        "content_scrubbed must be zero or one"
+    );
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT point_key FROM otel_metric_points
+             WHERE run_id = ?1
+             ORDER BY time_unix_nano DESC, id DESC",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["point-2", "point-1"]);
+
+    let run_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM otel_metric_points
+             WHERE run_id = ?1
+             ORDER BY time_unix_nano DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map([run_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        run_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_metric_points_run_time")),
+        "run metric query must use its index: {run_plan:?}"
+    );
+
+    let name_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM otel_metric_points
+             WHERE metric_name = ?1
+             ORDER BY time_unix_nano DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map(["agent.latency"], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        name_plan
+            .iter()
+            .any(|detail| detail.contains("idx_otel_metric_points_name_time")),
+        "metric-name query must use its index: {name_plan:?}"
+    );
+
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+
+    conn.execute("DELETE FROM agent_runs WHERE id = ?1", [run_id])
+        .unwrap();
+    let null_run_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM otel_metric_points WHERE run_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        null_run_count, 2,
+        "run deletion must preserve metric points"
+    );
+
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+
+    drop(conn);
+    drop(pool);
+    let reopened = init_pool(&StorageConfig::for_test(db_path)).unwrap();
+    let reopened_conn = reopened.get().unwrap();
+    let marker_count: i64 = reopened_conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1, "migration 47 must be idempotent");
 }

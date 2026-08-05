@@ -645,3 +645,72 @@ fn test_payload(sequence: i64) -> HeartbeatPayload {
         containers: None,
     }
 }
+
+// ENV-001: remote transcript-forwarding environment compatibility.
+
+#[test]
+fn transcript_forward_env_resolution_precedence_is_stable() {
+    use TranscriptForwardEnvWarning::{ConflictingValues, LegacyAlias};
+
+    let cases = [
+        (None, None, false, None),
+        (Some("true"), None, true, None),
+        (Some("1"), None, true, None),
+        (Some("false"), None, false, None),
+        (None, Some("true"), true, Some(LegacyAlias)),
+        (None, Some("false"), false, Some(LegacyAlias)),
+        (Some("true"), Some("true"), true, Some(LegacyAlias)),
+        (Some("false"), Some("false"), false, Some(LegacyAlias)),
+        (Some("true"), Some("false"), true, Some(ConflictingValues)),
+        (Some("false"), Some("true"), false, Some(ConflictingValues)),
+    ];
+
+    for (current, legacy, enabled, warning) in cases {
+        assert_eq!(
+            resolve_ai_transcript_forward_env(current, legacy),
+            TranscriptForwardEnvResolution { enabled, warning },
+            "current={current:?}, legacy={legacy:?}"
+        );
+    }
+    assert_eq!(
+        LegacyAlias.code(),
+        "agent_ai_transcript_forward_legacy_alias"
+    );
+    assert_eq!(
+        ConflictingValues.code(),
+        "agent_ai_transcript_forward_conflict"
+    );
+}
+
+#[test]
+#[serial]
+fn transcript_forward_env_current_value_is_authoritative_in_config() {
+    let _new = EnvGuard::set(AI_TRANSCRIPT_FORWARD_ENV, "false");
+    let _legacy = EnvGuard::set(AI_TRANSCRIPT_FORWARD_LEGACY_ENV, "true");
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    assert!(!config.ai_transcripts);
+}
+
+#[test]
+#[serial]
+fn transcript_forward_env_legacy_value_is_honored_in_config() {
+    let _new = EnvGuard::unset(AI_TRANSCRIPT_FORWARD_ENV);
+    let _legacy = EnvGuard::set(AI_TRANSCRIPT_FORWARD_LEGACY_ENV, "true");
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    assert!(config.ai_transcripts);
+}
+
+#[test]
+fn transcript_forward_env_does_not_gate_local_sessions_watch_service() {
+    let unit = crate::setup::ai_watch_service_unit(
+        Path::new("/home/test/.local/bin/cortex"),
+        Path::new("/home/test/.config/cortex/sessions-watch.env"),
+        Path::new("/home/test/.cortex/data/cortex.db"),
+        Path::new("/home/test/.local/state/cortex"),
+        Path::new("/home/test"),
+    );
+
+    assert!(unit.contains("sessions watch --no-initial-scan --json"));
+    assert!(!unit.contains(AI_TRANSCRIPT_FORWARD_ENV));
+    assert!(!unit.contains(AI_TRANSCRIPT_FORWARD_LEGACY_ENV));
+}

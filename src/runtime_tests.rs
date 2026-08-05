@@ -32,6 +32,7 @@ fn test_config(tmp: &std::path::Path, mcp: McpConfig) -> Config {
         error_detection: Default::default(),
         notifications: Default::default(),
         llm: Default::default(),
+        agent_observatory: Default::default(),
     }
 }
 
