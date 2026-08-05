@@ -15,8 +15,10 @@ pub use commits::{
 mod projection;
 pub use projection::{
     AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionOutboxRow,
-    AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert,
-    AgentWorktreeEvidenceUpsert, write_agent_projection,
+    AgentProjectionRunMatch, AgentProjectionWorktreeRef, AgentProjectionWriteInput,
+    AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
+    find_active_projection_worktree, find_unique_overlapping_projection_run,
+    write_agent_projection,
 };
 
 #[path = "agent_observatory_observations.rs"]

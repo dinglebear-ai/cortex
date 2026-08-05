@@ -1,5 +1,12 @@
 //! Projection of classified source rows into Agent Observatory materialized state.
 
+#[path = "projector_commands.rs"]
+mod commands;
+pub use commands::{
+    CommandProjectionDiagnostic, CommandProjectionOutcome, CommandProjectionSkipReason,
+    project_command_log,
+};
+
 use super::AGENT_OBSERVATORY_PROJECTION_VERSION;
 use super::classifier::{
     TranscriptLogClassification, TranscriptLogProjection, TranscriptSkipDiagnostic,

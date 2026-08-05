@@ -420,3 +420,14 @@ FIX: out-of-order replay exposed run-state rewind; projection run upsert now pre
 GATE: missing session, unsupported provider, and malformed metadata returned typed skip diagnostics with zero writes; classifier/projector contain no scanner or filesystem parser calls
 REGRESSION: all 64 Agent Observatory tests, all Agent Observatory DB tests, 56 database/schema tests, AI project normalization tests, and 162 config tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, provider-file static audit, and 64 KiB <= 256 KiB cap audit passed
+
+## AO-037 Project agent commands and shell history
+commit/worktree SHA: 4a2887ea (task started)
+RED: command classifier/projector tests imported source classifications, typed skip diagnostics, projection outcomes, worktree/run lookups, and agent-command/Atuin projection entry points before implementation
+RED result: whole-lib compile failed with the AO-037 classifier, projector, and read-side lookup surfaces unresolved
+GREEN: added pure classifiers for canonical agent-command rows plus local and forwarded Atuin shapes, then projected them atomically into command or shell_history events with preserved scrubbed command, severity, exit status, duration, sessions, and cwd evidence
+GREEN result: 5 classifier tests and 3 projector tests passed; verified agent-command cwd created or enriched one deterministic run, claimed Atuin cwd attached only to one overlapping run, exact replay emitted no duplicate event/outbox, and absent or ambiguous runs skipped without writes
+FIX: Atuin now emits the distinct shell_history event/outbox kind; finished_at ordering compares parsed RFC3339 instants; nested cwd values resolve to the longest active worktree ancestor while sibling path-prefix collisions remain unmatched
+GATE: agent-command cwd evidence is verified at 0.98 and may select primary; Atuin cwd-window evidence is claimed at 0.85 and never overrides the verified primary worktree; malformed, inconsistent, unsupported, or unscrubbed rows return typed diagnostics
+REGRESSION: all 72 Agent Observatory tests passed, including identity, lifecycle, attribution, transcript projection, command/shell projection, DB projection transactions, migrations, and configuration contracts
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, and Cargo.toml/Cargo.lock no-diff gate passed

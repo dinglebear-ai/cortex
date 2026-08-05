@@ -11,6 +11,12 @@ pub use types::{
 
 #[path = "agent_observatory_projection_counters.rs"]
 mod counters;
+#[path = "agent_observatory_projection_lookup.rs"]
+mod lookup;
+pub use lookup::{
+    AgentProjectionRunMatch, AgentProjectionWorktreeRef, find_active_projection_worktree,
+    find_unique_overlapping_projection_run,
+};
 #[path = "agent_observatory_projection_sql.rs"]
 mod sql;
 

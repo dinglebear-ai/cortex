@@ -1,4 +1,11 @@
-//! Classification of canonical log rows into Agent Observatory transcript projections.
+//! Classification of canonical log rows into Agent Observatory projections.
+
+#[path = "classifier_commands.rs"]
+mod commands;
+pub use commands::{
+    CommandLogClassification, CommandLogProjection, CommandLogSource, CommandSkipDiagnostic,
+    CommandSkipReason, classify_command_log,
+};
 
 use crate::ai_project::normalize_ai_project_path;
 use crate::db::LogEntry;

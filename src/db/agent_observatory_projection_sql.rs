@@ -3,7 +3,7 @@
 use super::super::{AgentRunEventRow, AgentRunRow, AgentRunWorktreeEvidenceRow};
 use anyhow::{Context, Result, bail};
 use rusqlite::types::Type;
-use rusqlite::{OptionalExtension, Row, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use std::str::FromStr;
 
 use super::types::{
@@ -466,9 +466,10 @@ pub(super) fn insert_event(
     Ok((row, inserted))
 }
 
-pub(super) fn run_by_id(tx: &Transaction<'_>, run_id: i64) -> Result<AgentRunRow> {
+pub(super) fn run_by_id(connection: &Connection, run_id: i64) -> Result<AgentRunRow> {
     let sql = format!("SELECT {RUN_COLUMNS} FROM agent_runs WHERE id = ?1");
-    tx.query_row(&sql, [run_id], run_row)
+    connection
+        .query_row(&sql, [run_id], run_row)
         .context("query run by ID")
 }
 
