@@ -122,6 +122,35 @@ runs:
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         "$HOME/.local/bin/kache" --version
 
+    # Records what RUSTC_WRAPPER will actually resolve to at build time.
+    # Builds in this fleet have intermittently died with
+    #   could not execute process `kache <rustc> ...` (never executed)
+    #   No such file or directory (os error 2)
+    # which is ENOENT on the wrapper itself. /usr/local/bin/kache is a symlink
+    # into /opt/hostedtoolcache, so a dangling target produces exactly that and
+    # leaves no trace in the build log. Cheap to record, and the difference
+    # between a resolvable and a dangling wrapper is the whole diagnosis.
+    - name: Record resolved kache wrapper
+      if: inputs.enable-cache == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -uo pipefail
+        which_kache="$(command -v kache || true)"
+        if [ -z "$which_kache" ]; then
+          echo "::warning::kache is not on PATH; RUSTC_WRAPPER will fail with ENOENT"
+          exit 0
+        fi
+        resolved="$(readlink -f "$which_kache" || true)"
+        printf 'kache on PATH : %s\n' "$which_kache"
+        printf 'resolves to   : %s\n' "$resolved"
+        if [ -x "$resolved" ]; then
+          printf 'target        : executable\n'
+          "$resolved" --version || echo "::warning::kache binary present but --version failed"
+        else
+          echo "::warning::kache resolves to a MISSING or non-executable target: $resolved"
+          ls -l "$which_kache" || true
+        fi
+
     - name: Configure kache
       if: inputs.enable-cache == 'true' && runner.os == 'Linux'
       shell: bash
