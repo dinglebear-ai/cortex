@@ -389,3 +389,13 @@ GREEN result: 8 focused queue tests passed, including 100-event coalescing at th
 GATE: overflow emits exactly one FullReconcile and clears buffered/pending work; queue and pending limits reject zero; all test timing uses injected Instant with no sleeps
 REGRESSION: 13 watcher tests, all 56 Git observer tests, and 162 config tests passed
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, and corrected no-sleep static audit passed
+
+## AO-034 Add overflow and periodic repair reconcile
+commit/worktree SHA: 54dbe32a (task started)
+RED: supervisor tests imported atomic handle, options, scheduled actions, reason/error types, and git_watch_supervisor before implementation
+RED result: compile failed with every supervisor type and constructor unresolved
+GREEN: added an injected-Instant supervisor with atomic overflow coalescing, one in-flight full reconcile, 60-second overflow and periodic defaults, combined overflow/periodic scans, direct-action passthrough, and failure requeue
+GREEN result: 6 focused supervisor tests passed; 100 overflow notifications produced one scan per interval, periodic ticks repaired missed state, skipped intervals coalesced, and same-tick overflow/periodic work produced one combined scan
+GATE: failed full reconcile requeued bounded repair while direct repository actions continued; completion and zero/overflowing interval errors are typed; all scheduler tests use injected time with no sleeps
+REGRESSION: 19 watcher tests, all 62 Git observer tests, and 162 config tests passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Cargo.toml/Cargo.lock no-diff gate, and no-sleep static audit passed
