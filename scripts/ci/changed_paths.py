@@ -33,7 +33,13 @@ def any_match(paths: list[str], predicate: Callable[[str], bool]) -> bool:
 
 
 def classify(event: str, paths: list[str]) -> dict[str, bool]:
-    if event in {"schedule", "workflow_dispatch"}:
+    if event == "schedule":
+        # The weekly cron exists solely to surface new RUSTSEC advisories via
+        # cargo-deny (see ci.yml). Only the security lane runs; everything else
+        # would just rebuild unchanged code.
+        return {key: key == "security" for key in OUTPUT_KEYS}
+
+    if event == "workflow_dispatch":
         return {key: True for key in OUTPUT_KEYS}
 
     if not paths:

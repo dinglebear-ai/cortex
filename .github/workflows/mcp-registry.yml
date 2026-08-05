@@ -16,6 +16,10 @@ on:
         default: ""
         type: string
 
+concurrency:
+  group: mcp-registry-${{ github.event.release.tag_name || inputs.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
