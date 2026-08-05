@@ -325,7 +325,8 @@ printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
     assert!(log.contains("CORTEX_AGENT_JOURNALD='true'"));
     assert!(log.contains("CORTEX_SYSLOG_TARGET='old-syslog.example:1514'"));
     assert!(log.contains("CORTEX_AGENT_FILE_TAILS='/var/log/app.log:app'"));
-    assert!(log.contains("CORTEX_AGENT_AI_TRANSCRIPTS='true'"));
+    assert!(log.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD='true'"));
+    assert!(!log.contains("CORTEX_AGENT_AI_TRANSCRIPTS='"));
     assert!(log.contains("CORTEX_AGENT_COMMAND_FORWARD='true'"));
     assert!(log.contains("CORTEX_AGENT_SHELL_HISTORY_FORWARD='true'"));
     assert!(log.contains("CORTEX_AGENT_AUTO_UPDATE='false'"));
@@ -661,7 +662,11 @@ fn resolve_linux_agent_env_preserves_auth_and_flags_without_defaults() {
         env_get(&env, "CORTEX_AGENT_FILE_TAILS"),
         Some("/var/log/app.log:app")
     );
-    assert_eq!(env_get(&env, "CORTEX_AGENT_AI_TRANSCRIPTS"), Some("true"));
+    assert_eq!(
+        env_get(&env, "CORTEX_AGENT_AI_TRANSCRIPT_FORWARD"),
+        Some("true")
+    );
+    assert_eq!(env_get(&env, "CORTEX_AGENT_AI_TRANSCRIPTS"), None);
     assert_eq!(env_get(&env, "CORTEX_AGENT_COMMAND_FORWARD"), Some("true"));
     assert_eq!(
         env_get(&env, "CORTEX_AGENT_SHELL_HISTORY_FORWARD"),

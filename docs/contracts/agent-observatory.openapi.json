@@ -1,0 +1,201 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Cortex Agent Observatory API", "version": "1.0.0-proposed" },
+  "servers": [{ "url": "/" }],
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/api/repositories": {
+      "get": {
+        "operationId": "listRepositories",
+        "tags": ["repositories"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Host" },
+          { "$ref": "#/components/parameters/Query" },
+          { "name": "active_runs_only", "in": "query", "schema": { "type": "boolean", "default": false } },
+          { "name": "include_removed", "in": "query", "schema": { "type": "boolean", "default": false } },
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/RepositoryPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      }
+    },
+    "/api/repositories/{repository_id}": {
+      "get": {
+        "operationId": "getRepository",
+        "tags": ["repositories"],
+        "parameters": [{ "$ref": "#/components/parameters/RepositoryId" }],
+        "responses": { "200": { "description": "Repository", "content": { "application/json": { "schema": { "$ref": "./agent-observatory.schema.json#/$defs/Repository" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/repositories/{repository_id}/worktrees": {
+      "get": {
+        "operationId": "listRepositoryWorktrees",
+        "tags": ["repositories"],
+        "parameters": [{ "$ref": "#/components/parameters/RepositoryId" }, { "name": "branch", "in": "query", "schema": { "type": "string", "maxLength": 1024 } }, { "name": "dirty", "in": "query", "schema": { "type": "boolean" } }, { "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }],
+        "responses": { "200": { "$ref": "#/components/responses/WorktreePage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/repositories/{repository_id}/runs": {
+      "get": {
+        "operationId": "listRepositoryRuns",
+        "tags": ["repositories", "agent-runs"],
+        "parameters": [{ "$ref": "#/components/parameters/RepositoryId" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Tool" }, { "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Cursor" }],
+        "responses": { "200": { "$ref": "#/components/responses/RunPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/agent-runs": {
+      "get": {
+        "operationId": "listAgentRuns",
+        "tags": ["agent-runs"],
+        "parameters": [
+          { "name": "repository_id", "in": "query", "schema": { "$ref": "#/components/schemas/Id" } },
+          { "name": "worktree_id", "in": "query", "schema": { "$ref": "#/components/schemas/Id" } },
+          { "name": "branch", "in": "query", "schema": { "type": "string", "maxLength": 1024 } },
+          { "$ref": "#/components/parameters/Status" },
+          { "$ref": "#/components/parameters/Tool" },
+          { "$ref": "#/components/parameters/Host" },
+          { "$ref": "#/components/parameters/Query" },
+          { "name": "active_only", "in": "query", "schema": { "type": "boolean", "default": false } },
+          { "$ref": "#/components/parameters/Since" },
+          { "$ref": "#/components/parameters/Until" },
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/RunPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/api/agent-runs/{run_key}": {
+      "get": {
+        "operationId": "getAgentRun",
+        "tags": ["agent-runs"],
+        "parameters": [{ "$ref": "#/components/parameters/RunKey" }],
+        "responses": { "200": { "description": "Run detail", "content": { "application/json": { "schema": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRun" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/agent-runs/{run_key}/events": {
+      "get": {
+        "operationId": "listAgentRunEvents",
+        "tags": ["agent-runs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/RunKey" },
+          { "name": "kind", "in": "query", "style": "form", "explode": true, "schema": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/EventKind" } } },
+          { "name": "severity_min", "in": "query", "schema": { "type": "string", "maxLength": 32 } },
+          { "name": "actor_key", "in": "query", "schema": { "type": "string", "maxLength": 1024 } },
+          { "name": "trace_id", "in": "query", "schema": { "$ref": "./agent-observatory.schema.json#/$defs/TraceId" } },
+          { "$ref": "#/components/parameters/Query" },
+          { "$ref": "#/components/parameters/Since" },
+          { "$ref": "#/components/parameters/Until" },
+          { "name": "order", "in": "query", "schema": { "enum": ["asc", "desc"], "default": "desc" } },
+          { "name": "include", "in": "query", "schema": { "enum": ["payload"] } },
+          { "$ref": "#/components/parameters/EventLimit" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/EventPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "413": { "$ref": "#/components/responses/TooLarge" } }
+      }
+    },
+    "/api/agent-runs/{run_key}/telemetry": {
+      "get": {
+        "operationId": "getAgentRunTelemetry",
+        "tags": ["agent-runs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/RunKey" },
+          { "name": "signal", "in": "query", "schema": { "enum": ["spans", "metrics", "all"], "default": "all" } },
+          { "name": "trace_id", "in": "query", "schema": { "$ref": "./agent-observatory.schema.json#/$defs/TraceId" } },
+          { "name": "metric_name", "in": "query", "schema": { "type": "string", "maxLength": 1024 } },
+          { "$ref": "#/components/parameters/Since" }, { "$ref": "#/components/parameters/Until" },
+          { "name": "span_limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 } },
+          { "name": "span_cursor", "in": "query", "schema": { "type": "string", "maxLength": 2048 } },
+          { "name": "metric_limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 } },
+          { "name": "metric_cursor", "in": "query", "schema": { "type": "string", "maxLength": 2048 } }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/Telemetry" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/agent-runs/stream": {
+      "get": {
+        "operationId": "streamAgentRuns",
+        "tags": ["agent-runs"],
+        "description": "Authenticated SSE. Browser clients use fetch so Authorization remains a header.",
+        "parameters": [
+          { "name": "Last-Event-ID", "in": "header", "schema": { "$ref": "#/components/schemas/Id" } },
+          { "name": "after", "in": "query", "schema": { "$ref": "#/components/schemas/Id" } },
+          { "name": "repository_id", "in": "query", "schema": { "$ref": "#/components/schemas/Id" } },
+          { "name": "worktree_id", "in": "query", "schema": { "$ref": "#/components/schemas/Id" } },
+          { "name": "run_key", "in": "query", "schema": { "type": "string", "maxLength": 1024 } }
+        ],
+        "responses": {
+          "200": { "description": "SSE frames whose data validates as StreamEnvelope", "content": { "text/event-stream": { "schema": { "type": "string" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "429": { "$ref": "#/components/responses/TooMany" }, "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/agent-observatory/status": {
+      "get": {
+        "operationId": "getAgentObservatoryStatus",
+        "tags": ["observatory"],
+        "responses": { "200": { "$ref": "#/components/responses/Status" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      }
+    },
+    "/api/agent-observatory/reconcile": {
+      "post": {
+        "operationId": "reconcileRepositories",
+        "tags": ["observatory"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "repository_id": { "$ref": "#/components/schemas/Id" }, "all": { "type": "boolean", "default": false }, "dry_run": { "type": "boolean", "default": false } } } } } },
+        "responses": { "202": { "$ref": "#/components/responses/Accepted" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/agent-observatory/backfill": {
+      "post": {
+        "operationId": "startAgentObservatoryBackfill",
+        "tags": ["observatory"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["source"], "properties": { "source": { "enum": ["logs", "mcp_events", "hook_events", "skill_events", "llm_invocations", "otel_spans", "otel_metric_points", "repository_observations", "all"] }, "from_id": { "$ref": "#/components/schemas/Id" }, "until_id": { "$ref": "#/components/schemas/Id" }, "dry_run": { "type": "boolean", "default": false } } } } } },
+        "responses": { "202": { "$ref": "#/components/responses/Accepted" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "CORTEX_API_TOKEN" } },
+    "parameters": {
+      "RepositoryId": { "name": "repository_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Id" } },
+      "RunKey": { "name": "run_key", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1, "maxLength": 1024 } },
+      "Host": { "name": "host", "in": "query", "schema": { "type": "string", "maxLength": 255 } },
+      "Tool": { "name": "tool", "in": "query", "style": "form", "explode": true, "schema": { "type": "array", "items": { "type": "string", "maxLength": 128 } } },
+      "Status": { "name": "status", "in": "query", "style": "form", "explode": true, "schema": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/RunStatus" } } },
+      "Query": { "name": "query", "in": "query", "schema": { "type": "string", "maxLength": 4096 } },
+      "Since": { "name": "since", "in": "query", "schema": { "type": "string", "format": "date-time" } },
+      "Until": { "name": "until", "in": "query", "schema": { "type": "string", "format": "date-time" } },
+      "Limit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+      "EventLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 } },
+      "Cursor": { "name": "cursor", "in": "query", "schema": { "type": "string", "maxLength": 2048 } }
+    },
+    "schemas": {
+      "Id": { "$ref": "./agent-observatory.schema.json#/$defs/Id" },
+      "Error": { "type": "object", "additionalProperties": false, "required": ["error", "message"], "properties": { "error": { "type": "string" }, "message": { "type": "string" }, "request_id": { "type": ["string", "null"] }, "details": { "type": "object" } } },
+      "Page": { "$ref": "./agent-observatory.schema.json#/$defs/Page" },
+      "RepositoryPage": { "type": "object", "required": ["repositories", "pagination", "as_of", "stream_cursor"], "properties": { "repositories": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/Repository" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "WorktreePage": { "type": "object", "required": ["worktrees", "pagination", "as_of", "stream_cursor"], "properties": { "worktrees": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/Worktree" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "RunPage": { "type": "object", "required": ["runs", "pagination", "as_of", "stream_cursor"], "properties": { "runs": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRun" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "EventPage": { "type": "object", "required": ["run_key", "events", "pagination", "as_of", "stream_cursor"], "properties": { "run_key": { "type": "string" }, "events": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRunEvent" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "Telemetry": { "type": "object", "required": ["run_key", "spans", "metrics", "span_pagination", "metric_pagination", "as_of"], "properties": { "run_key": { "type": "string" }, "spans": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/SpanSummary" } }, "metrics": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/MetricPoint" } }, "summary": { "type": "object" }, "span_pagination": { "$ref": "#/components/schemas/Page" }, "metric_pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" } } },
+      "Status": { "type": "object", "required": ["enabled", "schema_version", "projection_version", "projector", "git_observer", "stream", "otlp", "web"], "properties": { "enabled": { "type": "boolean" }, "schema_version": { "type": "integer" }, "projection_version": { "type": "integer" }, "projector": { "type": "object" }, "git_observer": { "type": "object" }, "stream": { "type": "object" }, "otlp": { "type": "object" }, "web": { "type": "object" }, "warnings": { "type": "array", "items": { "type": "string" } } } },
+      "Accepted": { "type": "object", "additionalProperties": false, "required": ["job_id", "status"], "properties": { "job_id": { "$ref": "#/components/schemas/Id" }, "status": { "const": "accepted" } } }
+    },
+    "responses": {
+      "RepositoryPage": { "description": "Repository page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RepositoryPage" } } } },
+      "WorktreePage": { "description": "Worktree page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorktreePage" } } } },
+      "RunPage": { "description": "Run page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunPage" } } } },
+      "EventPage": { "description": "Event page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EventPage" } } } },
+      "Telemetry": { "description": "Telemetry response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Telemetry" } } } },
+      "Status": { "description": "Observatory status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+      "Accepted": { "description": "Job accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Accepted" } } } },
+      "BadRequest": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Unauthorized": { "description": "Missing or invalid bearer", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Forbidden": { "description": "Admin required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "NotFound": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Conflict": { "description": "Operation in progress", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "TooLarge": { "description": "Cap exceeded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "TooMany": { "description": "Client limit", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Unavailable": { "description": "Disabled or unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    }
+  }
+}
