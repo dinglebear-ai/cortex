@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.4](https://github.com/dinglebear-ai/cortex/compare/v3.11.3...v3.11.4) (2026-08-05)
+
+
+### Fixed
+
+* **ci:** pin kache 0.13.0 to match the runner fleet ([#178](https://github.com/dinglebear-ai/cortex/issues/178)) ([04cbd51](https://github.com/dinglebear-ai/cortex/commit/04cbd511a39ac8def9d2d8ba4e7ddcec24eb4f94))
+* **mcp:** centralize Registry publication ([#171](https://github.com/dinglebear-ai/cortex/issues/171)) ([b731ec3](https://github.com/dinglebear-ai/cortex/commit/b731ec34a14f3a8a606292c7d90124f3125319c9))
+
 ## [3.11.3](https://github.com/dinglebear-ai/cortex/compare/v3.11.2...v3.11.3) (2026-08-03)
 
 
