@@ -9,6 +9,10 @@ fn planned_schema_and_projection_versions_are_locked() {
 // Compile-time (not runtime) check: the runtime schema must never claim to have
 // already applied Agent Observatory migrations that don't exist yet. Both
 // constants are `const i64`, so this ordering is provable at compile time —
-// asserting it in `const _` catches drift at build time instead of only when
-// `cargo test` happens to run.
+// asserting it in `const _` catches drift as soon as this `#[cfg(test)]`
+// module is compiled (e.g. `cargo test`, `cargo build --tests`), rather than
+// only when the `#[test]` above actually executes. NOTE: this module is
+// `#[cfg(test)]`-gated, so a plain `cargo build`/`cargo build --release`
+// (which never compiles the test target) does not evaluate this assertion —
+// it is a test-compile-time guarantee, not a production-build one.
 const _: () = assert!(crate::db::KNOWN_SCHEMA_VERSION < AGENT_OBSERVATORY_SCHEMA_VERSION);
