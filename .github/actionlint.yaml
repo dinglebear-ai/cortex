@@ -1,9 +1,7 @@
 self-hosted-runner:
   labels:
     - rmcp-template
-    - tootie
     - unraid
-    - dookie
     - ci-pool-rust
     - ci-pool-python
     - ci-pool-typescript
