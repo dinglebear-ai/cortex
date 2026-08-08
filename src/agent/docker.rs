@@ -4,13 +4,17 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bollard::Docker;
-use bollard::query_parameters::{ListContainersOptionsBuilder, LogsOptionsBuilder};
+use bollard::models::EventMessage;
+use bollard::query_parameters::{
+    EventsOptionsBuilder, ListContainersOptionsBuilder, LogsOptionsBuilder,
+};
 use chrono::Utc;
 use futures_util::StreamExt;
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 
 use super::syslog_sender::{PRI_LOCAL0_INFO, PRI_LOCAL0_WARN, SyslogSender, format_rfc5424};
+use crate::docker_ingest::docker_event_timestamp;
 
 const CONTAINER_POLL_SECS: u64 = 30;
 
@@ -46,11 +50,23 @@ pub async fn run_docker_forwarder(
     docker.ping().await.context("Docker ping")?;
     tracing::info!(docker_url, "docker forwarder connected");
 
+    tokio::try_join!(
+        run_docker_log_forwarder(&docker, hostname, Arc::clone(&sender)),
+        run_docker_event_forwarder(&docker, hostname, sender),
+    )?;
+    Ok(())
+}
+
+async fn run_docker_log_forwarder(
+    docker: &Docker,
+    hostname: &str,
+    sender: Arc<SyslogSender>,
+) -> Result<()> {
     let mut active: HashMap<String, tokio::task::AbortHandle> = HashMap::new();
     let mut tasks: JoinSet<String> = JoinSet::new(); // yields container_id on exit
 
     loop {
-        let containers = list_containers(&docker).await?;
+        let containers = list_containers(docker).await?;
         let live_ids: std::collections::HashSet<String> =
             containers.iter().map(|c| c.id.clone()).collect();
 
@@ -98,6 +114,106 @@ pub async fn run_docker_forwarder(
 
         sleep(Duration::from_secs(CONTAINER_POLL_SECS)).await;
     }
+}
+
+async fn run_docker_event_forwarder(
+    docker: &Docker,
+    hostname: &str,
+    sender: Arc<SyslogSender>,
+) -> Result<()> {
+    let filters = HashMap::from([("type".to_string(), vec!["container".to_string()])]);
+    // This is a live-forwarding path. Replaying a lookback window after an
+    // agent reconnect could deliver the same lifecycle event multiple times
+    // and falsely satisfy restart-loop thresholds.
+    let options = EventsOptionsBuilder::default().filters(&filters).build();
+    let mut events = docker.events(Some(options));
+
+    while let Some(event) = events.next().await {
+        if let Some(line) = docker_event_line(hostname, &event?) {
+            sender.send(line).await?;
+        }
+    }
+    Ok(())
+}
+
+fn docker_event_line(hostname: &str, event: &EventMessage) -> Option<String> {
+    let action = event.action.as_deref()?;
+    let normalized_action = normalize_event_action(action);
+    if normalized_action.is_empty() || !supported_event_action(action) {
+        return None;
+    }
+    let actor = event.actor.as_ref()?;
+    let container_id = actor.id.as_deref()?;
+    let attributes = actor.attributes.as_ref();
+    let attr = |key: &str| {
+        attributes
+            .and_then(|attrs| attrs.get(key))
+            .map(String::as_str)
+    };
+    let container_name =
+        attr("name").unwrap_or_else(|| &container_id[..container_id.len().min(12)]);
+    let image = attr("image");
+    let compose_project = attr("com.docker.compose.project");
+    let compose_service = attr("com.docker.compose.service");
+    let exit_code = attr("exitCode")
+        .or_else(|| attr("exit_code"))
+        .and_then(|value| value.parse::<i32>().ok());
+    let metadata = serde_json::json!({
+        "source_kind": AGENT_DOCKER_SOURCE_KIND,
+        "agent_docker": {
+            "host": hostname,
+            "container_id": container_id,
+            "container_name": container_name,
+            "compose_project": compose_project,
+            "compose_service": compose_service,
+            "image": image,
+            "stream": "event",
+            "event_action": normalized_action,
+            "exit_code": exit_code,
+        }
+    });
+    let mut message = format!(
+        "{AGENT_DOCKER_META_MARKER}{metadata}] docker container event: {normalized_action} container={container_name}"
+    );
+    if let Some(exit_code) = exit_code {
+        message.push_str(&format!(" exit_code={exit_code}"));
+    }
+    let pri = match (normalized_action.as_str(), exit_code) {
+        ("oom", _) => PRI_LOCAL0_WARN,
+        ("die", Some(code)) if code != 0 => PRI_LOCAL0_WARN,
+        _ => PRI_LOCAL0_INFO,
+    };
+    let timestamp = docker_event_timestamp(event);
+    Some(format_rfc5424(
+        pri,
+        &timestamp,
+        hostname,
+        compose_service.unwrap_or(container_name),
+        &container_id[..container_id.len().min(12)],
+        &message,
+    ))
+}
+
+fn supported_event_action(action: &str) -> bool {
+    matches!(
+        action,
+        "create" | "start" | "restart" | "die" | "stop" | "destroy" | "rename" | "oom"
+    ) || action.starts_with("health_status:")
+}
+
+fn normalize_event_action(action: &str) -> String {
+    action
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 async fn follow_container(

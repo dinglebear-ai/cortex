@@ -518,6 +518,25 @@ fn agent_docker_meta_prefix_is_extracted_into_metadata_json_and_stripped() {
 }
 
 #[test]
+fn agent_docker_lifecycle_metadata_becomes_a_canonical_docker_event() {
+    let cfg = EnrichmentConfig::default();
+    let meta = r#"{"agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","image":"plex:latest","stream":"event","event_action":"die","exit_code":137}}"#;
+    let msg = format!(
+        "[cortex-agent-docker-meta:{meta}] docker container event: die container=plex exit_code=137"
+    );
+    let e = entry("plex", &msg, "10.0.0.1:1234", "info");
+    let out = enrich_entry(e, &cfg);
+    let metadata: serde_json::Value =
+        serde_json::from_str(out.metadata_json.as_deref().unwrap()).unwrap();
+
+    assert_eq!(metadata["source_kind"], "docker-event");
+    assert_eq!(metadata["docker"]["event_action"], "die");
+    assert_eq!(metadata["docker"]["exit_code"], 137);
+    assert_eq!(out.facility.as_deref(), Some("docker"));
+    assert_eq!(out.source_ip, "docker-event://tootie/plex/die");
+}
+
+#[test]
 fn agent_docker_meta_prefix_merges_with_existing_metadata() {
     let cfg = EnrichmentConfig::default();
     let meta = r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abc","container_name":"plex","stream":"stdout"}}"#;

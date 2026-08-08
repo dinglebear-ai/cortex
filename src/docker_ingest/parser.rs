@@ -172,7 +172,7 @@ fn container_meta_from_event_actor(container_id: &str, actor: &EventActor) -> Co
     }
 }
 
-fn docker_event_timestamp(event: &EventMessage) -> String {
+pub(crate) fn docker_event_timestamp(event: &EventMessage) -> String {
     if let Some(time_nano) = event.time_nano {
         let secs = time_nano.div_euclid(1_000_000_000);
         let nanos = time_nano.rem_euclid(1_000_000_000) as u32;
