@@ -540,6 +540,75 @@ async fn tail_route_returns_plain_api_json() {
     assert_eq!(value["logs"][0]["message"], "from two");
 }
 
+#[tokio::test]
+async fn feed_route_is_cursor_based_host_filtered_and_includes_raw() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    db::insert_logs_batch(
+        &pool,
+        &[
+            entry(
+                "2026-01-01T00:00:00Z",
+                "host-a",
+                "info",
+                "first",
+                "source-a",
+            ),
+            entry(
+                "2026-01-01T00:00:01Z",
+                "host-b",
+                "info",
+                "other",
+                "source-b",
+            ),
+            entry(
+                "2026-01-01T00:00:02Z",
+                "host-a",
+                "warning",
+                "third",
+                "source-a",
+            ),
+            entry(
+                "2026-01-01T00:00:03Z",
+                "host-b",
+                "info",
+                "fourth",
+                "source-b",
+            ),
+        ],
+    )
+    .unwrap();
+
+    let app = router(state).unwrap();
+    let (status, first) = get_json(
+        app.clone(),
+        "/api/feed?after_id=0&host=host-a&limit=1",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{first}");
+    assert_eq!(first["logs"][0]["message"], "first");
+    assert_eq!(first["logs"][0]["raw"], "first");
+    assert_eq!(first["has_more"], true);
+
+    let cursor = first["next_after_id"].as_i64().unwrap();
+    let (status, second) = get_json(
+        app.clone(),
+        &format!("/api/feed?after_id={cursor}&host=host-a&limit=10"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{second}");
+    assert_eq!(second["logs"].as_array().unwrap().len(), 1);
+    assert_eq!(second["logs"][0]["message"], "third");
+    assert_eq!(second["has_more"], false);
+    assert!(second["next_after_id"].as_i64().unwrap() > second["logs"][0]["id"].as_i64().unwrap());
+
+    let (status, current) = get_json(app, "/api/feed?host=host-a", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{current}");
+    assert!(current["logs"].as_array().unwrap().is_empty());
+    assert_eq!(current["next_after_id"], second["next_after_id"]);
+}
+
 // ── AuthPolicy coverage on /api/* ────────────────────────────────────────────
 
 /// Mounted static-bearer: wrong token → 401 (no fall-through to permit).

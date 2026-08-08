@@ -1042,6 +1042,63 @@ pub fn fetch_log_by_id(pool: &DbPool, id: i64) -> Result<Option<LogEntryWithRaw>
     }
 }
 
+/// Return an ascending, lossless log feed for external consumers.
+///
+/// An omitted cursor establishes a high-water mark without replaying retained
+/// history. Passing `Some(0)` explicitly replays from the beginning.
+pub fn feed_logs(
+    pool: &DbPool,
+    after_id: Option<i64>,
+    hostname: Option<&str>,
+    limit: u32,
+) -> Result<(Vec<LogEntryWithRaw>, i64, bool)> {
+    let conn = pool.get()?;
+    let after_id = match after_id {
+        Some(id) => id.max(0),
+        None => conn.query_row("SELECT COALESCE(MAX(id), 0) FROM logs", [], |row| {
+            row.get(0)
+        })?,
+    };
+    let high_water: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM logs", [], |row| {
+        row.get(0)
+    })?;
+    let fetch_limit = i64::from(limit.clamp(1, 1_000)) + 1;
+
+    let sql = if hostname.is_some() {
+        "SELECT id, timestamp, hostname, facility, severity,
+                app_name, process_id, message, raw, received_at, source_ip,
+                ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
+         FROM logs WHERE id > ?1 AND hostname = ?2
+         ORDER BY id ASC LIMIT ?3"
+    } else {
+        "SELECT id, timestamp, hostname, facility, severity,
+                app_name, process_id, message, raw, received_at, source_ip,
+                ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
+         FROM logs WHERE id > ?1
+         ORDER BY id ASC LIMIT ?2"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let mut logs = if let Some(hostname) = hostname {
+        stmt.query_map(params![after_id, hostname, fetch_limit], map_row_with_raw)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map(params![after_id, fetch_limit], map_row_with_raw)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let has_more = logs.len() > limit as usize;
+    if has_more {
+        logs.truncate(limit as usize);
+    }
+    let next_after_id = if has_more {
+        logs.last().map_or(after_id, |log| log.id)
+    } else {
+        high_water.max(after_id)
+    };
+    Ok((logs, next_after_id, has_more))
+}
+
 pub fn context_around(
     pool: &DbPool,
     reference: &ContextRef,
