@@ -193,6 +193,9 @@ install: release
 build-mcpb:
     bash scripts/build-mcpb.sh
 
+build-mcpb-windows:
+    bash scripts/build-mcpb.sh --target windows
+
 runtime-current:
     bash scripts/check-runtime-current.sh
 
