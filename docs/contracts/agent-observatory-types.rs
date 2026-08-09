@@ -7,7 +7,17 @@ use std::collections::BTreeMap;
 
 pub type Id = String;
 pub type Timestamp = String;
-pub type JsonObject = BTreeMap<String, String>;
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(JsonObject),
+}
+
+pub type JsonObject = BTreeMap<String, JsonValue>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
@@ -188,10 +198,11 @@ pub struct AgentRunDetail {
     pub actors: Vec<AgentActor>,
     pub worktree_evidence: Vec<Evidence>,
     pub available_event_kinds: Vec<AgentEventKind>,
+    pub commit_summary: Option<GitCommitSummary>,
     pub latest_stream_cursor: Id,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentRunEvent {
     pub id: Id,
     pub event_key: String,
@@ -211,7 +222,7 @@ pub struct AgentRunEvent {
     pub severity: String,
     pub title: String,
     pub summary: String,
-    pub payload_json: String,
+    pub payload: Option<JsonObject>,
     pub content_scrubbed: bool,
 }
 
@@ -278,7 +289,7 @@ pub struct RunPage {
     pub stream_cursor: Id,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EventPage {
     pub run_key: String,
     pub events: Vec<AgentRunEvent>,
@@ -287,7 +298,7 @@ pub struct EventPage {
     pub stream_cursor: Id,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StreamEnvelope {
     pub id: Id,
     pub event: StreamEventName,
@@ -295,7 +306,7 @@ pub struct StreamEnvelope {
     pub entity_key: String,
     pub run_key: Option<String>,
     pub occurred_at: Timestamp,
-    pub data_json: String,
+    pub data: JsonObject,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

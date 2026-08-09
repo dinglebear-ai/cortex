@@ -69,7 +69,7 @@
         "operationId": "getAgentRun",
         "tags": ["agent-runs"],
         "parameters": [{ "$ref": "#/components/parameters/RunKey" }],
-        "responses": { "200": { "description": "Run detail", "content": { "application/json": { "schema": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRun" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
+        "responses": { "200": { "description": "Run detail", "content": { "application/json": { "schema": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRunDetail" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
       }
     },
     "/api/agent-runs/{run_key}/events": {
@@ -140,7 +140,7 @@
       "post": {
         "operationId": "reconcileRepositories",
         "tags": ["observatory"],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "repository_id": { "$ref": "#/components/schemas/Id" }, "all": { "type": "boolean", "default": false }, "dry_run": { "type": "boolean", "default": false } } } } } },
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "repository_id": { "$ref": "#/components/schemas/Id" }, "all": { "const": true }, "dry_run": { "type": "boolean", "default": false } }, "oneOf": [{ "required": ["repository_id"], "not": { "required": ["all"] } }, { "required": ["all"], "not": { "required": ["repository_id"] } }] } } } },
         "responses": { "202": { "$ref": "#/components/responses/Accepted" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "$ref": "#/components/responses/Conflict" } }
       }
     },
@@ -148,8 +148,31 @@
       "post": {
         "operationId": "startAgentObservatoryBackfill",
         "tags": ["observatory"],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["source"], "properties": { "source": { "enum": ["logs", "mcp_events", "hook_events", "skill_events", "llm_invocations", "otel_spans", "otel_metric_points", "repository_observations", "all"] }, "from_id": { "$ref": "#/components/schemas/Id" }, "until_id": { "$ref": "#/components/schemas/Id" }, "dry_run": { "type": "boolean", "default": false } } } } } },
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["source"], "description": "When both bounds are present, decimal(from_id) MUST be less than or equal to decimal(until_id).", "x-cortex-validation": "decimal(from_id) <= decimal(until_id)", "properties": { "source": { "enum": ["logs", "mcp_events", "hook_events", "skill_events", "llm_invocations", "otel_spans", "otel_metric_points", "repository_observations", "all"] }, "from_id": { "$ref": "#/components/schemas/Id" }, "until_id": { "$ref": "#/components/schemas/Id" }, "dry_run": { "type": "boolean", "default": false } } } } } },
         "responses": { "202": { "$ref": "#/components/responses/Accepted" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/agent-observatory/backfill/{job_id}": {
+      "parameters": [{ "name": "job_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Id" } }],
+      "get": {
+        "operationId": "getAgentObservatoryBackfill",
+        "tags": ["observatory"],
+        "responses": { "200": { "$ref": "#/components/responses/BackfillJob" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "delete": {
+        "operationId": "cancelAgentObservatoryBackfill",
+        "tags": ["observatory"],
+        "description": "Requests cooperative cancellation and returns observable job state.",
+        "responses": { "202": { "$ref": "#/components/responses/BackfillJob" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      }
+    },
+    "/api/agent-observatory/backfill/{job_id}/restart": {
+      "post": {
+        "operationId": "restartAgentObservatoryBackfill",
+        "tags": ["observatory"],
+        "parameters": [{ "name": "job_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Id" } }],
+        "description": "Creates a new bounded job from a failed or cancelled job.",
+        "responses": { "202": { "$ref": "#/components/responses/Accepted" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" } }
       }
     }
   },
@@ -172,13 +195,14 @@
       "Id": { "$ref": "./agent-observatory.schema.json#/$defs/Id" },
       "Error": { "type": "object", "additionalProperties": false, "required": ["error", "message"], "properties": { "error": { "type": "string" }, "message": { "type": "string" }, "request_id": { "type": ["string", "null"] }, "details": { "type": "object" } } },
       "Page": { "$ref": "./agent-observatory.schema.json#/$defs/Page" },
-      "RepositoryPage": { "type": "object", "required": ["repositories", "pagination", "as_of", "stream_cursor"], "properties": { "repositories": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/Repository" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
-      "WorktreePage": { "type": "object", "required": ["worktrees", "pagination", "as_of", "stream_cursor"], "properties": { "worktrees": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/Worktree" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
-      "RunPage": { "type": "object", "required": ["runs", "pagination", "as_of", "stream_cursor"], "properties": { "runs": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRun" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
-      "EventPage": { "type": "object", "required": ["run_key", "events", "pagination", "as_of", "stream_cursor"], "properties": { "run_key": { "type": "string" }, "events": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRunEvent" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
-      "Telemetry": { "type": "object", "required": ["run_key", "spans", "metrics", "span_pagination", "metric_pagination", "as_of"], "properties": { "run_key": { "type": "string" }, "spans": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/SpanSummary" } }, "metrics": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/MetricPoint" } }, "summary": { "type": "object" }, "span_pagination": { "$ref": "#/components/schemas/Page" }, "metric_pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" } } },
-      "Status": { "type": "object", "required": ["enabled", "schema_version", "projection_version", "projector", "git_observer", "stream", "otlp", "web"], "properties": { "enabled": { "type": "boolean" }, "schema_version": { "type": "integer" }, "projection_version": { "type": "integer" }, "projector": { "type": "object" }, "git_observer": { "type": "object" }, "stream": { "type": "object" }, "otlp": { "type": "object" }, "web": { "type": "object" }, "warnings": { "type": "array", "items": { "type": "string" } } } },
-      "Accepted": { "type": "object", "additionalProperties": false, "required": ["job_id", "status"], "properties": { "job_id": { "$ref": "#/components/schemas/Id" }, "status": { "const": "accepted" } } }
+      "RepositoryPage": { "type": "object", "additionalProperties": false, "required": ["repositories", "pagination", "as_of", "stream_cursor"], "properties": { "repositories": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/Repository" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "WorktreePage": { "type": "object", "additionalProperties": false, "required": ["worktrees", "pagination", "as_of", "stream_cursor"], "properties": { "worktrees": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/Worktree" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "RunPage": { "type": "object", "additionalProperties": false, "required": ["runs", "pagination", "as_of", "stream_cursor"], "properties": { "runs": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRun" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "EventPage": { "type": "object", "additionalProperties": false, "required": ["run_key", "events", "pagination", "as_of", "stream_cursor"], "properties": { "run_key": { "type": "string" }, "events": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/AgentRunEvent" } }, "pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" }, "stream_cursor": { "$ref": "#/components/schemas/Id" } } },
+      "Telemetry": { "type": "object", "additionalProperties": false, "required": ["run_key", "spans", "metrics", "summary", "freshness", "span_pagination", "metric_pagination", "as_of"], "properties": { "run_key": { "type": "string" }, "spans": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/SpanSummary" } }, "metrics": { "type": "array", "items": { "$ref": "./agent-observatory.schema.json#/$defs/MetricPoint" } }, "summary": { "type": "object" }, "freshness": { "$ref": "./agent-observatory.schema.json#/$defs/RunFreshness" }, "span_pagination": { "$ref": "#/components/schemas/Page" }, "metric_pagination": { "$ref": "#/components/schemas/Page" }, "as_of": { "type": "string", "format": "date-time" } } },
+      "Status": { "type": "object", "additionalProperties": false, "required": ["enabled", "schema_version", "projection_version", "projector", "git_observer", "stream", "otlp", "web", "warnings"], "properties": { "enabled": { "type": "boolean" }, "schema_version": { "type": "integer" }, "projection_version": { "type": "integer" }, "projector": { "type": "object" }, "git_observer": { "type": "object" }, "stream": { "type": "object" }, "otlp": { "type": "object" }, "web": { "type": "object" }, "warnings": { "type": "array", "items": { "type": "string" } } } },
+      "Accepted": { "type": "object", "additionalProperties": false, "required": ["job_id", "status"], "properties": { "job_id": { "$ref": "#/components/schemas/Id" }, "status": { "const": "accepted" } } },
+      "BackfillJob": { "type": "object", "additionalProperties": false, "required": ["job_id", "source", "from_id", "until_id", "status", "processed", "total", "created_at", "started_at", "finished_at", "error", "restart_of_job_id"], "properties": { "job_id": { "$ref": "#/components/schemas/Id" }, "source": { "enum": ["logs", "mcp_events", "hook_events", "skill_events", "llm_invocations", "otel_spans", "otel_metric_points", "repository_observations", "all"] }, "from_id": { "anyOf": [{ "$ref": "#/components/schemas/Id" }, { "type": "null" }] }, "until_id": { "anyOf": [{ "$ref": "#/components/schemas/Id" }, { "type": "null" }] }, "status": { "enum": ["accepted", "running", "cancel_requested", "cancelled", "completed", "failed"] }, "processed": { "type": "integer", "minimum": 0 }, "total": { "type": ["integer", "null"], "minimum": 0 }, "created_at": { "type": "string", "format": "date-time" }, "started_at": { "type": ["string", "null"], "format": "date-time" }, "finished_at": { "type": ["string", "null"], "format": "date-time" }, "error": { "type": ["string", "null"] }, "restart_of_job_id": { "anyOf": [{ "$ref": "#/components/schemas/Id" }, { "type": "null" }] } } }
     },
     "responses": {
       "RepositoryPage": { "description": "Repository page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RepositoryPage" } } } },
@@ -188,6 +212,7 @@
       "Telemetry": { "description": "Telemetry response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Telemetry" } } } },
       "Status": { "description": "Observatory status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
       "Accepted": { "description": "Job accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Accepted" } } } },
+      "BackfillJob": { "description": "Observable backfill job state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackfillJob" } } } },
       "BadRequest": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Unauthorized": { "description": "Missing or invalid bearer", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Forbidden": { "description": "Admin required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },

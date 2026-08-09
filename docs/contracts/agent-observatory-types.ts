@@ -150,10 +150,12 @@ export interface AgentRunSummary {
   freshness: RunFreshness
 }
 
-export interface AgentRunDetail extends AgentRunSummary {
+export interface AgentRunDetail {
+  run: AgentRunSummary
   actors: AgentActor[]
   worktree_evidence: Evidence[]
   available_event_kinds: AgentEventKind[]
+  commit_summary: GitCommitSummary | null
   latest_stream_cursor: Id
 }
 
@@ -176,7 +178,7 @@ export interface AgentRunEvent<TPayload = unknown> {
   severity: string
   title: string
   summary: string
-  payload?: TPayload
+  payload: TPayload | null
   content_scrubbed: boolean
 }
 

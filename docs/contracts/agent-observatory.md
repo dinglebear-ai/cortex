@@ -344,8 +344,12 @@ Planned admin-only routes:
 - `POST /api/agent-observatory/reconcile`
 - `POST /api/agent-observatory/backfill`
 - `GET /api/agent-observatory/backfill/{job_id}`
+- `DELETE /api/agent-observatory/backfill/{job_id}`
+- `POST /api/agent-observatory/backfill/{job_id}/restart`
 
-Request bodies reject unknown fields. Reconcile supports repository ID or bounded all. Backfill supports source and cursor range. Both are single-flight per operation class and audit caller/action/result.
+Request bodies reject unknown fields. Reconcile requires exactly one target: a `repository_id`, or `all: true`; both, neither, and `all: false` are invalid. Backfill supports source and cursor range, and when both bounds are present their decimal values must satisfy `from_id <= until_id`. Both operations are single-flight per operation class and audit caller/action/result.
+
+Backfill creation returns a job ID. Status exposes `accepted | running | cancel_requested | cancelled | completed | failed`, processed and optional total counts, timestamps, a safe failure message, and restart lineage. Cancellation is cooperative and observable: DELETE returns the updated job and status remains `cancel_requested` until the worker checkpoints and reaches `cancelled`. Restart is permitted only for failed or cancelled jobs and creates a new job with the same bounded request.
 
 ## 8. Error envelope
 

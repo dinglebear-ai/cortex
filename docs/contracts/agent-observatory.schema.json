@@ -29,7 +29,7 @@
     "FreshnessLane": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["state"],
+      "required": ["state", "last_observed_at", "lag_seconds", "detail"],
       "properties": {
         "state": { "enum": ["fresh", "delayed", "stale", "not_observed", "error"] },
         "last_observed_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
@@ -54,7 +54,7 @@
     "Evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "source", "trust", "confidence", "first_seen_at", "last_seen_at"],
+      "required": ["kind", "source", "trust", "confidence", "first_seen_at", "last_seen_at", "detail"],
       "properties": {
         "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
         "source": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -117,7 +117,7 @@
     "AgentActor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "native_id"],
+      "required": ["key", "native_id", "actor_type", "display_name", "started_at", "last_activity_at", "ended_at"],
       "properties": {
         "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "native_id": { "type": "string", "minLength": 1, "maxLength": 512 },
@@ -133,7 +133,9 @@
       "additionalProperties": false,
       "required": [
         "id", "run_key", "native_session_id", "tool", "hostname", "status", "status_reason",
-        "status_observed_at", "started_at", "last_activity_at", "event_count", "error_count", "freshness"
+        "status_observed_at", "started_at", "last_activity_at", "ended_at", "transcript_path",
+        "primary_worktree", "primary_branch", "start_head_sha", "current_head_sha", "parent_run_key",
+        "previous_run_key", "provider_tool", "event_count", "error_count", "freshness"
       ],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
@@ -157,9 +159,41 @@
         "current_head_sha": { "anyOf": [{ "$ref": "#/$defs/Sha" }, { "type": "null" }] },
         "event_count": { "type": "integer", "minimum": 0 },
         "error_count": { "type": "integer", "minimum": 0 },
-        "freshness": { "$ref": "#/$defs/RunFreshness" },
+        "freshness": { "$ref": "#/$defs/RunFreshness" }
+      }
+    },
+    "GitCommitSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "parent_shas", "author_name", "authored_at", "committed_at", "subject", "changed_files", "insertions", "deletions", "changed_paths", "first_observed_at", "last_observed_at", "reachable", "evidence"],
+      "properties": {
+        "sha": { "$ref": "#/$defs/Sha" },
+        "parent_shas": { "type": "array", "items": { "$ref": "#/$defs/Sha" } },
+        "author_name": { "type": ["string", "null"] },
+        "authored_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "committed_at": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "subject": { "type": "string" },
+        "changed_files": { "type": ["integer", "null"], "minimum": 0 },
+        "insertions": { "type": ["integer", "null"], "minimum": 0 },
+        "deletions": { "type": ["integer", "null"], "minimum": 0 },
+        "changed_paths": { "type": "array", "items": { "type": "string" } },
+        "first_observed_at": { "$ref": "#/$defs/Timestamp" },
+        "last_observed_at": { "$ref": "#/$defs/Timestamp" },
+        "reachable": { "type": "boolean" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" } }
+      }
+    },
+    "AgentRunDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run", "actors", "worktree_evidence", "available_event_kinds", "commit_summary", "latest_stream_cursor"],
+      "properties": {
+        "run": { "$ref": "#/$defs/AgentRun" },
         "actors": { "type": "array", "items": { "$ref": "#/$defs/AgentActor" }, "maxItems": 256 },
-        "worktree_evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" }, "maxItems": 128 }
+        "worktree_evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" }, "maxItems": 128 },
+        "available_event_kinds": { "type": "array", "items": { "$ref": "#/$defs/EventKind" } },
+        "commit_summary": { "anyOf": [{ "$ref": "#/$defs/GitCommitSummary" }, { "type": "null" }] },
+        "latest_stream_cursor": { "$ref": "#/$defs/Id" }
       }
     },
     "AgentRunEvent": {
@@ -167,7 +201,8 @@
       "additionalProperties": false,
       "required": [
         "id", "event_key", "run_key", "observed_at", "ingested_at", "kind", "source_kind",
-        "source_id", "severity", "title", "summary", "content_scrubbed"
+        "actor_key", "worktree_id", "commit_sha", "source_id", "source_log_id", "provider_sequence",
+        "trace_id", "span_id", "severity", "title", "summary", "payload", "content_scrubbed"
       ],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
@@ -188,7 +223,7 @@
         "severity": { "type": "string", "maxLength": 32 },
         "title": { "type": "string", "maxLength": 512 },
         "summary": { "type": "string", "maxLength": 8192 },
-        "payload": {},
+        "payload": { "type": ["object", "null"] },
         "content_scrubbed": { "type": "boolean" }
       }
     },
@@ -231,7 +266,7 @@
     "Page": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["limit", "truncated"],
+      "required": ["limit", "next_cursor", "truncated"],
       "properties": {
         "limit": { "type": "integer", "minimum": 1 },
         "next_cursor": { "type": ["string", "null"], "maxLength": 2048 },
@@ -247,7 +282,7 @@
     "StreamEnvelope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "event", "entity_type", "entity_key", "occurred_at", "data"],
+      "required": ["id", "event", "entity_type", "entity_key", "run_key", "occurred_at", "data"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
         "event": { "$ref": "#/$defs/StreamEventName" },
