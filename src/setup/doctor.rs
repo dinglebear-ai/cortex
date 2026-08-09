@@ -3,9 +3,6 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-
 use super::debug_wrapper::{check_debug_compose_content_phase, check_debug_wrapper_content_phase};
 use super::firstrun::filesystem_phase;
 use super::sessions_watch::{run_sessions_watch_service_setup, transcript_root_permissions_phase};
@@ -302,6 +299,18 @@ pub(crate) fn check_transcript_forward_env_migration(
     fix: bool,
     yes: bool,
 ) -> SetupPhase {
+    check_transcript_forward_env_migration_with_hook(env_path, fix, yes, || {})
+}
+
+fn check_transcript_forward_env_migration_with_hook<F>(
+    env_path: &Path,
+    fix: bool,
+    yes: bool,
+    after_read: F,
+) -> SetupPhase
+where
+    F: FnOnce(),
+{
     use crate::heartbeat_agent::{AI_TRANSCRIPT_FORWARD_ENV, AI_TRANSCRIPT_FORWARD_LEGACY_ENV};
 
     let timer = PhaseTimer::start("transcript-forward-env-migration");
@@ -328,6 +337,7 @@ pub(crate) fn check_transcript_forward_env_migration(
             );
         }
     };
+    after_read();
 
     let mut assignments = Vec::new();
 
@@ -377,122 +387,13 @@ pub(crate) fn check_transcript_forward_env_migration(
         );
     }
 
-    normalize_transcript_forward_assignments(env_path, &content, &assignments, timer)
-}
-
-fn normalize_transcript_forward_assignments(
-    env_path: &Path,
-    content: &str,
-    assignments: &[(usize, String, bool)],
-    timer: PhaseTimer,
-) -> SetupPhase {
-    let assignment_lines = assignments
-        .iter()
-        .map(|(line, _, _)| *line)
-        .collect::<std::collections::HashSet<_>>();
-    let first_line = assignments[0].0;
-    let value = &assignments[0].1;
-    let rewritten_lines = content
-        .lines()
-        .enumerate()
-        .filter_map(|(line_num, line)| {
-            if line_num == first_line {
-                let leading = &line[..line.len() - line.trim_start().len()];
-                return Some(format!(
-                    "{leading}{}={value}",
-                    crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV
-                ));
-            }
-            if assignment_lines.contains(&line_num) {
-                None
-            } else {
-                Some(line.to_string())
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut new_content = rewritten_lines.join("\n");
-    if content.ends_with('\n') && !new_content.ends_with('\n') {
-        new_content.push('\n');
-    }
-
-    match atomic_write_env_file(env_path, content, &new_content) {
-        Ok(()) => timer.finish(
-            SetupStatus::Ok,
-            "normalized transcript forwarding configuration",
+    timer.finish(
+        SetupStatus::Error,
+        format!(
+            "automatic rewrite is disabled to prevent concurrent edit or symlink-swap data loss; edit {} manually, replace {AI_TRANSCRIPT_FORWARD_LEGACY_ENV} with {AI_TRANSCRIPT_FORWARD_ENV}, and collapse equal duplicates",
+            env_path.display()
         ),
-        Err(error) => timer.finish(
-            SetupStatus::Error,
-            format!("failed to migrate .env file: {error}"),
-        ),
-    }
-}
-
-/// Atomic write implementation matching the pattern from firstrun.rs.
-/// This ensures the .env file is never in a partially written state.
-fn atomic_write_env_file(path: &Path, expected: &str, out: &str) -> io::Result<()> {
-    use std::io::Write;
-
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "env path must have a parent directory",
-        )
-    })?;
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "env path has no file name"))?;
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp_path = parent.join(format!(".{file_name}.tmp.{pid}.{nanos}"));
-
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-
-    let write_result: io::Result<()> = (|| {
-        let mut file = options.open(&tmp_path)?;
-        file.write_all(out.as_bytes())?;
-        file.sync_all()?;
-        Ok(())
-    })();
-
-    if let Err(err) = write_result {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(err);
-    }
-
-    if std::fs::read_to_string(path)? != expected {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(io::Error::other(
-            "env file changed concurrently; refusing to overwrite it",
-        ));
-    }
-
-    if let Err(err) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(err);
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-
-    // fsync parent directory
-    if let Some(parent) = path.parent() {
-        let dir = std::fs::File::open(parent)?;
-        dir.sync_all()?;
-    }
-
-    Ok(())
+    )
 }
 
 #[cfg(test)]

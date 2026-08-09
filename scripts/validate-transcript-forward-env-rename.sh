@@ -66,10 +66,12 @@ def allowed(path: str, line: str) -> bool:
         )
     if path in doc_paths:
         lowered = line.lower()
-        return any(word in lowered for word in (
-            "deprecated", "deprecation", "legacy", "compatibility", "red", "regression",
-            "removal", "rename", "generated", "operationally misleading",
-        ))
+        if re.search(rf"(?:^|[^A-Za-z0-9_]){re.escape(legacy)}\s*=", line):
+            return False
+        return re.search(
+            r"\b(?:deprecated|deprecation|legacy|compatibility|red|regression|removal|rename|generated)\b",
+            lowered,
+        ) is not None or "operationally misleading" in lowered
     return False
 
 violations: list[str] = []
