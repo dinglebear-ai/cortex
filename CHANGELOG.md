@@ -31,6 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * **ci:** emit line-tables-only debuginfo in dev builds ([#182](https://github.com/dinglebear-ai/cortex/issues/182)) ([1094384](https://github.com/dinglebear-ai/cortex/commit/1094384f063044c998c023d5de0144f0e16c3bc2))
 
+
+### Chores
+
+* adopt AGPL-3.0-only with commercial licensing ([#176](https://github.com/dinglebear-ai/cortex/issues/176)) ([6afa01a](https://github.com/dinglebear-ai/cortex/commit/6afa01ad46594f9ad0e7bd519cdbc44b46664002))
+* scrub internal network identifiers ([#174](https://github.com/dinglebear-ai/cortex/issues/174)) ([3a91a07](https://github.com/dinglebear-ai/cortex/commit/3a91a07a3ca546cde40d9553a8418c14af86ebe3))
+
+
+### CI
+
+* audit concurrency, coverage gating, release cache, and cron scoping ([#177](https://github.com/dinglebear-ai/cortex/issues/177)) ([7c35d1f](https://github.com/dinglebear-ai/cortex/commit/7c35d1f4d3d1bd610349592bb1ad2a397a77dc5f))
+* record what `RUSTC_WRAPPER` resolves to before the build ([#181](https://github.com/dinglebear-ai/cortex/issues/181)) ([4318085](https://github.com/dinglebear-ai/cortex/commit/4318085021b55ad173b8b6a84b10cd898df370a7))
+
+
+### Documentation
+
+* add the Agent Observatory implementation plan and align the rmcp 3.0.0-beta.2 toolchain ([#172](https://github.com/dinglebear-ai/cortex/issues/172)) ([f2cb986](https://github.com/dinglebear-ai/cortex/commit/f2cb9869a2fce06c93a4cd42acfe4a6fc30a0b1d))
+
 ## [3.11.3](https://github.com/dinglebear-ai/cortex/compare/v3.11.2...v3.11.3) (2026-08-03)
 
 
