@@ -196,7 +196,7 @@ runs:
               "$config_file" | head -n1
           )"
           [ -z "$configured_store" ] || cache_dir="$configured_store"
-        elif [ -n "${KACHE_S3_ACCESS_KEY:-}" ] && [ -n "${KACHE_S3_SECRET_KEY:-}" ]; then
+        elif [ "$("$GITHUB_WORKSPACE/scripts/ci/kache-s3-mode.sh")" = remote ]; then
           credentials_file="$RUNNER_TEMP/kache-aws-credentials"
           umask 077
           {
