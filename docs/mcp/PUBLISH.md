@@ -64,7 +64,8 @@ Steps executed:
 | crates.io | `cargo publish` via GitHub Actions | `v*` tag push |
 | GHCR | Docker image build and push | `v*` tag push |
 | MCP Registry | `server.json` under `tv.tootie/cortex` namespace | manual update |
-| MCPB | `dist/cortex-X.Y.Z-linux.mcpb` | `just build-mcpb` |
+| MCPB (Linux) | `dist/cortex-X.Y.Z-linux.mcpb` | `just build-mcpb` |
+| MCPB (Windows) | `dist/cortex-X.Y.Z-windows.mcpb` | `bash scripts/build-mcpb.sh --target windows` |
 
 ## server.json
 
@@ -91,11 +92,25 @@ Run before publishing a release:
 
 ```bash
 just build-mcpb
+bash scripts/build-mcpb.sh --target windows
 npx --yes @anthropic-ai/mcpb info dist/cortex-X.Y.Z-linux.mcpb
+npx --yes @anthropic-ai/mcpb info dist/cortex-X.Y.Z-windows.mcpb
 ```
 
-The unsigned MCPB is a Linux bundle for local stdio clients. Signing is a
+The unsigned MCPBs are target-specific bundles for local stdio clients. Signing is a
 separate distribution step once signing keys are available.
+
+### Windows cross-compile prerequisites
+
+`--target windows` builds `x86_64-pc-windows-gnu` from a Linux host and requires two
+things that are not installed by default. `scripts/build-mcpb.sh` checks both and fails
+fast with install instructions if either is missing:
+
+- The `x86_64-pc-windows-gnu` rustup target: `rustup target add x86_64-pc-windows-gnu`
+- A mingw-w64 linker (`x86_64-w64-mingw32-gcc`) on `PATH`:
+  - Debian/Ubuntu: `sudo apt install gcc-mingw-w64-x86-64`
+  - Fedora: `sudo dnf install mingw64-gcc`
+  - Arch: `sudo pacman -S mingw-w64-gcc`
 
 ## Verification
 
