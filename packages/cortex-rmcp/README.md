@@ -4,9 +4,9 @@
 [![Release](https://img.shields.io/github/v/release/dinglebear-ai/cortex)](https://github.com/dinglebear-ai/cortex/releases)
 [![npm](https://img.shields.io/npm/v/cortex-rmcp)](https://www.npmjs.com/package/cortex-rmcp)
 [![crates.io](https://img.shields.io/crates/v/cortex)](https://crates.io/crates/cortex)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](LICENSE)
 
-Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.
+Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.
 
 It collects logs and operational evidence, stores them in SQLite with FTS5 search, and exposes one shared intelligence layer through CLI, REST, MCP, and a bundled browser workspace.
 
@@ -915,4 +915,4 @@ Cortex is intentionally opinionated:
 
 ## License
 
-Cortex is available under the [MIT License](LICENSE).
+Original Dinglebear-authored portions of this project are licensed under [AGPL-3.0-only](LICENSE). Separate commercial licensing is available for organizations that need terms outside the AGPL. Third-party material remains under its original license. See [LICENSING.md](https://github.com/dinglebear-ai/cortex/blob/main/LICENSING.md).

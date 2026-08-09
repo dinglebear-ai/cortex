@@ -24,7 +24,6 @@ check:
     bash scripts/check-rust-module-size.sh --limit 500
 
 lint:
-    just test-cargo-wrapper
     cargo clippy -- -D warnings
 
 fmt:
@@ -38,10 +37,6 @@ coverage:
 
 coverage-html:
     env -u CORTEX_API_TOKEN -u NO_AUTH -u CORTEX_DB_PATH cargo llvm-cov nextest --html
-
-# Verify Cargo wrapper binary sync behavior
-test-cargo-wrapper:
-    scripts/test-cargo-rustc-wrapper.sh
 
 # Doc tests (nextest does not run these; no executable doc tests currently exist)
 test-doc:

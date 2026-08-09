@@ -6,7 +6,7 @@ resolver = "3"
 edition = "2024"
 rust-version = "1.97.1"
 authors = ["dinglebear.ai <hello@dinglebear.ai>"]
-license = "MIT"
+license = "AGPL-3.0-only"
 readme = "README.md"
 homepage = "https://cortex.dinglebear.ai"
 repository = "https://github.com/dinglebear-ai/cortex"
@@ -35,7 +35,7 @@ missing_safety_doc = "deny"
 
 [package]
 name = "cortex"
-version = "3.11.2"
+version = "3.11.3"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -45,7 +45,7 @@ homepage.workspace = true
 repository.workspace = true
 categories = ["command-line-utilities", "development-tools::debugging", "database", "network-programming", "parsing"]
 keywords = ["mcp", "logs", "syslog", "observability", "homelab"]
-description = "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST."
+description = "Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS."
 publish = false
 autobins = false
 
@@ -183,6 +183,14 @@ test-support = []
 # Release profile for a deployed long-running daemon + the bundled plugin
 # binary (full-review BM4). `panic = "abort"` is deliberately NOT set:
 # run_db recovers DB-task panics via JoinError::is_panic.
+# CI compiles this workspace from scratch constantly (CARGO_INCREMENTAL=0 is
+# required under the kache rustc-wrapper), and full DWARF is a large share of
+# that time. "line-tables-only" keeps file/line in panics and backtraces --
+# what CI output is actually read for -- while skipping the type/variable
+# debuginfo only an interactive debugger uses. Matches labby.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 strip = "symbols"

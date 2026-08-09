@@ -66,16 +66,25 @@ There is no file-based logging. Container orchestrators (Docker, Kubernetes) cap
 
 ### MCP tool errors
 
-Tool execution errors return MCP-formatted responses with `isError: true`:
+Action validation and execution errors return MCP-formatted responses with
+`isError: true`:
 
 ```json
 {
-  "content": [{"type": "text", "text": "Tool execution failed"}],
+  "content": [{"type": "text", "text": "{\"kind\":\"invalid_param\",...}"}],
+  "structuredContent": {
+    "kind": "invalid_param",
+    "message": "caller-safe validation detail",
+    "action": "project_context",
+    "retryable": false
+  },
   "isError": true
 }
 ```
 
-The server logs the full error with timing, then returns a sanitized message to the client.
+Validation messages are caller-safe and structured for client recovery. Internal
+execution failures remain sanitized while the server logs their full detail and
+timing.
 
 ### Database errors
 

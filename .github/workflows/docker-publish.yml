@@ -3,9 +3,15 @@ name: Container and MCP Registry Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z release tag to rebuild, verify, and promote
+        required: true
+        type: string
 
 concurrency:
-  group: container-release-${{ github.event.release.tag_name }}
+  group: container-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
 permissions:
@@ -19,55 +25,12 @@ jobs:
     name: Build, verify, and publish amd64 image
     uses: dinglebear-ai/workflows/.github/workflows/hosted-container-release.yml@2650efa9e06ec76992d82022f15b7bfd276166a2
     with:
-      checkout-ref: ${{ github.event.release.tag_name }}
+      checkout-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
       image: ghcr.io/${{ github.repository }}
-      release-tag: ${{ github.event.release.tag_name }}
+      release-tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
       dockerfile: config/Dockerfile
-      smoke-command: docker run --rm "$IMAGE_REF" --help
+      smoke-command: docker run --rm --entrypoint cortex "$IMAGE_REF" --help
       cache-scope: cortex-container-release
     secrets:
       REGISTRY_USERNAME: ${{ github.actor }}
       REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  mcp-registry:
-    name: Publish MCP Registry metadata
-    needs: [container]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.event.release.tag_name }}
-          persist-credentials: false
-
-      - name: Install mcp-publisher
-        run: |
-          curl -fsSL \
-            "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" |
-            tar xz mcp-publisher
-
-      - name: Set release metadata
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          VERSION="${RELEASE_TAG#v}"
-          jq \
-            --arg version "$VERSION" \
-            --arg image "ghcr.io/${GITHUB_REPOSITORY}:${RELEASE_TAG}" \
-            '
-              .version = $version |
-              .packages = [
-                .packages[] |
-                if .registryType == "oci" then .identifier = $image else . end
-              ]
-            ' server.json > server.tmp
-          mv server.tmp server.json
-
-      - name: Authenticate to MCP Registry
-        run: ./mcp-publisher login dns --domain tootie.tv --private-key "$MCP_PRIVATE_KEY"
-        env:
-          MCP_PRIVATE_KEY: ${{ secrets.MCP_PRIVATE_KEY }}
-
-      - name: Publish to MCP Registry
-        run: ./mcp-publisher publish

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.3](https://github.com/dinglebear-ai/cortex/compare/v3.11.2...v3.11.3) (2026-08-03)
+
+
+### Fixed
+
+* **ci:** preserve existing Kache config ([#159](https://github.com/dinglebear-ai/cortex/issues/159)) ([f721a50](https://github.com/dinglebear-ai/cortex/commit/f721a50577c961aed00f48376a5bfb96c9c53966))
+* **release:** invoke cortex in container smoke ([#165](https://github.com/dinglebear-ai/cortex/issues/165)) ([5ca85ca](https://github.com/dinglebear-ai/cortex/commit/5ca85ca875da4ad7fddb22c2da10abc3726b498a))
+* **release:** keep registry description schema-compliant ([#169](https://github.com/dinglebear-ai/cortex/issues/169)) ([0cc5b13](https://github.com/dinglebear-ai/cortex/commit/0cc5b13cd92503fb2fb0dcd6b0b7b97e2f31da22))
+* **release:** publish MCP metadata with dinglebear.ai ([f018f0f](https://github.com/dinglebear-ai/cortex/commit/f018f0fab7e189352226c4a76d2713107f2bf255))
+
 ## [3.11.2](https://github.com/dinglebear-ai/cortex/compare/v3.11.1...v3.11.2) (2026-08-02)
 
 
@@ -110,6 +120,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+### Licensing
+
+- Relicense Dinglebear-owned original work under AGPL-3.0-only and document separate commercial licensing; third-party material retains its original terms.
+
 ## [3.9.1] - 2026-07-12
 
 ## [3.8.1] - 2026-07-09
@@ -125,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Three new plugin skills filling gaps in the assessment/investigation skill family: `hook-friction-assessment` (analyzes `hook_investigate` evidence bundles, mirroring the existing mcp/skill friction-assessment pattern), `incidents` (triage for `unaddressed_errors`, `ack_error`/`unack_error`, `notifications_recent`, `similar_incidents`, `incident_context`), and `topology` (homelab topology/correlation queries via `map`, `host_state`, `fleet_state`, `correlate`, `correlate_state`, `graph`).
 
 ### Changed
+
 
 - Renamed all plugin skill directories to drop the redundant `cortex-` prefix (e.g. `cortex-troubleshoot` → `troubleshoot`), updating the `name:` frontmatter, sibling cross-references, `agents/openai.yaml` prompts, and the Rust `include_str!`/`SKILL_NAME` constants that embed three of these skills (`frustration-assessment`, `mcp-friction-assessment`, `skill-improvement-assessment`) into the binary at compile time.
 

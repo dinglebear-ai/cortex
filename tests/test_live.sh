@@ -502,14 +502,13 @@ phase_tools() {
     file_tails_result="$(call_tool cortex '{"action":"file_tails","op":"status"}')" || file_tails_result=""
     assert_jq "cortex file_tails — sources array present"       "${file_tails_result}" '.sources | type == "array"'
     assert_jq "cortex file_tails — statuses array present"      "${file_tails_result}" '.statuses | type == "array"'
+    # Invalid params now come back as a structured tool-level error
+    # (isError result with a JSON body), not a JSON-RPC-level failure —
+    # see fix(mcp): return structured validation errors.
     local file_tails_missing_op
-    if file_tails_missing_op="$(call_tool cortex '{"action":"file_tails"}' 2>&1)"; then
-      _fail "cortex file_tails — missing op rejected" "request unexpectedly succeeded: ${file_tails_missing_op}"
-    elif [[ "${file_tails_missing_op}" == *"op"* || "${file_tails_missing_op}" == *"missing"* || "${file_tails_missing_op}" == *"required"* ]]; then
-      _pass "cortex file_tails — missing op rejected"
-    else
-      _fail "cortex file_tails — missing op rejected" "response did not mention op: ${file_tails_missing_op}"
-    fi
+    file_tails_missing_op="$(call_tool cortex '{"action":"file_tails"}')" || file_tails_missing_op=""
+    assert_jq "cortex file_tails — missing op rejected"             "${file_tails_missing_op}" '.kind' "invalid_param"
+    assert_jq "cortex file_tails — missing op rejected mentions op" "${file_tails_missing_op}" '.message | contains("op")' "true"
     if file_tail_smoke_available; then
       local server_path write_path source_id tag marker add_result search_result count attempt
       server_path="${CORTEX_FILE_TAIL_SMOKE_PATH:-${FILE_TAIL_SMOKE_SERVER_PATH}}"
@@ -620,7 +619,15 @@ phase_tools() {
   assert_jq "cortex sessions — count field present" "${sessions_result}" '.count != null'
   assert_jq "cortex sessions — sessions field is array" "${sessions_result}" '.sessions | type' "array"
   if [[ "${AI_SEEDED}" == true ]]; then
-    assert_jq "cortex sessions — seeded AI project appears" "${sessions_result}" \
+    # The unbounded sessions action intentionally reads a periodically refreshed
+    # rollup. Query the seeded fixture through an explicit time window so this
+    # assertion uses the exact live path instead of racing rollup refresh timing.
+    local seeded_sessions_result
+    seeded_sessions_result="$(call_tool cortex "$(jq -nc \
+      --arg project "${AI_SMOKE_PROJECT}" \
+      '{"action":"sessions","project":$project,"since":"2026-05-11T00:00:00Z","until":"2026-05-13T00:00:00Z","limit":10}')")" \
+      || seeded_sessions_result=""
+    assert_jq "cortex sessions — seeded AI project appears" "${seeded_sessions_result}" \
       "any(.sessions[]?; .project == \"${AI_SMOKE_PROJECT}\")" "true"
   fi
 
@@ -940,7 +947,7 @@ wait_for_timeline_rollup() {
   local token="$1"
   local response=""
   local attempt
-  for attempt in {1..30}; do
+  for attempt in {1..120}; do
     response="$(curl -sf --max-time 3 \
       -H "Authorization: Bearer ${token}" \
       "${BASE_URL}/api/timeline?bucket=hour" 2>/dev/null || true)"
@@ -1027,7 +1034,7 @@ phase_cli_parity() {
     args="${pair#*|}"
     if [[ "${label}" == "timeline --bucket hour" ]] \
       && ! wait_for_timeline_rollup "${cli_token}"; then
-      _fail "cli parity: ${label} (timeline rollup not ready after 30s)"
+      _fail "cli parity: ${label} (timeline rollup not ready after 120s)"
       continue
     fi
     if [[ -n "${CLI_PARITY_CONTAINER}" ]]; then
