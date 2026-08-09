@@ -42,6 +42,9 @@ coverage-html:
 test-doc:
     cargo test --doc
 
+check-agent-observatory-contracts:
+    bash scripts/check-agent-observatory-contracts.sh
+
 docker-build:
     docker build -f config/Dockerfile -t cortex .
 
