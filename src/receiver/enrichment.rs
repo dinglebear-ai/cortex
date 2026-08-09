@@ -294,6 +294,10 @@ fn extract_agent_docker_metadata(entry: &mut LogBatchEntry, config: &EnrichmentC
     let Some(rest) = rest.strip_prefix("] ").or_else(|| rest.strip_prefix(']')) else {
         return;
     };
+    let lifecycle = agent_docker
+        .get("stream")
+        .and_then(Value::as_str)
+        .is_some_and(|stream| stream == "event");
 
     // Ordering dependency: this extraction runs FIRST in `enrich_entry`, so
     // any pre-existing `metadata_json` here was set by the receiver/parser.
@@ -311,11 +315,36 @@ fn extract_agent_docker_metadata(entry: &mut LogBatchEntry, config: &EnrichmentC
         if target.contains_key("agent_docker") {
             return;
         }
-        target.insert("agent_docker".to_string(), agent_docker);
+        target.insert("agent_docker".to_string(), agent_docker.clone());
         target.insert(
             "source_kind".to_string(),
-            Value::String(AGENT_DOCKER_SOURCE_KIND.to_string()),
+            Value::String(
+                if lifecycle {
+                    "docker-event"
+                } else {
+                    AGENT_DOCKER_SOURCE_KIND
+                }
+                .to_string(),
+            ),
         );
+        if lifecycle {
+            let mut docker = serde_json::Map::new();
+            for key in [
+                "host",
+                "container_id",
+                "container_name",
+                "compose_project",
+                "compose_service",
+                "image",
+                "event_action",
+                "exit_code",
+            ] {
+                if let Some(value) = agent_docker.get(key) {
+                    docker.insert(key.to_string(), value.clone());
+                }
+            }
+            target.insert("docker".to_string(), Value::Object(docker));
+        }
     }
     // If the merged object would blow the metadata bound, truncation would
     // drop the `agent_docker` identity we just extracted. Back out instead:
@@ -325,6 +354,11 @@ fn extract_agent_docker_metadata(entry: &mut LogBatchEntry, config: &EnrichmentC
     };
     entry.message = rest.to_string();
     entry.metadata_json = Some(bounded);
+    if lifecycle {
+        // Keep transport-derived `source_ip` immutable. The asserted Docker
+        // host/container/action remain queryable under metadata_json.docker.
+        entry.facility = Some("docker".to_string());
+    }
 }
 
 /// Match `entry.source_ip` against an operator-configured prefix at the

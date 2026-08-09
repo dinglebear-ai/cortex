@@ -3,6 +3,7 @@ use super::*;
 pub(super) const API_SURFACE_SPECS: &[SurfaceSpec] = &[
     api!("/api/search", Search, Canonical, Read),
     api!("/api/filter", Search, Canonical, Read),
+    api!("/api/feed", Search, Canonical, Read),
     api!("/api/tail", Search, Canonical, Read),
     api!("/api/errors", Analysis, RetainedProtocolCompatibility, Read),
     api!("/api/hosts", Hosts, Canonical, Read),
