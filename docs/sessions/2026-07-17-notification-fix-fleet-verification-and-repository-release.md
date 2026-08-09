@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Notification Fix, Fleet Verification, and Repository Release
 
 ## Session Metadata
@@ -14,15 +16,15 @@
 
 ## Objective
 
-Resolve the repeated Cortex fleet-silence notifications, distinguish the tootie server from the tootie and Tower heartbeat-agent containers, verify what each configured host is actually delivering, then leave the repository fully merged, synchronized, branch-clean, built, and deployed.
+Resolve the repeated Cortex fleet-silence notifications, distinguish the nashost server from the nashost and Tower heartbeat-agent containers, verify what each configured host is actually delivering, then leave the repository fully merged, synchronized, branch-clean, built, and deployed.
 
 ## Summary
 
-The repeated Gotify warnings were not proof that tootie, Tower, and dookie were continuously disconnected. The silence evaluator correctly generated stable outage keys containing the stream's unchanged last-seen timestamp, but the dispatcher only searched a rolling 15-minute firing window. Once an outage remained open longer than that window, the same outage was sent again. Heartbeat- and stream-silence rules now check exact dedup keys across the full firing history; ordinary notification rules retain the rolling window.
+The repeated Gotify warnings were not proof that nashost, Tower, and devhost were continuously disconnected. The silence evaluator correctly generated stable outage keys containing the stream's unchanged last-seen timestamp, but the dispatcher only searched a rolling 15-minute firing window. Once an outage remained open longer than that window, the same outage was sent again. Heartbeat- and stream-silence rules now check exact dedup keys across the full firing history; ordinary notification rules retain the rolling window.
 
-The Unraid agent containers were also corrected independently from the full server. The heartbeat-agent image does not serve HTTP on port 3100, so its inherited server-only Docker healthcheck was guaranteed to report unhealthy. That probe was removed only from the agent containers. The full Cortex server on tootie still has its `/health` probe enabled and healthy. Both Unraid agents run as root so their local Docker sockets are accessible.
+The Unraid agent containers were also corrected independently from the full server. The heartbeat-agent image does not serve HTTP on port 3100, so its inherited server-only Docker healthcheck was guaranteed to report unhealthy. That probe was removed only from the agent containers. The full Cortex server on nashost still has its `/health` probe enabled and healthy. Both Unraid agents run as root so their local Docker sockets are accessible.
 
-Live fleet inspection showed that several alerts were stale/repeating rather than fresh transport failures, but it did not support claiming that every known device sends every possible source. tootie and Tower recovered their configured heartbeat, Docker, and TCP paths; dookie, squirts, STEAMY WSL, vivobook WSL, and agent-os have host-specific gaps or intentionally narrower configurations; SHART remains genuinely down because its Unraid array/Docker stack is unavailable.
+Live fleet inspection showed that several alerts were stale/repeating rather than fresh transport failures, but it did not support claiming that every known device sends every possible source. nashost and Tower recovered their configured heartbeat, Docker, and TCP paths; devhost, edgehost, WINHOST WSL, laptophost WSL, and agent-os have host-specific gaps or intentionally narrower configurations; BACKUPHOST remains genuinely down because its Unraid array/Docker stack is unavailable.
 
 ## Implemented Changes
 
@@ -36,31 +38,31 @@ The fix was developed test-first. The new regression initially reached the no-Ap
 
 ## Runtime Corrections and Verification
 
-- Recreated tootie's heartbeat-agent container as root and without the server-only HTTP healthcheck.
+- Recreated nashost's heartbeat-agent container as root and without the server-only HTTP healthcheck.
 - Recreated Tower's heartbeat-agent container as root and without the server-only HTTP healthcheck; corrected its persisted environment and token.
-- Kept tootie's full Cortex server healthcheck enabled. The server remained healthy.
-- Deployed the notification fix to the tootie server and observed repeated evaluation cycles.
-- At 19:53, 19:58, 20:03, and 20:08 UTC, unchanged SHART heartbeat-silence and dookie stream-silence candidates were dropped as `dedup_suppressed`; their firing counts and timestamps did not advance.
+- Kept nashost's full Cortex server healthcheck enabled. The server remained healthy.
+- Deployed the notification fix to the nashost server and observed repeated evaluation cycles.
+- At 19:53, 19:58, 20:03, and 20:08 UTC, unchanged BACKUPHOST heartbeat-silence and devhost stream-silence candidates were dropped as `dedup_suppressed`; their firing counts and timestamps did not advance.
 
 ## Fleet Delivery Findings
 
 | Host | Observed delivery | Remaining limitation |
 |---|---|---|
-| tootie | current heartbeat, Docker stream, TCP syslog, Plex file tail | none in the checked configured paths |
+| nashost | current heartbeat, Docker stream, TCP syslog, Plex file tail | none in the checked configured paths |
 | Tower | current heartbeat; Docker and TCP streams recovered | recent history should continue to be watched after recreation |
-| dookie | heartbeat, Docker, TCP, command forwarding | configured shell-history path had no observed rows; command rows can be mislabeled `localhost` |
-| squirts | heartbeat, Docker, TCP | transcript/shell-history evidence conflicted between prior audit and the current database snapshot |
-| STEAMY WSL | heartbeat and TCP | no current transcript/shell-history rows observed |
-| vivobook WSL | heartbeat and TCP | Docker collection is intentionally disabled |
+| devhost | heartbeat, Docker, TCP, command forwarding | configured shell-history path had no observed rows; command rows can be mislabeled `localhost` |
+| edgehost | heartbeat, Docker, TCP | transcript/shell-history evidence conflicted between prior audit and the current database snapshot |
+| WINHOST WSL | heartbeat and TCP | no current transcript/shell-history rows observed |
+| laptophost WSL | heartbeat and TCP | Docker collection is intentionally disabled |
 | agent-os | heartbeat | Windows host is partial because several collectors still assume Linux `/proc` |
-| SHART | no current heartbeat | Unraid license/array failure prevents Docker and the agent from running |
+| BACKUPHOST | no current heartbeat | Unraid license/array failure prevents Docker and the agent from running |
 
 Android devices and the offline Steam Deck/tablet are not configured as Cortex heartbeat agents, so their absence is not an ingest regression.
 
 ## Errors and Corrections During the Work
 
-- Initial wording blurred tootie the machine, tootie the full Cortex server, and the separate tootie heartbeat-agent container. They are now treated as distinct runtime units.
-- Tower and tootie were initially discussed too loosely; Tower is a separate Unraid host.
+- Initial wording blurred nashost the machine, nashost the full Cortex server, and the separate nashost heartbeat-agent container. They are now treated as distinct runtime units.
+- Tower and nashost were initially discussed too loosely; Tower is a separate Unraid host.
 - The first Tower token recreation attempt suffered shell expansion at the wrong layer. The persisted environment was corrected and the container recreated.
 - A healthy heartbeat-agent was labeled unhealthy because it inherited a server HTTP probe for a port it never opens. Only that invalid agent probe was disabled.
 - Silence alerts used a stable outage key but a time-bounded lookup, producing repeat notifications every time the generic dedup window expired.
@@ -89,7 +91,7 @@ Existing open defects remain separately tracked: Windows-native collectors (`sys
 
 - Preserve the full-history notification firing table and query it by exact dedup key for outage rules instead of inventing another mutable outage-state table.
 - Keep the generic rolling dedup window for non-outage rules.
-- Keep tootie's server healthcheck enabled; remove the port-3100 probe only from heartbeat-agent containers.
+- Keep nashost's server healthcheck enabled; remove the port-3100 probe only from heartbeat-agent containers.
 - Do not claim universal fleet completeness when live rows do not prove every configured path.
 - Merge the green release-please PR with a merge commit, consistent with prior release PRs, then remove its branch.
 - Preserve and synchronize `marketplace-no-mcp`; delete every other stale branch.
@@ -101,15 +103,15 @@ Existing open defects remain separately tracked: Windows-native collectors (`sys
 | Notification regression test before fix | failed through `no_apprise_urls`, reproducing the expired-window bug |
 | Notification regression test after fix | same outage dropped as `dedup_suppressed`; changed outage key allowed |
 | Live evaluator over four cycles | firing count and timestamps remained stable for unchanged outages |
-| tootie server health | healthy with the server HTTP probe still enabled |
-| tootie/Tower agent state | recreated as root; server-only health probe absent only on agents |
+| nashost server health | healthy with the server HTTP probe still enabled |
+| nashost/Tower agent state | recreated as root; server-only health probe absent only on agents |
 | Repository worktrees | exactly one, on `main` |
 | PR #141 checks | all completed successfully; merge state clean |
 
 ## Risks and Rollback
 
 - Lifetime dedup assumes outage keys always include the stalled last-seen timestamp. The evaluator tests cover this contract; changing key construction later must preserve that discriminator.
-- SHART will remain legitimately silent until its Unraid licensing/array problem is fixed.
+- BACKUPHOST will remain legitimately silent until its Unraid licensing/array problem is fixed.
 - Some fleet paths are not proven end-to-end, particularly shell/transcript forwarding and Windows-native system probes.
 - The notification fix can be rolled back by reverting `5e982465`; doing so restores the old repeated-alert behavior.
 - Container deployment rollback is the previous versioned image and the prior host binary.
@@ -120,5 +122,5 @@ Existing open defects remain separately tracked: Windows-native collectors (`sys
 2. Merge release PR #141 and synchronize `main`.
 3. Let or run the canonical `marketplace-no-mcp` synchronization workflow and verify drift checks.
 4. Delete the release branch and any other stale local/remote branches, retaining only `main` and `marketplace-no-mcp` remotely and only `main` locally.
-5. Run repository quality gates, build the latest release binary, install it on the host PATH, and deploy the same version to the tootie Cortex container.
+5. Run repository quality gates, build the latest release binary, install it on the host PATH, and deploy the same version to the nashost Cortex container.
 6. Verify Git synchronization, branch inventory, binary versions, container image/version, and `/health`, then close `syslog-mcp-pv4j6` and push Beads state.

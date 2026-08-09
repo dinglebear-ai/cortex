@@ -150,10 +150,12 @@ export interface AgentRunSummary {
   freshness: RunFreshness
 }
 
-export interface AgentRunDetail extends AgentRunSummary {
+export interface AgentRunDetail {
+  run: AgentRunSummary
   actors: AgentActor[]
   worktree_evidence: Evidence[]
   available_event_kinds: AgentEventKind[]
+  commit_summary: GitCommitSummary | null
   latest_stream_cursor: Id
 }
 
@@ -176,7 +178,7 @@ export interface AgentRunEvent<TPayload = unknown> {
   severity: string
   title: string
   summary: string
-  payload?: TPayload
+  payload: TPayload | null
   content_scrubbed: boolean
 }
 
@@ -273,6 +275,29 @@ export interface StreamEnvelope<TData extends Record<string, unknown> = Record<s
   run_key: string | null
   occurred_at: Timestamp
   data: TData
+}
+
+export type BackfillStatus =
+  | "accepted"
+  | "running"
+  | "cancel_requested"
+  | "cancelled"
+  | "completed"
+  | "failed"
+
+export interface BackfillJob {
+  job_id: Id
+  source: "logs" | "mcp_events" | "hook_events" | "skill_events" | "llm_invocations" | "otel_spans" | "otel_metric_points" | "repository_observations" | "all"
+  from_id: Id | null
+  until_id: Id | null
+  status: BackfillStatus
+  processed: number
+  total: number | null
+  created_at: Timestamp
+  started_at: Timestamp | null
+  finished_at: Timestamp | null
+  error: string | null
+  restart_of_job_id: Id | null
 }
 
 export interface ProjectionCursorStatus {

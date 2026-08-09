@@ -3,7 +3,7 @@
 use super::GitCommitRow;
 use crate::db::pool::{DbPool, write_lock};
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -154,6 +154,23 @@ pub fn reconcile_git_commits(
     reachability: &[GitCommitReachabilityUpdate],
     observed_at: &str,
 ) -> Result<Vec<GitCommitRow>> {
+    validate_reconcile_git_commits(commits, reachability, observed_at)?;
+    if commits.is_empty() && reachability.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _write_guard = write_lock();
+    let mut conn = pool.get().context("acquire database connection")?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let rows = reconcile_git_commits_tx(&tx, repository_key, commits, reachability, observed_at)?;
+    tx.commit()?;
+    Ok(rows)
+}
+
+pub(super) fn validate_reconcile_git_commits(
+    commits: &[GitCommitUpsert],
+    reachability: &[GitCommitReachabilityUpdate],
+    observed_at: &str,
+) -> Result<()> {
     validate_observed_at(observed_at)?;
     let mut shas = HashSet::new();
     for commit in commits {
@@ -171,14 +188,17 @@ pub fn reconcile_git_commits(
             bail!("duplicate reachability SHA in batch");
         }
     }
-    if commits.is_empty() && reachability.is_empty() {
-        return Ok(Vec::new());
-    }
+    Ok(())
+}
 
-    let _write_guard = write_lock();
-    let mut conn = pool.get().context("acquire database connection")?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let repository_id = repository_id(&tx, repository_key)?;
+pub(super) fn reconcile_git_commits_tx(
+    tx: &Transaction<'_>,
+    repository_key: &str,
+    commits: &[GitCommitUpsert],
+    reachability: &[GitCommitReachabilityUpdate],
+    observed_at: &str,
+) -> Result<Vec<GitCommitRow>> {
+    let repository_id = repository_id(tx, repository_key)?;
     let mut rows = Vec::with_capacity(commits.len());
     for commit in commits {
         tx.execute(
@@ -224,7 +244,7 @@ pub fn reconcile_git_commits(
             ],
         )?;
         rows.push(
-            commit_by_sha(&tx, repository_id, &commit.sha)?
+            commit_by_sha(tx, repository_id, &commit.sha)?
                 .context("commit missing after upsert")?,
         );
     }
@@ -242,7 +262,6 @@ pub fn reconcile_git_commits(
             );
         }
     }
-    tx.commit()?;
     Ok(rows)
 }
 

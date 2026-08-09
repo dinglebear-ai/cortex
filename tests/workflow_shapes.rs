@@ -13,6 +13,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
 
     for job in [
         "version-sync",
+        "identity",
         "fmt",
         "clippy",
         "test",
@@ -35,15 +36,22 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
     let docs_contract = workflow_job_block(workflow, "docs-contract");
     assert!(
         docs_contract.contains("needs.changes.outputs.docs == 'true'")
-            && docs_contract.contains("cargo test --lib --locked docs_tests::")
-            && docs_contract.contains("bash scripts/check-public-identity.sh"),
+            && docs_contract.contains("cargo test --lib --locked docs_tests::"),
         "docs-contract must run focused embedded-document tests for docs changes"
+    );
+
+    let identity = workflow_job_block(workflow, "identity");
+    assert!(
+        identity.contains("bash scripts/check-public-identity.sh")
+            && identity.contains("needs.changes.outputs.docs == 'true'"),
+        "identity must validate public strings across documentation and release surfaces"
     );
 
     let gate = workflow_job_block(workflow, "ci-gate");
     for job in [
         "changes",
         "version-sync",
+        "identity",
         "fmt",
         "clippy",
         "test",
@@ -127,6 +135,7 @@ fn workflows_default_to_read_only_github_token_permissions() {
     );
 
     let docker = include_str!("../.github/workflows/docker-publish.yml");
+    let registry = include_str!("../.github/workflows/mcp-registry.yml");
     let container = workflow_job_block(docker, "container");
     assert!(
         container.contains("hosted-container-release.yml"),
@@ -137,6 +146,45 @@ fn workflows_default_to_read_only_github_token_permissions() {
             && docker.contains("attestations: write")
             && docker.contains("id-token: write"),
         "the container release workflow must retain package, provenance, and OIDC scopes"
+    );
+    assert!(
+        docker.contains("workflow_dispatch:") && docker.contains("release_tag:"),
+        "the container release workflow must support controlled recovery for an existing release tag"
+    );
+    assert!(
+        docker
+            .contains(r#"smoke-command: docker run --rm --entrypoint cortex "$IMAGE_REF" --help"#)
+            && !docker.contains(r#"smoke-command: docker run --rm "$IMAGE_REF" --help"#),
+        "the container smoke test must invoke the cortex binary instead of treating --help as the executable"
+    );
+    assert!(
+        !docker.contains("mcp-publisher")
+            && !docker.contains("registry.modelcontextprotocol.io")
+            && !docker.contains("MCP_PRIVATE_KEY"),
+        "container publication must not duplicate the shared MCP Registry publisher"
+    );
+    assert!(
+        registry.contains("mcp-registry-publish.yml@befa67c7b7f976235bf3fbced6ede93293a7f405")
+            && registry.contains("workflow_dispatch:")
+            && registry.contains("expected-version:")
+            && registry.contains("manifest-path: server.json")
+            && registry.contains("MCP_PRIVATE_KEY")
+            && !registry.contains("auth-method:"),
+        "MCP Registry publication must use the pinned DNS-only workflow source of truth"
+    );
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../server.json")).expect("server.json must parse");
+    let description = manifest["description"]
+        .as_str()
+        .expect("server.json description must be a string");
+    assert!(
+        description.chars().count() <= 100,
+        "MCP Registry description must stay within the 100-character schema limit"
+    );
+    assert!(
+        registry.contains("version-prefix: v"),
+        "Cortex Registry recovery must normalize v-prefixed release tags"
     );
 }
 
@@ -232,6 +280,44 @@ fn release_please_config_and_manifest_agree_with_components_toml() {
         assert!(
             components.contains(&format!("regex_version\", path = \"{regex_carrier}\"")),
             "release/components.toml must keep a regex_version carrier for {regex_carrier}"
+        );
+    }
+}
+
+#[test]
+fn release_please_rust_workspace_uses_scalar_package_versions() {
+    let root_manifest = include_str!("../Cargo.toml");
+    let xtask_manifest = include_str!("../xtask/Cargo.toml");
+    let components = include_str!("../release/components.toml");
+
+    let root: toml::Value = toml::from_str(root_manifest).expect("root Cargo.toml must parse");
+    let xtask: toml::Value = toml::from_str(xtask_manifest).expect("xtask Cargo.toml must parse");
+    let root_version = root
+        .get("package")
+        .and_then(|value| value.get("version"))
+        .and_then(toml::Value::as_str)
+        .expect("root package.version must be a scalar string");
+    let xtask_version = xtask
+        .get("package")
+        .and_then(|value| value.get("version"))
+        .and_then(toml::Value::as_str)
+        .expect("xtask package.version must be a scalar string");
+
+    assert_eq!(root_version, xtask_version);
+    assert!(
+        root.get("workspace")
+            .and_then(|value| value.get("package"))
+            .and_then(|value| value.get("version"))
+            .is_none(),
+        "workspace.package.version must stay absent because release-please cannot replace inherited package versions"
+    );
+    for required in [
+        r#"cargo_package", path = "xtask/Cargo.toml", package = "xtask""#,
+        r#"cargo_lock_package", path = "Cargo.lock", package = "xtask""#,
+    ] {
+        assert!(
+            components.contains(required),
+            "release/components.toml must track {required}"
         );
     }
 }

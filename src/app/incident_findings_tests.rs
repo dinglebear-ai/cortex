@@ -5,7 +5,7 @@ fn log(id: i64, message: &str) -> LogEntry {
     LogEntry {
         id,
         timestamp: "2026-05-25T00:00:00Z".into(),
-        hostname: "tootie".into(),
+        hostname: "nashost".into(),
         facility: None,
         severity: "err".into(),
         app_name: None,
@@ -27,7 +27,7 @@ fn incident(abuse_count: usize) -> AbuseIncident {
         project: "/home/jmagar/workspace/cortex".into(),
         tool: "claude".into(),
         session_id: "sess-1".into(),
-        hostname: "tootie".into(),
+        hostname: "nashost".into(),
         first_seen: "2026-05-25T00:00:00Z".into(),
         last_seen: "2026-05-25T00:05:00Z".into(),
         duration_secs: 300,

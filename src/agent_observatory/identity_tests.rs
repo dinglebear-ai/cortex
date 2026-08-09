@@ -19,12 +19,12 @@ fn canonical_tool_normalizes_known_unknown_and_explicit_unknown_values() {
 fn run_key_matches_contract_and_trims_identity_components() {
     assert_eq!(
         run_key(
-            " dookie ",
+            " devhost ",
             " Claude ",
             " 00112233-4455-6677-8899-aabbccddeeff "
         )
         .unwrap(),
-        "v1|6:dookie|6:claude|36:00112233-4455-6677-8899-aabbccddeeff"
+        "v1|7:devhost|6:claude|36:00112233-4455-6677-8899-aabbccddeeff"
     );
 }
 
@@ -54,7 +54,7 @@ fn length_prefixes_make_delimiter_characters_unambiguous() {
 
 #[test]
 fn actor_key_nests_the_complete_run_key_without_ambiguity() {
-    let run = run_key("dookie", "Claude", "session-1").unwrap();
+    let run = run_key("devhost", "Claude", "session-1").unwrap();
     assert_eq!(
         actor_key(&run, "agent:1").unwrap(),
         format!("v1|{}:{run}|7:agent:1", run.len())
@@ -143,7 +143,7 @@ fn every_identity_rejects_empty_trimmed_components() {
 #[test]
 fn property_style_vectors_are_stable_across_repeated_calls() {
     let vectors = [
-        ("dookie", "claude", "abc"),
+        ("devhost", "claude", "abc"),
         (" host:one ", "Custom Tool", "session|two"),
         ("δοκιμή", "Gemini", "会話:三"),
     ];

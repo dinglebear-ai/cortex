@@ -17,7 +17,7 @@ use std::time::Duration;
 
 fn options() -> ReconcileOptions {
     ReconcileOptions {
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         command_timeout: Duration::from_secs(5),
         max_commits_per_transition: 500,
         store_changed_paths: true,
@@ -299,7 +299,7 @@ async fn removed_and_reappeared_worktree_reuses_identity_and_preserves_run_evide
                 "INSERT INTO agent_runs
                     (run_key, native_session_id, tool, hostname, primary_worktree_id,
                      status, status_reason, status_observed_at, started_at, last_activity_at)
-                 VALUES ('run-key', 'session-one', 'claude', 'dookie', ?1,
+                 VALUES ('run-key', 'session-one', 'claude', 'devhost', ?1,
                          'active', 'fixture', ?2, ?2, ?2)",
                 params![linked_before.id, first_seen],
             )

@@ -13,7 +13,7 @@ fn params(dedup_key: &str, next_attempt_at: &str) -> OutboxInsertParams {
         dedup_key: dedup_key.to_string(),
         rule_id: "queue_test".to_string(),
         severity: "warning".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         title: "Queue test".to_string(),
         body: "queued via pool wrapper".to_string(),
         apprise_urls_json: "[]".to_string(),
@@ -30,7 +30,7 @@ fn enqueue_and_claim_pending_round_trip_through_pool() {
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].dedup_key, "queue-ready");
-    assert_eq!(rows[0].hostname, "dookie");
+    assert_eq!(rows[0].hostname, "devhost");
 }
 
 #[test]

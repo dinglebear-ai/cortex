@@ -430,8 +430,8 @@ fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
              first_seen_at, last_seen_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         rusqlite::params![
-            "v1|6:dookie|20:/workspace/cortex/.git",
-            "dookie",
+            "v1|6:devhost|20:/workspace/cortex/.git",
+            "devhost",
             "/workspace/cortex/.git",
             "/workspace/cortex",
             "cortex",
@@ -446,7 +446,7 @@ fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
                  first_seen_at, last_seen_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             rusqlite::params![
-                "v1|6:dookie|20:/workspace/cortex/.git",
+                "v1|6:devhost|20:/workspace/cortex/.git",
                 "other-host",
                 "/workspace/other/.git",
                 "/workspace/other",
@@ -465,7 +465,7 @@ fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             rusqlite::params![
                 "different-key",
-                "dookie",
+                "devhost",
                 "/workspace/cortex/.git",
                 "/workspace/cortex-copy",
                 "cortex-copy",
@@ -511,7 +511,7 @@ fn init_pool_creates_agent_observatory_worktree_schema_scaffold() {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         rusqlite::params![
             "repo-key",
-            "dookie",
+            "devhost",
             "/workspace/cortex/.git",
             "/workspace/cortex",
             "cortex",
@@ -571,7 +571,7 @@ fn init_pool_creates_agent_observatory_worktree_schema_scaffold() {
         rusqlite::params![
             "worktree-key",
             repository_id,
-            "dookie",
+            "devhost",
             "/workspace/cortex",
             "/workspace/cortex/.git",
             "refs/heads/feat/agent-observatory",
@@ -591,7 +591,7 @@ fn init_pool_creates_agent_observatory_worktree_schema_scaffold() {
             rusqlite::params![
                 "different-key",
                 repository_id,
-                "dookie",
+                "devhost",
                 "/workspace/cortex",
                 "/workspace/cortex/.git/worktrees/duplicate",
                 "2026-08-01T01:00:00.000Z",
@@ -663,7 +663,7 @@ fn init_pool_creates_agent_observatory_observation_schema_scaffold() {
         "INSERT INTO repositories
             (repository_key, hostname, common_git_dir, primary_path, display_name,
              first_seen_at, last_seen_at)
-         VALUES ('repo-key', 'dookie', '/workspace/cortex/.git',
+         VALUES ('repo-key', 'devhost', '/workspace/cortex/.git',
                  '/workspace/cortex', 'cortex', ?1, ?1)",
         ["2026-08-01T01:00:00.000Z"],
     )
@@ -672,7 +672,7 @@ fn init_pool_creates_agent_observatory_observation_schema_scaffold() {
     conn.execute(
         "INSERT INTO repository_worktrees
             (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
-         VALUES ('worktree-key', ?1, 'dookie', '/workspace/cortex',
+         VALUES ('worktree-key', ?1, 'devhost', '/workspace/cortex',
                  '/workspace/cortex/.git', ?2, ?2)",
         rusqlite::params![repository_id, "2026-08-01T01:00:00.000Z"],
     )
@@ -801,7 +801,7 @@ fn init_pool_creates_agent_observatory_git_commit_schema_scaffold() {
             "INSERT INTO repositories
                 (repository_key, hostname, common_git_dir, primary_path, display_name,
                  first_seen_at, last_seen_at)
-             VALUES (?1, 'dookie', ?2, ?3, ?4, ?5, ?5)",
+             VALUES (?1, 'devhost', ?2, ?3, ?4, ?5, ?5)",
             rusqlite::params![key, common_dir, path, name, "2026-08-01T01:00:00.000Z"],
         )
         .unwrap();
@@ -1092,10 +1092,10 @@ fn init_pool_creates_agent_observatory_run_schema_scaffold() {
              status_observed_at, started_at, last_activity_at)
          VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5, ?5)",
         rusqlite::params![
-            "v1|6:dookie|6:claude|9:session-1",
+            "v1|6:devhost|6:claude|9:session-1",
             "session-1",
             "claude",
-            "dookie",
+            "devhost",
             "2026-08-01T02:00:00.000Z",
         ],
     )
@@ -1115,7 +1115,7 @@ fn init_pool_creates_agent_observatory_run_schema_scaffold() {
             "INSERT INTO agent_runs
                 (run_key, native_session_id, tool, hostname, status,
                  status_observed_at, started_at, last_activity_at)
-             VALUES ('bad-status', 'session-2', 'claude', 'dookie',
+             VALUES ('bad-status', 'session-2', 'claude', 'devhost',
                      'running-ish', ?1, ?1, ?1)",
             ["2026-08-01T02:00:01.000Z"],
         )
@@ -1128,7 +1128,7 @@ fn init_pool_creates_agent_observatory_run_schema_scaffold() {
             "INSERT INTO agent_runs
                 (run_key, native_session_id, tool, hostname, status,
                  status_observed_at, started_at, last_activity_at)
-             VALUES ('different-run-key', 'session-1', 'claude', 'dookie',
+             VALUES ('different-run-key', 'session-1', 'claude', 'devhost',
                      'idle', ?1, ?1, ?1)",
             ["2026-08-01T02:00:02.000Z"],
         )
@@ -1204,7 +1204,7 @@ fn init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema() {
         "INSERT INTO repositories
             (repository_key, hostname, common_git_dir, primary_path, display_name,
              first_seen_at, last_seen_at)
-         VALUES ('repo-evidence', 'dookie', '/workspace/cortex/.git',
+         VALUES ('repo-evidence', 'devhost', '/workspace/cortex/.git',
                  '/workspace/cortex', 'cortex', ?1, ?1)",
         ["2026-08-01T02:30:00.000Z"],
     )
@@ -1218,7 +1218,7 @@ fn init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema() {
             "INSERT INTO repository_worktrees
                 (worktree_key, repository_id, hostname, path, git_dir,
                  first_seen_at, last_seen_at)
-             VALUES (?1, ?2, 'dookie', ?3, ?4, ?5, ?5)",
+             VALUES (?1, ?2, 'devhost', ?3, ?4, ?5, ?5)",
             rusqlite::params![
                 key,
                 repository_id,
@@ -1248,7 +1248,7 @@ fn init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema() {
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, hostname, status,
              status_observed_at, started_at, last_activity_at)
-         VALUES ('run-evidence', 'session-evidence', 'claude', 'dookie',
+         VALUES ('run-evidence', 'session-evidence', 'claude', 'devhost',
                  'active', ?1, ?1, ?1)",
         ["2026-08-01T02:30:00.000Z"],
     )
@@ -1581,16 +1581,16 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('reverse_proxy', 'proxy:example.tootie.tv', 'example.tootie.tv',
-             'app_inventory', 'proxy:example.tootie.tv', 'verified')",
+         VALUES ('reverse_proxy', 'proxy:example.test', 'example.test',
+             'app_inventory', 'proxy:example.test', 'verified')",
         [],
     )
     .unwrap();
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('domain', 'example.tootie.tv', 'example.tootie.tv',
-             'app_inventory', 'example.tootie.tv', 'verified')",
+         VALUES ('domain', 'example.test', 'example.test',
+             'app_inventory', 'example.test', 'verified')",
         [],
     )
     .unwrap();
@@ -1651,7 +1651,7 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
         "INSERT INTO graph_relationships
             (relationship_key, src_entity_id, dst_entity_id, relationship_type,
              reason_code, trust_level, confidence, evidence_count)
-         VALUES ('reverse_proxy:example.tootie.tv->domain:example.tootie.tv',
+         VALUES ('reverse_proxy:example.test->domain:example.test',
              ?1, ?2, 'exposes_domain', 'reverse_proxy_config',
              'verified', 0.90, 1)",
         rusqlite::params![proxy_id, domain_id],
@@ -1688,7 +1688,7 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let proxy_rel_id: i64 = conn
         .query_row(
             "SELECT id FROM graph_relationships
-             WHERE relationship_key = 'reverse_proxy:example.tootie.tv->domain:example.tootie.tv'",
+             WHERE relationship_key = 'reverse_proxy:example.test->domain:example.test'",
             [],
             |row| row.get(0),
         )
@@ -1697,10 +1697,10 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
         "INSERT INTO graph_relationship_evidence
             (relationship_id, evidence_key, source_kind, source_id, observed_at,
              reason_code, trust_level, safe_excerpt, evidence_count)
-         VALUES (?1, 'proxy:example.tootie.tv:route',
-             'app_inventory', 'proxy:example.tootie.tv',
+         VALUES (?1, 'proxy:example.test:route',
+             'app_inventory', 'proxy:example.test',
              '2026-01-01T00:00:00Z', 'reverse_proxy_config',
-             'verified', 'example.tootie.tv routes through proxy config', 1)",
+             'verified', 'example.test routes through proxy config', 1)",
         [proxy_rel_id],
     )
     .unwrap();
@@ -1898,8 +1898,8 @@ fn migration_30_widens_old_graph_constraints_and_preserves_rows() {
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('compose_project', 'squirts:edge', 'edge',
-             'app_inventory', 'compose:squirts', 'verified')",
+         VALUES ('compose_project', 'edgehost:edge', 'edge',
+             'app_inventory', 'compose:edgehost', 'verified')",
         [],
     )
     .unwrap();
@@ -1915,7 +1915,7 @@ fn migration_30_widens_old_graph_constraints_and_preserves_rows() {
         "INSERT INTO graph_relationship_evidence
             (relationship_id, evidence_key, source_kind, source_id, observed_at,
              reason_code, trust_level, safe_excerpt, evidence_count)
-         VALUES (?1, 'inventory:route', 'app_inventory', 'proxy:squirts',
+         VALUES (?1, 'inventory:route', 'app_inventory', 'proxy:edgehost',
              '2026-01-01T00:00:00Z', 'reverse_proxy_config',
              'verified', 'proxy route', 1)",
         rusqlite::params![relationship_id],
@@ -1970,7 +1970,7 @@ fn graph_lookup_indexes_support_expected_query_plans() {
     let entity_plan = plan_details(
         "EXPLAIN QUERY PLAN
          SELECT id FROM graph_entities
-         WHERE entity_type = 'host' AND canonical_key = 'dookie'",
+         WHERE entity_type = 'host' AND canonical_key = 'devhost'",
     );
     assert!(
         entity_plan
@@ -1982,7 +1982,7 @@ fn graph_lookup_indexes_support_expected_query_plans() {
     let alias_plan = plan_details(
         "EXPLAIN QUERY PLAN
          SELECT entity_id FROM graph_entity_aliases
-         WHERE alias_type = 'hostname' AND alias_key = 'dookie'",
+         WHERE alias_type = 'hostname' AND alias_key = 'devhost'",
     );
     assert!(
         alias_plan
@@ -2264,7 +2264,7 @@ fn migration_32_covers_graph_to_log_join() {
     let join_plan = plan_details(
         "EXPLAIN QUERY PLAN
          SELECT id FROM logs
-         WHERE hostname IN ('dookie', 'squirts')
+         WHERE hostname IN ('devhost', 'edgehost')
            AND app_name = 'swag'
            AND timestamp BETWEEN '2026-06-18T00:00:00Z' AND '2026-06-18T01:00:00Z'",
     );
@@ -3262,7 +3262,7 @@ fn graph_schema_accepts_entity_resolution_vocabulary() {
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
          VALUES
             ('logical_service', 'plex', 'plex', 'resolver', 'fixture', 'verified'),
-            ('service_instance', 'tootie/plex', 'tootie/plex', 'resolver', 'fixture', 'verified')",
+            ('service_instance', 'nashost/plex', 'nashost/plex', 'resolver', 'fixture', 'verified')",
         [],
     )
     .unwrap();
@@ -3312,8 +3312,8 @@ fn migration_41_cleans_legacy_service_rows_from_populated_db() {
             "INSERT INTO graph_entities
                 (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
              VALUES
-                ('service', 'tootie:plex', 'plex', 'log', 'fixture', 'inferred'),
-                ('service', 'tootie:plex:plex', 'tootie/plex/plex', 'log', 'fixture', 'inferred'),
+                ('service', 'nashost:plex', 'plex', 'log', 'fixture', 'inferred'),
+                ('service', 'nashost:plex:plex', 'nashost/plex/plex', 'log', 'fixture', 'inferred'),
                 ('app', 'plex/plex/plex', 'plex/plex/plex', 'log', 'fixture', 'claimed'),
                 ('app', 'kernel', 'kernel', 'log', 'fixture', 'claimed')",
             [],
@@ -3410,8 +3410,8 @@ fn migration_41_prunes_relationships_evidence_and_aliases_touching_legacy_entiti
             .unwrap();
         };
 
-        let legacy = insert_entity("service", "tootie:plex");
-        let host = insert_entity("host", "tootie");
+        let legacy = insert_entity("service", "nashost:plex");
+        let host = insert_entity("host", "nashost");
         let app = insert_entity("app", "kernel");
         let legacy_rel = insert_rel("legacy:runs_on:host", legacy, host);
         insert_evidence(legacy_rel, "legacy-evidence");
@@ -3639,7 +3639,7 @@ fn init_pool_creates_agent_observatory_run_events_schema() {
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, hostname, status,
              status_observed_at, started_at, last_activity_at)
-         VALUES ('run-events-test', 'session-events', 'claude', 'dookie',
+         VALUES ('run-events-test', 'session-events', 'claude', 'devhost',
                  'active', ?1, ?1, ?1)",
         ["2026-08-01T02:40:00.000Z"],
     )
@@ -3818,7 +3818,7 @@ fn init_pool_creates_agent_stream_outbox() {
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, hostname, status,
              status_observed_at, started_at, last_activity_at)
-         VALUES ('run-outbox-test', 'session-outbox', 'claude', 'dookie',
+         VALUES ('run-outbox-test', 'session-outbox', 'claude', 'devhost',
                  'active', ?1, ?1, ?1)",
         ["2026-08-01T03:00:00.000Z"],
     )
@@ -3902,7 +3902,7 @@ fn init_pool_creates_agent_stream_outbox() {
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, hostname, status,
              status_observed_at, started_at, last_activity_at)
-         VALUES ('run-outbox-query', 'session-outbox-query', 'claude', 'dookie',
+         VALUES ('run-outbox-query', 'session-outbox-query', 'claude', 'devhost',
                  'active', ?1, ?1, ?1)",
         ["2026-08-01T03:05:00.000Z"],
     )
@@ -4016,7 +4016,7 @@ fn init_pool_creates_agent_run_commits_and_projection_cursors() {
     // Insert test data for foreign key constraints
     conn.execute(
         "INSERT INTO repositories (repository_key, hostname, common_git_dir, primary_path, display_name, first_seen_at, last_seen_at)
-         VALUES ('repo-test', 'dookie', '/tmp/repo', '/tmp/repo', 'Test Repo', ?1, ?2)",
+         VALUES ('repo-test', 'devhost', '/tmp/repo', '/tmp/repo', 'Test Repo', ?1, ?2)",
         ["2026-08-01T02:50:00.000Z", "2026-08-01T02:50:00.000Z"],
     )
     .unwrap();
@@ -4025,7 +4025,7 @@ fn init_pool_creates_agent_run_commits_and_projection_cursors() {
     conn.execute(
         "INSERT INTO repository_worktrees
             (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
-         VALUES ('wt-main', ?1, 'dookie', '/tmp/repo', '/tmp/repo/.git', ?2, ?2)",
+         VALUES ('wt-main', ?1, 'devhost', '/tmp/repo', '/tmp/repo/.git', ?2, ?2)",
         rusqlite::params![repo_id, "2026-08-01T02:50:01.000Z"],
     )
     .unwrap();
@@ -4045,7 +4045,7 @@ fn init_pool_creates_agent_run_commits_and_projection_cursors() {
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, hostname, status,
              status_observed_at, started_at, last_activity_at)
-         VALUES ('run-commits-test', 'session-commits', 'claude', 'dookie',
+         VALUES ('run-commits-test', 'session-commits', 'claude', 'devhost',
                  'active', ?1, ?1, ?1)",
         ["2026-08-01T02:50:03.000Z"],
     )
@@ -4675,7 +4675,7 @@ fn migration_46_creates_otel_spans_table_and_indexes() {
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, hostname, status,
              status_observed_at, started_at, last_activity_at)
-         VALUES ('span-run', 'span-session', 'claude', 'dookie',
+         VALUES ('span-run', 'span-session', 'claude', 'devhost',
                  'active', ?1, ?1, ?1)",
         ["2026-08-01T03:00:00.000Z"],
     )
@@ -4691,7 +4691,7 @@ fn migration_46_creates_otel_spans_table_and_indexes() {
                  resource_json, attributes_json, events_json, links_json,
                  received_at, content_scrubbed)
              VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 100,
-                     'dookie', 'cortex', 'claude', 'span-session', ?7,
+                     'devhost', 'cortex', 'claude', 'span-session', ?7,
                      '{}', '{\"worktree\":\"cortex\"}', '[]', '[]', ?8, 1)",
             rusqlite::params![
                 "0123456789abcdef0123456789abcdef",
@@ -4931,7 +4931,7 @@ fn migration_47_creates_otel_metric_points_table_and_indexes() {
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, hostname, status,
              status_observed_at, started_at, last_activity_at)
-         VALUES ('metric-run', 'metric-session', 'codex', 'dookie',
+         VALUES ('metric-run', 'metric-session', 'codex', 'devhost',
                  'active', ?1, ?1, ?1)",
         ["2026-08-01T03:30:00.000Z"],
     )
@@ -4947,7 +4947,7 @@ fn migration_47_creates_otel_metric_points_table_and_indexes() {
                  ai_session_id, run_id, resource_json, attributes_json,
                  value_json, exemplars_json, received_at, content_scrubbed)
              VALUES (?1, ?2, 'fixture', 'ms', ?3, 2, 0, ?4, ?5,
-                     'dookie', 'cortex', 'codex', 'metric-session', ?6,
+                     'devhost', 'cortex', 'codex', 'metric-session', ?6,
                      '{}', '{}', ?7, '[]', ?8, 1)",
             rusqlite::params![
                 point_key,

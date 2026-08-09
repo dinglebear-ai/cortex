@@ -1,7 +1,7 @@
 ---
-title: "Agent Observatory Next.js and Aurora UI design"
+title: "agent observatory next.js and aurora ui design"
 created: 2026-07-31
-updated: 2026-08-05
+updated: 2026-07-31
 ---
 
 # Agent Observatory Next.js and Aurora UI design

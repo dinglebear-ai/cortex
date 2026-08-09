@@ -189,23 +189,23 @@ fn search_logs_from_graph_fans_out_from_session_to_host_logs() {
     insert_logs_batch(
         &pool,
         &[
-            // Session sess-7 ran commands on dookie (links ai_session → host).
+            // Session sess-7 ran commands on devhost (links ai_session → host).
             agent_command_row(
                 "2026-01-01T00:00:00Z",
-                "dookie",
+                "devhost",
                 "sess-7",
                 "/home/jmagar/workspace/cortex",
             ),
             // Plain syslog on the same host — should be reached via the host edge.
-            syslog_row("2026-01-01T00:01:00Z", "dookie", "swag"),
+            syslog_row("2026-01-01T00:01:00Z", "devhost", "swag"),
             // Unrelated host — must NOT be returned.
-            syslog_row("2026-01-01T00:02:00Z", "squirts", "authelia"),
+            syslog_row("2026-01-01T00:02:00Z", "edgehost", "authelia"),
         ],
     )
     .unwrap();
     refresh_graph_projection(&pool).unwrap();
 
-    // Seed from the AI session entity; traversal reaches host:dookie.
+    // Seed from the AI session entity; traversal reaches host:devhost.
     let session_key = "cortex:claude:sess-7".to_string();
     let logs = search_logs_from_graph_related_entities(
         &pool,
@@ -221,11 +221,11 @@ fn search_logs_from_graph_fans_out_from_session_to_host_logs() {
 
     let hosts: std::collections::HashSet<&str> = logs.iter().map(|l| l.hostname.as_str()).collect();
     assert!(
-        hosts.contains("dookie"),
-        "must fan out to dookie logs: {hosts:?}"
+        hosts.contains("devhost"),
+        "must fan out to devhost logs: {hosts:?}"
     );
     assert!(
-        !hosts.contains("squirts"),
+        !hosts.contains("edgehost"),
         "unrelated host must be excluded"
     );
     assert!(
@@ -244,11 +244,11 @@ fn search_logs_from_graph_respects_source_kind_filter() {
         &[
             agent_command_row(
                 "2026-01-01T00:00:00Z",
-                "dookie",
+                "devhost",
                 "sess-7",
                 "/home/jmagar/workspace/cortex",
             ),
-            syslog_row("2026-01-01T00:01:00Z", "dookie", "swag"),
+            syslog_row("2026-01-01T00:01:00Z", "devhost", "swag"),
         ],
     )
     .unwrap();
@@ -321,23 +321,23 @@ fn topic_correlate_app_seed_does_not_fan_out_to_whole_host() {
     insert_logs_batch(
         &pool,
         &[
-            syslog_row("2026-01-01T00:00:00Z", "tootie", "plex"),
-            syslog_row("2026-01-01T00:01:00Z", "tootie", "kernel"),
+            syslog_row("2026-01-01T00:00:00Z", "nashost", "plex"),
+            syslog_row("2026-01-01T00:01:00Z", "nashost", "kernel"),
         ],
     )
     .unwrap();
-    // Graph: app:plex —emitted_by→ host:tootie (log-identity edge).
+    // Graph: app:plex —emitted_by→ host:nashost (log-identity edge).
     {
         let conn = pool.get().unwrap();
         let app = insert_entity(&conn, graph::ENTITY_TYPE_APP, "plex");
-        let host = insert_entity(&conn, graph::ENTITY_TYPE_HOST, "tootie");
+        let host = insert_entity(&conn, graph::ENTITY_TYPE_HOST, "nashost");
         insert_rel(&conn, app, host, graph::REL_EMITTED_BY);
     }
 
     let inputs =
         topic_correlate_inputs(&pool, &["plex".to_string()], 2, None, None, None, 100).unwrap();
     // The topic resolves to the raw app entity and the walk reaches
-    // host:tootie, but the transitively reached host must never drive
+    // host:nashost, but the transitively reached host must never drive
     // host-wide log inclusion labelled `resolved`.
     assert!(
         inputs
@@ -373,7 +373,7 @@ fn ambiguous_prefix_candidates_surface_without_log_fanout() {
         &pool,
         &[syslog_row(
             "2026-01-01T00:00:00Z",
-            "tootie",
+            "nashost",
             "plexmediaserver",
         )],
     )

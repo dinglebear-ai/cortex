@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-08 18:55:30 EST
 repo: https://github.com/jmagar/syslog-mcp
@@ -44,7 +46,7 @@ Implemented end-to-end OAuth 2.0 for two Rust MCP servers (syslog-mcp and axon_r
    - Deployed OAuth binary via systemd drop-in (`~/.config/systemd/user/syslog-mcp.service.d/oauth.conf`).
    - Fixed DCR: `bearer_only_router()` excludes `/register`; switched to `router()`.
    - Fixed scope validation: lab-auth rejected `syslog:read syslog:admin` (space-separated); added multi-scope support in `authorize.rs`.
-   - Fixed SWAG proxy for `syslog.tootie.tv`: removed `oauth.conf` include, added direct OAuth endpoint routes. Fixed `WWW-Authenticate` path-based PRM URL (`/mcp/.well-known/oauth-protected-resource`).
+   - Fixed SWAG proxy for `syslog.example.invalid`: removed `oauth.conf` include, added direct OAuth endpoint routes. Fixed `WWW-Authenticate` path-based PRM URL (`/mcp/.well-known/oauth-protected-resource`).
    - Fixed claude.ai redirect URI: added `https://claude.ai/api/mcp/auth_callback` to `allowed_client_redirect_uris`.
    - OAuth flow verified end-to-end: Claude Code plugin authenticated successfully.
 
@@ -55,7 +57,7 @@ Implemented end-to-end OAuth 2.0 for two Rust MCP servers (syslog-mcp and axon_r
 7. **axon_rust OAuth** (PR #76, #77):
    - Dispatched agent to implement OAuth matching syslog-mcp's pattern. Key difference: axon uses sqlx-sqlite 0.8 which pins `libsqlite3-sys 0.30`, conflicting with lab-auth's rusqlite 0.39. Resolved by vendoring lab-auth with rusqlite downgraded to 0.32.
    - PR #76 merged. Post-merge fixes: fail-conservative scope default, artifacts/scrape write scope, x-api-key header normalization.
-   - Configured SWAG proxy for `axon.tootie.tv` matching syslog pattern.
+   - Configured SWAG proxy for `axon.example.invalid` matching syslog pattern.
    - Discovered rmcp `StreamableHttpServerConfig` didn't have `with_allowed_hosts` set → requests from Cloudflare rejected. Fixed in PR #77.
 
 ## Key Findings
@@ -63,7 +65,7 @@ Implemented end-to-end OAuth 2.0 for two Rust MCP servers (syslog-mcp and axon_r
 - **rmcp extension propagation (B0 spike)**: Pattern (a) confirmed — `ctx.extensions.get::<axum::http::request::Parts>()?.extensions.get::<AuthContext>()` works in rmcp 1.6 with `stateful_mode=false`. The research finding claiming it didn't was wrong.
 - **scope validation**: `validate_scope` in lab-auth only accepted exact `default_scope` match; MCP clients send `syslog:read syslog:admin` as a space-separated string. Fixed in lab-auth `authorize.rs:431`.
 - **DCR flow**: `bearer_only_router()` excludes `/register` unconditionally; Claude Code MCP SDK requires DCR. Must use `router()` (full) with `enable_dynamic_registration(true)`.
-- **path-based PRM**: `WWW-Authenticate` header points to `<resource_url>/.well-known/oauth-protected-resource` (e.g., `https://syslog.tootie.tv/mcp/.well-known/oauth-protected-resource`). SWAG must proxy this path to the upstream.
+- **path-based PRM**: `WWW-Authenticate` header points to `<resource_url>/.well-known/oauth-protected-resource` (e.g., `https://syslog.example.invalid/mcp/.well-known/oauth-protected-resource`). SWAG must proxy this path to the upstream.
 - **rmcp allowed_hosts** (axon): `StreamableHttpServerConfig::default()` only allows loopback. Must call `.with_allowed_hosts(...)` with the public hostname to allow requests from external reverse proxies.
 - **libsqlite3-sys conflict** (axon): sqlx-sqlite 0.8 pins `libsqlite3-sys 0.30`; rusqlite 0.39 requires `0.37`. Both declare `links = "sqlite3"` — Cargo hard error. Vendored lab-auth with rusqlite 0.32.
 
@@ -102,9 +104,9 @@ Implemented end-to-end OAuth 2.0 for two Rust MCP servers (syslog-mcp and axon_r
 - `config.toml` — `[mcp.auth]` section
 - `.github/workflows/lab-auth-bump.yml` — SHA-bump automation
 
-**SWAG nginx (squirts:/mnt/appdata/swag/nginx/proxy-confs/):**
+**SWAG nginx (edgehost:/mnt/appdata/swag/nginx/proxy-confs/):**
 - `syslog-mcp.subdomain.conf` — removed `oauth.conf` include + `auth_request`, added direct OAuth routes + `/mcp/.well-known/oauth-protected-resource`
-- `axon.subdomain.conf` — same pattern applied for axon.tootie.tv
+- `axon.subdomain.conf` — same pattern applied for axon.example.invalid
 
 **axon_rust repo:**
 - `src/mcp/auth.rs` — AuthPolicy enum, build_auth_policy, build_auth_layer, x-api-key normalizer
@@ -125,9 +127,9 @@ cargo build --release  # worktree
 systemctl --user daemon-reload && systemctl --user restart syslog-mcp
 
 # OAuth endpoint verification
-curl -s https://syslog.tootie.tv/.well-known/oauth-authorization-server
-curl -s https://syslog.tootie.tv/mcp/.well-known/oauth-protected-resource
-curl -si https://syslog.tootie.tv/mcp -X POST -H "Authorization: Bearer <token>" ...
+curl -s https://syslog.example.invalid/.well-known/oauth-authorization-server
+curl -s https://syslog.example.invalid/mcp/.well-known/oauth-protected-resource
+curl -si https://syslog.example.invalid/mcp -X POST -H "Authorization: Bearer <token>" ...
 
 # syslog-mcp PR merge
 gh pr merge 17 --squash  # merged at e40f54b
@@ -165,10 +167,10 @@ systemctl --user start axon-mcp
 | Command | Expected | Actual | Status |
 |---------|----------|--------|--------|
 | `cargo test --features test-support` | 277+ pass | 277 pass | ✅ |
-| `curl https://syslog.tootie.tv/.well-known/oauth-authorization-server` | issuer=https://syslog.tootie.tv | issuer: https://syslog.tootie.tv | ✅ |
-| `curl https://syslog.tootie.tv/mcp/.well-known/oauth-protected-resource` | 200 with resource URL | 200, resource: https://syslog.tootie.tv/mcp | ✅ |
+| `curl https://syslog.example.invalid/.well-known/oauth-authorization-server` | issuer=https://syslog.example.invalid | issuer: https://syslog.example.invalid | ✅ |
+| `curl https://syslog.example.invalid/mcp/.well-known/oauth-protected-resource` | 200 with resource URL | 200, resource: https://syslog.example.invalid/mcp | ✅ |
 | Claude Code plugin OAuth flow | Authenticate → Google → Connected | Authentication successful. Connected to syslog. | ✅ |
-| `curl https://axon.tootie.tv/.well-known/oauth-authorization-server` | issuer=https://axon.tootie.tv | issuer: https://axon.tootie.tv | ✅ |
+| `curl https://axon.example.invalid/.well-known/oauth-authorization-server` | issuer=https://axon.example.invalid | issuer: https://axon.example.invalid | ✅ |
 | axon POST /mcp via Cloudflare | 200 (after init) | Unexpected message (correct — needs initialize first) | ✅ |
 
 ## Risks and Rollback
@@ -181,7 +183,7 @@ systemctl --user start axon-mcp
 ## Decisions Not Taken
 
 - **Copy-and-adapt (Route A)**: Vendoring ~3,000 LOC of OAuth primitives into syslog-mcp avoided. Chosen: shared git+rev dep so security fixes propagate to both services.
-- **mcp-auth.tootie.tv as external AS**: The homelab already runs `mcp-auth.tootie.tv` as a central OAuth server. Rejected in favor of each service owning its OAuth AS, matching the planned architecture.
+- **mcp-auth.example.invalid as external AS**: The homelab already runs `mcp-auth.example.invalid` as a central OAuth server. Rejected in favor of each service owning its OAuth AS, matching the planned architecture.
 - **Browser sessions** (`/auth/login`): Excluded from syslog-mcp since no browser-facing routes exist. The full `router()` does mount `/auth/login`; syslog-mcp doesn't wire the cookie middleware.
 - **RFC 9700 refresh token rotation**: Deferred. Mitigated by reducing default refresh TTL from 30d → 8h. The 30d non-rotating tokens are a normative MUST violation per RFC 9700 for public clients.
 
@@ -200,7 +202,7 @@ systemctl --user start axon-mcp
 ## Open Questions
 
 - **Refresh token rotation**: RFC 9700 MUST for public clients. Currently 8h non-rotating. Needs a follow-up bead in lab-auth.
-- **`/auth/login` mounted on syslog-mcp**: The full `router()` mounts `/auth/login` (browser session flow). syslog-mcp doesn't wire the cookie middleware so it's a dead endpoint — but it's reachable at `https://syslog.tootie.tv/auth/login`. Low risk but inconsistent.
+- **`/auth/login` mounted on syslog-mcp**: The full `router()` mounts `/auth/login` (browser session flow). syslog-mcp doesn't wire the cookie middleware so it's a dead endpoint — but it's reachable at `https://syslog.example.invalid/auth/login`. Low risk but inconsistent.
 - **axon vendor drift**: axon's vendored lab-auth will fall behind upstream. No automation tracks this. Ideally resolve the rusqlite conflict upstream.
 
 ## Next Steps
@@ -210,7 +212,7 @@ systemctl --user start axon-mcp
 
 **Follow-on tasks not yet started:**
 - Merge axon PR #77 fixes back into main and rebuild deployed binary with final version
-- Set up SWAG proxy for `axon.tootie.tv` `/mcp` — currently serves but the axon binary rebuilds need to be redone from main (not the worktree)
+- Set up SWAG proxy for `axon.example.invalid` `/mcp` — currently serves but the axon binary rebuilds need to be redone from main (not the worktree)
 - Add `axon:write` scope enforcement in axon's action dispatch (currently only `axon:read`/`axon:write` mapped for known actions)
 - RFC 9700 refresh token rotation — create a follow-up bead in lab-auth
 - Publish `lab-auth` to crates.io (deferred; currently git+rev dep)

@@ -10,6 +10,10 @@ on:
   schedule:
     - cron: "43 6 * * 1"
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -21,6 +25,7 @@ jobs:
   changes:
     name: Changes
     runs-on: ci-pool-ops
+    timeout-minutes: 10
     outputs:
       all: ${{ steps.classify.outputs.all }}
       docs: ${{ steps.classify.outputs.docs }}
@@ -80,6 +85,7 @@ jobs:
   version-sync:
     name: Version Sync
     runs-on: ci-pool-ops
+    timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.skills == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.workflow == 'true' }}
     steps:
@@ -96,15 +102,39 @@ jobs:
       - name: Check agent memory symlinks
         run: bash scripts/check-agent-memory-symlinks.sh
 
-      - name: Check public identity strings
-        run: bash scripts/check-public-identity.sh
-
       - name: Check Rust module sizes
         run: bash scripts/check-rust-module-size.sh --limit 500
+
+  identity:
+    name: Public Identity
+    runs-on: ci-pool-ops
+    timeout-minutes: 10
+    needs: [changes]
+    # check-public-identity.sh scans config/*, scripts/*, .github/*,
+    # .claude-plugin/*, plugins/*, docs/*, server.json and mcpb/manifest.json.
+    # It needs no Rust toolchain, so it runs standalone rather than riding along
+    # with a job whose gate covers only part of that surface.
+    if: >-
+      ${{ needs.changes.outputs.docs == 'true'
+      || needs.changes.outputs.rust == 'true'
+      || needs.changes.outputs.release == 'true'
+      || needs.changes.outputs.skills == 'true'
+      || needs.changes.outputs.docker == 'true'
+      || needs.changes.outputs.workflow == 'true' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check public identity strings
+        run: |
+          bash scripts/check-public-identity.sh
+          bash scripts/check-private-identifiers.sh
+          bash scripts/test-private-identifiers.sh
+          bash scripts/test-render-deploy-templates.sh
 
   fmt:
     name: Formatting
     runs-on: ci-pool-rust
+    timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
@@ -121,6 +151,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ci-pool-rust
+    timeout-minutes: 30
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
@@ -137,6 +168,7 @@ jobs:
   test:
     name: Tests
     runs-on: ci-pool-rust
+    timeout-minutes: 30
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
@@ -167,19 +199,19 @@ jobs:
   docs-contract:
     name: Docs Contract
     runs-on: ci-pool-ops
+    timeout-minutes: 30
     needs: [changes]
-    # check-public-identity.sh scans server.json, mcpb/manifest.json,
-    # .claude-plugin/*, plugins/*, config/* and scripts/* — none of which
-    # classify as `docs` or `rust`. Gating on those two alone let the most
-    # likely regression vectors skip the job entirely, and the aggregate gate
-    # counts a skipped job as success.
+    # When `rust` is true, the Tests job already runs docs_tests:: via nextest,
+    # so this job would rebuild and rerun the same tests for nothing. It exists
+    # to cover docs/release/skills/docker/workflow-only PRs where the Tests job
+    # is skipped but the include_str! docs contracts could still drift.
     if: >-
-      ${{ needs.changes.outputs.docs == 'true'
-      || needs.changes.outputs.rust == 'true'
+      ${{ needs.changes.outputs.rust != 'true'
+      && (needs.changes.outputs.docs == 'true'
       || needs.changes.outputs.release == 'true'
       || needs.changes.outputs.skills == 'true'
       || needs.changes.outputs.docker == 'true'
-      || needs.changes.outputs.workflow == 'true' }}
+      || needs.changes.outputs.workflow == 'true') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -192,14 +224,15 @@ jobs:
         run: |
           env -u CORTEX_API_TOKEN -u NO_AUTH cargo test --lib --locked docs_tests::
 
-      - name: Verify public identity
-        run: bash scripts/check-public-identity.sh
-
   coverage:
     name: Coverage
     runs-on: ci-pool-rust
+    timeout-minutes: 30
     needs: [changes, test]
-    if: ${{ needs.changes.outputs.rust == 'true' && needs.test.result == 'success' }}
+    # PR runs already execute the full suite in the Tests job; the instrumented
+    # rebuild + second full run here only produces a --summary-only report that
+    # nothing consumes, so keep it to push/schedule/dispatch.
+    if: ${{ needs.changes.outputs.rust == 'true' && needs.test.result == 'success' && github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -219,12 +252,13 @@ jobs:
   deny:
     name: Dependency Check (cargo-deny)
     runs-on: ci-pool-rust
+    timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.security == 'true' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           command: check
           arguments: --all-features
@@ -232,6 +266,7 @@ jobs:
   mcp-integration:
     name: MCP Integration Tests
     runs-on: ci-pool-system
+    timeout-minutes: 30
     needs: [changes, test]
     if: ${{ needs.test.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.mcp == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
@@ -244,10 +279,12 @@ jobs:
   ci-gate:
     name: CI Gate
     runs-on: ci-pool-ops
+    timeout-minutes: 10
     if: always()
     needs:
       - changes
       - version-sync
+      - identity
       - fmt
       - clippy
       - test
@@ -269,6 +306,7 @@ jobs:
           }
           require_success_or_skipped changes "${{ needs.changes.result }}"
           require_success_or_skipped version-sync "${{ needs.version-sync.result }}"
+          require_success_or_skipped identity "${{ needs.identity.result }}"
           require_success_or_skipped fmt "${{ needs.fmt.result }}"
           require_success_or_skipped clippy "${{ needs.clippy.result }}"
           require_success_or_skipped test "${{ needs.test.result }}"
@@ -280,6 +318,7 @@ jobs:
   npm:
     name: npm launcher
     runs-on: ci-pool-typescript
+    timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' }}
     steps:

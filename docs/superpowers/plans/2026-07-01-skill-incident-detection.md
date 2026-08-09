@@ -664,7 +664,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
     // Skill event log row.
     let skill_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-skill-1",
@@ -673,7 +673,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
     // Correction anchor shortly after, same session.
     let correction_log = make_ai_entry(
         "2026-01-01T00:02:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-skill-1",
@@ -697,7 +697,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-skill-1",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),
@@ -719,7 +719,7 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
     assert_eq!(incident.tool, "codex");
     assert_eq!(incident.project, "/home/jmagar/workspace/cortex");
     assert_eq!(incident.session_id, "sess-skill-1");
-    assert_eq!(incident.hostname, "dookie");
+    assert_eq!(incident.hostname, "devhost");
     assert_eq!(incident.skill_event_count, 1);
     assert_eq!(incident.signal_counts.user_correction_after_skill, 1);
     assert!(
@@ -743,7 +743,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     // Session A: skill event only, no negative signal (low score).
     let a_skill = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-a",
         "sess-a",
@@ -752,7 +752,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     // Session B: skill event + correction + tool failure (higher score).
     let b_skill = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-b",
         "sess-b",
@@ -760,7 +760,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     );
     let b_correction = make_ai_entry(
         "2026-01-01T00:01:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-b",
         "sess-b",
@@ -768,7 +768,7 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
     );
     let b_failure = make_ai_entry(
         "2026-01-01T00:02:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-b",
         "sess-b",
@@ -785,11 +785,11 @@ fn search_ai_skill_incidents_sorts_by_score_with_total_cmp() {
             .unwrap()
     };
     insert_skill_event(
-        &pool, log_ids[0], "codex", "/tmp/project-a", "sess-a", "dookie",
+        &pool, log_ids[0], "codex", "/tmp/project-a", "sess-a", "devhost",
         "2026-01-01T00:00:00Z", "lavra:lavra-plan", Some("lavra"),
     );
     insert_skill_event(
-        &pool, log_ids[1], "codex", "/tmp/project-b", "sess-b", "dookie",
+        &pool, log_ids[1], "codex", "/tmp/project-b", "sess-b", "devhost",
         "2026-01-01T00:00:00Z", "lavra:lavra-plan", Some("lavra"),
     );
 
@@ -820,7 +820,7 @@ fn search_ai_skill_incidents_min_score_and_signals_filters() {
     let (pool, _dir) = test_pool();
     let skill_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "claude",
         "/tmp/project-c",
         "sess-c",
@@ -833,7 +833,7 @@ fn search_ai_skill_incidents_min_score_and_signals_filters() {
             .unwrap()
     };
     insert_skill_event(
-        &pool, log_id, "claude", "/tmp/project-c", "sess-c", "dookie",
+        &pool, log_id, "claude", "/tmp/project-c", "sess-c", "devhost",
         "2026-01-01T00:00:00Z", "lavra:lavra-plan", Some("lavra"),
     );
 
@@ -1321,7 +1321,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
 
     let skill_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -1329,7 +1329,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
     );
     let before_log = make_ai_entry(
         "2026-01-01T00:00:00.000Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -1337,7 +1337,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
     );
     let correction_log = make_ai_entry(
         "2026-01-01T00:02:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -1345,7 +1345,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
     );
     let failure_log = make_ai_entry(
         "2026-01-01T00:03:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -1369,7 +1369,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
     };
     // log_ids: [before, skill, correction, failure] in timestamp order.
     insert_skill_event(
-        &pool, log_ids[1], "codex", "/tmp/project-d", "sess-d", "dookie",
+        &pool, log_ids[1], "codex", "/tmp/project-d", "sess-d", "devhost",
         "2026-01-01T00:00:00Z", "lavra:lavra-plan", Some("lavra"),
     );
 
@@ -2413,7 +2413,7 @@ fn log(id: i64, message: &str) -> LogEntry {
     LogEntry {
         id,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: None,
         severity: "info".to_string(),
         app_name: Some("ai-transcript".to_string()),
@@ -2437,7 +2437,7 @@ fn incident(signals_present: Vec<&str>) -> SkillIncident {
         tool: "codex".to_string(),
         project: "/tmp/project".to_string(),
         session_id: "sess-1".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         first_seen: "2026-01-01T00:00:00Z".to_string(),
         last_seen: "2026-01-01T00:05:00Z".to_string(),
         duration_secs: 300,

@@ -320,11 +320,11 @@ CLI responses with `--json` return structured data:
   "truncated": true,
   "sessions": [
     {
-      "session_key": "6:dookie|6:claude|29:/home/jmagar/workspace/cortex|36:SESSION_ID",
+      "session_key": "6:devhost|6:claude|29:/home/jmagar/workspace/cortex|36:SESSION_ID",
       "project": "/home/jmagar/workspace/cortex",
       "tool": "claude",
       "session_id": "...",
-      "hostname": "dookie",
+      "hostname": "devhost",
       "first_seen": "2026-07-08T06:50:01.053Z",
       "last_seen": "2026-07-08T06:51:11.235Z",
       "event_count": 152,

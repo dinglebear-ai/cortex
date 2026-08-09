@@ -30,6 +30,7 @@ pub mod otlp_metrics;
 pub mod otlp_traces;
 mod pool;
 mod queries;
+pub(crate) use queries::page_agent_projection_logs;
 mod queries_hosts;
 mod queries_service_instances;
 mod skill_events;
@@ -43,8 +44,8 @@ pub use analytics::{
     IngestRatePerHost, ListAppsParams, ListAppsResult, ListSourceIpsParams, ListSourceIpsResult,
     LogEntryWithRaw, PatternEntry, RangeSummary, SilentHostEntry, SourceIpEntry,
     SourceIpHostBreakdown, TimelineGroupBy, TimelinePoint, anomalies, clock_skew, context_around,
-    fetch_log_by_id, get_ai_project_context, get_ai_usage_blocks, ingest_rate, ingest_rate_by_host,
-    list_apps, list_source_ips, silent_hosts, summarize_range, timeline,
+    feed_logs, fetch_log_by_id, get_ai_project_context, get_ai_usage_blocks, ingest_rate,
+    ingest_rate_by_host, list_apps, list_source_ips, silent_hosts, summarize_range, timeline,
 };
 pub(crate) use analytics::{cluster_pattern_rows, fetch_pattern_rows};
 pub use graph::{

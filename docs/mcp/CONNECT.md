@@ -103,17 +103,33 @@ The daemon must still be running somewhere to ingest logs into that database.
 
 ## MCPB bundle
 
-Build a Linux MCP Bundle from the existing stdio server:
+Build an MCP Bundle from the existing stdio server:
 
 ```bash
 just build-mcpb
+# or explicitly:
+bash scripts/build-mcpb.sh --target linux
+bash scripts/build-mcpb.sh --target windows
 ```
 
-The generated `dist/cortex-<version>-linux.mcpb` bundles the release
-`cortex` binary and launches it as:
+Supported build combinations are Linux to Linux, Linux to Windows GNU
+(`x86_64-pc-windows-gnu` plus MinGW), and native Windows to Windows. Native
+Windows uses the installed Rust host toolchain; Windows-to-Linux and macOS
+packaging are rejected so a host executable cannot be mislabeled. `--no-build`
+still verifies the executable format, x86-64 architecture, and compiled Cortex
+version before packaging.
+
+The packaging CLI is installed from the exact version and integrity hashes in
+`tools/mcpb/package-lock.json`; the script never executes a mutable `latest`
+package.
+
+The generated `dist/cortex-<version>-<target>.mcpb` bundles the release
+`cortex` binary for that target and launches it as:
 
 ```bash
 server/cortex mcp
+# Windows bundles launch:
+server/cortex.exe mcp
 ```
 
 The bundle is query-only. It reads `cortex.db` from the configured data
@@ -155,7 +171,7 @@ All clients use the same `mcpServers` JSON structure. The only difference is the
 When cortex is behind SWAG, the MCP endpoint becomes:
 
 ```
-https://cortex.tootie.tv/mcp
+https://cortex.example.invalid/mcp
 ```
 
 Configure clients to use this URL instead of `localhost:3100`.

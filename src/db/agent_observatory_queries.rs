@@ -378,6 +378,20 @@ pub fn reconcile_repository(
     worktrees: &[RepositoryWorktreeUpsert],
     observed_at: &str,
 ) -> Result<RepositoryReconcileResult> {
+    validate_reconcile_repository(repository, worktrees, observed_at)?;
+    let _write_guard = write_lock();
+    let mut conn = pool.get().context("acquire database connection")?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let result = reconcile_repository_tx(&tx, repository, worktrees, observed_at)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+pub(super) fn validate_reconcile_repository(
+    repository: &RepositoryUpsert,
+    worktrees: &[RepositoryWorktreeUpsert],
+    observed_at: &str,
+) -> Result<()> {
     validate_repository(repository, observed_at)?;
     let mut keys = HashSet::new();
     let mut paths = HashSet::new();
@@ -391,15 +405,25 @@ pub fn reconcile_repository(
         }
     }
 
-    let _write_guard = write_lock();
-    let mut conn = pool.get().context("acquire database connection")?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let repository_row = upsert_repository_tx(&tx, repository, observed_at)?;
+    Ok(())
+}
+
+pub(super) fn reconcile_repository_tx(
+    tx: &Transaction<'_>,
+    repository: &RepositoryUpsert,
+    worktrees: &[RepositoryWorktreeUpsert],
+    observed_at: &str,
+) -> Result<RepositoryReconcileResult> {
+    let keys = worktrees
+        .iter()
+        .map(|worktree| worktree.worktree_key.as_str())
+        .collect::<HashSet<_>>();
+    let repository_row = upsert_repository_tx(tx, repository, observed_at)?;
 
     let mut active_worktrees = Vec::with_capacity(worktrees.len());
     for worktree in worktrees {
         active_worktrees.push(upsert_worktree_tx(
-            &tx,
+            tx,
             repository_row.id,
             worktree,
             observed_at,
@@ -428,7 +452,6 @@ pub fn reconcile_repository(
         }
     }
 
-    tx.commit()?;
     active_worktrees.sort_by(|left, right| left.path.cmp(&right.path).then(left.id.cmp(&right.id)));
     Ok(RepositoryReconcileResult {
         repository: repository_row,

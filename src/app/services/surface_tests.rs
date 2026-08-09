@@ -105,7 +105,7 @@ async fn analysis_incident_preserves_mutually_exclusive_host_service_validation(
         .analysis(AnalysisRequest::Incident(IncidentRequest {
             around: Some("2026-01-01T00:00:00Z".into()),
             minutes: None,
-            host: Some("dookie".into()),
+            host: Some("devhost".into()),
             service: Some("cortex.service".into()),
             limit: None,
         }))

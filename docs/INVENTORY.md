@@ -29,7 +29,7 @@ The following files describe a planned feature and are not part of the current
 | `contracts/agent-observatory.sql` | Planned additive schema versions 44-47 |
 | `contracts/agent-observatory.schema.json` | JSON Schema definitions |
 | `contracts/agent-observatory.openapi.json` | Proposed REST/OpenAPI surface |
-| `contracts/agent-observatory-types.rs` | Compile-checked Rust contract declarations |
+| `contracts/agent-observatory-types.rs` | Rust contract declarations; intended to be compile-checked once wired into CI (not currently referenced by any Cargo target, build.rs, or CI step) |
 | `contracts/agent-observatory-types.ts` | Type-checked TypeScript declarations |
 | `contracts/agent-observatory-aurora-lock.example.json` | Pinned Aurora source and generated-file lock contract |
 | `plans/2026-07-31-agent-observatory-implementation.md` | 116-task TDD implementation index and phase gates, including the transcript-forward env compatibility track |
@@ -247,9 +247,9 @@ The MCP `map` action defaults to the bounded snapshot. Set `mode` to ask
 topology questions backed by the graph projection:
 
 ```json
-{"action":"map","mode":"host_services","host":"squirts"}
-{"action":"map","mode":"domain_routes","domain":"adguard.tootie.tv"}
-{"action":"map","mode":"service_dependencies","host":"squirts","service":"swag"}
+{"action":"map","mode":"host_services","host":"edgehost"}
+{"action":"map","mode":"domain_routes","domain":"adguard.example.invalid"}
+{"action":"map","mode":"service_dependencies","host":"edgehost","service":"swag"}
 {"action":"map","mode":"findings","finding_limit":25}
 ```
 

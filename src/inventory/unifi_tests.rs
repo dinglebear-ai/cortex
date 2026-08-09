@@ -23,7 +23,7 @@ async fn collector_uses_modern_network_details_and_suppresses_successful_fallbac
     Mock::given(method("GET"))
         .and(path("/proxy/network/api/s/default/stat/device"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [{"mac": "aa:bb", "ip": "10.1.0.2"}]
+            "data": [{"mac": "aa:bb", "ip": "192.0.2.2"}]
         })))
         .mount(&server)
         .await;
@@ -47,12 +47,12 @@ async fn collector_uses_modern_network_details_and_suppresses_successful_fallbac
             "id": "net-1",
             "name": "LAN",
             "ipv4Configuration": {
-                "gatewayIpAddress": "10.1.0.1",
+                "gatewayIpAddress": "192.0.2.1",
                 "dhcpConfiguration": {
                     "enabled": true,
-                    "rangeStart": "10.1.0.100",
-                    "rangeEnd": "10.1.0.200",
-                    "dnsServerIpAddresses": ["10.1.0.8"]
+                    "rangeStart": "192.0.2.100",
+                    "rangeEnd": "192.0.2.200",
+                    "dnsServerIpAddresses": ["192.0.2.8"]
                 }
             }
         })))
@@ -66,8 +66,8 @@ async fn collector_uses_modern_network_details_and_suppresses_successful_fallbac
         .iter()
         .find(|network| network.kind == "unifi_network" && network.name == "LAN")
         .unwrap();
-    assert_eq!(network.details["dhcp"]["gateway"], "10.1.0.1");
-    assert_eq!(network.details["dhcp"]["dns_servers"], json!(["10.1.0.8"]));
+    assert_eq!(network.details["dhcp"]["gateway"], "192.0.2.1");
+    assert_eq!(network.details["dhcp"]["dns_servers"], json!(["192.0.2.8"]));
     assert!(out.nodes.iter().any(|node| node.hostname == "aa:bb"));
     assert!(
         !out.warnings
@@ -114,7 +114,7 @@ async fn collection_deadline_preserves_completed_unifi_network_details() {
             "id": "fast",
             "name": "Fast",
             "ipv4Configuration": {
-                "dhcpConfiguration": {"dnsServerIpAddresses": ["10.1.0.8"]}
+                "dhcpConfiguration": {"dnsServerIpAddresses": ["192.0.2.8"]}
             }
         })))
         .mount(&server)
@@ -143,7 +143,7 @@ async fn collection_deadline_preserves_completed_unifi_network_details() {
         .iter()
         .find(|network| network.name == "Fast")
         .unwrap();
-    assert_eq!(fast.details["dhcp"]["dns_servers"], json!(["10.1.0.8"]));
+    assert_eq!(fast.details["dhcp"]["dns_servers"], json!(["192.0.2.8"]));
     assert!(out.networks.iter().any(|network| network.name == "Slow"));
     assert!(out.warnings.iter().any(|warning| {
         warning.contains("preserved completed results")
@@ -195,13 +195,13 @@ fn modern_unifi_network_details_include_exact_dhcp_dns_assignments() {
             "enabled": true,
             "vlanId": 1,
             "ipv4Configuration": {
-                "gatewayIpAddress": "10.1.0.1",
+                "gatewayIpAddress": "192.0.2.1",
                 "dhcpConfiguration": {
                     "enabled": true,
-                    "rangeStart": "10.1.0.100",
-                    "rangeEnd": "10.1.0.200",
+                    "rangeStart": "192.0.2.100",
+                    "rangeEnd": "192.0.2.200",
                     "leaseTimeSeconds": 86400,
-                    "dnsServerIpAddresses": ["10.1.0.8", "1.1.1.1"]
+                    "dnsServerIpAddresses": ["192.0.2.8", "1.1.1.1"]
                 }
             }
         }),
@@ -213,11 +213,11 @@ fn modern_unifi_network_details_include_exact_dhcp_dns_assignments() {
     assert_eq!(network.kind, "unifi_network");
     assert_eq!(network.details["site_id"], "site-1");
     assert_eq!(network.details["dhcp"]["enabled"], true);
-    assert_eq!(network.details["dhcp"]["range_start"], "10.1.0.100");
-    assert_eq!(network.details["dhcp"]["range_end"], "10.1.0.200");
+    assert_eq!(network.details["dhcp"]["range_start"], "192.0.2.100");
+    assert_eq!(network.details["dhcp"]["range_end"], "192.0.2.200");
     assert_eq!(
         network.details["dhcp"]["dns_servers"],
-        json!(["1.1.1.1", "10.1.0.8"])
+        json!(["1.1.1.1", "192.0.2.8"])
     );
     assert!(network.details.contains_key("settings"));
 }
@@ -235,7 +235,7 @@ fn top_level_network_enabled_does_not_imply_dhcp_enabled() {
             "enabled": true,
             "ipv4Configuration": {
                 "dnsServerType": "auto",
-                "dnsServerIpAddresses": ["10.1.0.8", "not-an-ip", "2001:db8::53"]
+                "dnsServerIpAddresses": ["192.0.2.8", "not-an-ip", "2001:db8::53"]
             }
         }),
         &mut out,
@@ -243,7 +243,7 @@ fn top_level_network_enabled_does_not_imply_dhcp_enabled() {
 
     let dhcp = out.networks[0].details.get("dhcp").unwrap();
     assert!(dhcp.get("enabled").is_none());
-    assert_eq!(dhcp["dns_servers"], json!(["10.1.0.8", "2001:db8::53"]));
+    assert_eq!(dhcp["dns_servers"], json!(["192.0.2.8", "2001:db8::53"]));
     assert!(!dhcp.to_string().contains("auto"));
 }
 
@@ -272,7 +272,7 @@ fn network_detail_merge_preserves_list_fields_and_adds_dhcp() {
             "ipv4Configuration": {
                 "dhcpConfiguration": {
                     "enabled": true,
-                    "dnsServerIpAddresses": ["10.1.0.8"]
+                    "dnsServerIpAddresses": ["192.0.2.8"]
                 }
             }
         }),
@@ -284,7 +284,7 @@ fn network_detail_merge_preserves_list_fields_and_adds_dhcp() {
     assert_eq!(details["vlanId"], 42);
     assert_eq!(details["purpose"], "corporate");
     assert_eq!(details["dhcp"]["enabled"], true);
-    assert_eq!(details["dhcp"]["dns_servers"], json!(["10.1.0.8"]));
+    assert_eq!(details["dhcp"]["dns_servers"], json!(["192.0.2.8"]));
 }
 
 #[test]
@@ -353,7 +353,7 @@ fn legacy_unifi_networkconf_fields_are_normalized() {
             "dhcpd_start":"10.20.0.10",
             "dhcpd_stop":"10.20.0.99",
             "dhcpd_gateway":"10.20.0.1",
-            "dhcpd_dns_1":"10.1.0.8",
+            "dhcpd_dns_1":"192.0.2.8",
             "dhcpd_dns_2":"9.9.9.9"
         }]}),
         &mut out,
@@ -362,7 +362,7 @@ fn legacy_unifi_networkconf_fields_are_normalized() {
     let dhcp = &out.networks[0].details["dhcp"];
     assert_eq!(dhcp["enabled"], true);
     assert_eq!(dhcp["gateway"], "10.20.0.1");
-    assert_eq!(dhcp["dns_servers"], json!(["10.1.0.8", "9.9.9.9"]));
+    assert_eq!(dhcp["dns_servers"], json!(["192.0.2.8", "9.9.9.9"]));
 }
 
 #[test]

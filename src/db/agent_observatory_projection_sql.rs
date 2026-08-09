@@ -335,10 +335,13 @@ pub(super) fn upsert_actor(
             (actor_key, run_id, native_actor_id, actor_type, display_name, started_at,
              last_activity_at, ended_at, metadata_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(actor_key) DO UPDATE SET actor_type=excluded.actor_type,
-             display_name=excluded.display_name, started_at=excluded.started_at,
-             last_activity_at=excluded.last_activity_at, ended_at=excluded.ended_at,
-             metadata_json=excluded.metadata_json
+         ON CONFLICT(actor_key) DO UPDATE SET
+             actor_type=CASE WHEN COALESCE(excluded.last_activity_at, excluded.started_at, '') >= COALESCE(agent_run_actors.last_activity_at, agent_run_actors.started_at, '') THEN excluded.actor_type ELSE agent_run_actors.actor_type END,
+             display_name=CASE WHEN COALESCE(excluded.last_activity_at, excluded.started_at, '') >= COALESCE(agent_run_actors.last_activity_at, agent_run_actors.started_at, '') THEN excluded.display_name ELSE agent_run_actors.display_name END,
+             started_at=CASE WHEN agent_run_actors.started_at IS NULL THEN excluded.started_at WHEN excluded.started_at IS NULL THEN agent_run_actors.started_at ELSE MIN(agent_run_actors.started_at, excluded.started_at) END,
+             last_activity_at=CASE WHEN agent_run_actors.last_activity_at IS NULL THEN excluded.last_activity_at WHEN excluded.last_activity_at IS NULL THEN agent_run_actors.last_activity_at ELSE MAX(agent_run_actors.last_activity_at, excluded.last_activity_at) END,
+             ended_at=CASE WHEN agent_run_actors.ended_at IS NULL THEN excluded.ended_at WHEN excluded.ended_at IS NULL THEN agent_run_actors.ended_at ELSE MAX(agent_run_actors.ended_at, excluded.ended_at) END,
+             metadata_json=CASE WHEN COALESCE(excluded.last_activity_at, excluded.started_at, '') >= COALESCE(agent_run_actors.last_activity_at, agent_run_actors.started_at, '') THEN excluded.metadata_json ELSE agent_run_actors.metadata_json END
          WHERE agent_run_actors.actor_type IS NOT excluded.actor_type
             OR agent_run_actors.display_name IS NOT excluded.display_name
             OR agent_run_actors.started_at IS NOT excluded.started_at
@@ -378,11 +381,13 @@ pub(super) fn upsert_evidence(
             (relation_key, run_id, worktree_id, evidence_kind, evidence_source, trust_level,
              confidence, is_primary, first_seen_at, last_seen_at, metadata_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-         ON CONFLICT(relation_key) DO UPDATE SET trust_level=excluded.trust_level,
-             confidence=excluded.confidence, is_primary=excluded.is_primary,
+         ON CONFLICT(relation_key) DO UPDATE SET
+             trust_level=CASE WHEN excluded.last_seen_at > agent_run_worktrees.last_seen_at OR (excluded.last_seen_at = agent_run_worktrees.last_seen_at AND CASE excluded.trust_level WHEN 'refuted' THEN 5 WHEN 'verified' THEN 4 WHEN 'correlated' THEN 3 WHEN 'claimed' THEN 2 ELSE 1 END >= CASE agent_run_worktrees.trust_level WHEN 'refuted' THEN 5 WHEN 'verified' THEN 4 WHEN 'correlated' THEN 3 WHEN 'claimed' THEN 2 ELSE 1 END) THEN excluded.trust_level ELSE agent_run_worktrees.trust_level END,
+             confidence=CASE WHEN excluded.last_seen_at >= agent_run_worktrees.last_seen_at THEN excluded.confidence ELSE agent_run_worktrees.confidence END,
+             is_primary=CASE WHEN excluded.last_seen_at >= agent_run_worktrees.last_seen_at THEN excluded.is_primary ELSE agent_run_worktrees.is_primary END,
              first_seen_at=MIN(agent_run_worktrees.first_seen_at, excluded.first_seen_at),
              last_seen_at=MAX(agent_run_worktrees.last_seen_at, excluded.last_seen_at),
-             metadata_json=excluded.metadata_json
+             metadata_json=CASE WHEN excluded.last_seen_at >= agent_run_worktrees.last_seen_at THEN excluded.metadata_json ELSE agent_run_worktrees.metadata_json END
          WHERE agent_run_worktrees.trust_level IS NOT excluded.trust_level
             OR agent_run_worktrees.confidence IS NOT excluded.confidence
             OR agent_run_worktrees.is_primary IS NOT excluded.is_primary
@@ -460,6 +465,19 @@ pub(super) fn insert_event(
         || row.source_kind != input.source_kind
         || row.source_id != input.source_id
         || row.event_kind != input.event_kind
+        || row.actor_id != actor_id
+        || row.worktree_id != worktree_id
+        || row.observed_at != input.observed_at
+        || row.ingested_at != input.ingested_at
+        || row.source_log_id != input.source_log_id
+        || row.provider_sequence != input.provider_sequence
+        || row.trace_id != input.trace_id
+        || row.span_id != input.span_id
+        || row.severity != input.severity
+        || row.title != input.title
+        || row.summary != input.summary
+        || row.payload_json != input.payload_json
+        || row.content_scrubbed != input.content_scrubbed
     {
         bail!("event identity conflict for key {key}");
     }

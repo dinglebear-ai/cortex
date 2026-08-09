@@ -16,14 +16,14 @@ fn log(
     LogEntry {
         id,
         timestamp: timestamp.to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: None,
         severity: "info".to_string(),
         app_name: Some(format!("{tool}-transcript")),
         process_id: Some(format!("pid-{id}")),
         message: message.to_string(),
         received_at: timestamp.to_string(),
-        source_ip: "agent-ai-transcript://dookie".to_string(),
+        source_ip: "agent-ai-transcript://devhost".to_string(),
         ai_tool: Some(tool.to_string()),
         ai_project: Some(project.to_string()),
         ai_session_id: session.map(str::to_string),
@@ -110,15 +110,15 @@ fn claude_codex_and_gemini_rows_project_expected_runs_events_and_replay_idempote
     );
     assert_eq!(
         projected[0].run.run_key,
-        run_key("dookie", "claude", "claude-session").unwrap()
+        run_key("devhost", "claude", "claude-session").unwrap()
     );
     assert_eq!(
         projected[2].run.run_key,
-        run_key("dookie", "codex", "codex-session").unwrap()
+        run_key("devhost", "codex", "codex-session").unwrap()
     );
     assert_eq!(
         projected[3].run.run_key,
-        run_key("dookie", "gemini", "gemini-session").unwrap()
+        run_key("devhost", "gemini", "gemini-session").unwrap()
     );
     let payload: serde_json::Value =
         serde_json::from_str(&projected[0].event.payload_json).unwrap();

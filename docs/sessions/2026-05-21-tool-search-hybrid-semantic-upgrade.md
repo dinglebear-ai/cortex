@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-21 01:50:32 EST
 repo: https://github.com/jmagar/syslog-mcp
@@ -20,7 +22,7 @@ Short diagnostic session testing the lab MCP gateway's `tool_search` tool across
 
 1. User ran `/mcp` to open the MCP dialog — session was dismissed without changes
 2. Called `tool_search("syslog logs search query")` — failed with "Session not found" (MCP session had expired)
-3. Confirmed the lab gateway itself was healthy via `curl https://lab.tootie.tv/health`
+3. Confirmed the lab gateway itself was healthy via `curl https://lab.example.invalid/health`
 4. User ran `/mcp reconnect lab` (not found), then `/mcp` and reconnected `plugin:lab:lab`
 5. Retested `tool_search("syslog logs search query")` — succeeded, returned `syslog` tool at score 28.0
 6. Tested `tool_search("password")` — only one low-score result (repomix file reader mentioning password detection); Bitwarden not in gateway
@@ -58,7 +60,7 @@ Short diagnostic session testing the lab MCP gateway's `tool_search` tool across
 
 ```bash
 # Gateway health check
-curl https://lab.tootie.tv/health
+curl https://lab.example.invalid/health
 # → {"status":"ok","mode":"master","pid":7,"uptime_s":10188}
 
 # Recent lab commits

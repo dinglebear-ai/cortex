@@ -242,7 +242,7 @@ fn build_projection_plan(inventory: &HomelabInventory) -> InventoryProjectionPla
         // Canonical service identity (entity_resolution_v2): inventory
         // services flow through the shared resolver adapter, projecting as
         // `logical_service` (`plex`) plus a host-scoped `service_instance`
-        // (`tootie/plex`). Legacy `service` entities (`host:name`) are never
+        // (`nashost/plex`). Legacy `service` entities (`host:name`) are never
         // emitted.
         let observations = entity_resolution::observations_from_inventory_service(service);
         let decisions = entity_resolution::resolve_observations(&observations);

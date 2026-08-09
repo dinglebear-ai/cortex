@@ -1049,7 +1049,7 @@ async fn graph_alias_miss_with_legacy_shape_returns_rejected_legacy_shape() {
         .graph_entity_lookup(GraphEntityLookupRequest {
             mode: None,
             alias_type: Some("hostname".into()),
-            alias_key: Some("tootie:plex".into()),
+            alias_key: Some("nashost:plex".into()),
             ..Default::default()
         })
         .await
@@ -1614,18 +1614,18 @@ async fn filter_logs_maps_docker_stream_alias_to_source_prefix() {
     let (service, pool, _dir) = test_service();
     let mut stdout = entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "info",
         "docker stdout",
-        "docker://dookie/cortex/stdout",
+        "docker://devhost/cortex/stdout",
     );
     stdout.app_name = Some("cortex".into());
     let mut other = entry(
         "2026-01-01T00:00:01Z",
-        "dookie",
+        "devhost",
         "info",
         "other stdout",
-        "docker://dookie/other/stdout",
+        "docker://devhost/other/stdout",
     );
     other.app_name = Some("other".into());
     insert_logs_batch(&pool, &[stdout, other]).unwrap();
@@ -1633,7 +1633,7 @@ async fn filter_logs_maps_docker_stream_alias_to_source_prefix() {
     let response = service
         .filter_logs(FilterLogsRequest {
             source_kind: Some("docker-stream".into()),
-            docker_host: Some("dookie".into()),
+            docker_host: Some("devhost".into()),
             container: Some("cortex".into()),
             ..Default::default()
         })
@@ -1667,14 +1667,14 @@ async fn filter_logs_file_tail_source_kind_uses_source_prefix() {
         &[
             entry(
                 "2026-01-01T00:00:00Z",
-                "squirts",
+                "edgehost",
                 "info",
                 "file-tail row",
-                "file-tail://squirts/swag-access",
+                "file-tail://edgehost/swag-access",
             ),
             entry(
                 "2026-01-01T00:00:01Z",
-                "squirts",
+                "edgehost",
                 "info",
                 "normal row",
                 "10.0.0.5:1514",
@@ -2358,7 +2358,7 @@ async fn file_tails_add_list_disable_enable_remove_round_trip() {
                 id: "swag-access".into(),
                 path: log_path.to_string_lossy().into_owned(),
                 tag: "swag-access".into(),
-                host: Some("squirts".into()),
+                host: Some("edgehost".into()),
                 facility: Some("local4".into()),
                 severity: Some("info".into()),
                 start_at_end: Some(true),
@@ -2434,7 +2434,7 @@ async fn file_tails_list_and_status_do_not_reconcile() {
                 id: "swag-access".into(),
                 path: log_path.to_string_lossy().into_owned(),
                 tag: "swag-access".into(),
-                host: Some("squirts".into()),
+                host: Some("edgehost".into()),
                 facility: Some("local4".into()),
                 severity: Some("info".into()),
                 start_at_end: Some(true),
@@ -2475,7 +2475,7 @@ async fn file_tails_duplicate_add_is_rejected_without_resetting_checkpoint() {
         id: "swag-access".into(),
         path: log_path.to_string_lossy().into_owned(),
         tag: "swag-access".into(),
-        host: Some("squirts".into()),
+        host: Some("edgehost".into()),
         facility: Some("local4".into()),
         severity: Some("info".into()),
         start_at_end: Some(true),
@@ -2518,7 +2518,7 @@ async fn file_tails_reconcile_failure_reports_rolled_back_mutation() {
                 id: "swag-access".into(),
                 path: log_path.to_string_lossy().into_owned(),
                 tag: "swag-access".into(),
-                host: Some("squirts".into()),
+                host: Some("edgehost".into()),
                 facility: Some("local4".into()),
                 severity: Some("info".into()),
                 start_at_end: Some(true),
@@ -2552,7 +2552,7 @@ async fn file_tails_mutations_reject_registry_only_query_mode() {
                 id: "swag-access".into(),
                 path: log_path.to_string_lossy().into_owned(),
                 tag: "swag-access".into(),
-                host: Some("squirts".into()),
+                host: Some("edgehost".into()),
                 facility: Some("local4".into()),
                 severity: Some("info".into()),
                 start_at_end: Some(true),
@@ -2605,7 +2605,7 @@ fn add_file_tail_request(
         id: id.into(),
         path: path.into(),
         tag: id.into(),
-        host: Some("squirts".into()),
+        host: Some("edgehost".into()),
         facility: facility.map(str::to_string),
         severity: severity.map(str::to_string),
         start_at_end: Some(true),
@@ -2749,7 +2749,7 @@ fn insert_skill_event_for_service_test(
 fn skill_ai_entry(ts: &str, session_id: &str, msg: &str) -> LogBatchEntry {
     LogBatchEntry {
         timestamp: ts.to_string(),
-        hostname: "dookie".into(),
+        hostname: "devhost".into(),
         facility: Some("local0".into()),
         severity: "info".into(),
         app_name: Some("ai-transcript".into()),
@@ -2817,7 +2817,7 @@ async fn investigate_ai_skill_incidents_by_skill_picks_top_priority_and_lists_ot
         "codex",
         "/tmp/skill-svc-test",
         "sess-low",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),
@@ -2828,7 +2828,7 @@ async fn investigate_ai_skill_incidents_by_skill_picks_top_priority_and_lists_ot
         "codex",
         "/tmp/skill-svc-test",
         "sess-high",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),
@@ -2879,7 +2879,7 @@ async fn investigate_ai_skill_incidents_low_signal_returns_summary_not_error() {
         "codex",
         "/tmp/skill-svc-test",
         "sess-only",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),

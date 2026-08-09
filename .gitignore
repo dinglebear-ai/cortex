@@ -1,5 +1,8 @@
 # ── Secrets ──────────────────────────────────────────────────────────────────
 .env
+deploy/hosts.env
+deploy/rendered/
+!deploy/hosts.env.example
 .env.*
 !.env.example
 .broadcastr

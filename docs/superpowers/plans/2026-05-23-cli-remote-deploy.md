@@ -56,7 +56,7 @@ fn mode_parse_accepts_remote_deploy_namespace() {
         Mode::parse(vec![
             "deploy".into(),
             "remote".into(),
-            "tootie".into(),
+            "nashost".into(),
             "--dry-run".into(),
             "--json".into()
         ])
@@ -310,8 +310,8 @@ Expected: all deploy tests pass.
 In `docs/CLI.md`, update `syslog deploy` examples:
 
 ```bash
-syslog deploy remote tootie --dry-run
-syslog deploy remote tootie --json
+syslog deploy remote nashost --dry-run
+syslog deploy remote nashost --json
 ```
 
 State:

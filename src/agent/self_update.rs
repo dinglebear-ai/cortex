@@ -23,15 +23,23 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::time::timeout;
 
 /// Number of agent restarts allowed without a confirming heartbeat before the
 /// in-flight update is rolled back to the previous `.bak` binary.
 const MAX_ATTEMPTS: u32 = 3;
 
+pub const SELF_UPDATE_DEADLINE: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10);
+const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_AGENT_BINARY_BYTES: usize = 128 * 1024 * 1024;
 const MARKER_FILE: &str = ".cortex-update-state.json";
 
 /// Server-issued update directive, deserialized from the heartbeat `202` body.
@@ -89,6 +97,82 @@ pub fn update_needed(directive: &AgentUpdateDirective) -> bool {
     directive.version != env!("CARGO_PKG_VERSION")
 }
 
+pub fn build_update_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(CHUNK_IDLE_TIMEOUT)
+        .timeout(SELF_UPDATE_DEADLINE)
+        .build()
+        .context("build agent self-update HTTP client")
+}
+
+async fn download_binary(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+    max_bytes: usize,
+    first_byte_timeout: Duration,
+    chunk_idle_timeout: Duration,
+) -> Result<Vec<u8>> {
+    let mut request = client.get(url);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request
+        .send()
+        .await
+        .context("agent binary download failed")?
+        .error_for_status()
+        .context("agent binary download returned error status")?;
+
+    if let Some(content_length) = response.content_length()
+        && content_length > max_bytes as u64
+    {
+        bail!("agent binary content length {content_length} exceeds {max_bytes}-byte limit");
+    }
+
+    let initial_capacity = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(0)
+        .min(max_bytes);
+    let mut bytes = Vec::with_capacity(initial_capacity);
+    let mut stream = response.bytes_stream();
+    let mut first_chunk = true;
+
+    loop {
+        let deadline = if first_chunk {
+            first_byte_timeout
+        } else {
+            chunk_idle_timeout
+        };
+        let next = timeout(deadline, stream.next()).await.map_err(|_| {
+            if first_chunk {
+                anyhow!("agent binary first byte exceeded {deadline:?}")
+            } else {
+                anyhow!("agent binary download stalled for {deadline:?}")
+            }
+        })?;
+
+        let Some(chunk) = next else {
+            break;
+        };
+        let chunk = chunk.context("read agent binary body")?;
+        let new_len = bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| anyhow!("agent binary size overflow"))?;
+        if new_len > max_bytes {
+            bail!("agent binary exceeded {max_bytes}-byte limit while streaming");
+        }
+        bytes.extend_from_slice(&chunk);
+        first_chunk = false;
+    }
+
+    Ok(bytes)
+}
+
 /// Download, verify, install, and re-exec the advertised binary. On success this
 /// function does not return (the process image is replaced). It returns `Ok(())`
 /// only when no update was needed; any failure leaves the live binary untouched.
@@ -116,21 +200,17 @@ pub async fn maybe_update(
         "agent behind server; downloading update"
     );
 
-    // 1. Download over the authenticated channel.
+    // 1. Download over the authenticated channel with explicit size and idle limits.
     let url = join_url(target_base, &directive.path);
-    let mut req = client.get(&url);
-    if let Some(token) = token {
-        req = req.bearer_auth(token);
-    }
-    let bytes = req
-        .send()
-        .await
-        .context("agent binary download failed")?
-        .error_for_status()
-        .context("agent binary download returned error status")?
-        .bytes()
-        .await
-        .context("read agent binary body")?;
+    let bytes = download_binary(
+        client,
+        &url,
+        token,
+        MAX_AGENT_BINARY_BYTES,
+        FIRST_BYTE_TIMEOUT,
+        CHUNK_IDLE_TIMEOUT,
+    )
+    .await?;
 
     // 2. Verify integrity before touching disk near the live path.
     let got = sha256_hex(&bytes);

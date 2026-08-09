@@ -23,11 +23,18 @@ check:
     cargo check
     bash scripts/check-rust-module-size.sh --limit 500
 
+# AO-001: parse/compile/validate the Agent Observatory planning contracts
+# (JSON, SQL, Rust, TypeScript) and fail on unresolved placeholders.
 check-agent-observatory-contracts:
     bash scripts/check-agent-observatory-contracts.sh
 
+# ENV-004: confirm the deprecated CORTEX_AGENT_AI_TRANSCRIPTS env var only
+# appears in the approved allowlist locations.
+validate-transcript-forward-env-rename:
+    bash scripts/validate-transcript-forward-env-rename.sh
+    bash scripts/test-validate-transcript-forward-env-rename.sh
+
 lint:
-    just test-cargo-wrapper
     cargo clippy -- -D warnings
 
 fmt:
@@ -41,10 +48,6 @@ coverage:
 
 coverage-html:
     env -u CORTEX_API_TOKEN -u NO_AUTH -u CORTEX_DB_PATH cargo llvm-cov nextest --html
-
-# Verify Cargo wrapper binary sync behavior
-test-cargo-wrapper:
-    scripts/test-cargo-rustc-wrapper.sh
 
 # Doc tests (nextest does not run these; no executable doc tests currently exist)
 test-doc:
@@ -200,6 +203,9 @@ install: release
 
 build-mcpb:
     bash scripts/build-mcpb.sh
+
+build-mcpb-windows:
+    bash scripts/build-mcpb.sh --target windows
 
 runtime-current:
     bash scripts/check-runtime-current.sh

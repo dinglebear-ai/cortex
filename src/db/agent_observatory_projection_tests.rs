@@ -6,8 +6,10 @@ use super::{
 use crate::agent_observatory::identity::{actor_key, event_key, run_key};
 use crate::config::StorageConfig;
 use crate::db::agent_observatory::{
-    AgentEventKind, EvidenceTrustLevel, RepositoryUpsert, RepositoryWorktreeUpsert, RunStatus,
-    StreamEventName, reconcile_repository,
+    AgentEventKind, EvidenceTrustLevel, GitCommitUpsert, RepositoryObservationInput,
+    RepositoryObservationKind, RepositoryUpsert, RepositoryWorktreeUpsert, RunStatus,
+    StreamEventName, get_repository_by_key, reconcile_git_repository_snapshot_with,
+    reconcile_repository,
 };
 use crate::db::init_pool;
 use rusqlite::Connection;
@@ -20,7 +22,7 @@ const HEAD_SHA: &str = "0123456789012345678901234567890123456789";
 fn repository() -> RepositoryUpsert {
     RepositoryUpsert {
         repository_key: "repo-key".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         common_git_dir: "/workspace/cortex/.git".to_string(),
         primary_path: "/workspace/cortex".to_string(),
         display_name: "cortex".to_string(),
@@ -32,7 +34,7 @@ fn repository() -> RepositoryUpsert {
 fn worktree() -> RepositoryWorktreeUpsert {
     RepositoryWorktreeUpsert {
         worktree_key: "worktree-key".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         path: "/workspace/cortex".to_string(),
         git_dir: "/workspace/cortex/.git".to_string(),
         branch_ref: Some("refs/heads/main".to_string()),
@@ -61,7 +63,7 @@ fn input() -> AgentProjectionWriteInput {
             native_session_id: "session-one".to_string(),
             tool: "Claude".to_string(),
             provider_tool: Some("claude-code".to_string()),
-            hostname: "dookie".to_string(),
+            hostname: "devhost".to_string(),
             parent_run_key: None,
             previous_run_key: None,
             primary_worktree_key: Some("worktree-key".to_string()),
@@ -177,7 +179,7 @@ fn injected_failure_after_event_insert_rolls_back_everything_and_retry_is_idempo
     assert_eq!(written.run.last_event_id, Some(written.event.id));
     assert_eq!(
         written.run.run_key,
-        run_key("dookie", "claude", "session-one").unwrap()
+        run_key("devhost", "claude", "session-one").unwrap()
     );
     let actor = written.actor.as_ref().unwrap();
     assert_eq!(
@@ -256,4 +258,91 @@ fn missing_worktree_reference_rolls_back_run_actor_and_event() {
     let error = write_agent_projection(&pool, &invalid).unwrap_err();
     assert!(error.to_string().contains("missing-worktree"));
     assert_projection_counts(&pool, [0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn reverse_replay_cannot_regress_actor_or_worktree_evidence() {
+    let (_dir, pool) = setup();
+    let mut newest = input();
+    newest.actor.as_mut().unwrap().display_name = Some("Newest actor".to_string());
+    newest.actor.as_mut().unwrap().last_activity_at = Some("2026-08-05T12:05:00.000Z".to_string());
+    newest.worktree_evidence.as_mut().unwrap().last_seen_at =
+        "2026-08-05T12:05:00.000Z".to_string();
+    newest.worktree_evidence.as_mut().unwrap().trust_level = EvidenceTrustLevel::Verified;
+    write_agent_projection(&pool, &newest).unwrap();
+
+    let mut older = input();
+    older.event.source_id = "43".to_string();
+    older.event.source_log_id = Some(43);
+    older.actor.as_mut().unwrap().display_name = Some("Stale actor".to_string());
+    older.actor.as_mut().unwrap().last_activity_at = Some(STARTED_AT.to_string());
+    older.worktree_evidence.as_mut().unwrap().last_seen_at = STARTED_AT.to_string();
+    older.worktree_evidence.as_mut().unwrap().trust_level = EvidenceTrustLevel::Inferred;
+    let replay = write_agent_projection(&pool, &older).unwrap();
+    assert_eq!(
+        replay.actor.unwrap().display_name.as_deref(),
+        Some("Newest actor")
+    );
+    let evidence = replay.worktree_evidence.unwrap();
+    assert_eq!(evidence.last_seen_at, "2026-08-05T12:05:00.000Z");
+    assert_eq!(evidence.trust_level, EvidenceTrustLevel::Verified);
+}
+
+#[test]
+fn event_key_collision_rejects_any_fingerprint_mismatch() {
+    let (_dir, pool) = setup();
+    let original = input();
+    write_agent_projection(&pool, &original).unwrap();
+    let mut collision = original;
+    collision.event.trace_id = Some("0123456789abcdef0123456789abcdef".to_string());
+    let error = write_agent_projection(&pool, &collision).unwrap_err();
+    assert!(error.to_string().contains("event identity conflict"));
+    assert_projection_counts(&pool, [1, 1, 1, 1, 1]);
+}
+
+#[test]
+fn git_snapshot_failure_after_topology_and_commits_rolls_back_all_stages() {
+    let directory = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(
+        directory.path().join("atomic-git.db"),
+    ))
+    .unwrap();
+    let commit = GitCommitUpsert {
+        sha: HEAD_SHA.to_string(),
+        parent_shas_json: "[]".to_string(),
+        author_name: None,
+        author_email_hash: None,
+        authored_at: Some(STARTED_AT.to_string()),
+        committed_at: Some(STARTED_AT.to_string()),
+        subject: "atomic snapshot".to_string(),
+        changed_files: Some(1),
+        insertions: Some(1),
+        deletions: Some(0),
+        changed_paths_json: "[]".to_string(),
+        reachable: true,
+        metadata_json: "{}".to_string(),
+    };
+    let error = reconcile_git_repository_snapshot_with(
+        &pool,
+        &repository(),
+        &[worktree()],
+        &[commit],
+        &[],
+        STARTED_AT,
+        |_| {
+            Ok(vec![RepositoryObservationInput {
+                worktree_key: Some("missing-worktree".to_string()),
+                observation_kind: RepositoryObservationKind::Status,
+                new_head_sha: None,
+                summary: "injected failure".to_string(),
+                payload_json: "{}".to_string(),
+            }])
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("missing-worktree"));
+    assert!(get_repository_by_key(&pool, "repo-key").unwrap().is_none());
+    let connection = pool.get().unwrap();
+    assert_eq!(table_count(&connection, "git_commits"), 0);
+    assert_eq!(table_count(&connection, "repository_observations"), 0);
 }

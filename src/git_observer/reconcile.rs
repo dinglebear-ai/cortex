@@ -27,8 +27,7 @@ use crate::agent_observatory::identity::{repository_key, worktree_key};
 use crate::db::DbPool;
 use crate::db::agent_observatory::{
     RepositoryObservationInput, RepositoryObservationKind, RepositoryUpsert,
-    RepositoryWorktreeUpsert, reconcile_git_commits, reconcile_repository,
-    record_repository_observations_if_changed,
+    RepositoryWorktreeUpsert, reconcile_git_repository_snapshot_with,
 };
 use crate::git_observer::porcelain::{
     StatusSummary, WorktreeRecord, parse_status_porcelain_v2, parse_worktree_porcelain,
@@ -441,31 +440,29 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
         };
     let commit_inputs =
         commit_upserts(&commit_collection.commits, &commit_collection.reachability)?;
-    let imported_commits = reconcile_git_commits(
+    let base_observations = observations(&snapshot, &commit_collection.transitions);
+    let result = reconcile_git_repository_snapshot_with(
         pool,
-        &snapshot.repository.repository_key,
+        &snapshot.repository,
+        &worktrees,
         &commit_inputs,
         &commit_collection.reachability,
         observed_at,
-    )?;
-    let topology = reconcile_repository(pool, &snapshot.repository, &worktrees, observed_at)?;
-    let mut observation_inputs = observations(&snapshot, &commit_collection.transitions);
-    observation_inputs.extend(lifecycle_observations(
-        repository_existed,
-        &previous,
-        &topology,
-        observed_at,
-    )?);
-    let inserted_observations = record_repository_observations_if_changed(
-        pool,
-        &snapshot.repository.repository_key,
-        &observation_inputs,
-        observed_at,
+        |topology| {
+            let mut inputs = base_observations;
+            inputs.extend(lifecycle_observations(
+                repository_existed,
+                &previous,
+                topology,
+                observed_at,
+            )?);
+            Ok(inputs)
+        },
     )?;
     Ok(RepositoryReconcileReport {
-        topology: Some(topology),
-        imported_commits,
-        inserted_observations,
+        topology: Some(result.topology),
+        imported_commits: result.commits,
+        inserted_observations: result.observations,
         warnings: Vec::new(),
     })
 }

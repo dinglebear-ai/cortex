@@ -1042,6 +1042,64 @@ pub fn fetch_log_by_id(pool: &DbPool, id: i64) -> Result<Option<LogEntryWithRaw>
     }
 }
 
+/// Return an ascending, lossless log feed for external consumers.
+///
+/// An omitted cursor establishes a high-water mark without replaying retained
+/// history. Passing `Some(0)` explicitly replays from the beginning.
+pub fn feed_logs(
+    pool: &DbPool,
+    after_id: Option<i64>,
+    hostname: Option<&str>,
+    limit: u32,
+) -> Result<(Vec<LogEntryWithRaw>, i64, bool)> {
+    let conn = pool.get()?;
+    let after_id = match after_id {
+        Some(id) => id.max(0),
+        None => conn.query_row("SELECT COALESCE(MAX(id), 0) FROM logs", [], |row| {
+            row.get(0)
+        })?,
+    };
+    let high_water: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM logs", [], |row| {
+        row.get(0)
+    })?;
+    let fetch_limit = i64::from(limit.clamp(1, 1_000)) + 1;
+
+    let sql = if hostname.is_some() {
+        "SELECT id, timestamp, hostname, facility, severity,
+                app_name, process_id, message, raw, received_at, source_ip,
+                ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
+         FROM logs WHERE id > ?1 AND hostname = ?2
+         ORDER BY id ASC LIMIT ?3"
+    } else {
+        "SELECT id, timestamp, hostname, facility, severity,
+                app_name, process_id, message, raw, received_at, source_ip,
+                ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
+         FROM logs WHERE id > ?1
+         ORDER BY id ASC LIMIT ?2"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let mut logs = if let Some(hostname) = hostname {
+        stmt.query_map(params![after_id, hostname, fetch_limit], map_row_with_raw)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map(params![after_id, fetch_limit], map_row_with_raw)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let has_more = logs.len() > limit as usize;
+    if has_more {
+        logs.truncate(limit as usize);
+    }
+    let returned_high_water = logs.last().map_or(after_id, |log| log.id);
+    let next_after_id = if has_more {
+        returned_high_water
+    } else {
+        high_water.max(returned_high_water)
+    };
+    Ok((logs, next_after_id, has_more))
+}
+
 pub fn context_around(
     pool: &DbPool,
     reference: &ContextRef,
@@ -1261,8 +1319,8 @@ pub struct SilentHostEntry {
 pub fn silent_hosts(pool: &DbPool, cutoff: &str, now_unix: i64) -> Result<Vec<SilentHostEntry>> {
     // Route through list_hosts so case/FQDN variants of one machine are merged
     // (taking the latest last_seen) BEFORE applying the silence cutoff. Reading
-    // the raw `hosts` table here would flag a dormant `shart` identity as silent
-    // while the live `SHART` keeps forwarding — the merged host is correctly
+    // the raw `hosts` table here would flag a dormant `backuphost` identity as silent
+    // while the live `BACKUPHOST` keeps forwarding — the merged host is correctly
     // considered alive.
     let mut out: Vec<SilentHostEntry> = super::queries::list_hosts(pool)?
         .into_iter()
@@ -1341,7 +1399,7 @@ pub fn clock_skew(pool: &DbPool, since: &str, limit: Option<u32>) -> Result<Vec<
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    // Merge case/FQDN variants of one machine (e.g. `SHART`/`shart`) into a single
+    // Merge case/FQDN variants of one machine (e.g. `BACKUPHOST`/`backuphost`) into a single
     // skew row: sum samples, recombine the mean as a sample-weighted average, and
     // widen min/max. Without this a host's clock skew is reported once per casing.
     let names: Vec<String> = rows.iter().map(|r| r.hostname.clone()).collect();

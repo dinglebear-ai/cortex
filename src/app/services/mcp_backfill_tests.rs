@@ -21,7 +21,7 @@ fn insert_claude_log_row(pool: &DbPool, raw_json: &str) -> i64 {
     let conn = pool.get().unwrap();
     conn.execute(
         "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id)
-         VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', '[tool_use test]', ?1, 'transcript://claude_project', 'claude', 'cortex', 'sess-1')",
+         VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', '[tool_use test]', ?1, 'transcript://claude_project', 'claude', 'cortex', 'sess-1')",
         rusqlite::params![raw_json],
     )
     .unwrap();

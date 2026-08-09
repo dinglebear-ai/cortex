@@ -29,7 +29,7 @@ fn mode_parse_accepts_heartbeat_state_commands() {
             "state".into(),
             "host".into(),
             "--host".into(),
-            "tootie".into(),
+            "nashost".into(),
             "--json".into()
         ])
         .unwrap(),
@@ -67,7 +67,7 @@ fn mode_parse_accepts_topic_correlate() {
         Mode::parse(vec![
             "correlate".into(),
             "topic".into(),
-            "squirts".into(),
+            "edgehost".into(),
             "dockersocket".into(),
         ])
         .unwrap(),
@@ -100,7 +100,7 @@ fn mode_parse_accepts_graph_cli_commands() {
         Mode::parse(vec![
             "entity".into(),
             "host".into(),
-            "tootie".into(),
+            "nashost".into(),
             "--json".into(),
         ])
         .unwrap(),
@@ -110,7 +110,7 @@ fn mode_parse_accepts_graph_cli_commands() {
         Mode::parse(vec![
             "graph".into(),
             "around".into(),
-            "host:tootie".into(),
+            "host:nashost".into(),
             "--limit".into(),
             "1".into(),
             "--json".into(),
@@ -425,7 +425,7 @@ fn mode_parse_accepts_setup_deploy_namespace() {
             "setup".into(),
             "deploy".into(),
             "remote".into(),
-            "tootie".into(),
+            "nashost".into(),
             "--dry-run".into(),
             "--json".into()
         ])
@@ -438,7 +438,7 @@ fn mode_parse_accepts_setup_deploy_namespace() {
             "deploy".into(),
             "agent".into(),
             "--hosts".into(),
-            "tootie,dookie".into(),
+            "nashost,devhost".into(),
             "--target".into(),
             "https://cortex.example.test".into(),
             "--heartbeat-token".into(),
@@ -497,7 +497,7 @@ fn parse_deploy_remote_accepts_home_override() {
         "remote".into(),
         "--home".into(),
         "/mnt/cache/appdata/cortex".into(),
-        "tootie".into(),
+        "nashost".into(),
         "--dry-run".into(),
     ])
     .unwrap();
@@ -510,7 +510,7 @@ fn parse_deploy_remote_accepts_home_override() {
     else {
         panic!("expected deploy remote");
     };
-    assert_eq!(host, "tootie");
+    assert_eq!(host, "nashost");
     assert!(dry_run);
     assert_eq!(home.as_deref(), Some("/mnt/cache/appdata/cortex"));
 }
@@ -521,7 +521,7 @@ fn parse_deploy_remote_home_defaults_to_live_profile_seed_shape() {
         "remote".into(),
         "--home".into(),
         "/mnt/cache/appdata/cortex".into(),
-        "tootie".into(),
+        "nashost".into(),
     ])
     .unwrap();
 
@@ -531,7 +531,7 @@ fn parse_deploy_remote_home_defaults_to_live_profile_seed_shape() {
             ref host,
             dry_run: false,
             home: Some(ref home),
-        } if host == "tootie" && home == "/mnt/cache/appdata/cortex"
+        } if host == "nashost" && home == "/mnt/cache/appdata/cortex"
     ));
 }
 
@@ -540,14 +540,14 @@ fn parse_deploy_agent_trims_and_drops_empty_hosts() {
     let command = super::parse_deploy_command(&[
         "agent".into(),
         "--hosts".into(),
-        " tootie, ,dookie, ".into(),
+        " nashost, ,devhost, ".into(),
     ])
     .unwrap();
 
     let super::DeployCommandKind::Agent { hosts, .. } = command.kind else {
         panic!("expected deploy agent");
     };
-    assert_eq!(hosts, vec!["tootie".to_string(), "dookie".to_string()]);
+    assert_eq!(hosts, vec!["nashost".to_string(), "devhost".to_string()]);
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn parse_deploy_agent_preserves_all_options() {
     let command = super::parse_deploy_command(&[
         "agent".into(),
         "--hosts".into(),
-        "tootie,dookie".into(),
+        "nashost,devhost".into(),
         "--target".into(),
         "https://cortex.example.test".into(),
         "--heartbeat-token".into(),
@@ -580,7 +580,7 @@ fn parse_deploy_agent_preserves_all_options() {
     else {
         panic!("expected deploy agent");
     };
-    assert_eq!(hosts, vec!["tootie".to_string(), "dookie".to_string()]);
+    assert_eq!(hosts, vec!["nashost".to_string(), "devhost".to_string()]);
     assert_eq!(target.as_deref(), Some("https://cortex.example.test"));
     assert_eq!(token.as_deref(), Some("secret"));
     assert_eq!(docker, Some(true));
@@ -667,7 +667,7 @@ fn mode_parse_accepts_update_config_server() {
         "config".into(),
         "server".into(),
         "--host".into(),
-        "tootie".into(),
+        "nashost".into(),
         "--home".into(),
         "/mnt/cache/appdata/cortex".into(),
         "--profile".into(),
@@ -685,7 +685,7 @@ fn mode_parse_accepts_update_config_server() {
                 profile: Some(ref profile),
             },
             json: true,
-        }) if host == "tootie" && home == "/mnt/cache/appdata/cortex" && profile == "/tmp/deployments.toml"
+        }) if host == "nashost" && home == "/mnt/cache/appdata/cortex" && profile == "/tmp/deployments.toml"
     ));
 }
 
@@ -696,9 +696,9 @@ fn mode_parse_accepts_update_config_clients() {
         "config".into(),
         "clients".into(),
         "--hosts".into(),
-        "dookie,shart".into(),
+        "devhost,backuphost".into(),
         "--target".into(),
-        "https://cortex.tootie.tv".into(),
+        "https://cortex.example.invalid".into(),
         "--docker".into(),
     ])
     .unwrap();
@@ -714,8 +714,8 @@ fn mode_parse_accepts_update_config_clients() {
                 profile: None,
             },
             json: false,
-        }) if hosts == &vec!["dookie".to_string(), "shart".to_string()]
-             && target == "https://cortex.tootie.tv"
+        }) if hosts == &vec!["devhost".to_string(), "backuphost".to_string()]
+             && target == "https://cortex.example.invalid"
     ));
 }
 
@@ -726,7 +726,7 @@ fn mode_parse_rejects_update_config_run_only_flags() {
         "config".into(),
         "server".into(),
         "--host".into(),
-        "tootie".into(),
+        "nashost".into(),
         "--home".into(),
         "/mnt/cache/appdata/cortex".into(),
         "--dry-run".into(),
@@ -742,7 +742,7 @@ fn mode_parse_rejects_update_config_run_only_flags() {
         "config".into(),
         "clients".into(),
         "--hosts".into(),
-        "dookie".into(),
+        "devhost".into(),
         "--binary".into(),
         "/tmp/cortex".into(),
     ])
@@ -952,7 +952,7 @@ fn parse_deploy_command_covers_modes_and_rejects_contextual_flags() {
     ));
 
     let remote =
-        super::parse_deploy_command(&["remote".into(), "tootie".into(), "--dry-run".into()])
+        super::parse_deploy_command(&["remote".into(), "nashost".into(), "--dry-run".into()])
             .unwrap();
     assert!(matches!(
         remote.kind,
@@ -960,12 +960,12 @@ fn parse_deploy_command_covers_modes_and_rejects_contextual_flags() {
             ref host,
             dry_run: true,
             home: None
-        } if host == "tootie"
+        } if host == "nashost"
     ));
 
     for (args, expected) in [
         (
-            vec!["local", "--hosts", "tootie"],
+            vec!["local", "--hosts", "nashost"],
             "unknown deploy local argument",
         ),
         (vec!["remote", "--docker"], "unknown deploy remote argument"),

@@ -1,7 +1,7 @@
 ---
-title: "Cortex Agent Observatory specification"
+title: "cortex agent observatory specification"
 created: 2026-07-31
-updated: 2026-08-05
+updated: 2026-07-31
 ---
 
 # Cortex Agent Observatory specification

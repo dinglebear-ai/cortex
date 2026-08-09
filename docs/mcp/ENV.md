@@ -80,7 +80,7 @@ pull compatibility mode for explicit remote Docker Engine HTTP endpoints.
 | Variable | Required | Default | Description | Sensitive |
 | --- | --- | --- | --- | --- |
 | `CORTEX_DOCKER_INGEST_ENABLED` | no | `false` | Enable legacy central pull Docker log ingestion from remote Docker-compatible HTTP endpoints | no |
-| `CORTEX_DOCKER_HOSTS` | yes, if Docker ingest is enabled | (none) | Comma-separated hostnames — each becomes `http://<host>:2375` (e.g. `squirts,tootie`) | no |
+| `CORTEX_DOCKER_HOSTS` | yes, if Docker ingest is enabled | (none) | Comma-separated hostnames — each becomes `http://<host>:2375` (e.g. `edgehost,nashost`) | no |
 | `CORTEX_DOCKER_RECONNECT_INITIAL_MS` | no | `1000` | Initial reconnect delay after host stream failure | no |
 | `CORTEX_DOCKER_RECONNECT_MAX_MS` | no | `30000` | Maximum reconnect delay after repeated failures | no |
 

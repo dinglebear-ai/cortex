@@ -11,9 +11,9 @@ fn case_fold_host(raw: &str) -> String {
 }
 
 /// Map each input hostname to its canonical identity, applying two folds:
-/// 1. **Case / trailing-dot** via [`case_fold_host`] (`SHART` → `shart`).
+/// 1. **Case / trailing-dot** via [`case_fold_host`] (`BACKUPHOST` → `backuphost`).
 /// 2. **FQDN → short name, only when the short name independently exists** among
-///    the inputs (`tootie.<tailnet>` → `tootie` when a bare `tootie` is present,
+///    the inputs (`nashost.<tailnet>` → `nashost` when a bare `nashost` is present,
 ///    but `host.docker.internal` is left alone). This never invents a merge that
 ///    could mask a distinct machine.
 ///
@@ -44,9 +44,9 @@ pub(crate) fn canonical_host_keys(
 }
 
 /// Merge host rows that refer to the same machine. Two folds are applied:
-/// 1. **Case / trailing-dot** — `SHART` and `shart` collapse, `STEAMY`→`steamy`.
+/// 1. **Case / trailing-dot** — `BACKUPHOST` and `backuphost` collapse, `WINHOST`→`winhost`.
 /// 2. **FQDN → short name, only when the short name independently exists** as
-///    its own host. So `tootie.manatee-triceratops.ts.net` folds into `tootie`
+///    its own host. So `nashost.example.ts.net` folds into `nashost`
 ///    (a real host), but `host.docker.internal` is left alone because no bare
 ///    `host` row exists — we never invent a merge that could mask a distinct
 ///    machine.

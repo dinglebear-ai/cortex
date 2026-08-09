@@ -50,7 +50,10 @@ async fn collect_builds_device_facts_from_local_command_output() {
     let dir = tempfile::tempdir().unwrap();
     let bin_dir = dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    executable_file(&bin_dir.join("hostname"), "#!/bin/sh\nprintf 'dookie\\n'\n");
+    executable_file(
+        &bin_dir.join("hostname"),
+        "#!/bin/sh\nprintf 'devhost\\n'\n",
+    );
     executable_file(
         &bin_dir.join("uname"),
         "#!/bin/sh\nprintf 'Linux test 1 x86_64 GNU/Linux\\n'\n",
@@ -58,7 +61,7 @@ async fn collect_builds_device_facts_from_local_command_output() {
     executable_file(
         &bin_dir.join("ip"),
         r#"#!/bin/sh
-printf '[{"ifname":"lo","addr_info":[{"local":"127.0.0.1"}]},{"ifname":"eth0","addr_info":[{"local":"10.1.0.42"},{"local":"fd00::42"}]}]\n'
+printf '[{"ifname":"lo","addr_info":[{"local":"127.0.0.1"}]},{"ifname":"eth0","addr_info":[{"local":"192.0.2.42"},{"local":"fd00::42"}]}]\n'
 "#,
     );
     executable_file(
@@ -93,8 +96,8 @@ OUT
     assert!(output.warnings.is_empty());
     assert_eq!(output.nodes.len(), 1);
     let node = &output.nodes[0];
-    assert_eq!(node.hostname, "dookie");
-    assert_eq!(node.ips, vec!["10.1.0.42", "fd00::42"]);
+    assert_eq!(node.hostname, "devhost");
+    assert_eq!(node.ips, vec!["192.0.2.42", "fd00::42"]);
     assert_eq!(node.os.as_deref(), Some("Linux test 1 x86_64 GNU/Linux"));
     assert_eq!(node.listeners.len(), 2);
     assert_eq!(node.listeners[0].protocol, "tcp");

@@ -1660,7 +1660,7 @@ fn is_supported_setup_env_key(key: &str) -> bool {
 }
 
 /// Warn about `agent_docker_source_prefixes` entries that can never match a
-/// source. Valid shapes are a full IP literal (`100.64.0.5` or
+/// source. Valid shapes are a full IP literal (`198.51.100.7` or
 /// `2001:db8::1`, exact-host match) or a dot-terminated partial IPv4 quad
 /// (`100.64.0.`, subnet-prefix match). A partial quad without its trailing
 /// dot (`100.64.0`) is treated by the gate as an exact-host literal that

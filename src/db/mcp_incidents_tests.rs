@@ -86,7 +86,7 @@ fn search_ai_mcp_incidents_groups_by_server_tool_session_window_and_scores() {
 
     let call_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-mcp-1",
@@ -94,7 +94,7 @@ fn search_ai_mcp_incidents_groups_by_server_tool_session_window_and_scores() {
     );
     let correction_log = make_ai_entry(
         "2026-01-01T00:02:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-mcp-1",
@@ -118,7 +118,7 @@ fn search_ai_mcp_incidents_groups_by_server_tool_session_window_and_scores() {
         "codex",
         "/home/jmagar/workspace/cortex",
         "sess-mcp-1",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "call_1",
         "mcp__labby__search",
@@ -143,7 +143,7 @@ fn search_ai_mcp_incidents_groups_by_server_tool_session_window_and_scores() {
     assert_eq!(incident.tool, "codex");
     assert_eq!(incident.project, "/home/jmagar/workspace/cortex");
     assert_eq!(incident.session_id, "sess-mcp-1");
-    assert_eq!(incident.hostname, "dookie");
+    assert_eq!(incident.hostname, "devhost");
     assert_eq!(incident.event_count, 1);
     assert_eq!(incident.signal_counts.user_correction_after_tool_call, 1);
     assert!(
@@ -160,7 +160,7 @@ fn search_ai_mcp_incidents_excludes_non_mcp_classified_rows() {
     let (pool, _dir) = test_pool();
     let call_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project",
         "sess-builtin",
@@ -179,7 +179,7 @@ fn search_ai_mcp_incidents_excludes_non_mcp_classified_rows() {
         "codex",
         "/tmp/project",
         "sess-builtin",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "call_builtin",
         "shell",
@@ -200,7 +200,7 @@ fn search_ai_mcp_incidents_repeated_failures_trigger_signal() {
     let (pool, _dir) = test_pool();
     let call_log_1 = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "claude",
         "/tmp/project-e",
         "sess-e",
@@ -208,7 +208,7 @@ fn search_ai_mcp_incidents_repeated_failures_trigger_signal() {
     );
     let call_log_2 = make_ai_entry(
         "2026-01-01T00:01:00Z",
-        "dookie",
+        "devhost",
         "claude",
         "/tmp/project-e",
         "sess-e",
@@ -229,7 +229,7 @@ fn search_ai_mcp_incidents_repeated_failures_trigger_signal() {
         "claude",
         "/tmp/project-e",
         "sess-e",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "call_a",
         "mcp__gh__search",
@@ -243,7 +243,7 @@ fn search_ai_mcp_incidents_repeated_failures_trigger_signal() {
         "claude",
         "/tmp/project-e",
         "sess-e",
-        "dookie",
+        "devhost",
         "2026-01-01T00:01:00Z",
         "call_b",
         "mcp__gh__search",
@@ -276,7 +276,7 @@ fn search_ai_mcp_incidents_min_score_and_signals_filters() {
     let (pool, _dir) = test_pool();
     let call_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "claude",
         "/tmp/project-c",
         "sess-c",
@@ -294,7 +294,7 @@ fn search_ai_mcp_incidents_min_score_and_signals_filters() {
         "claude",
         "/tmp/project-c",
         "sess-c",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "call_c",
         "mcp__labby__search",

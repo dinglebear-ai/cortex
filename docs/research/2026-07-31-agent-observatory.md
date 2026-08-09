@@ -1,7 +1,7 @@
 ---
-title: "Agent Observatory research ledger"
+title: "agent observatory research ledger"
 created: 2026-07-31
-updated: 2026-08-05
+updated: 2026-07-31
 ---
 
 # Agent Observatory research ledger

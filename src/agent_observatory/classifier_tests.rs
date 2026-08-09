@@ -8,14 +8,14 @@ fn log(tool: Option<&str>, session: Option<&str>, metadata: Option<String>) -> L
     LogEntry {
         id: 101,
         timestamp: "2026-08-05T12:00:00.000Z".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: None,
         severity: "info".to_string(),
         app_name: Some("transcript".to_string()),
         process_id: Some("4242".to_string()),
         message: "hello".to_string(),
         received_at: "2026-08-05T12:00:01.000Z".to_string(),
-        source_ip: "agent-ai-transcript://dookie".to_string(),
+        source_ip: "agent-ai-transcript://devhost".to_string(),
         ai_tool: tool.map(str::to_string),
         ai_project: Some("/workspace/cortex/.worktrees/task-one".to_string()),
         ai_session_id: session.map(str::to_string),
@@ -66,4 +66,30 @@ fn missing_session_unsupported_tool_and_invalid_metadata_are_diagnostics() {
         panic!("invalid metadata must be skipped");
     };
     assert_eq!(diagnostic.reason, TranscriptSkipReason::InvalidMetadataJson);
+}
+
+#[test]
+fn transcript_projection_scrubs_secrets_from_message_metadata_and_provenance() {
+    let secret = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut row = log(
+        Some("claude"),
+        Some(secret),
+        Some(format!(r#"{{"nested":{{"authorization":"{secret}"}}}}"#)),
+    );
+    row.message = format!("credential {secret}");
+    row.ai_project = Some(format!("/workspace/{secret}"));
+    row.ai_transcript_path = Some(format!("/tmp/{secret}.jsonl"));
+    let TranscriptLogClassification::Project(projected) = classify_transcript_log(&row) else {
+        panic!("valid transcript row should project");
+    };
+    let persisted = format!(
+        "{} {} {} {} {}",
+        projected.message,
+        projected.metadata_json,
+        projected.session_id,
+        projected.project.unwrap_or_default(),
+        projected.transcript_path,
+    );
+    assert!(!persisted.contains(secret));
+    assert!(persisted.contains("[REDACTED]"));
 }

@@ -16,7 +16,7 @@ const HEAD: &str = "0123456789012345678901234567890123456789";
 fn repository() -> RepositoryUpsert {
     RepositoryUpsert {
         repository_key: "repo-key".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         common_git_dir: "/workspace/cortex/.git".to_string(),
         primary_path: VERIFIED_PATH.to_string(),
         display_name: "cortex".to_string(),
@@ -28,7 +28,7 @@ fn repository() -> RepositoryUpsert {
 fn worktree(key: &str, path: &str, branch: &str) -> RepositoryWorktreeUpsert {
     RepositoryWorktreeUpsert {
         worktree_key: key.to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         path: path.to_string(),
         git_dir: format!("{path}/.git"),
         branch_ref: Some(format!("refs/heads/{branch}")),
@@ -55,14 +55,14 @@ fn agent_command() -> LogEntry {
     LogEntry {
         id: 301,
         timestamp: "2026-08-05T12:00:00.000Z".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: Some("agent".to_string()),
         severity: "warning".to_string(),
         app_name: Some("Claude".to_string()),
         process_id: Some("4242".to_string()),
         message: "curl --token [REDACTED]".to_string(),
         received_at: "2026-08-05T12:00:01.000Z".to_string(),
-        source_ip: "agent-command://dookie/claude/claude-session".to_string(),
+        source_ip: "agent-command://devhost/claude/claude-session".to_string(),
         ai_tool: Some("Claude".to_string()),
         ai_project: Some(VERIFIED_CWD.to_string()),
         ai_session_id: Some("claude-session".to_string()),
@@ -93,14 +93,14 @@ fn atuin() -> LogEntry {
     LogEntry {
         id: 302,
         timestamp: "2026-08-05T12:05:00.000Z".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: Some("shell".to_string()),
         severity: "info".to_string(),
         app_name: Some("atuin".to_string()),
         process_id: None,
         message: "git status".to_string(),
         received_at: "2026-08-05T12:05:01.000Z".to_string(),
-        source_ip: "shell-history://dookie/user/atuin".to_string(),
+        source_ip: "shell-history://devhost/user/atuin".to_string(),
         ai_tool: None,
         ai_project: Some(CLAIMED_CWD.to_string()),
         ai_session_id: Some("atuin-session".to_string()),
@@ -158,7 +158,7 @@ fn nested_agent_and_atuin_cwds_project_without_primary_override() {
     };
     assert_eq!(
         agent.run.run_key,
-        run_key("dookie", "claude", "claude-session").unwrap()
+        run_key("devhost", "claude", "claude-session").unwrap()
     );
     assert_eq!(agent.run.primary_worktree_id, Some(verified_id));
     assert_eq!(agent.run.started_at, "2026-08-05T12:00:00.000Z");

@@ -150,7 +150,7 @@ fn remote_repair_home_override_targets_existing_home_and_preserves_remote_env() 
         "CORTEX_AUTH_MODE=oauth\nCORTEX_VERSION=dev\nCORTEX_TOKEN=keep-token\n",
     );
     let report = run_remote_deploy_with_runner(
-        "tootie",
+        "nashost",
         RemoteDeployOptions {
             dry_run: false,
             home: Some("/mnt/cache/appdata/cortex".to_string()),
@@ -261,7 +261,7 @@ fn remote_deploy_rejects_relative_home_before_running_ssh() {
     let mut runner = FakeRemoteRunner::ok();
 
     let error = run_remote_deploy_with_runner(
-        "tootie",
+        "nashost",
         RemoteDeployOptions {
             dry_run: true,
             home: Some("relative/path".to_string()),
@@ -282,13 +282,13 @@ fn remote_deploy_rejects_relative_home_before_running_ssh() {
 fn remote_deploy_accepts_safe_hosts() {
     let mut runner = FakeRemoteRunner::ok();
 
-    let report = run_remote_deploy_with_runner("tootie", true, &mut runner).unwrap();
+    let report = run_remote_deploy_with_runner("nashost", true, &mut runner).unwrap();
 
-    assert_eq!(report.host, "tootie");
+    assert_eq!(report.host, "nashost");
     assert!(
         runner
             .commands
             .iter()
-            .all(|command| command.starts_with("tootie:"))
+            .all(|command| command.starts_with("nashost:"))
     );
 }

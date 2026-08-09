@@ -77,7 +77,7 @@ REGRESSION result: 4 topology tests passed; schema-head test passed at 44; forma
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: KNOWN_SCHEMA_VERSION now advances truthfully to 44 only after the complete topology migration commits atomically.
 
-## AO-008 Implement migration 45 agent_runs
+## AO-008 Implement migration 45 agent_runs atomically
 commit/worktree SHA: 696d60c5 (task started)
 RED: isolated pinned-target init_pool_creates_agent_observatory_run_schema_scaffold
 RED result: expected run columns, got an empty list because agent_runs did not exist
@@ -86,9 +86,9 @@ GREEN result: 1 passed; lifecycle status constraints, host/tool/native-session i
 REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt, and git diff --check
 REGRESSION result: runtime schema remains 44; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
-NOTES: Migration 45 remains unmarked until actors, evidence, events, cursors, and stream outbox are complete.
+NOTES: The foundation PR removed its partial unversioned scaffold. This implementation lands agent_runs only as part of the complete, versioned migration 45 transaction.
 
-## AO-009 Add actors and run/worktree evidence
+## AO-009 Add actors and run/worktree evidence atomically
 commit/worktree SHA: cb6f7f77 (task started)
 RED: isolated pinned-target init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema
 RED result: expected actor columns, got an empty list because agent_run_actors and agent_run_worktrees did not exist
@@ -97,7 +97,57 @@ GREEN result: 1 passed; actor identity and JSON checks, confidence/trust constra
 REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
 REGRESSION result: runtime schema remains 44; formatting and diff clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
-NOTES: Migration 45 remains intentionally unmarked until AO-013.
+NOTES: The foundation PR proved partial migration-45 tables stayed absent. This implementation adds all migration-45 tables and advances the schema head in one atomic migration.
+
+## ENV-001 Add the new resolver and compatibility alias
+commit/worktree SHA: 2e22dc19 (task started)
+RED: pinned-target env_new_only_true_enables_forwarding
+RED result: new CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true was ignored and forwarding remained false
+GREEN: pinned-target transcript_forward_env_ test filter
+GREEN result: 4 passed; precedence matrix, warning codes, authoritative replacement, legacy-only compatibility, and local sessions-watch independence verified
+REGRESSION: pinned-target heartbeat_agent::tests plus cargo fmt and git diff --check
+REGRESSION result: 46 passed; formatting and diff clean
+FILES: src/heartbeat_agent.rs, src/heartbeat_agent_tests.rs
+NOTES: The deprecated name is centralized in AI_TRANSCRIPT_FORWARD_LEGACY_ENV; from_env emits exactly one warning selected by the pure resolver.
+
+## ENV-002 Switch all generated and deployed configuration to the new name
+commit/worktree SHA: 06c64c09 (task started)
+RED: setup generation, persisted env resolution, and Linux deployment fixtures expecting CORTEX_AGENT_AI_TRANSCRIPT_FORWARD only
+RED result: all three failed because output preserved CORTEX_AGENT_AI_TRANSCRIPTS or omitted the replacement
+GREEN: the same three focused tests after setup/deploy normalization
+GREEN result: 3 passed; legacy-only persisted/process environment values are emitted under CORTEX_AGENT_AI_TRANSCRIPT_FORWARD and the legacy key is absent
+REGRESSION: setup::heartbeat_agent::tests, agent_deploy::tests, cargo fmt, git diff --check, production occurrence audit
+REGRESSION result: 12 setup tests and 32 deployment tests passed; the only non-test source occurrence of CORTEX_AGENT_AI_TRANSCRIPTS is the compatibility constant
+FILES: src/setup/heartbeat_agent.rs, src/setup/heartbeat_agent_tests.rs, src/agent_deploy.rs, src/agent_deploy_tests.rs
+NOTES: Replacement values are authoritative; legacy persisted values are normalized instead of copied verbatim, and generated files never contain both names.
+
+## PR-173 adversarial remediation
+RED: review beads `syslog-mcp-2axwk`, `syslog-mcp-e5o51`, `syslog-mcp-ftiu1`, and `syslog-mcp-34jai`
+RED result: startup created an unversioned migration-45 subset; doctor inspected only the final duplicate, replaced symlinks, and could overwrite a concurrently changed file; validation allowlisted whole files and ignored extensionless tracked text.
+GREEN: focused database and doctor tests plus both transcript-forward validator scripts
+GREEN result: migration-45 tables remain absent; ambiguous legacy/duplicate configuration fails closed for manual editing; conflicting duplicates and symlinks fail without mutation; tracked occurrence validation rejects both extensionless fixtures and invalid occurrences inside an otherwise approved file.
+FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`, `src/setup/doctor.rs`, `src/setup/doctor_tests.rs`, `scripts/validate-transcript-forward-env-rename.sh`, `scripts/test-validate-transcript-forward-env-rename.sh`, `Justfile`
+NOTES: Contract, OpenAPI, schema, Rust/TypeScript type, architecture, research, specification, validator, and golden-fixture artifacts were resolved to the versions already validated and merged through PR #172.
+
+## PR-173 independent re-review remediation
+RED: review beads `syslog-mcp-afx03` and `syslog-mcp-ya4a7`
+RED result: reread-before-rename still allowed a noncooperative edit or symlink swap in the final compare/replace window; documentation context accepted the substring `red` inside unrelated words such as `configured`.
+GREEN: fail-closed doctor migration plus injected post-read mutation tests; whole-word documentation context grammar plus an executable-assignment rejection and code-fence negative fixture.
+GREEN result: no automatic rewrite path remains, so forced noncooperative edits and symlink swaps are preserved; executable legacy assignments are rejected even in allowlisted documentation, and unrelated substrings grant no exception.
+REGRESSION: post-merge privacy scanner and adversarial fixtures, render-template hostile-input test, Agent Observatory contracts, transcript validator fixtures, doctor tests, workflow/Kache contracts, full clippy, and full nextest.
+REGRESSION result: all hermetic gates passed; full nextest ran 2,754 tests with 2 skipped and no failures. The live deployment-host check requires a deployment-local `hosts.env`, which is intentionally absent from this worktree.
+FILES: `src/setup/doctor.rs`, `src/setup/doctor_tests.rs`, `src/setup/doctor_transcript_forward_tests.rs`, `scripts/validate-transcript-forward-env-rename.sh`, `scripts/test-validate-transcript-forward-env-rename.sh`
+NOTES: Current `origin/main` through PR #174 was merged without conflicts, preserving the privacy scanner/config/runbook changes and the validated PR #172 Agent Observatory artifacts.
+
+## ENV-003 Keep legacy environment migration fail-closed
+RED: legacy-only and conflicting environment fixtures exercised the setup doctor
+RED result: earlier implementation could rewrite a deployment file under an automated fix path
+GREEN: doctor reports the deprecated alias and replacement guidance without modifying the file
+GREEN result: legacy-only, equal-alias, and conflicting states remain byte-for-byte unchanged; no automatic write path exists
+REGRESSION: setup doctor tests, transcript-forward rename validator, private-identifier scan, cargo fmt, and git diff --check
+REGRESSION result: compatibility reads remain supported while deployment mutation requires an explicit operator edit
+FILES: src/setup/doctor.rs, src/setup/doctor_tests.rs, scripts/validate-transcript-forward-env-rename.sh
+NOTES: ENV-003 is intentionally fail-closed. Detection and guidance are safe; Cortex does not auto-write deployment environment files.
 
 ## AO-010 Add durable run events
 commit/worktree SHA: (pending)
@@ -143,6 +193,28 @@ REGRESSION result: runtime schema now at 45; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: KNOWN_SCHEMA_VERSION now truthfully at 45; migration 45 is atomic and idempotent; G1 Storage gate partially satisfied.
 
+## AO-014 Implement migration 46 OTLP span table
+commit/worktree SHA: bffe249c (independent compliance verification started)
+RED: replace the shallow table-existence check with the complete migration-46 SQL contract fixture
+RED result: the expanded test initially failed to compile at its JSON fixture, proving the new contract path had not previously been exercised
+GREEN: pinned-target migration_46_creates_otel_spans_table_and_indexes
+GREEN result: exact columns, four indexes, trace/span dedupe, identifier lengths, duration/JSON/scrub constraints, deterministic run ordering, run and trace query plans, run-FK SET NULL, integrity, and idempotent reopen all passed
+REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
+REGRESSION result: schema head remains 47; formatting and diff checks clean
+FILES: src/db/pool_tests.rs, docs/plans/agent-observatory/proof/PROOF.md
+NOTES: Migration-46 DDL originally landed in the combined 22626a72 runner commit; this independent task commit locks the full contract without rewriting later unpublished descendants.
+
+## AO-015 Implement migration 47 OTLP metric-point table
+commit/worktree SHA: cebcafb6 (independent compliance verification started)
+RED: replace the shallow table-existence check with the complete migration-47 SQL contract fixture
+RED result: the expanded test initially failed to compile because its JSON value fixture lacked Rust string escaping
+GREEN: corrected the fixture and reran migration_47_creates_otel_metric_points_table_and_indexes in an isolated Cargo target
+GREEN result: 1 passed; exact columns and all three indexes, point-key dedupe, instrument/JSON/boolean constraints, deterministic ordering, run/name query plans, run deletion preservation, integrity, foreign keys, and idempotent reopen verified
+REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
+REGRESSION result: schema head test passed at 47; formatting and diff checks clean
+FILES: src/db/pool_tests.rs
+NOTES: The original migration DDL remains unchanged; this task adds full independent contract proof after AO-014 and AO-015 were originally combined in one implementation commit.
+
 ## AO-016 Add schema-43 upgrade fixture
 commit/worktree SHA: 22626a72 (task started)
 RED: pinned-target schema_43_fixture_upgrades_to_47_and_preserves_legacy_rows
@@ -175,73 +247,6 @@ REGRESSION: full config::tests, runtime::tests, corrected focused validation tes
 REGRESSION result: 96 config tests passed; 20 runtime tests passed; corrected validation test passed; Clippy, formatting, and diff checks clean
 FILES: src/config.rs, src/config_tests.rs, src/runtime_tests.rs, docs/contracts/config-schema.md
 NOTES: Feature remains explicitly disabled by default. The nested agent_observatory block denies unknown fields and all documented CORTEX_AGENT_OBSERVATORY_* variables override TOML.
-
-## ENV-001 Add the new resolver and compatibility alias
-commit/worktree SHA: 2e22dc19 (task started)
-RED: pinned-target env_new_only_true_enables_forwarding
-RED result: new CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true was ignored and forwarding remained false
-GREEN: pinned-target transcript_forward_env_ test filter
-GREEN result: 4 passed; precedence matrix, warning codes, authoritative replacement, legacy-only compatibility, and local sessions-watch independence verified
-REGRESSION: pinned-target heartbeat_agent::tests plus cargo fmt and git diff --check
-REGRESSION result: 46 passed; formatting and diff clean
-FILES: src/heartbeat_agent.rs, src/heartbeat_agent_tests.rs
-NOTES: The deprecated name is centralized in AI_TRANSCRIPT_FORWARD_LEGACY_ENV; from_env emits exactly one warning selected by the pure resolver.
-
-
-## ENV-002 Switch all generated and deployed configuration to the new name
-commit/worktree SHA: 06c64c09 (task started)
-RED: setup generation, persisted env resolution, and Linux deployment fixtures expecting CORTEX_AGENT_AI_TRANSCRIPT_FORWARD only
-RED result: all three failed because output preserved CORTEX_AGENT_AI_TRANSCRIPTS or omitted the replacement
-GREEN: the same three focused tests after setup/deploy normalization
-GREEN result: 3 passed; legacy-only persisted/process environment values are emitted under CORTEX_AGENT_AI_TRANSCRIPT_FORWARD and the legacy key is absent
-REGRESSION: setup::heartbeat_agent::tests, agent_deploy::tests, cargo fmt, git diff --check, production occurrence audit
-REGRESSION result: 12 setup tests and 32 deployment tests passed; the only non-test source occurrence of CORTEX_AGENT_AI_TRANSCRIPTS is the compatibility constant
-FILES: src/setup/heartbeat_agent.rs, src/setup/heartbeat_agent_tests.rs, src/agent_deploy.rs, src/agent_deploy_tests.rs
-NOTES: Replacement values are authoritative; legacy persisted values are normalized instead of copied verbatim, and generated files never contain both names.
-
-## ENV-003 Add doctor detection and safe automatic migration
-commit/worktree SHA: 67fea1c2 (task started)
-RED: temporary env-file fixtures for legacy-only, both-equal, conflicting, authorization, permission, and idempotency behavior
-RED result: doctor had no transcript-forwarding migration diagnostic or safe rewrite path
-GREEN: pinned-target transcript_forward_migration_ test filter
-GREEN result: 11 passed; legacy-only rename, equal-alias cleanup, conflict no-write, missing/current-only no-op, explicit --fix --yes authorization, private 0600 permissions, and idempotent second run verified
-REGRESSION: pinned-target setup::doctor::tests, cargo fmt --all -- --check, git diff --check
-REGRESSION result: 23 doctor tests passed; formatting and diff checks clean
-FILES: src/setup/doctor.rs, src/setup/doctor_tests.rs
-NOTES: Migration uses temporary-file write, sync_all, atomic rename, and parent-directory fsync. Conflicting values are never guessed or rewritten.
-
-## ENV-004 Complete documentation, release, and removal gates
-commit/worktree SHA: 42c2c2f9 (task started)
-RED: strict occurrence validation against the consolidated repository
-RED result: the initial grep pipeline corrupted NUL-delimited filenames, falsely passed with zero counted files, and the corrected scanner exposed missing migration-document allowlist entries
-GREEN: tracked-file NUL-safe git grep scanner plus documented migration-only allowlist
-GREEN result: clean repository passes with 12 allowlisted files; a temporary legacy occurrence in README.md fails and names README.md as the violation
-REGRESSION: bash syntax validation, transcript_forward_env_ tests, and git diff --check
-REGRESSION result: 4 compatibility tests passed; new-variable precedence, legacy-only compatibility, and local sessions-watch independence remain intact
-FILES: docs/contracts/agent-observatory.md, scripts/validate-transcript-forward-env-rename.sh
-NOTES: Cortex 3.x keeps the deprecated alias only in compatibility code, tests, migration documentation, and proof. Cortex 4.0 removal must delete the resolver, warning, doctor migration, and allowlist entries together.
-
-## AO-014 Implement migration 46 OTLP span table
-commit/worktree SHA: bffe249c (independent compliance verification started)
-RED: replace the shallow table-existence check with the complete migration-46 SQL contract fixture
-RED result: the expanded test initially failed to compile at its JSON fixture, proving the new contract path had not previously been exercised
-GREEN: pinned-target migration_46_creates_otel_spans_table_and_indexes
-GREEN result: exact columns, four indexes, trace/span dedupe, identifier lengths, duration/JSON/scrub constraints, deterministic run ordering, run and trace query plans, run-FK SET NULL, integrity, and idempotent reopen all passed
-REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
-REGRESSION result: schema head remains 47; formatting and diff checks clean
-FILES: src/db/pool_tests.rs, docs/plans/agent-observatory/proof/PROOF.md
-NOTES: Migration-46 DDL originally landed in the combined 22626a72 runner commit; this independent task commit locks the full contract without rewriting later unpublished descendants.
-
-## AO-015 Implement migration 47 OTLP metric-point table
-commit/worktree SHA: cebcafb6 (independent compliance verification started)
-RED: replace the shallow table-existence check with the complete migration-47 SQL contract fixture
-RED result: the expanded test initially failed to compile because its JSON value fixture lacked Rust string escaping
-GREEN: corrected the fixture and reran migration_47_creates_otel_metric_points_table_and_indexes in an isolated Cargo target
-GREEN result: 1 passed; exact columns and all three indexes, point-key dedupe, instrument/JSON/boolean constraints, deterministic ordering, run/name query plans, run deletion preservation, integrity, foreign keys, and idempotent reopen verified
-REGRESSION: known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
-REGRESSION result: schema head test passed at 47; formatting and diff checks clean
-FILES: src/db/pool_tests.rs
-NOTES: The original migration DDL remains unchanged; this task adds full independent contract proof after AO-014 and AO-015 were originally combined in one implementation commit.
 
 ## AO-019 Implement versioned identity helpers
 commit/worktree SHA: ccfd024c (task started)

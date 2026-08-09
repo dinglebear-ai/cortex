@@ -5,7 +5,7 @@ fn log(id: i64, message: &str) -> LogEntry {
     LogEntry {
         id,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: None,
         severity: "info".to_string(),
         app_name: Some("ai-transcript".to_string()),
@@ -29,7 +29,7 @@ fn incident(signals_present: Vec<&str>) -> McpIncident {
         tool: "codex".to_string(),
         project: "/tmp/project".to_string(),
         session_id: "sess-1".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         first_seen: "2026-01-01T00:00:00Z".to_string(),
         last_seen: "2026-01-01T00:05:00Z".to_string(),
         duration_secs: 300,

@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-06-12 16:09:09 EST
 repo: git@github.com:jmagar/cortex.git
@@ -37,7 +39,7 @@ The final repository state before this note was clean on `main` at merge commit 
 
 ## Key Findings
 
-- The old syslog-forwarder-only approach could not preserve the richer SWAG/Authelia/AdGuard/fail2ban style log ingestion cleanly once syslog forwarding was stopped on `tootie` and `shart`; Cortex needed first-class file-tail source management.
+- The old syslog-forwarder-only approach could not preserve the richer SWAG/Authelia/AdGuard/fail2ban style log ingestion cleanly once syslog forwarding was stopped on `nashost` and `backuphost`; Cortex needed first-class file-tail source management.
 - File-tail add needed explicit source attribution: `hostname` is required in the model and schema so rows are not silently attributed to the Cortex container host. See `src/file_tail/models.rs:94` and `docs/mcp/SCHEMA.md:153`.
 - Mutating `file_tails` operations must be long-running-server-only; stdio/query-only runtimes can read the registry but cannot spawn competing local tailers. This was wired through `src/runtime.rs` and `src/app/services/file_tails.rs`.
 - Add-then-append had a race: `file_tails add` could return before the tail task opened the file. The supervisor now initializes the initial checkpoint before `reconcile()` returns in `src/file_tail/supervisor.rs:98` and `src/file_tail/supervisor.rs:106`.
@@ -139,7 +141,7 @@ The final repository state before this note was clean on `main` at merge commit 
 
 | bead | title | actions observed | final status | why it mattered |
 |---|---|---|---|---|
-| `syslog-mcp-dqlv5` | Implement Unraid heartbeat-agent parity | Closed on 2026-06-11 with reason stating Unraid syslog file tailing, Docker unix socket streaming, deploy syslog target wiring, and live `tootie`/`shart` verification were implemented | closed | This was the agent-parity work immediately preceding managed file-tail ingest. |
+| `syslog-mcp-dqlv5` | Implement Unraid heartbeat-agent parity | Closed on 2026-06-11 with reason stating Unraid syslog file tailing, Docker unix socket streaming, deploy syslog target wiring, and live `nashost`/`backuphost` verification were implemented | closed | This was the agent-parity work immediately preceding managed file-tail ingest. |
 | `syslog-mcp-6y96m` | Managed file-tail ingest | Claimed/implemented and closed; reopened/closed again after review follow-ups per session note and interactions | closed | Main feature bead for PR #73. |
 | `syslog-mcp-7j9hn` | PR #73 review follow-up | Opened and closed by the API/CLI/docs review-remediation agent; interaction notes API/CLI/MCP/docs/smoke findings and verification | closed | Tracked first review pass remediation. |
 
@@ -253,7 +255,7 @@ No new bead was created by this `save-to-md` pass. `bd list --all --sort updated
 
 ## Decisions Not Taken
 
-- **Do not revive broad syslog forwarders for special app logs.** That would reintroduce duplicate or ambiguous ingestion after the user confirmed syslog forwarding was already stopped on `tootie` and `shart`.
+- **Do not revive broad syslog forwarders for special app logs.** That would reintroduce duplicate or ambiguous ingestion after the user confirmed syslog forwarding was already stopped on `nashost` and `backuphost`.
 - **Do not selectively filter file-tail content inside Cortex.** The user explicitly wanted full parity and broad observability rather than selective ingestion.
 - **Do not mount sensitive Cortex internals by default.** The default root remains `/file-tail-root`, not `/data` or arbitrary host paths.
 - **Do not delete ambiguous historical plans.** Existing `docs/plans` files were left because this maintenance pass did not prove them complete.

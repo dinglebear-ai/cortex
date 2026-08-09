@@ -12,7 +12,7 @@ const SHA_TWO: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
 fn repository() -> RepositoryUpsert {
     RepositoryUpsert {
         repository_key: "repo-key".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         common_git_dir: "/workspace/cortex/.git".to_string(),
         primary_path: "/workspace/cortex".to_string(),
         display_name: "cortex".to_string(),

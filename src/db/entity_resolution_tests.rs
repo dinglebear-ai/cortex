@@ -4,36 +4,36 @@ use super::vocab::*;
 fn canonical_service_keys_separate_logic_from_topology() {
     assert_eq!(logical_service_key(" Plex "), Some("plex".to_string()));
     assert_eq!(
-        service_instance_key("Tootie", " Plex "),
-        Some("tootie/plex".to_string())
+        service_instance_key("Nashost", " Plex "),
+        Some("nashost/plex".to_string())
     );
     assert_eq!(
-        split_service_instance_key("tootie/plex"),
-        Some(("tootie", "plex"))
+        split_service_instance_key("nashost/plex"),
+        Some(("nashost", "plex"))
     );
 }
 
 #[test]
 fn container_key_host_extracts_leading_host_segment() {
-    assert_eq!(container_key_host("tootie:abc123"), Some("tootie"));
+    assert_eq!(container_key_host("nashost:abc123"), Some("nashost"));
     // Extra colons (e.g. a malformed docker_host) still yield the leading
     // segment as host, matching the container-key construction site which
     // only ever emits a single colon between host and container id.
-    assert_eq!(container_key_host("tootie:abc:123"), Some("tootie"));
+    assert_eq!(container_key_host("nashost:abc:123"), Some("nashost"));
     assert_eq!(container_key_host("no-colon-key"), None);
     assert_eq!(container_key_host(":abc123"), None);
-    assert_eq!(container_key_host("tootie:"), None);
+    assert_eq!(container_key_host("nashost:"), None);
     assert_eq!(container_key_host(""), None);
 }
 
 #[test]
 fn old_nested_service_shapes_are_classified_not_normalized() {
     assert_eq!(
-        classify_legacy_shape("tootie:plex"),
+        classify_legacy_shape("nashost:plex"),
         Some(LegacyShape::HostService)
     );
     assert_eq!(
-        classify_legacy_shape("tootie:plex:plex"),
+        classify_legacy_shape("nashost:plex:plex"),
         Some(LegacyShape::HostProjectService)
     );
     assert_eq!(
@@ -41,22 +41,22 @@ fn old_nested_service_shapes_are_classified_not_normalized() {
         Some(LegacyShape::SlashTriplet)
     );
     assert_eq!(classify_legacy_shape("plex"), None);
-    assert_eq!(classify_legacy_shape("tootie/plex"), None);
+    assert_eq!(classify_legacy_shape("nashost/plex"), None);
 }
 
 #[test]
 fn legacy_shape_classifier_ignores_free_text_and_non_name_segments() {
     let cases: &[(&str, Option<LegacyShape>)] = &[
         // Whitespace anywhere → free text, never a legacy key.
-        ("what is tootie:plex doing", None),
-        ("plex on tootie: status", None),
+        ("what is nashost:plex doing", None),
+        ("plex on nashost: status", None),
         ("a/b/c d", None),
         // Colon shapes where a segment lacks any ASCII alphabetic char.
         ("10.0.0.5:443", None),
         ("12:30", None),
-        ("tootie:8080", None),
+        ("nashost:8080", None),
         (":plex", None),
-        ("tootie:", None),
+        ("nashost:", None),
         // Absolute paths are not slash triplets.
         ("/mnt/user/media", None),
         ("/var/lib/docker", None),
@@ -67,8 +67,8 @@ fn legacy_shape_classifier_ignores_free_text_and_non_name_segments() {
         ("https://a.b/c", None),
         ("agent-command://foo", None),
         // Plan-asserted legacy shapes must keep classifying.
-        ("tootie:plex", Some(LegacyShape::HostService)),
-        ("tootie:plex:plex", Some(LegacyShape::HostProjectService)),
+        ("nashost:plex", Some(LegacyShape::HostService)),
+        ("nashost:plex:plex", Some(LegacyShape::HostProjectService)),
         ("plex/plex/plex", Some(LegacyShape::SlashTriplet)),
         ("a/b/c", Some(LegacyShape::SlashTriplet)),
     ];
@@ -102,8 +102,8 @@ fn key_grammar_edge_cases_pin_non_ascii_empty_and_long_inputs() {
 #[test]
 fn canonical_keys_preserve_dots_in_hostnames() {
     let cases: &[(&str, Option<&str>)] = &[
-        ("tootie.lan", Some("tootie.lan")),
-        ("Tootie.LAN", Some("tootie.lan")),
+        ("nashost.lan", Some("nashost.lan")),
+        ("Nashost.LAN", Some("nashost.lan")),
         (".plex.", Some("plex")),
         ("-.plex.-", Some("plex")),
         ("...", None),
@@ -117,8 +117,8 @@ fn canonical_keys_preserve_dots_in_hostnames() {
         );
     }
     assert_eq!(
-        service_instance_key("tootie.lan", "plex"),
-        Some("tootie.lan/plex".to_string())
+        service_instance_key("nashost.lan", "plex"),
+        Some("nashost.lan/plex".to_string())
     );
 }
 
@@ -128,7 +128,7 @@ use super::observation::*;
 #[test]
 fn agent_docker_identity_extracts_structured_service_instance() {
     let identity = AgentDockerIdentity {
-        agent_host: "Tootie".to_string(),
+        agent_host: "Nashost".to_string(),
         container_id: "abcdef1234567890".to_string(),
         container_name: "plex".to_string(),
         compose_project: Some("plex".to_string()),
@@ -140,7 +140,7 @@ fn agent_docker_identity_extracts_structured_service_instance() {
     let observations = observations_from_agent_docker_identity(&identity);
     assert!(observations.iter().any(|o| {
         o.kind == ObservationKind::ServiceInstance
-            && o.service_instance_key.as_deref() == Some("tootie/plex")
+            && o.service_instance_key.as_deref() == Some("nashost/plex")
             && o.logical_service_key.as_deref() == Some("plex")
             && o.trust == ResolverTrust::Verified
             && o.structured
@@ -150,7 +150,7 @@ fn agent_docker_identity_extracts_structured_service_instance() {
 #[test]
 fn agent_docker_evidence_path_follows_actual_service_name_source() {
     let with_compose = AgentDockerIdentity {
-        agent_host: "tootie".to_string(),
+        agent_host: "nashost".to_string(),
         container_id: "abcdef1234567890".to_string(),
         container_name: "plex-container".to_string(),
         compose_project: Some("plex".to_string()),
@@ -190,7 +190,7 @@ fn agent_docker_evidence_path_follows_actual_service_name_source() {
 fn raw_app_label_does_not_create_logical_service_observation_by_itself() {
     let observations = observations_from_raw_app_label(
         "plex/plex/plex",
-        "tootie",
+        "nashost",
         "log",
         "42",
         "2026-01-01T00:00:00Z",
@@ -229,39 +229,39 @@ use super::resolver::*;
 
 #[test]
 fn resolver_converges_duplicate_hosts_under_one_logical_service() {
-    let tootie = ResolverObservation {
+    let nashost = ResolverObservation {
         kind: ObservationKind::ServiceInstance,
-        observed_key: "tootie/plex".to_string(),
-        display_label: "tootie/plex".to_string(),
-        host_key: Some("tootie".to_string()),
+        observed_key: "nashost/plex".to_string(),
+        display_label: "nashost/plex".to_string(),
+        host_key: Some("nashost".to_string()),
         logical_service_key: Some("plex".to_string()),
-        service_instance_key: Some("tootie/plex".to_string()),
+        service_instance_key: Some("nashost/plex".to_string()),
         source_kind: "app_inventory".to_string(),
-        source_id: "inventory:tootie".to_string(),
+        source_id: "inventory:nashost".to_string(),
         evidence_path: "inventory.services.plex".to_string(),
         observed_at: "2026-01-01T00:00:00Z".to_string(),
         trust: ResolverTrust::Verified,
         structured: true,
     };
-    let shart = ResolverObservation {
-        service_instance_key: Some("shart/plex".to_string()),
-        host_key: Some("shart".to_string()),
-        source_id: "inventory:shart".to_string(),
-        observed_key: "shart/plex".to_string(),
-        display_label: "shart/plex".to_string(),
-        ..tootie.clone()
+    let backuphost = ResolverObservation {
+        service_instance_key: Some("backuphost/plex".to_string()),
+        host_key: Some("backuphost".to_string()),
+        source_id: "inventory:backuphost".to_string(),
+        observed_key: "backuphost/plex".to_string(),
+        display_label: "backuphost/plex".to_string(),
+        ..nashost.clone()
     };
-    let decisions = resolve_observations(&[tootie, shart]);
+    let decisions = resolve_observations(&[nashost, backuphost]);
     assert!(
         decisions
             .iter()
             .any(|d| { d.entity_type == ENTITY_TYPE_LOGICAL_SERVICE && d.canonical_key == "plex" })
     );
     assert!(decisions.iter().any(|d| {
-        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "tootie/plex"
+        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "nashost/plex"
     }));
     assert!(decisions.iter().any(|d| {
-        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "shart/plex"
+        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "backuphost/plex"
     }));
 }
 
@@ -275,7 +275,7 @@ fn mixed_trust_evidence_pins_decision_trust_to_strongest() {
         logical_service_key: Some("plex".to_string()),
         service_instance_key: None,
         source_kind: "app_inventory".to_string(),
-        source_id: "inventory:tootie".to_string(),
+        source_id: "inventory:nashost".to_string(),
         evidence_path: "inventory.services.name".to_string(),
         observed_at: "2026-01-01T00:00:00Z".to_string(),
         trust: ResolverTrust::Verified,
@@ -298,7 +298,7 @@ fn mixed_trust_evidence_pins_decision_trust_to_strongest() {
 
 #[test]
 fn resolver_rejects_old_key_shapes_before_lookup() {
-    for input in ["tootie:plex", "tootie:plex:plex", "plex/plex/plex"] {
+    for input in ["nashost:plex", "nashost:plex:plex", "plex/plex/plex"] {
         let diagnostic = diagnose_lookup_input(input);
         assert_eq!(diagnostic.status, ResolverStatus::RejectedLegacyShape);
         assert_eq!(diagnostic.reason, "rejected_legacy_shape");
@@ -309,7 +309,7 @@ fn resolver_rejects_old_key_shapes_before_lookup() {
 #[test]
 fn weak_raw_labels_do_not_upgrade_themselves() {
     let observations =
-        observations_from_raw_app_label("complex", "tootie", "log", "99", "2026-01-01T00:00:00Z");
+        observations_from_raw_app_label("complex", "nashost", "log", "99", "2026-01-01T00:00:00Z");
     let decisions = resolve_observations(&observations);
     assert!(!decisions.iter().any(|d| d.canonical_key == "plex"));
     assert!(
@@ -322,7 +322,7 @@ fn weak_raw_labels_do_not_upgrade_themselves() {
 #[test]
 fn structured_agent_docker_metadata_resolves_without_central_docker_uri() {
     let identity = AgentDockerIdentity {
-        agent_host: "tootie".to_string(),
+        agent_host: "nashost".to_string(),
         container_id: "abcdef1234567890".to_string(),
         container_name: "plex".to_string(),
         compose_project: Some("plex".to_string()),
@@ -334,6 +334,6 @@ fn structured_agent_docker_metadata_resolves_without_central_docker_uri() {
     let observations = observations_from_agent_docker_identity(&identity);
     let decisions = resolve_observations(&observations);
     assert!(decisions.iter().any(|d| {
-        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "tootie/plex"
+        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "nashost/plex"
     }));
 }

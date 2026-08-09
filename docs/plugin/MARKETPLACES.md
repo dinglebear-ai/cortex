@@ -45,14 +45,14 @@ No Gemini extension manifest is currently shipped from this repo.
 ## MCP Registry
 
 The repo ships `server.json` for MCP Registry metadata under the
-`tv.tootie/cortex` namespace, with DNS verification via the `tootie.tv`
+`ai.dinglebear/cortex` namespace, with DNS verification via the `dinglebear.ai`
 domain.
 
 Example registry entry:
 
 ```json
 {
-  "name": "tv.tootie/cortex",
+  "name": "ai.dinglebear/cortex",
   "packages": [
     {
       "registryType": "oci",

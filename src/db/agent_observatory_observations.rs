@@ -200,6 +200,21 @@ pub fn record_repository_observations_if_changed(
     inputs: &[RepositoryObservationInput],
     observed_at: &str,
 ) -> Result<Vec<RepositoryObservationRow>> {
+    validate_repository_observations(repository_key, inputs, observed_at)?;
+    let _write_guard = write_lock();
+    let mut connection = pool.get().context("acquire database connection")?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let inserted =
+        record_repository_observations_if_changed_tx(&tx, repository_key, inputs, observed_at)?;
+    tx.commit()?;
+    Ok(inserted)
+}
+
+pub(super) fn validate_repository_observations(
+    repository_key: &str,
+    inputs: &[RepositoryObservationInput],
+    observed_at: &str,
+) -> Result<()> {
     if repository_key.trim().is_empty() {
         bail!("repository_key must be non-empty");
     }
@@ -213,15 +228,21 @@ pub fn record_repository_observations_if_changed(
         }
     }
 
-    let _write_guard = write_lock();
-    let mut connection = pool.get().context("acquire database connection")?;
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let repository_id = repository_id(&tx, repository_key)?;
+    Ok(())
+}
+
+pub(super) fn record_repository_observations_if_changed_tx(
+    tx: &Transaction<'_>,
+    repository_key: &str,
+    inputs: &[RepositoryObservationInput],
+    observed_at: &str,
+) -> Result<Vec<RepositoryObservationRow>> {
+    let repository_id = repository_id(tx, repository_key)?;
     let mut inserted = Vec::new();
 
     for input in inputs {
-        let worktree_id = worktree_id(&tx, repository_id, input.worktree_key.as_deref())?;
-        let latest = latest_observation(&tx, repository_id, worktree_id, input.observation_kind)?;
+        let worktree_id = worktree_id(tx, repository_id, input.worktree_key.as_deref())?;
+        let latest = latest_observation(tx, repository_id, worktree_id, input.observation_kind)?;
         if latest
             .as_ref()
             .is_some_and(|row| state_is_unchanged(row, input))
@@ -254,10 +275,9 @@ pub fn record_repository_observations_if_changed(
                 input.payload_json,
             ],
         )?;
-        inserted.push(observation_by_key(&tx, &key)?);
+        inserted.push(observation_by_key(tx, &key)?);
     }
 
-    tx.commit()?;
     Ok(inserted)
 }
 

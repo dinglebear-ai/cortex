@@ -9,7 +9,7 @@ use crate::db::init_pool;
 fn repository(key: &str, display_name: &str) -> RepositoryUpsert {
     RepositoryUpsert {
         repository_key: key.to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         common_git_dir: format!("/workspace/{key}/.git"),
         primary_path: format!("/workspace/{key}"),
         display_name: display_name.to_string(),
@@ -21,7 +21,7 @@ fn repository(key: &str, display_name: &str) -> RepositoryUpsert {
 fn worktree(key: &str, path: &str, branch: &str) -> RepositoryWorktreeUpsert {
     RepositoryWorktreeUpsert {
         worktree_key: key.to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         path: path.to_string(),
         git_dir: format!("{path}/.git"),
         branch_ref: Some(format!("refs/heads/{branch}")),

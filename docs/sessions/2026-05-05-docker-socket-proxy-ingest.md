@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-05 07:26:06 EST
 repo: https://github.com/jmagar/syslog-mcp
@@ -103,7 +105,7 @@ Add support for storing Docker container logs from multiple homelab hosts in sys
 | `docker compose config` | Compose config renders | Passed | Pass |
 | `bash bin/check-version-sync.sh` | Version files aligned | Passed at `0.7.0` | Pass |
 | `git diff --check` | No whitespace errors | Passed | Pass |
-| `rg` over Docker-ingest docs/tests for `tootie|squirts` | No matches | No matches in targeted Docker-ingest files | Pass |
+| `rg` over Docker-ingest docs/tests for `nashost|edgehost` | No matches | No matches in targeted Docker-ingest files | Pass |
 | `gh pr view 10 --repo jmagar/syslog-mcp --json state,mergedAt,mergeCommit` | PR is merged | `state=MERGED`, merge commit `84aa5aa4b03c244129833c77b3d6ada152bb85c9` | Pass |
 
 ## Risks and Rollback
@@ -115,7 +117,7 @@ Add support for storing Docker container logs from multiple homelab hosts in sys
 ## Decisions Not Taken
 
 - Did not use Docker daemon-level syslog driver as the primary plan because it can couple container runtime behavior to remote log delivery and changes Docker logging behavior.
-- Did not rename existing registry/domain references such as `tv.tootie/syslog-mcp`; only personal device examples introduced by this PR were neutralized.
+- Did not rename existing registry/domain references such as `tv.nashost/syslog-mcp`; only personal device examples introduced by this PR were neutralized.
 
 ## References
 
@@ -127,7 +129,7 @@ Add support for storing Docker container logs from multiple homelab hosts in sys
 ## Open Questions
 
 - GitHub checks triggered by the final branch update were still running after the PR merge when last checked: MCP Integration Tests, Security Audit, and build-and-push were pending; local and pre-push tests passed.
-- Existing public registry/domain names using `tootie` remain in the repo and were not changed because they appear to be namespace/domain references, not personal device examples.
+- Existing public registry/domain names using `nashost` remain in the repo and were not changed because they appear to be namespace/domain references, not personal device examples.
 
 ## Next Steps
 

@@ -97,12 +97,12 @@ fn graph_inventory_fixture() -> HomelabInventory {
         "2026-01-01T00:00:00Z".to_string(),
     );
     inventory.nodes.push(InventoryNode {
-        id: "node:squirts".to_string(),
-        hostname: "squirts".to_string(),
+        id: "node:edgehost".to_string(),
+        hostname: "edgehost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: test_provenance("ssh:squirts", "source_inventory"),
+        provenance: test_provenance("ssh:edgehost", "source_inventory"),
         roles: vec!["edge".to_string()],
-        ips: vec!["10.1.0.8".to_string()],
+        ips: vec!["192.0.2.8".to_string()],
         os: Some("Ubuntu".to_string()),
         cpu: None,
         memory: None,
@@ -111,15 +111,15 @@ fn graph_inventory_fixture() -> HomelabInventory {
         extras: Default::default(),
     });
     inventory.services.push(InventoryService {
-        id: "container:squirts:swag".to_string(),
+        id: "container:edgehost:swag".to_string(),
         name: "swag".to_string(),
         kind: "container".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: test_provenance("docker:squirts", "app_inventory"),
-        host: Some("squirts".to_string()),
+        provenance: test_provenance("docker:edgehost", "app_inventory"),
+        host: Some("edgehost".to_string()),
         image: Some("lscr.io/linuxserver/swag:latest".to_string()),
         status: Some("running".to_string()),
-        domains: vec!["adguard.tootie.tv".to_string()],
+        domains: vec!["adguard.example.invalid".to_string()],
         ports: vec![PortMapping {
             host_ip: Some("0.0.0.0".to_string()),
             host_port: Some(443),
@@ -137,23 +137,23 @@ fn graph_inventory_fixture() -> HomelabInventory {
     });
     inventory.compose_projects.push(ComposeProject {
         name: "edge".to_string(),
-        provenance: test_provenance("compose:squirts:/opt/edge/compose.yaml", "app_inventory"),
+        provenance: test_provenance("compose:edgehost:/opt/edge/compose.yaml", "app_inventory"),
         services: vec!["swag".to_string()],
         compose_files: vec!["/opt/edge/compose.yaml".to_string()],
-        domains: vec!["adguard.tootie.tv".to_string()],
+        domains: vec!["adguard.example.invalid".to_string()],
         ports: Vec::new(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:adguard.tootie.tv".to_string(),
-        server_names: vec!["adguard.tootie.tv".to_string()],
+        id: "proxy:adguard.example.invalid".to_string(),
+        server_names: vec!["adguard.example.invalid".to_string()],
         upstreams: vec!["swag:443".to_string()],
-        provenance: test_provenance("swag:squirts:/config/nginx/proxy.conf", "app_inventory"),
+        provenance: test_provenance("swag:edgehost:/config/nginx/proxy.conf", "app_inventory"),
     });
     inventory.artifact_refs.push(ArtifactRef {
-        id: "artifact:compose:squirts:edge".to_string(),
+        id: "artifact:compose:edgehost:edge".to_string(),
         kind: "compose".to_string(),
         collector: "raw_configs".to_string(),
-        source_host: Some("squirts".to_string()),
+        source_host: Some("edgehost".to_string()),
         source_path: Some("/opt/edge/compose.yaml".to_string()),
         cache_path: "/home/jmagar/.cortex/inventory/artifacts/edge.yaml".to_string(),
         redaction: RedactionStatus::Redacted,
@@ -178,12 +178,12 @@ fn graph_inventory_without_route_target_fixture() -> HomelabInventory {
         "2026-01-01T00:00:00Z".to_string(),
     );
     inventory.nodes.push(InventoryNode {
-        id: "node:squirts".to_string(),
-        hostname: "squirts".to_string(),
+        id: "node:edgehost".to_string(),
+        hostname: "edgehost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: test_provenance("ssh:squirts", "source_inventory"),
+        provenance: test_provenance("ssh:edgehost", "source_inventory"),
         roles: vec!["edge".to_string()],
-        ips: vec!["10.1.0.8".to_string()],
+        ips: vec!["192.0.2.8".to_string()],
         os: Some("Ubuntu".to_string()),
         cpu: None,
         memory: None,
@@ -192,10 +192,10 @@ fn graph_inventory_without_route_target_fixture() -> HomelabInventory {
         extras: Default::default(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:orphan.tootie.tv".to_string(),
-        server_names: vec!["orphan.tootie.tv".to_string()],
+        id: "proxy:orphan.example.invalid".to_string(),
+        server_names: vec!["orphan.example.invalid".to_string()],
         upstreams: vec!["missing-service:443".to_string()],
-        provenance: test_provenance("swag:squirts:/config/nginx/orphan.conf", "app_inventory"),
+        provenance: test_provenance("swag:edgehost:/config/nginx/orphan.conf", "app_inventory"),
     });
     inventory.recompute_summary();
     inventory
@@ -296,7 +296,7 @@ async fn host_state_action_returns_bounded_heartbeat_state() {
                  uptime_secs, sequence, collection_ms, partial, agent_version,
                  os, architecture, metadata_json
              ) VALUES (
-                 'host-a', 'tootie', '127.0.0.1:41000', ?1, ?1, 'boot-a',
+                 'host-a', 'nashost', '127.0.0.1:41000', ?1, ?1, 'boot-a',
                  60, ?2, 5, ?3, '0.1.0-test', 'linux', 'x86_64',
                  '{\"agent\":{\"interval_secs\":30}}'
              )",
@@ -313,7 +313,7 @@ async fn host_state_action_returns_bounded_heartbeat_state() {
     let value = execute_tool(
         &h.state,
         "cortex",
-        json!({"action": "host_state", "host": "tootie", "limit": 1}),
+        json!({"action": "host_state", "host": "nashost", "limit": 1}),
         None,
     )
     .await
@@ -329,14 +329,14 @@ async fn skill_events_action_returns_inserted_rows() {
     let conn = h.pool.get().unwrap();
     conn.execute(
         "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip)
-         VALUES ('2026-06-01T00:00:00.000Z', 'dookie', 'info', 'm', 'm', 'transcript://claude_project')",
+         VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', 'm', 'm', 'transcript://claude_project')",
         [],
     )
     .unwrap();
     let log_id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO ai_skill_events (log_id, ai_tool, ai_project, ai_session_id, hostname, timestamp, skill_name, event_kind, evidence_kind)
-         VALUES (?1, 'claude', 'cortex', 'sess-1', 'dookie', '2026-06-01T00:00:00.000Z', 'cortex-troubleshoot', 'claude_attribution', 'structured_json_field')",
+         VALUES (?1, 'claude', 'cortex', 'sess-1', 'devhost', '2026-06-01T00:00:00.000Z', 'cortex-troubleshoot', 'claude_attribution', 'structured_json_field')",
         rusqlite::params![log_id],
     )
     .unwrap();
@@ -402,7 +402,7 @@ async fn event_actions_apply_mcp_since_and_until_bounds() {
     for (index, timestamp) in timestamps.iter().enumerate() {
         conn.execute(
             "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip)
-             VALUES (?1, 'dookie', 'info', ?2, ?2, 'transcript://codex_cortex')",
+             VALUES (?1, 'devhost', 'info', ?2, ?2, 'transcript://codex_cortex')",
             rusqlite::params![timestamp, format!("event-{index}")],
         )
         .unwrap();
@@ -411,7 +411,7 @@ async fn event_actions_apply_mcp_since_and_until_bounds() {
             "INSERT INTO ai_skill_events
                 (log_id, ai_tool, ai_project, ai_session_id, hostname, timestamp,
                  skill_name, event_kind, evidence_kind)
-             VALUES (?1, 'codex', 'cortex', 'session-filter', 'dookie', ?2,
+             VALUES (?1, 'codex', 'cortex', 'session-filter', 'devhost', ?2,
                      'test-skill', 'loaded', 'structured')",
             rusqlite::params![log_id, timestamp],
         )
@@ -420,7 +420,7 @@ async fn event_actions_apply_mcp_since_and_until_bounds() {
             "INSERT INTO ai_mcp_events
                 (ai_tool, ai_project, ai_session_id, hostname, timestamp, call_id,
                  tool_name, mcp_server, mcp_tool, event_kind)
-             VALUES ('codex', 'cortex', 'session-filter', 'dookie', ?1, ?2,
+             VALUES ('codex', 'cortex', 'session-filter', 'devhost', ?1, ?2,
                      'mcp__labby__search', 'labby', 'search', 'call')",
             rusqlite::params![timestamp, format!("call-{index}")],
         )
@@ -429,7 +429,7 @@ async fn event_actions_apply_mcp_since_and_until_bounds() {
             "INSERT INTO ai_hook_events
                 (ai_tool, ai_project, ai_session_id, hostname, timestamp,
                  hook_event, hook_name, status, evidence_kind)
-             VALUES ('codex', 'cortex', 'session-filter', 'dookie', ?1,
+             VALUES ('codex', 'cortex', 'session-filter', 'devhost', ?1,
                      'PostToolUse', 'format', 'ok', 'runtime_transcript')",
             rusqlite::params![timestamp],
         )
@@ -482,14 +482,14 @@ async fn map_action_returns_infra_snapshot_from_known_hosts() {
         &[
             db::LogBatchEntry {
                 timestamp: "2026-01-01T00:00:00Z".to_string(),
-                hostname: "tootie".to_string(),
+                hostname: "nashost".to_string(),
                 facility: Some("daemon".to_string()),
                 severity: "info".to_string(),
                 app_name: Some("plex".to_string()),
                 process_id: None,
                 message: "plex started".to_string(),
                 raw: "<14>plex started".to_string(),
-                source_ip: "10.1.0.2:514".to_string(),
+                source_ip: "192.0.2.2:514".to_string(),
                 docker_checkpoint: None,
                 ai_tool: None,
                 ai_project: None,
@@ -504,14 +504,14 @@ async fn map_action_returns_infra_snapshot_from_known_hosts() {
             },
             db::LogBatchEntry {
                 timestamp: "2026-01-01T00:01:00Z".to_string(),
-                hostname: "squirts".to_string(),
+                hostname: "edgehost".to_string(),
                 facility: Some("daemon".to_string()),
                 severity: "warning".to_string(),
                 app_name: Some("swag".to_string()),
                 process_id: None,
                 message: "proxy warning".to_string(),
                 raw: "<12>proxy warning".to_string(),
-                source_ip: "10.1.0.8:514".to_string(),
+                source_ip: "192.0.2.8:514".to_string(),
                 docker_checkpoint: None,
                 ai_tool: None,
                 ai_project: None,
@@ -545,13 +545,13 @@ async fn map_action_returns_infra_snapshot_from_known_hosts() {
     );
 
     let nodes = value["nodes"].as_array().unwrap();
-    let tootie = nodes
+    let nashost = nodes
         .iter()
-        .find(|node| node["hostname"] == "tootie")
-        .expect("tootie node missing");
-    assert_eq!(tootie["log_count"], 1);
-    assert!(tootie["source_ips"].as_array().unwrap().is_empty());
-    assert!(tootie["apps"].as_array().unwrap().is_empty());
+        .find(|node| node["hostname"] == "nashost")
+        .expect("nashost node missing");
+    assert_eq!(nashost["log_count"], 1);
+    assert!(nashost["source_ips"].as_array().unwrap().is_empty());
+    assert!(nashost["apps"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -571,7 +571,7 @@ async fn map_action_host_services_mode_returns_graph_answer() {
         json!({
             "action": "map",
             "mode": "host_services",
-            "host": "squirts",
+            "host": "edgehost",
             "answer_limit": 25,
             "evidence_sample_limit": 2
         }),
@@ -585,7 +585,7 @@ async fn map_action_host_services_mode_returns_graph_answer() {
     assert_eq!(answer["mode"], "host_services");
     assert_eq!(answer["answer_status"], "ok");
     assert_eq!(answer["target"]["entity_type"], "host");
-    assert_eq!(answer["target"]["key"], "squirts");
+    assert_eq!(answer["target"]["key"], "edgehost");
     assert_eq!(value["summary"]["returned_hosts"], 0);
     assert_eq!(
         value["cortex_overlay"]["overlay_status"],
@@ -597,7 +597,7 @@ async fn map_action_host_services_mode_returns_graph_answer() {
             .unwrap()
             .iter()
             .any(|row| row["entity_type"] == "service_instance"
-                && row["key"] == "squirts/swag"
+                && row["key"] == "edgehost/swag"
                 && row["relationship_type"] == "runs_on"),
         "host_services should include service instances running on the host: {answer}"
     );
@@ -639,7 +639,7 @@ async fn map_action_domain_routes_mode_returns_proxy_graph_answer() {
         json!({
             "action": "map",
             "mode": "domain_routes",
-            "domain": "adguard.tootie.tv"
+            "domain": "adguard.example.invalid"
         }),
         None,
     )
@@ -650,14 +650,14 @@ async fn map_action_domain_routes_mode_returns_proxy_graph_answer() {
     assert_eq!(answer["mode"], "domain_routes");
     assert_eq!(answer["answer_status"], "ok");
     assert_eq!(answer["target"]["entity_type"], "domain");
-    assert_eq!(answer["target"]["key"], "adguard.tootie.tv");
+    assert_eq!(answer["target"]["key"], "adguard.example.invalid");
     assert!(
         answer["rows"]
             .as_array()
             .unwrap()
             .iter()
             .any(|row| row["entity_type"] == "reverse_proxy"
-                && row["key"] == "proxy:adguard.tootie.tv"
+                && row["key"] == "proxy:adguard.example.invalid"
                 && row["relationship_type"] == "exposes_domain"),
         "domain_routes should include the proxy config that exposes the domain: {answer}"
     );
@@ -667,7 +667,7 @@ async fn map_action_domain_routes_mode_returns_proxy_graph_answer() {
             .unwrap()
             .iter()
             .any(|row| row["entity_type"] == "service_instance"
-                && row["key"] == "squirts/swag"
+                && row["key"] == "edgehost/swag"
                 && row["relationship_type"] == "routes_to"),
         "domain_routes should include the route target service instance through the proxy: {answer}"
     );
@@ -716,7 +716,7 @@ async fn map_action_service_dependencies_mode_accepts_bare_service_with_host() {
         json!({
             "action": "map",
             "mode": "service_dependencies",
-            "host": "squirts",
+            "host": "edgehost",
             "service": "swag"
         }),
         None,
@@ -728,13 +728,13 @@ async fn map_action_service_dependencies_mode_accepts_bare_service_with_host() {
     assert_eq!(answer["mode"], "service_dependencies");
     assert_eq!(answer["answer_status"], "ok");
     assert_eq!(answer["target"]["entity_type"], "service_instance");
-    assert_eq!(answer["target"]["key"], "squirts/swag");
+    assert_eq!(answer["target"]["key"], "edgehost/swag");
     assert!(
         answer["rows"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["entity_type"] == "compose_project" && row["key"] == "squirts:edge"),
+            .any(|row| row["entity_type"] == "compose_project" && row["key"] == "edgehost:edge"),
         "service_dependencies should include compose project evidence: {answer}"
     );
 }
@@ -752,7 +752,7 @@ async fn map_action_service_dependencies_mode_rejects_legacy_service_keys() {
 
     // Legacy `host:service` / `host:project:service` identities are a
     // hard-break rejection, never a lookup.
-    for service in ["squirts:swag", "squirts:edge:swag"] {
+    for service in ["edgehost:swag", "edgehost:edge:swag"] {
         let err = execute_tool(
             &h.state,
             "cortex",
@@ -814,7 +814,7 @@ async fn map_action_findings_mode_returns_topology_findings_without_raw_leaks() 
                         .as_array()
                         .unwrap()
                         .iter()
-                        .any(|entity| entity["key"] == "adguard.tootie.tv")
+                        .any(|entity| entity["key"] == "adguard.example.invalid")
             ),
         "findings should include bounded public route proof: {answer}"
     );
@@ -1193,7 +1193,7 @@ async fn correlate_action_with_topic_routes_to_topic_correlation() {
         "cortex",
         json!({
             "action": "correlate",
-            "topic": "squirts dockersocket",
+            "topic": "edgehost dockersocket",
             "limit": 5
         }),
         None,
@@ -1201,7 +1201,7 @@ async fn correlate_action_with_topic_routes_to_topic_correlation() {
     .await
     .unwrap();
 
-    assert_eq!(value["topic"], "squirts dockersocket");
+    assert_eq!(value["topic"], "edgehost dockersocket");
     assert!(
         value.get("resolved_entities").is_some(),
         "topic correlation envelope missing resolved_entities: {value}"

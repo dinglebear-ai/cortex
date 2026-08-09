@@ -20,7 +20,7 @@ fn format_rfc5424_replaces_newlines_and_keeps_valid_fields() {
     let line = format_rfc5424(
         PRI_LOCAL0_ERR,
         "2026-06-12T12:00:00.000Z",
-        "dookie",
+        "devhost",
         "compose/service",
         "abcdef123456",
         "first\nsecond",
@@ -28,7 +28,7 @@ fn format_rfc5424_replaces_newlines_and_keeps_valid_fields() {
 
     assert_eq!(
         line,
-        "<131>1 2026-06-12T12:00:00.000Z dookie compose/service abcdef123456 - - first second"
+        "<131>1 2026-06-12T12:00:00.000Z devhost compose/service abcdef123456 - - first second"
     );
 }
 

@@ -69,7 +69,7 @@ Phase gates: G7 Operations and G8 clean-room release.
 - **Files:** ignored benchmark tests or xtask, JSON output schema.
 - **RED:** harness asserts architecture budgets and initially fails or reports baseline.
 - **GREEN:** add only missing indexes/query refinements backed by EXPLAIN and measurements.
-- **Proof:** run list p95 <150ms, event page p95 <200ms on documented DOOKIE profile; query plans archived.
+- **Proof:** run list p95 <150ms, event page p95 <200ms on the documented reference-hardware profile; query plans archived.
 - **Gate:** no index added without measured query need and write/storage cost note.
 - **References:** architecture performance budgets.
 

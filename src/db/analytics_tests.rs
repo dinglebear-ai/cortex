@@ -1406,25 +1406,25 @@ fn timeline_rollup_status_reports_watermark() {
 #[test]
 fn silent_hosts_merges_case_variants_before_cutoff() {
     // Regression: silent_hosts read the raw, case-sensitive `hosts` table, so a
-    // dormant `shart` identity was flagged as silent even though the live `SHART`
+    // dormant `backuphost` identity was flagged as silent even though the live `BACKUPHOST`
     // kept forwarding. Routing through list_hosts() merges case/FQDN variants
     // (latest last_seen wins) first, so the machine is correctly considered alive.
     let (pool, _d) = test_pool();
     insert_logs_batch(
         &pool,
         &[
-            entry("2026-06-19T20:00:00Z", "SHART", "info", None, "live"),
-            entry("2026-06-11T06:00:00Z", "shart", "info", None, "old"),
-            entry("2026-06-11T06:00:00Z", "STEAMY", "info", None, "old"),
+            entry("2026-06-19T20:00:00Z", "BACKUPHOST", "info", None, "live"),
+            entry("2026-06-11T06:00:00Z", "backuphost", "info", None, "old"),
+            entry("2026-06-11T06:00:00Z", "WINHOST", "info", None, "old"),
         ],
     )
     .unwrap();
     // hosts.last_seen is stamped with insert-time `now`; pin it explicitly.
     let conn = pool.get().unwrap();
     for (host, last_seen) in [
-        ("SHART", "2026-06-19T20:00:00.000Z"),
-        ("shart", "2026-06-11T06:00:00.000Z"),
-        ("STEAMY", "2026-06-11T06:00:00.000Z"),
+        ("BACKUPHOST", "2026-06-19T20:00:00.000Z"),
+        ("backuphost", "2026-06-11T06:00:00.000Z"),
+        ("WINHOST", "2026-06-11T06:00:00.000Z"),
     ] {
         conn.execute(
             "UPDATE hosts SET last_seen = ?1 WHERE hostname = ?2",
@@ -1441,32 +1441,32 @@ fn silent_hosts_merges_case_variants_before_cutoff() {
     let names: Vec<String> = silent.iter().map(|h| h.hostname.clone()).collect();
 
     assert!(
-        !names.iter().any(|n| n == "shart"),
-        "merged shart is live (SHART forwarding) and must not be flagged silent: {names:?}"
+        !names.iter().any(|n| n == "backuphost"),
+        "merged backuphost is live (BACKUPHOST forwarding) and must not be flagged silent: {names:?}"
     );
     assert!(
-        names.iter().any(|n| n == "steamy"),
-        "genuinely-dormant STEAMY (lowercased) must still be flagged: {names:?}"
+        names.iter().any(|n| n == "winhost"),
+        "genuinely-dormant WINHOST (lowercased) must still be flagged: {names:?}"
     );
 }
 
 #[test]
 fn clock_skew_merges_case_variants() {
-    // Regression: clock_skew GROUP BY hostname was case-sensitive, so `SHART` and
-    // `shart` reported as two separate skew rows. They must merge into one host
+    // Regression: clock_skew GROUP BY hostname was case-sensitive, so `BACKUPHOST` and
+    // `backuphost` reported as two separate skew rows. They must merge into one host
     // with summed samples and a sample-weighted average skew.
     let (pool, _d) = test_pool();
     insert_logs_batch(
         &pool,
         &[
-            entry("2026-01-01T00:00:00Z", "SHART", "info", None, "a"),
-            entry("2026-01-01T00:00:00Z", "SHART", "info", None, "b"),
-            entry("2026-01-01T00:00:00Z", "shart", "info", None, "c"),
+            entry("2026-01-01T00:00:00Z", "BACKUPHOST", "info", None, "a"),
+            entry("2026-01-01T00:00:00Z", "BACKUPHOST", "info", None, "b"),
+            entry("2026-01-01T00:00:00Z", "backuphost", "info", None, "c"),
         ],
     )
     .unwrap();
     let conn = pool.get().unwrap();
-    // SHART rows skew +10s, the shart row skews +40s.
+    // BACKUPHOST rows skew +10s, the backuphost row skews +40s.
     for (msg, received_at) in [
         ("a", "2026-01-01T00:00:10Z"),
         ("b", "2026-01-01T00:00:10Z"),
@@ -1481,8 +1481,12 @@ fn clock_skew_merges_case_variants() {
     drop(conn);
 
     let result = clock_skew(&pool, "2026-01-01T00:00:00Z", None).unwrap();
-    assert_eq!(result.len(), 1, "SHART/shart must collapse to one host");
-    assert_eq!(result[0].hostname, "shart");
+    assert_eq!(
+        result.len(),
+        1,
+        "BACKUPHOST/backuphost must collapse to one host"
+    );
+    assert_eq!(result[0].hostname, "backuphost");
     assert_eq!(result[0].samples, 3);
     // Sample-weighted: (10 + 10 + 40) / 3 = 20.
     assert!(
@@ -1491,4 +1495,29 @@ fn clock_skew_merges_case_variants() {
         result[0].avg_skew_secs
     );
     assert!((result[0].max_skew_secs - 40.0).abs() < 0.5);
+}
+
+#[test]
+fn feed_cursor_is_never_below_the_greatest_returned_id() {
+    let (pool, _d) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[entry("2026-01-01T00:00:00Z", "h", "info", None, "one")],
+    )
+    .unwrap();
+    let (first, cursor, more) = feed_logs(&pool, Some(0), None, 100).unwrap();
+    assert!(!more);
+    assert_eq!(first.len(), 1);
+    assert!(cursor >= first.iter().map(|row| row.id).max().unwrap());
+
+    insert_logs_batch(
+        &pool,
+        &[entry("2026-01-01T00:00:01Z", "h", "info", None, "two")],
+    )
+    .unwrap();
+    let (second, next_cursor, _) = feed_logs(&pool, Some(cursor), None, 100).unwrap();
+    assert_eq!(second.len(), 1);
+    assert!(next_cursor >= second[0].id);
+    let (duplicate, _, _) = feed_logs(&pool, Some(next_cursor), None, 100).unwrap();
+    assert!(duplicate.is_empty());
 }

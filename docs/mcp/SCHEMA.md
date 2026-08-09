@@ -1,7 +1,7 @@
 ---
 title: "Tool Schema Documentation -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: "2026-08-04"
 ---
 
 # Tool Schema Documentation -- cortex
@@ -26,7 +26,7 @@ wins.
 ## Current Actions
 
 cortex exposes one MCP tool named `cortex`. The required `action` argument
-selects one of these 54 actions:
+selects one of these 56 actions:
 
 | Action | Scope | Cost | Purpose |
 | --- | --- | --- | --- |
@@ -89,7 +89,9 @@ selects one of these 54 actions:
 
 ## Schema Pattern
 
-The runtime tool definition is a flat action-dispatched JSON schema:
+The runtime tool definition is a hybrid action-dispatched JSON schema. Shared
+properties remain at the root for backward-compatible discovery, while exact
+per-action object branches are generated from `ACTION_SPECS` under `oneOf`:
 
 ```json
 {
@@ -119,14 +121,48 @@ The runtime tool definition is a flat action-dispatched JSON schema:
         "enum": ["...derived from ACTION_SPECS..."]
       }
     },
-    "required": ["action"]
+    "required": ["action"],
+    "oneOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": { "const": "project_context" },
+          "project": { "type": "string" },
+          "tool": { "type": "string" },
+          "limit": { "type": "integer" }
+        },
+        "required": ["action", "project"]
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": { "const": "list_ai_projects" },
+          "tool": { "type": "string" },
+          "since": { "type": "string" },
+          "until": { "type": "string" }
+        },
+        "required": ["action"]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "action": { "enum": ["...unmigrated actions..."] }
+        },
+        "required": ["action"]
+      }
+    ]
   }
 }
 ```
 
-All properties are declared at the top level because MCP clients receive one
-tool schema for the `cortex` super-tool. Per-action validation happens in the
-handler and service layers.
+Root properties remain available because MCP clients receive one schema for the
+`cortex` super-tool. `project_context` and `list_ai_projects` now have exact
+machine-enforced field sets generated from the action registry. Unmigrated
+actions use an explicit fallback branch that excludes those exact action names.
+Runtime request structs still use `deny_unknown_fields` as the final validation
+boundary.
 
 ## Common Arguments
 
@@ -151,7 +187,7 @@ handler and service layers.
 | `limit`, `offset` | Action-specific bounds; `offset` is for `apps` and `source_ips` pagination |
 | `host_limit`, `per_host_limit`, `section_limit`, `include_sections` | Node and inventory-section bounds for `map`; `per_host_limit` is accepted for v1 compatibility and ignored by map v2 |
 | `mode`, `host`, `domain`, `service`, `answer_limit`, `evidence_sample_limit`, `payload_budget` | Map snapshot mode and graph-backed map answer controls: `host_services`, `domain_routes`, and `service_dependencies` |
-| `mode`, `entity_id`, `entity_type`, `key`, `alias_type`, `alias_key`, `depth`, `evidence_id`, `evidence_sample_limit`, `payload_budget` | Graph controls. Targeted modes require exactly one lookup strategy: `entity_id`, `entity_type` + `key`, or `alias_type` + `alias_key`. `evidence` requires `evidence_id`. Service identity is `logical_service` (`key=plex`) or `service_instance` (`key=tootie/plex`); legacy nested keys (`tootie:plex`, `tootie:plex:plex`, `plex/plex/plex`) are rejected with `rejected_legacy_shape`. |
+| `mode`, `entity_id`, `entity_type`, `key`, `alias_type`, `alias_key`, `depth`, `evidence_id`, `evidence_sample_limit`, `payload_budget` | Graph controls. Targeted modes require exactly one lookup strategy: `entity_id`, `entity_type` + `key`, or `alias_type` + `alias_key`. `evidence` requires `evidence_id`. Service identity is `logical_service` (`key=plex`) or `service_instance` (`key=nashost/plex`); legacy nested keys (`nashost:plex`, `nashost:plex:plex`, `plex/plex/plex`) are rejected with `rejected_legacy_shape`. |
 
 ## Correlation Arguments
 
@@ -195,8 +231,11 @@ All MCP tool responses use one text content block containing pretty-printed JSON
 }
 ```
 
-Validation failures usually surface as MCP invalid-params errors. Execution
-failures return tool errors with `isError: true`.
+Action validation failures and execution failures return tool errors with
+`isError: true`. Validation errors also include matching JSON text and
+`structuredContent` containing `kind: "invalid_param"`, `action`, `message`,
+and `retryable: false`. JSON-RPC errors are reserved for failures that prevent
+normal tool execution.
 
 ## Drift Checks
 

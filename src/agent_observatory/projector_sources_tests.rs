@@ -12,7 +12,7 @@ const HEAD: &str = "0123456789012345678901234567890123456789";
 fn log_entry() -> LogBatchEntry {
     LogBatchEntry {
         timestamp: "2026-08-05T12:00:00.000Z".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: None,
         severity: "info".to_string(),
         app_name: Some("fixture".to_string()),
@@ -41,7 +41,7 @@ fn setup() -> (crate::db::DbPool, tempfile::TempDir, i64) {
         &pool,
         &RepositoryUpsert {
             repository_key: "repo-key".to_string(),
-            hostname: "dookie".to_string(),
+            hostname: "devhost".to_string(),
             common_git_dir: "/workspace/cortex/.git".to_string(),
             primary_path: "/workspace/cortex".to_string(),
             display_name: "cortex".to_string(),
@@ -50,7 +50,7 @@ fn setup() -> (crate::db::DbPool, tempfile::TempDir, i64) {
         },
         &[RepositoryWorktreeUpsert {
             worktree_key: "worktree-key".to_string(),
-            hostname: "dookie".to_string(),
+            hostname: "devhost".to_string(),
             path: PROJECT.to_string(),
             git_dir: format!("{PROJECT}/.git"),
             branch_ref: Some("refs/heads/main".to_string()),
@@ -92,7 +92,7 @@ fn records(log_id: i64) -> Vec<AgentSourceRecord> {
             ai_tool: "claude".to_string(),
             ai_project: Some(PROJECT.to_string()),
             ai_session_id: Some("session-one".to_string()),
-            hostname: "dookie".to_string(),
+            hostname: "devhost".to_string(),
             timestamp: "2026-08-05T12:01:00.000Z".to_string(),
             turn_id: Some("turn-one".to_string()),
             call_id: "call-one".to_string(),
@@ -114,7 +114,7 @@ fn records(log_id: i64) -> Vec<AgentSourceRecord> {
             ai_tool: "claude".to_string(),
             ai_project: Some(PROJECT.to_string()),
             ai_session_id: Some("session-one".to_string()),
-            hostname: "dookie".to_string(),
+            hostname: "devhost".to_string(),
             timestamp: "2026-08-05T12:02:00.000Z".to_string(),
             hook_event: "post_tool".to_string(),
             hook_name: Some("audit".to_string()),
@@ -136,7 +136,7 @@ fn records(log_id: i64) -> Vec<AgentSourceRecord> {
             ai_tool: "claude".to_string(),
             ai_project: Some(PROJECT.to_string()),
             ai_session_id: Some("session-one".to_string()),
-            hostname: "dookie".to_string(),
+            hostname: "devhost".to_string(),
             timestamp: "2026-08-05T12:03:00.000Z".to_string(),
             skill_name: "pdfs".to_string(),
             skill_plugin: Some("core".to_string()),

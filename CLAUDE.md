@@ -9,7 +9,7 @@ Rust binary: syslog receiver (UDP/TCP) + MCP server for homelab log intelligence
 | Remote | `git@github.com:dinglebear-ai/cortex.git` |
 | Cargo workspace | 2 members: the root `cortex` package (`[[bin]] cortex`, `src/main.rs`) and `xtask/` |
 | Edition / MSRV | `edition = "2024"`, `rust-version = "1.97.1"`; `rust-toolchain.toml` pins Rust 1.97.1 |
-| MCP crate | `rmcp = "=3.0.0-beta.2"` via `[workspace.dependencies]` (root dependencies and dev-dependencies; `xtask` does not use it) |
+| MCP crate | `rmcp = "=3.1.0"` via `[workspace.dependencies]` (root dependencies and dev-dependencies; `xtask` does not use it) |
 | Auth crate | `lab-auth`, pinned git dependency (see `Cargo.toml`) |
 | License | MIT |
 | Package layout | `autobins = false`; the single binary is declared explicitly |
@@ -209,7 +209,7 @@ CORTEX_BATCH_SIZE=100
 CORTEX_FLUSH_INTERVAL=500        # ms
 
 # Enrichment
-CORTEX_AGENT_DOCKER_SOURCE_PREFIXES=100.88.16.79,100.120.242.  # comma-separated; full IPv4 (exact host) or dot-terminated partial quad (subnet); trailing dot required for subnets — "100.64.0" matches nothing; IPv6 not matchable; empty = accept from any sender
+CORTEX_AGENT_DOCKER_SOURCE_PREFIXES=198.51.100.1,198.51.100.  # comma-separated; full IPv4 (exact host) or dot-terminated partial quad (subnet); trailing dot required for subnets — "100.64.0" matches nothing; IPv6 not matchable; empty = accept from any sender
 
 # MCP server
 CORTEX_HOST=127.0.0.1               # default loopback; 0.0.0.0 requires CORTEX_TOKEN/OAuth

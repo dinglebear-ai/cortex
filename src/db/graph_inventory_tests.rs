@@ -37,12 +37,12 @@ fn basic_inventory() -> HomelabInventory {
     let mut inventory =
         HomelabInventory::empty("inv-test".to_string(), "2026-01-01T00:00:00Z".to_string());
     inventory.nodes.push(InventoryNode {
-        id: "node:dookie".to_string(),
-        hostname: "dookie".to_string(),
+        id: "node:devhost".to_string(),
+        hostname: "devhost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:dookie", "source_inventory"),
+        provenance: provenance("ssh:devhost", "source_inventory"),
         roles: Vec::new(),
-        ips: vec!["10.1.0.6".to_string()],
+        ips: vec!["192.0.2.6".to_string()],
         os: Some("Ubuntu".to_string()),
         cpu: None,
         memory: None,
@@ -116,7 +116,7 @@ fn inventory_projection_keeps_heartbeat_only_hosts_resolvable() {
              host_id, hostname, source_ip, sampled_at, received_at, boot_id,
              uptime_secs, sequence, collection_ms, partial, agent_version,
              os, architecture, metadata_json
-         ) VALUES ('host-dookie', 'dookie', '10.1.0.6:1514',
+         ) VALUES ('host-devhost', 'devhost', '192.0.2.6:1514',
                    '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'boot-a',
                    60, 1, 5, 0, '0.1.0', 'linux', 'x86_64', '{}')",
         [],
@@ -127,7 +127,7 @@ fn inventory_projection_keeps_heartbeat_only_hosts_resolvable() {
         "INSERT INTO host_heartbeats_latest (
              host_id, heartbeat_id, hostname, sampled_at, received_at,
              partial, agent_version, os, architecture, metadata_json
-         ) VALUES ('host-dookie', ?1, 'dookie', '2026-01-01T00:00:00Z',
+         ) VALUES ('host-devhost', ?1, 'devhost', '2026-01-01T00:00:00Z',
                    '2026-01-01T00:00:00Z', 0, '0.1.0', 'linux', 'x86_64', '{}')",
         [heartbeat_id],
     )
@@ -143,7 +143,7 @@ fn inventory_projection_keeps_heartbeat_only_hosts_resolvable() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-              WHERE entity_type = 'host' AND canonical_key = 'dookie'"
+              WHERE entity_type = 'host' AND canonical_key = 'devhost'"
         ),
         1
     );
@@ -154,9 +154,9 @@ fn inventory_projection_keeps_heartbeat_only_hosts_resolvable() {
                FROM graph_entity_aliases a
                JOIN graph_entities e ON e.id = a.entity_id
               WHERE e.entity_type = 'host'
-                AND e.canonical_key = 'dookie'
+                AND e.canonical_key = 'devhost'
                 AND a.alias_type = 'hostname'
-                AND a.alias_key = 'dookie'"
+                AND a.alias_key = 'devhost'"
         ),
         1
     );
@@ -229,12 +229,12 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
     let mut inventory =
         HomelabInventory::empty("inv-test".to_string(), "2026-01-01T00:00:00Z".to_string());
     inventory.nodes.push(InventoryNode {
-        id: "node:squirts".to_string(),
-        hostname: "squirts".to_string(),
+        id: "node:edgehost".to_string(),
+        hostname: "edgehost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:squirts", "source_inventory"),
+        provenance: provenance("ssh:edgehost", "source_inventory"),
         roles: vec!["edge".to_string()],
-        ips: vec!["10.1.0.8".to_string()],
+        ips: vec!["192.0.2.8".to_string()],
         os: Some("Ubuntu".to_string()),
         cpu: None,
         memory: None,
@@ -243,15 +243,15 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         extras: Default::default(),
     });
     inventory.services.push(InventoryService {
-        id: "container:squirts:swag".to_string(),
+        id: "container:edgehost:swag".to_string(),
         name: "swag".to_string(),
         kind: "container".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("docker:squirts", "app_inventory"),
-        host: Some("squirts".to_string()),
+        provenance: provenance("docker:edgehost", "app_inventory"),
+        host: Some("edgehost".to_string()),
         image: Some("lscr.io/linuxserver/swag:latest".to_string()),
         status: Some("running".to_string()),
-        domains: vec!["example.tootie.tv".to_string()],
+        domains: vec!["example.example.invalid".to_string()],
         ports: vec![PortMapping {
             host_ip: Some("0.0.0.0".to_string()),
             host_port: Some(443),
@@ -265,23 +265,23 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
     });
     inventory.compose_projects.push(ComposeProject {
         name: "edge".to_string(),
-        provenance: provenance("compose:squirts:/opt/edge/compose.yaml", "app_inventory"),
+        provenance: provenance("compose:edgehost:/opt/edge/compose.yaml", "app_inventory"),
         services: vec!["swag".to_string()],
         compose_files: vec!["/opt/edge/compose.yaml".to_string()],
-        domains: vec!["example.tootie.tv".to_string()],
+        domains: vec!["example.example.invalid".to_string()],
         ports: Vec::new(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:example.tootie.tv".to_string(),
-        server_names: vec!["example.tootie.tv".to_string()],
+        id: "proxy:example.example.invalid".to_string(),
+        server_names: vec!["example.example.invalid".to_string()],
         upstreams: vec!["swag:443".to_string()],
-        provenance: provenance("swag:squirts:/config/nginx/proxy.conf", "app_inventory"),
+        provenance: provenance("swag:edgehost:/config/nginx/proxy.conf", "app_inventory"),
     });
     inventory.artifact_refs.push(ArtifactRef {
-        id: "artifact:compose:squirts:edge".to_string(),
+        id: "artifact:compose:edgehost:edge".to_string(),
         kind: "compose".to_string(),
         collector: "raw_configs".to_string(),
-        source_host: Some("squirts".to_string()),
+        source_host: Some("edgehost".to_string()),
         source_path: Some("/opt/edge/compose.yaml".to_string()),
         cache_path: "/home/jmagar/.cortex/inventory/artifacts/edge.yaml".to_string(),
         redaction: RedactionStatus::Redacted,
@@ -300,7 +300,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-             WHERE entity_type = 'host' AND canonical_key = 'squirts'"
+             WHERE entity_type = 'host' AND canonical_key = 'edgehost'"
         ),
         1
     );
@@ -308,7 +308,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entity_aliases
-             WHERE alias_type = 'ip' AND alias_key = '10.1.0.8'"
+             WHERE alias_type = 'ip' AND alias_key = '192.0.2.8'"
         ),
         1
     );
@@ -316,7 +316,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entity_aliases
-             WHERE alias_type = 'domain' AND alias_key = 'example.tootie.tv'"
+             WHERE alias_type = 'domain' AND alias_key = 'example.example.invalid'"
         ),
         1
     );
@@ -324,7 +324,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-             WHERE entity_type = 'compose_project' AND canonical_key = 'squirts:edge'"
+             WHERE entity_type = 'compose_project' AND canonical_key = 'edgehost:edge'"
         ),
         1
     );
@@ -332,7 +332,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-             WHERE entity_type = 'reverse_proxy' AND canonical_key = 'proxy:example.tootie.tv'"
+             WHERE entity_type = 'reverse_proxy' AND canonical_key = 'proxy:example.example.invalid'"
         ),
         1
     );
@@ -340,7 +340,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-             WHERE entity_type = 'domain' AND canonical_key = 'example.tootie.tv'"
+             WHERE entity_type = 'domain' AND canonical_key = 'example.example.invalid'"
         ),
         1
     );
@@ -349,7 +349,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
             &conn,
             "SELECT COUNT(*) FROM graph_entities
              WHERE entity_type = 'config_artifact'
-               AND canonical_key = 'artifact:compose:squirts:edge'"
+               AND canonical_key = 'artifact:compose:edgehost:edge'"
         ),
         1
     );
@@ -393,7 +393,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-             WHERE entity_type = 'service_instance' AND canonical_key = 'squirts/swag'"
+             WHERE entity_type = 'service_instance' AND canonical_key = 'edgehost/swag'"
         ),
         1
     );
@@ -419,7 +419,7 @@ fn project_inventory_preserves_existing_entity_ownership_and_hides_config_paths(
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('host', 'squirts', 'squirts', 'log', '42', 'claimed')",
+         VALUES ('host', 'edgehost', 'edgehost', 'log', '42', 'claimed')",
         [],
     )
     .unwrap();
@@ -428,10 +428,10 @@ fn project_inventory_preserves_existing_entity_ownership_and_hides_config_paths(
     let mut inventory =
         HomelabInventory::empty("inv-test".to_string(), "2026-01-01T00:00:00Z".to_string());
     inventory.nodes.push(InventoryNode {
-        id: "node:squirts".to_string(),
-        hostname: "squirts".to_string(),
+        id: "node:edgehost".to_string(),
+        hostname: "edgehost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:squirts", "source_inventory"),
+        provenance: provenance("ssh:edgehost", "source_inventory"),
         roles: Vec::new(),
         ips: Vec::new(),
         os: None,
@@ -442,10 +442,10 @@ fn project_inventory_preserves_existing_entity_ownership_and_hides_config_paths(
         extras: Default::default(),
     });
     inventory.artifact_refs.push(ArtifactRef {
-        id: "artifact:compose:squirts:edge".to_string(),
+        id: "artifact:compose:edgehost:edge".to_string(),
         kind: "compose".to_string(),
         collector: "raw_configs".to_string(),
-        source_host: Some("squirts".to_string()),
+        source_host: Some("edgehost".to_string()),
         source_path: Some("/opt/edge/compose.yaml".to_string()),
         cache_path: "/home/jmagar/.cortex/inventory/raw/inv/edge.txt".to_string(),
         redaction: RedactionStatus::Redacted,
@@ -454,7 +454,7 @@ fn project_inventory_preserves_existing_entity_ownership_and_hides_config_paths(
     });
     inventory.compose_projects.push(ComposeProject {
         name: "edge".to_string(),
-        provenance: provenance("compose:squirts:/opt/edge/compose.yaml", "app_inventory"),
+        provenance: provenance("compose:edgehost:/opt/edge/compose.yaml", "app_inventory"),
         services: Vec::new(),
         compose_files: vec!["/opt/edge/compose.yaml".to_string()],
         domains: Vec::new(),
@@ -467,7 +467,7 @@ fn project_inventory_preserves_existing_entity_ownership_and_hides_config_paths(
         .query_row(
             "SELECT source_kind, source_id, trust_level
                FROM graph_entities
-              WHERE entity_type = 'host' AND canonical_key = 'squirts'",
+              WHERE entity_type = 'host' AND canonical_key = 'edgehost'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -517,7 +517,7 @@ fn project_inventory_does_not_route_to_ambiguous_service_name() {
 
     let mut inventory =
         HomelabInventory::empty("inv-test".to_string(), "2026-01-01T00:00:00Z".to_string());
-    for host in ["squirts", "tootie"] {
+    for host in ["edgehost", "nashost"] {
         inventory.nodes.push(InventoryNode {
             id: format!("node:{host}"),
             hostname: host.to_string(),
@@ -550,8 +550,8 @@ fn project_inventory_does_not_route_to_ambiguous_service_name() {
         });
     }
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:ambiguous.tootie.tv".to_string(),
-        server_names: vec!["ambiguous.tootie.tv".to_string()],
+        id: "proxy:ambiguous.example.invalid".to_string(),
+        server_names: vec!["ambiguous.example.invalid".to_string()],
         upstreams: vec!["swag:443".to_string()],
         provenance: provenance("swag:/config/nginx/proxy.conf", "app_inventory"),
     });
@@ -578,10 +578,10 @@ fn project_inventory_routes_to_service_name_beginning_with_http() {
     let mut inventory =
         HomelabInventory::empty("inv-test".to_string(), "2026-01-01T00:00:00Z".to_string());
     inventory.nodes.push(InventoryNode {
-        id: "node:squirts".to_string(),
-        hostname: "squirts".to_string(),
+        id: "node:edgehost".to_string(),
+        hostname: "edgehost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:squirts", "source_inventory"),
+        provenance: provenance("ssh:edgehost", "source_inventory"),
         roles: Vec::new(),
         ips: Vec::new(),
         os: None,
@@ -592,12 +592,12 @@ fn project_inventory_routes_to_service_name_beginning_with_http() {
         extras: Default::default(),
     });
     inventory.services.push(InventoryService {
-        id: "container:squirts:http-api".to_string(),
+        id: "container:edgehost:http-api".to_string(),
         name: "http-api".to_string(),
         kind: "container".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("docker:squirts", "app_inventory"),
-        host: Some("squirts".to_string()),
+        provenance: provenance("docker:edgehost", "app_inventory"),
+        host: Some("edgehost".to_string()),
         image: None,
         status: Some("running".to_string()),
         domains: Vec::new(),
@@ -608,10 +608,10 @@ fn project_inventory_routes_to_service_name_beginning_with_http() {
         details: Default::default(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:http-api.tootie.tv".to_string(),
-        server_names: vec!["http-api.tootie.tv".to_string()],
+        id: "proxy:http-api.example.invalid".to_string(),
+        server_names: vec!["http-api.example.invalid".to_string()],
         upstreams: vec!["http://http-api:8080".to_string()],
-        provenance: provenance("swag:squirts:/config/nginx/proxy.conf", "app_inventory"),
+        provenance: provenance("swag:edgehost:/config/nginx/proxy.conf", "app_inventory"),
     });
 
     project_inventory(&pool, &inventory).unwrap();
@@ -628,7 +628,7 @@ fn project_inventory_routes_to_service_name_beginning_with_http() {
                JOIN graph_entities dst ON dst.id = rel.dst_entity_id
               WHERE rel.relationship_type = 'routes_to'
                 AND dst.entity_type = 'service_instance'
-                AND dst.canonical_key = 'squirts/http-api'"
+                AND dst.canonical_key = 'edgehost/http-api'"
         ),
         1
     );
@@ -646,7 +646,7 @@ fn project_inventory_scopes_compose_projects_and_networks_by_source_host() {
 
     let mut inventory =
         HomelabInventory::empty("inv-test".to_string(), "2026-01-01T00:00:00Z".to_string());
-    for host in ["squirts", "tootie"] {
+    for host in ["edgehost", "nashost"] {
         inventory.nodes.push(InventoryNode {
             id: format!("node:{host}"),
             hostname: host.to_string(),
@@ -768,7 +768,7 @@ fn reprojection_prunes_stale_resolver_instance_of_edges_when_service_moves_hosts
         inventory
     };
 
-    project_inventory(&pool, &inventory_with_plex_on("tootie")).unwrap();
+    project_inventory(&pool, &inventory_with_plex_on("nashost")).unwrap();
     {
         let conn = pool.get().unwrap();
         assert_eq!(
@@ -777,9 +777,9 @@ fn reprojection_prunes_stale_resolver_instance_of_edges_when_service_moves_hosts
         );
     }
 
-    // Plex moves to shart: re-projection must not leak the stale
-    // tootie/plex instance_of edge or leave orphan evidence behind.
-    project_inventory(&pool, &inventory_with_plex_on("shart")).unwrap();
+    // Plex moves to backuphost: re-projection must not leak the stale
+    // nashost/plex instance_of edge or leave orphan evidence behind.
+    project_inventory(&pool, &inventory_with_plex_on("backuphost")).unwrap();
     let conn = pool.get().unwrap();
     assert_eq!(
         relationship_count(&conn, "instance_of", "resolver_instance_of"),
@@ -792,7 +792,7 @@ fn reprojection_prunes_stale_resolver_instance_of_edges_when_service_moves_hosts
                FROM graph_relationships r
                JOIN graph_entities src ON src.id = r.src_entity_id
               WHERE r.relationship_type = 'instance_of'
-                AND src.canonical_key = 'tootie/plex'"
+                AND src.canonical_key = 'nashost/plex'"
         ),
         0
     );
@@ -800,7 +800,7 @@ fn reprojection_prunes_stale_resolver_instance_of_edges_when_service_moves_hosts
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-              WHERE entity_type = 'service_instance' AND canonical_key = 'tootie/plex'"
+              WHERE entity_type = 'service_instance' AND canonical_key = 'nashost/plex'"
         ),
         0
     );
@@ -827,12 +827,12 @@ fn double_projection_with_log_and_inventory_instance_of_leaves_no_orphans() {
     .unwrap();
 
     // Log-driven instance_of: agent-docker structured metadata row for
-    // (tootie/plex, plex), projected by the log extraction path.
+    // (nashost/plex, plex), projected by the log extraction path.
     let mut entry = log_entry("Plex started");
-    entry.hostname = "tootie".to_string();
+    entry.hostname = "nashost".to_string();
     entry.app_name = Some("plex".to_string());
     entry.metadata_json = Some(
-        r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
+        r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#
             .to_string(),
     );
     insert_logs_batch(&pool, &[entry]).unwrap();
@@ -842,12 +842,12 @@ fn double_projection_with_log_and_inventory_instance_of_leaves_no_orphans() {
     let mut inventory =
         HomelabInventory::empty("inv-test".to_string(), "2026-01-01T00:00:00Z".to_string());
     inventory.services.push(InventoryService {
-        id: "container:tootie:plex".to_string(),
+        id: "container:nashost:plex".to_string(),
         name: "plex".to_string(),
         kind: "container".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("docker:tootie", "app_inventory"),
-        host: Some("tootie".to_string()),
+        provenance: provenance("docker:nashost", "app_inventory"),
+        host: Some("nashost".to_string()),
         image: None,
         status: Some("running".to_string()),
         domains: Vec::new(),
@@ -912,12 +912,12 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
     let mut inventory =
         HomelabInventory::empty("plex-proof".to_string(), "2026-01-01T00:00:00Z".to_string());
     inventory.nodes.push(InventoryNode {
-        id: "node:tootie".to_string(),
-        hostname: "tootie".to_string(),
+        id: "node:nashost".to_string(),
+        hostname: "nashost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:tootie", "source_inventory"),
+        provenance: provenance("ssh:nashost", "source_inventory"),
         roles: Vec::new(),
-        ips: vec!["100.120.242.29".to_string()],
+        ips: vec!["198.51.100.2".to_string()],
         os: Some("Unraid".to_string()),
         cpu: None,
         memory: None,
@@ -926,15 +926,15 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
         extras: Default::default(),
     });
     inventory.services.push(InventoryService {
-        id: "service:tootie:plex".to_string(),
+        id: "service:nashost:plex".to_string(),
         name: "plex".to_string(),
         kind: "container".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("docker:tootie", "app_inventory"),
-        host: Some("tootie".to_string()),
+        provenance: provenance("docker:nashost", "app_inventory"),
+        host: Some("nashost".to_string()),
         image: Some("lscr.io/linuxserver/plex:latest".to_string()),
         status: Some("running".to_string()),
-        domains: vec!["plex.tootie.tv".to_string()],
+        domains: vec!["plex.example.invalid".to_string()],
         ports: vec![PortMapping {
             host_ip: Some("0.0.0.0".to_string()),
             host_port: Some(32400),
@@ -952,24 +952,24 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
     });
     inventory.compose_projects.push(ComposeProject {
         name: "plex".to_string(),
-        provenance: provenance("compose:tootie:/opt/plex/compose.yaml", "app_inventory"),
+        provenance: provenance("compose:nashost:/opt/plex/compose.yaml", "app_inventory"),
         services: vec!["plex".to_string()],
         compose_files: Vec::new(),
         domains: Vec::new(),
         ports: Vec::new(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:plex.tootie.tv".to_string(),
-        server_names: vec!["plex.tootie.tv".to_string()],
+        id: "proxy:plex.example.invalid".to_string(),
+        server_names: vec!["plex.example.invalid".to_string()],
         upstreams: vec!["plex:32400".to_string()],
-        provenance: provenance("swag:tootie:/config/nginx/plex.conf", "app_inventory"),
+        provenance: provenance("swag:nashost:/config/nginx/plex.conf", "app_inventory"),
     });
     project_inventory(&pool, &inventory).unwrap();
     let conn = pool.get().unwrap();
     assert_eq!(
         count(
             &conn,
-            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'tootie/plex'"
+            "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'nashost/plex'"
         ),
         1
     );

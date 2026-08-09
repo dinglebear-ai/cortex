@@ -42,6 +42,152 @@ pub use queries::{
     reconcile_repository,
 };
 
+use crate::db::pool::{DbPool, write_lock};
+use anyhow::{Context, Result};
+use rusqlite::TransactionBehavior;
+
+pub(crate) fn projection_cursor(pool: &DbPool, source_name: &str) -> Result<String> {
+    let connection = pool.get().context("acquire database connection")?;
+    connection.execute(
+        "INSERT OR IGNORE INTO agent_projection_cursors
+             (cursor_type, source_name, cursor_value) VALUES ('source', ?1, '')",
+        [source_name],
+    )?;
+    Ok(connection.query_row(
+        "SELECT cursor_value FROM agent_projection_cursors
+          WHERE cursor_type = 'source' AND source_name = ?1",
+        [source_name],
+        |row| row.get(0),
+    )?)
+}
+
+pub(crate) fn advance_projection_cursor(
+    pool: &DbPool,
+    source_name: &str,
+    cursor: &str,
+) -> Result<()> {
+    let _write_guard = write_lock();
+    let connection = pool.get().context("acquire database connection")?;
+    let changed = connection.execute(
+        "UPDATE agent_projection_cursors
+            SET cursor_value = ?2,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE cursor_type = 'source' AND source_name = ?1",
+        rusqlite::params![source_name, cursor],
+    )?;
+    anyhow::ensure!(changed == 1, "projection cursor is not initialized");
+    Ok(())
+}
+
+pub(crate) fn record_projection_health(
+    pool: &DbPool,
+    worker: &str,
+    status: &str,
+    detail: &str,
+) -> Result<()> {
+    let _write_guard = write_lock();
+    let connection = pool.get().context("acquire database connection")?;
+    connection.execute(
+        "INSERT INTO agent_projection_cursors (cursor_type, source_name, cursor_value)
+         VALUES ('health', ?1, json_object('status', ?2, 'detail', ?3, 'attempts', 1))
+         ON CONFLICT(cursor_type, source_name) DO UPDATE SET
+             cursor_value = json_object(
+                 'status', ?2, 'detail', ?3,
+                 'attempts', COALESCE(json_extract(agent_projection_cursors.cursor_value, '$.attempts'), 0) + 1
+             ),
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        rusqlite::params![worker, status, detail],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn projection_health(pool: &DbPool, worker: &str) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    let connection = pool.get().context("acquire database connection")?;
+    Ok(connection
+        .query_row(
+            "SELECT cursor_value FROM agent_projection_cursors
+          WHERE cursor_type = 'health' AND source_name = ?1",
+            [worker],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GitRepositoryReconcileResult {
+    pub topology: RepositoryReconcileResult,
+    pub commits: Vec<GitCommitRow>,
+    pub observations: Vec<RepositoryObservationRow>,
+}
+
+/// Atomically publishes one Git observer snapshot. Readers can never observe a
+/// commit import without its matching topology and observation rows.
+pub fn reconcile_git_repository_snapshot(
+    pool: &DbPool,
+    repository: &RepositoryUpsert,
+    worktrees: &[RepositoryWorktreeUpsert],
+    commits: &[GitCommitUpsert],
+    reachability: &[GitCommitReachabilityUpdate],
+    observations: &[RepositoryObservationInput],
+    observed_at: &str,
+) -> Result<GitRepositoryReconcileResult> {
+    reconcile_git_repository_snapshot_with(
+        pool,
+        repository,
+        worktrees,
+        commits,
+        reachability,
+        observed_at,
+        |_| Ok(observations.to_vec()),
+    )
+}
+
+pub fn reconcile_git_repository_snapshot_with<F>(
+    pool: &DbPool,
+    repository: &RepositoryUpsert,
+    worktrees: &[RepositoryWorktreeUpsert],
+    commits: &[GitCommitUpsert],
+    reachability: &[GitCommitReachabilityUpdate],
+    observed_at: &str,
+    build_observations: F,
+) -> Result<GitRepositoryReconcileResult>
+where
+    F: FnOnce(&RepositoryReconcileResult) -> Result<Vec<RepositoryObservationInput>>,
+{
+    queries::validate_reconcile_repository(repository, worktrees, observed_at)?;
+    commits::validate_reconcile_git_commits(commits, reachability, observed_at)?;
+    let _write_guard = write_lock();
+    let mut connection = pool.get().context("acquire database connection")?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let topology = queries::reconcile_repository_tx(&tx, repository, worktrees, observed_at)?;
+    let commits = commits::reconcile_git_commits_tx(
+        &tx,
+        &repository.repository_key,
+        commits,
+        reachability,
+        observed_at,
+    )?;
+    let observation_inputs = build_observations(&topology)?;
+    observations::validate_repository_observations(
+        &repository.repository_key,
+        &observation_inputs,
+        observed_at,
+    )?;
+    let observations = observations::record_repository_observations_if_changed_tx(
+        &tx,
+        &repository.repository_key,
+        &observation_inputs,
+        observed_at,
+    )?;
+    tx.commit()?;
+    Ok(GitRepositoryReconcileResult {
+        topology,
+        commits,
+        observations,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumParseError {
     type_name: &'static str,

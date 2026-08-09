@@ -8,7 +8,9 @@ pub use commands::{
 };
 
 use crate::ai_project::normalize_ai_project_path;
+use crate::assessment::redact_json_value_strings;
 use crate::db::LogEntry;
+use crate::receiver::enrichment::scrub_ai_message;
 use serde_json::Value;
 
 pub const MAX_TRANSCRIPT_MESSAGE_BYTES: usize = 64 * 1024;
@@ -118,15 +120,21 @@ pub fn classify_transcript_log(row: &LogEntry) -> TranscriptLogClassification {
             return skip(row.id, TranscriptSkipReason::MetadataTooLarge);
         }
         Some(value) => match serde_json::from_str::<Value>(value) {
-            Ok(Value::Object(_)) => value.to_string(),
+            Ok(mut value @ Value::Object(_)) => {
+                redact_json_value_strings(&mut value);
+                value.to_string()
+            }
             Ok(_) => return skip(row.id, TranscriptSkipReason::MetadataNotObject),
             Err(_) => return skip(row.id, TranscriptSkipReason::InvalidMetadataJson),
         },
     };
     let project = required(row.ai_project.as_deref())
         .map(normalize_ai_project_path)
+        .map(|value| scrub_ai_message(&value, None))
         .filter(|project| !project.is_empty());
-    let (message, message_truncated) = truncate_utf8(&row.message, MAX_TRANSCRIPT_MESSAGE_BYTES);
+    let scrubbed_message = scrub_ai_message(&row.message, None);
+    let (message, message_truncated) =
+        truncate_utf8(&scrubbed_message, MAX_TRANSCRIPT_MESSAGE_BYTES);
 
     TranscriptLogClassification::Project(Box::new(TranscriptLogProjection {
         log_id: row.id,
@@ -134,14 +142,20 @@ pub fn classify_transcript_log(row: &LogEntry) -> TranscriptLogClassification {
         received_at: row.received_at.clone(),
         hostname: hostname.to_string(),
         tool,
-        provider_tool: provider_tool.to_string(),
+        provider_tool: scrub_ai_message(provider_tool, None),
         project,
-        session_id: session_id.to_string(),
-        transcript_path: transcript_path.to_string(),
-        process_id: row.process_id.clone(),
+        session_id: scrub_ai_message(session_id, None),
+        transcript_path: scrub_ai_message(transcript_path, None),
+        process_id: row
+            .process_id
+            .as_deref()
+            .map(|value| scrub_ai_message(value, None)),
         severity: row.severity.trim().to_string(),
-        app_name: row.app_name.clone(),
-        source_ip: row.source_ip.clone(),
+        app_name: row
+            .app_name
+            .as_deref()
+            .map(|value| scrub_ai_message(value, None)),
+        source_ip: scrub_ai_message(&row.source_ip, None),
         message,
         message_truncated,
         metadata_json,

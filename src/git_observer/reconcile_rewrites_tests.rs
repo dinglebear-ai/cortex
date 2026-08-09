@@ -17,7 +17,7 @@ use std::time::Duration;
 
 fn options() -> ReconcileOptions {
     ReconcileOptions {
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         command_timeout: Duration::from_secs(5),
         max_commits_per_transition: 32,
         store_changed_paths: true,

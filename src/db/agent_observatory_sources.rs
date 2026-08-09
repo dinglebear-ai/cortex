@@ -123,7 +123,7 @@ pub enum AgentSourceRecord {
 }
 
 impl AgentSourceRecord {
-    fn next_cursor(&self) -> String {
+    pub(crate) fn next_cursor(&self) -> String {
         match self {
             Self::Mcp(row) => row.cursor_id.to_string(),
             Self::Hook(row) => row.cursor_id.to_string(),

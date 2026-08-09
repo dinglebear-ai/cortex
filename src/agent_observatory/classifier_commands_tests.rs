@@ -5,7 +5,7 @@ fn base_log(source_ip: &str, metadata_json: &str) -> LogEntry {
     LogEntry {
         id: 301,
         timestamp: "2026-08-05T12:00:00.000Z".to_string(),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         facility: Some("agent".to_string()),
         severity: "warning".to_string(),
         app_name: Some("claude".to_string()),
@@ -24,7 +24,7 @@ fn base_log(source_ip: &str, metadata_json: &str) -> LogEntry {
 #[test]
 fn agent_command_shape_preserves_verified_command_fields() {
     let row = base_log(
-        "agent-command://dookie/claude/claude-session",
+        "agent-command://devhost/claude/claude-session",
         r#"{
             "source_type":"agent_command",
             "source_kind":"agent-command",
@@ -67,7 +67,7 @@ fn agent_command_shape_preserves_verified_command_fields() {
 #[test]
 fn atuin_shape_preserves_claimed_cwd_session_exit_and_duration() {
     let mut row = base_log(
-        "shell-history://dookie/user/atuin",
+        "shell-history://devhost/user/atuin",
         r#"{
             "source_type":"shell_history",
             "source_kind":"shell-history",
@@ -109,7 +109,7 @@ fn atuin_shape_preserves_claimed_cwd_session_exit_and_duration() {
 #[test]
 fn finished_at_comparison_uses_the_actual_instant() {
     let row = base_log(
-        "agent-command://dookie/claude/claude-session",
+        "agent-command://devhost/claude/claude-session",
         r#"{
             "source_type":"agent_command",
             "agent_command":{
@@ -134,7 +134,7 @@ fn finished_at_comparison_uses_the_actual_instant() {
 #[test]
 fn forwarded_atuin_shape_uses_root_fields_and_agent_prefix() {
     let mut row = base_log(
-        "agent-shell-history://dookie",
+        "agent-shell-history://devhost",
         r#"{
             "source_type":"shell_history",
             "shell":"atuin",
@@ -170,7 +170,7 @@ fn forwarded_atuin_shape_uses_root_fields_and_agent_prefix() {
 #[test]
 fn mismatched_prefix_unscrubbed_content_and_malformed_metadata_are_skipped() {
     let mismatch = base_log(
-        "shell-history://dookie/user/atuin",
+        "shell-history://devhost/user/atuin",
         r#"{"source_type":"agent_command","agent_command":{},"content_scrubbed":true}"#,
     );
     let CommandLogClassification::Skip(diagnostic) = classify_command_log(&mismatch) else {
@@ -179,7 +179,7 @@ fn mismatched_prefix_unscrubbed_content_and_malformed_metadata_are_skipped() {
     assert_eq!(diagnostic.reason, CommandSkipReason::SourceShapeMismatch);
 
     let unscrubbed = base_log(
-        "agent-command://dookie/claude/session",
+        "agent-command://devhost/claude/session",
         r#"{
             "source_type":"agent_command",
             "agent_command":{
@@ -195,7 +195,7 @@ fn mismatched_prefix_unscrubbed_content_and_malformed_metadata_are_skipped() {
     };
     assert_eq!(diagnostic.reason, CommandSkipReason::ContentNotScrubbed);
 
-    let malformed = base_log("agent-command://dookie/claude/session", "{");
+    let malformed = base_log("agent-command://devhost/claude/session", "{");
     let CommandLogClassification::Skip(diagnostic) = classify_command_log(&malformed) else {
         panic!("malformed metadata must skip");
     };
