@@ -89,6 +89,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Push-Location .cache/cargo/release
+          Copy-Item cortex.exe cortex-windows-x86_64.exe
+          $binaryHash = (Get-FileHash cortex-windows-x86_64.exe -Algorithm SHA256).Hash.ToLower()
+          "$binaryHash  cortex-windows-x86_64.exe" | Out-File -Encoding ascii cortex-windows-x86_64.exe.sha256
           Compress-Archive -Path cortex.exe -DestinationPath cortex-windows-x86_64.zip -Force
           $hash = (Get-FileHash cortex-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  cortex-windows-x86_64.zip" | Out-File -Encoding ascii cortex-windows-x86_64.zip.sha256
@@ -100,6 +103,8 @@ jobs:
           path: |
             .cache/cargo/release/cortex-windows-x86_64.zip
             .cache/cargo/release/cortex-windows-x86_64.zip.sha256
+            .cache/cargo/release/cortex-windows-x86_64.exe
+            .cache/cargo/release/cortex-windows-x86_64.exe.sha256
           if-no-files-found: error
 
   publish:
@@ -135,6 +140,8 @@ jobs:
             dist/cortex-linux-x86_64.tar.gz.sha256
             dist/cortex-windows-x86_64.zip
             dist/cortex-windows-x86_64.zip.sha256
+            dist/cortex-windows-x86_64.exe
+            dist/cortex-windows-x86_64.exe.sha256
           fail_on_unmatched_files: true
 
   npm:

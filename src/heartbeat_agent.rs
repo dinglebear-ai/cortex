@@ -1433,6 +1433,7 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
         .context("failed to build heartbeat reqwest::Client")?;
     let update_client = crate::agent::self_update::build_update_client()?;
     let update_in_flight = Arc::new(AtomicBool::new(false));
+    let update_retry_after = Arc::new(Mutex::new(None::<(String, Instant)>));
     let mut retry = RetryBuffer::new(config.retry_buffer_limit);
     let mut sequence = chrono::Utc::now().timestamp_millis();
     let mut attempt = 0u32;
@@ -1474,17 +1475,30 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
                 if let Some(directive) = directive {
                     let update_needed = crate::agent::self_update::update_needed(&directive);
                     if auto_update && update_needed {
-                        // Self-update runs outside the heartbeat cadence and only one
-                        // attempt may be active at a time. Slow or repeated directives
-                        // therefore cannot make the host appear silent or race the swap.
-                        if update_in_flight
+                        let cooling_down = update_retry_after
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.as_ref().cloned())
+                            .is_some_and(|(version, retry_at)| {
+                                version == directive.version && Instant::now() < retry_at
+                            });
+                        if cooling_down {
+                            tracing::debug!(
+                                target_version = %directive.version,
+                                "agent self-update is in per-version retry cooldown"
+                            );
+                        } else if update_in_flight
                             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                             .is_ok()
                         {
+                            // Self-update runs outside the heartbeat cadence and only one
+                            // attempt may be active at a time. Slow or repeated directives
+                            // therefore cannot make the host appear silent or race the swap.
                             let update_client = update_client.clone();
                             let update_target = target.to_string();
                             let update_token = config.token.clone();
                             let update_in_flight = Arc::clone(&update_in_flight);
+                            let update_retry_after = Arc::clone(&update_retry_after);
                             tokio::spawn(async move {
                                 let result = timeout(
                                     crate::agent::self_update::SELF_UPDATE_DEADLINE,
@@ -1500,16 +1514,28 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
 
                                 match result {
                                     Ok(Ok(())) => {}
-                                    Ok(Err(error)) => tracing::warn!(
-                                        error = format!("{error:#}"),
-                                        "agent self-update failed; staying on current binary"
-                                    ),
-                                    Err(_) => tracing::warn!(
-                                        timeout_secs =
-                                            crate::agent::self_update::SELF_UPDATE_DEADLINE
-                                                .as_secs(),
-                                        "agent self-update exceeded deadline; heartbeat loop remains active"
-                                    ),
+                                    Ok(Err(error)) => {
+                                        set_update_retry_cooldown(
+                                            &update_retry_after,
+                                            &directive.version,
+                                        );
+                                        tracing::warn!(
+                                            error = format!("{error:#}"),
+                                            "agent self-update failed; staying on current binary"
+                                        )
+                                    }
+                                    Err(_) => {
+                                        set_update_retry_cooldown(
+                                            &update_retry_after,
+                                            &directive.version,
+                                        );
+                                        tracing::warn!(
+                                            timeout_secs =
+                                                crate::agent::self_update::SELF_UPDATE_DEADLINE
+                                                    .as_secs(),
+                                            "agent self-update exceeded deadline; heartbeat loop remains active"
+                                        )
+                                    }
                                 }
                             });
                         } else {
@@ -1542,6 +1568,26 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
         }
 
         sequence += 1;
+    }
+}
+
+fn set_update_retry_cooldown(state: &Mutex<Option<(String, Instant)>>, version: &str) {
+    // Per-process randomness prevents a fleet from retrying a temporarily
+    // unavailable release asset in lockstep after the base five-minute delay.
+    let mut jitter = [0u8; 1];
+    let jitter_secs = if random_fill(&mut jitter).is_ok() {
+        u64::from(jitter[0]) % 60
+    } else {
+        version
+            .bytes()
+            .fold(0u64, |sum, byte| sum + u64::from(byte))
+            % 60
+    };
+    if let Ok(mut guard) = state.lock() {
+        *guard = Some((
+            version.to_string(),
+            Instant::now() + Duration::from_secs(300 + jitter_secs),
+        ));
     }
 }
 

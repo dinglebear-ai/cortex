@@ -9,8 +9,9 @@
 //! atomically swaps it into place (keeping a `.bak`), and re-execs.
 //!
 //! Safety model (matches the approved design):
-//! - **integrity**: SHA-256 from the authenticated heartbeat response, verified
-//!   against the downloaded bytes before anything is written over the live path.
+//! - **integrity**: SHA-256 is either carried by the authenticated heartbeat or
+//!   fetched from an authenticated same-origin server path, then verified
+//!   before anything is written over the live path.
 //! - **pre-swap validation**: the freshly downloaded binary must execute
 //!   `--version` and report the advertised version, so a corrupt or incompatible
 //!   download is never installed.
@@ -35,7 +36,7 @@ use tokio::time::timeout;
 /// in-flight update is rolled back to the previous `.bak` binary.
 const MAX_ATTEMPTS: u32 = 3;
 
-pub const SELF_UPDATE_DEADLINE: Duration = Duration::from_secs(60);
+pub const SELF_UPDATE_DEADLINE: Duration = Duration::from_secs(180);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10);
 const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -51,7 +52,16 @@ pub struct AgentUpdateDirective {
     /// relative to the agent's configured heartbeat target.
     pub path: String,
     /// Lowercase hex SHA-256 of the target binary.
-    pub sha256: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub checksum_path: Option<String>,
+    #[serde(default = "default_binary_format")]
+    pub format: String,
+}
+
+fn default_binary_format() -> String {
+    "binary".to_string()
 }
 
 /// Persisted record of an in-flight update, used for bounded auto-rollback.
@@ -82,12 +92,22 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Join a base URL with a server-supplied relative path.
-fn join_url(base: &str, path: &str) -> String {
-    format!(
-        "{}/{}",
-        base.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    )
+fn join_url(base: &str, path: &str) -> Result<String> {
+    if path.starts_with("//") || path.contains("://") {
+        bail!("agent update path must be relative to the configured server");
+    }
+    let base_url = reqwest::Url::parse(&format!("{}/", base.trim_end_matches('/')))
+        .context("parse agent update base URL")?;
+    let joined = base_url
+        .join(path.trim_start_matches('/'))
+        .context("resolve agent update path")?;
+    if joined.scheme() != base_url.scheme()
+        || joined.host_str() != base_url.host_str()
+        || joined.port_or_known_default() != base_url.port_or_known_default()
+    {
+        bail!("agent update path escaped the configured server origin");
+    }
+    Ok(joined.to_string())
 }
 
 /// True when the directive asks for a version different from the one compiled
@@ -200,8 +220,41 @@ pub async fn maybe_update(
         "agent behind server; downloading update"
     );
 
+    if directive.format != "binary" {
+        bail!("unsupported agent update format '{}'", directive.format);
+    }
+
+    let expected_sha256 = match directive.sha256.as_deref() {
+        Some(sha256) => sha256.to_string(),
+        None => {
+            let checksum_path = directive.checksum_path.as_deref().ok_or_else(|| {
+                anyhow!("server update directive omitted both sha256 and checksum_path")
+            })?;
+            let checksum_url = join_url(target_base, checksum_path)?;
+            let checksum_bytes = download_binary(
+                client,
+                &checksum_url,
+                token,
+                4096,
+                FIRST_BYTE_TIMEOUT,
+                CHUNK_IDLE_TIMEOUT,
+            )
+            .await
+            .context("download agent binary checksum")?;
+            let checksum = std::str::from_utf8(&checksum_bytes)
+                .context("agent binary checksum is not UTF-8")?
+                .split_whitespace()
+                .next()
+                .ok_or_else(|| anyhow!("agent binary checksum response is empty"))?;
+            if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                bail!("agent binary checksum response is not a SHA-256 digest");
+            }
+            checksum.to_ascii_lowercase()
+        }
+    };
+
     // 1. Download over the authenticated channel with explicit size and idle limits.
-    let url = join_url(target_base, &directive.path);
+    let url = join_url(target_base, &directive.path)?;
     let bytes = download_binary(
         client,
         &url,
@@ -214,15 +267,19 @@ pub async fn maybe_update(
 
     // 2. Verify integrity before touching disk near the live path.
     let got = sha256_hex(&bytes);
-    if !got.eq_ignore_ascii_case(&directive.sha256) {
+    if !got.eq_ignore_ascii_case(&expected_sha256) {
         bail!(
             "agent binary sha256 mismatch: expected {}, got {got}",
-            directive.sha256
+            expected_sha256
         );
     }
 
     // 3. Stage into the same directory (atomic rename requires same filesystem).
-    let tmp = dir.join(format!(".cortex-update-{}.tmp", directive.version));
+    let tmp_suffix = if cfg!(windows) { ".tmp.exe" } else { ".tmp" };
+    let tmp = dir.join(format!(
+        ".cortex-update-{}{}",
+        directive.version, tmp_suffix
+    ));
     std::fs::write(&tmp, &bytes).with_context(|| format!("write staged binary {tmp:?}"))?;
     set_executable(&tmp)?;
 
@@ -246,14 +303,12 @@ pub async fn maybe_update(
         },
     )?;
 
-    std::fs::rename(&tmp, &exe).with_context(|| format!("swap new binary into {exe:?}"))?;
-
     tracing::warn!(
         from = current,
         to = %directive.version,
         "agent binary updated; re-executing"
     );
-    reexec(&exe)
+    install_and_restart(&tmp, &exe, Some(&bak))
 }
 
 /// On Linux, `current_exe()` resolves through `/proc/self/exe`. If the file at
@@ -334,10 +389,7 @@ pub fn confirm_or_rollback() -> Result<()> {
             "agent update never confirmed healthy; rolling back"
         );
         if marker.bak.exists() {
-            std::fs::rename(&marker.bak, &exe)
-                .with_context(|| format!("restore rollback binary from {:?}", marker.bak))?;
-            let _ = std::fs::remove_file(&path);
-            return reexec(&exe);
+            return install_and_restart(&marker.bak, &exe, None);
         }
         // No backup to restore — give up on rollback but clear the marker so we
         // stop looping; the operator must intervene.
@@ -376,7 +428,7 @@ fn validate_binary(path: &Path, expected_version: &str) -> Result<()> {
         bail!("staged binary --version exited with {}", output.status);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.contains(expected_version) {
+    if stdout.split_whitespace().last() != Some(expected_version) {
         bail!(
             "staged binary reported '{}', expected version {expected_version}",
             stdout.trim()
@@ -399,17 +451,111 @@ fn set_executable(_path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn reexec(exe: &Path) -> Result<()> {
+fn install_and_restart(staged: &Path, exe: &Path, _fallback: Option<&Path>) -> Result<()> {
     use std::os::unix::process::CommandExt;
+    std::fs::rename(staged, exe).with_context(|| format!("swap new binary into {exe:?}"))?;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     // `exec` only returns on failure.
     let error = Command::new(exe).args(args).exec();
     Err(anyhow!("re-exec of {exe:?} failed: {error}"))
 }
 
-#[cfg(not(unix))]
-fn reexec(_exe: &Path) -> Result<()> {
-    bail!("agent re-exec is only supported on unix")
+#[cfg(any(windows, test))]
+fn powershell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(any(windows, test))]
+fn windows_quote_arg(value: &str) -> String {
+    if !value.is_empty()
+        && !value
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte == b'"')
+    {
+        return value.to_string();
+    }
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+    for ch in value.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        if ch == '"' {
+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+        } else {
+            quoted.push_str(&"\\".repeat(backslashes));
+        }
+        backslashes = 0;
+        quoted.push(ch);
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(any(windows, test))]
+fn windows_command_line(args: &[std::ffi::OsString]) -> String {
+    args.iter()
+        .map(|arg| windows_quote_arg(&arg.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(any(windows, test))]
+fn windows_swap_script(
+    pid: u32,
+    staged: &Path,
+    exe: &Path,
+    fallback: Option<&Path>,
+    args: &[std::ffi::OsString],
+) -> String {
+    let staged = powershell_literal(&staged.to_string_lossy());
+    let exe = powershell_literal(&exe.to_string_lossy());
+    let args = powershell_literal(&windows_command_line(args));
+    let status = powershell_literal(&exe_path_with_suffix(exe.as_str(), ".handoff.log"));
+    let fallback = fallback
+        .map(|path| powershell_literal(&path.to_string_lossy()))
+        .unwrap_or_else(|| "$null".to_string());
+    format!(
+        "$ErrorActionPreference='Stop';$status={status};$fallback={fallback};try{{$p=[Diagnostics.Process]::GetProcessById({pid});$p.WaitForExit()}}catch [ArgumentException]{{}};try{{Move-Item -LiteralPath {staged} -Destination {exe} -Force;$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName={exe};$psi.UseShellExecute=$false;$psi.Arguments={args};[void][Diagnostics.Process]::Start($psi);Set-Content -LiteralPath $status -Value 'swap_started' -Encoding Ascii}}catch{{$message=$_.Exception.ToString();Set-Content -LiteralPath $status -Value $message -Encoding UTF8;if($fallback -and (Test-Path -LiteralPath $fallback)){{Copy-Item -LiteralPath $fallback -Destination {exe} -Force;$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName={exe};$psi.UseShellExecute=$false;$psi.Arguments={args};[void][Diagnostics.Process]::Start($psi)}}else{{throw}}}}"
+    )
+}
+
+#[cfg(any(windows, test))]
+fn exe_path_with_suffix(quoted_exe: &str, suffix: &str) -> String {
+    let raw = quoted_exe
+        .strip_prefix('\'')
+        .and_then(|v| v.strip_suffix('\''))
+        .unwrap_or(quoted_exe);
+    format!("{raw}{suffix}")
+}
+
+#[cfg(windows)]
+fn install_and_restart(staged: &Path, exe: &Path, fallback: Option<&Path>) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let script = windows_swap_script(std::process::id(), staged, exe, fallback, &args);
+    Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .context("spawn Windows agent update handoff")?;
+    std::process::exit(0)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn install_and_restart(_staged: &Path, _exe: &Path, _fallback: Option<&Path>) -> Result<()> {
+    bail!("agent self-update is unsupported on this platform")
 }
 
 fn write_marker(exe: &Path, marker: &UpdateMarker) -> Result<()> {

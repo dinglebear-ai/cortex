@@ -5,7 +5,9 @@ fn update_needed_false_for_matching_version() {
     let directive = AgentUpdateDirective {
         version: env!("CARGO_PKG_VERSION").to_string(),
         path: "/v1/agent/binary?os=linux&arch=x86_64".to_string(),
-        sha256: "deadbeef".to_string(),
+        sha256: Some("deadbeef".to_string()),
+        checksum_path: None,
+        format: "binary".to_string(),
     };
     assert!(!update_needed(&directive));
 }
@@ -15,7 +17,9 @@ fn update_needed_true_for_different_version() {
     let directive = AgentUpdateDirective {
         version: "0.0.0-other".to_string(),
         path: "/v1/agent/binary".to_string(),
-        sha256: "deadbeef".to_string(),
+        sha256: Some("deadbeef".to_string()),
+        checksum_path: None,
+        format: "binary".to_string(),
     };
     assert!(update_needed(&directive));
 }
@@ -37,19 +41,60 @@ fn sha256_hex_matches_known_vector() {
 #[test]
 fn join_url_normalizes_slashes() {
     assert_eq!(
-        join_url("http://127.0.0.1:3100", "/v1/agent/binary"),
+        join_url("http://127.0.0.1:3100", "/v1/agent/binary").unwrap(),
         "http://127.0.0.1:3100/v1/agent/binary"
     );
     assert_eq!(
-        join_url("http://127.0.0.1:3100/", "v1/agent/binary"),
+        join_url("http://127.0.0.1:3100/", "v1/agent/binary").unwrap(),
         "http://127.0.0.1:3100/v1/agent/binary"
     );
     assert_eq!(
         join_url(
             "https://cortex.example.invalid",
             "/v1/agent/binary?os=linux&arch=x86_64"
-        ),
+        )
+        .unwrap(),
         "https://cortex.example.invalid/v1/agent/binary?os=linux&arch=x86_64"
+    );
+}
+
+#[test]
+fn join_url_rejects_cross_origin_directives() {
+    assert!(join_url("https://cortex.example", "https://evil.example/binary").is_err());
+    assert!(join_url("https://cortex.example", "//evil.example/binary").is_err());
+}
+
+#[test]
+fn windows_swap_script_preserves_literal_paths_and_process_arguments() {
+    let script = windows_swap_script(
+        42,
+        Path::new("C:\\Cortex User's\\.cortex-update.tmp.exe"),
+        Path::new("C:\\Cortex User's\\cortex.exe"),
+        Some(Path::new("C:\\Cortex User's\\cortex.bak")),
+        &["heartbeat".into(), "agent".into(), "--label=a b".into()],
+    );
+    assert!(script.contains("WaitForExit()"));
+    assert!(script.contains("C:\\Cortex User''s\\.cortex-update.tmp.exe"));
+    assert!(script.contains("C:\\Cortex User''s\\cortex.exe"));
+    assert!(script.contains("$psi.Arguments='heartbeat agent \"--label=a b\"'"));
+    assert!(!script.contains("ArgumentList"));
+    assert!(script.contains("catch{"));
+    assert!(script.contains("cortex.bak"));
+    assert!(script.contains(".handoff.log"));
+}
+
+#[test]
+fn windows_command_line_quotes_backslashes_before_quotes_and_at_end() {
+    let args = [
+        "plain".into(),
+        "two words".into(),
+        r#"say \"hello\""#.into(),
+        "trailing slash\\".into(),
+        "".into(),
+    ];
+    assert_eq!(
+        windows_command_line(&args),
+        "plain \"two words\" \"say \\\\\\\"hello\\\\\\\"\" \"trailing slash\\\\\" \"\""
     );
 }
 
@@ -151,6 +196,50 @@ async fn download_binary_accepts_authenticated_body() {
     .await
     .unwrap();
     assert_eq!(bytes, b"cortex");
+}
+
+#[tokio::test]
+async fn maybe_update_resolves_server_checksum_before_validating_binary() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let bytes = b"not-an-executable";
+    let checksum = format!("{}  cortex-windows-x86_64.exe\n", sha256_hex(bytes));
+    Mock::given(method("GET"))
+        .and(path("/checksum"))
+        .and(header("authorization", "Bearer secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(checksum))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/binary"))
+        .and(header("authorization", "Bearer secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.to_vec()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let directive = AgentUpdateDirective {
+        version: "0.0.0-other".to_string(),
+        path: "/binary".to_string(),
+        sha256: None,
+        checksum_path: Some("/checksum".to_string()),
+        format: "binary".to_string(),
+    };
+    let error = maybe_update(
+        &build_update_client().unwrap(),
+        &server.uri(),
+        Some("secret"),
+        &directive,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("staged agent binary failed validation"),
+        "checksum should be resolved before executable validation: {error:#}"
+    );
 }
 
 #[tokio::test]
