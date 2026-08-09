@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use axum::{
@@ -31,6 +32,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tokio::sync::Semaphore;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::db::DbPool;
@@ -48,6 +50,9 @@ pub struct HeartbeatState {
     api_token: Option<String>,
     auth_policy: AuthPolicy,
     release: Arc<AgentReleaseInfo>,
+    release_client: reqwest::Client,
+    release_base_url: String,
+    release_downloads: Arc<Semaphore>,
 }
 
 impl HeartbeatState {
@@ -57,6 +62,15 @@ impl HeartbeatState {
             api_token,
             auth_policy,
             release: Arc::new(AgentReleaseInfo::from_current_exe()),
+            release_client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(120))
+                .user_agent(format!("cortex/{SERVER_VERSION}"))
+                .build()
+                .expect("static release proxy client configuration is valid"),
+            release_base_url: "https://github.com/dinglebear-ai/cortex/releases/download"
+                .to_string(),
+            release_downloads: Arc::new(Semaphore::new(2)),
         }
     }
 }
@@ -98,32 +112,52 @@ impl AgentReleaseInfo {
     }
 
     /// Build an update directive when the reporting agent is on a different
-    /// version and we can serve a matching binary. Phase 1 serves only
-    /// `linux/x86_64` (the binary the server itself runs); other platforms get
-    /// no directive (handled out-of-band until the phase-2 fallback lands).
+    /// version and a matching release is available. Linux receives the
+    /// server's own binary; Windows receives authenticated proxy paths for the
+    /// raw executable and checksum published by release CI.
     fn directive_for(
         &self,
         os: &str,
         arch: &str,
         agent_version: &str,
     ) -> Option<AgentUpdateDirective> {
-        let sha256 = self.sha256.as_ref()?;
         if agent_version == self.version {
             return None;
         }
-        if !platform_self_servable(os, arch) {
+        if !platform_release_available(os, arch) {
             return None;
         }
+        if os.eq_ignore_ascii_case("windows") {
+            let base = format!(
+                "/v1/agent/release?os=windows&arch={arch}&version={}&kind=",
+                self.version
+            );
+            return Some(AgentUpdateDirective {
+                version: self.version.to_string(),
+                path: format!("{base}binary"),
+                sha256: None,
+                checksum_path: Some(format!("{base}checksum")),
+                format: "binary".to_string(),
+            });
+        }
+        let sha256 = self.sha256.as_ref()?;
         Some(AgentUpdateDirective {
             version: self.version.to_string(),
             path: format!("/v1/agent/binary?os={os}&arch={arch}"),
-            sha256: sha256.clone(),
+            sha256: Some(sha256.clone()),
+            checksum_path: None,
+            format: "binary".to_string(),
         })
     }
 }
 
 /// True for the platform whose binary the server can hand out from its own
 /// running image (linux on a 64-bit x86 host).
+fn platform_release_available(os: &str, arch: &str) -> bool {
+    matches!(arch, "x86_64" | "amd64")
+        && (os.eq_ignore_ascii_case("linux") || os.eq_ignore_ascii_case("windows"))
+}
+
 fn platform_self_servable(os: &str, arch: &str) -> bool {
     os.eq_ignore_ascii_case("linux") && matches!(arch, "x86_64" | "amd64")
 }
@@ -134,7 +168,11 @@ fn platform_self_servable(os: &str, arch: &str) -> bool {
 pub struct AgentUpdateDirective {
     pub version: String,
     pub path: String,
-    pub sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum_path: Option<String>,
+    pub format: String,
 }
 
 pub fn router(state: HeartbeatState) -> Router {
@@ -143,7 +181,132 @@ pub fn router(state: HeartbeatState) -> Router {
         .layer(RequestBodyLimitLayer::new(HEARTBEAT_BODY_LIMIT_BYTES))
         .layer(from_fn(json_payload_too_large))
         .route("/v1/agent/binary", get(agent_binary_handler))
+        .route("/v1/agent/release", get(agent_release_handler))
         .with_state(state)
+}
+
+const MAX_RELEASE_BINARY_BYTES: usize = 128 * 1024 * 1024;
+const MAX_RELEASE_CHECKSUM_BYTES: usize = 4096;
+
+/// Proxy a platform release artifact through the authenticated Cortex server.
+/// This keeps the server as the fleet's update coordinator while allowing the
+/// Linux server to distribute the native Windows binary built by release CI.
+async fn agent_release_handler(
+    State(state): State<HeartbeatState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    if !is_authorized(&state, &peer, &headers) {
+        return unauthorized();
+    }
+    let os = params.get("os").map(String::as_str).unwrap_or("");
+    let arch = params.get("arch").map(String::as_str).unwrap_or("");
+    let version = params.get("version").map(String::as_str).unwrap_or("");
+    let kind = params.get("kind").map(String::as_str).unwrap_or("");
+    if version != state.release.version {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "version_mismatch", "server_version": state.release.version})),
+        )
+            .into_response();
+    }
+    if !os.eq_ignore_ascii_case("windows") || !matches!(arch, "x86_64" | "amd64") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "unsupported_platform", "os": os, "arch": arch})),
+        )
+            .into_response();
+    }
+    let (asset, max_bytes, content_type) = match kind {
+        "binary" => (
+            "cortex-windows-x86_64.exe",
+            MAX_RELEASE_BINARY_BYTES,
+            "application/vnd.microsoft.portable-executable",
+        ),
+        "checksum" => (
+            "cortex-windows-x86_64.exe.sha256",
+            MAX_RELEASE_CHECKSUM_BYTES,
+            "text/plain; charset=utf-8",
+        ),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_release_kind"})),
+            )
+                .into_response();
+        }
+    };
+    let url = format!(
+        "{}/v{version}/{asset}",
+        state.release_base_url.trim_end_matches('/')
+    );
+    let permit = match Arc::clone(&state.release_downloads).try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header(header::RETRY_AFTER, "30")
+                .body(Body::from("release proxy busy"))
+                .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response());
+        }
+    };
+    let response = match state
+        .release_client
+        .get(&url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(error = %error, %url, "agent release artifact unavailable");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": "release_artifact_unavailable"})),
+            )
+                .into_response();
+        }
+    };
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return StatusCode::BAD_GATEWAY.into_response();
+    }
+    let stream = futures_util::StreamExt::scan(
+        response.bytes_stream(),
+        (0usize, false, permit),
+        move |state, item| {
+            let result = if state.1 {
+                return std::future::ready(None);
+            } else {
+                match item {
+                    Ok(chunk) => match state.0.checked_add(chunk.len()) {
+                        Some(new_len) if new_len <= max_bytes => {
+                            state.0 = new_len;
+                            Ok(chunk)
+                        }
+                        _ => {
+                            state.1 = true;
+                            Err(std::io::Error::other("release artifact exceeds size limit"))
+                        }
+                    },
+                    Err(error) => {
+                        state.1 = true;
+                        Err(std::io::Error::other(error))
+                    }
+                }
+            };
+            std::future::ready(Some(result))
+        },
+    );
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header("x-cortex-version", version)
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// `GET /v1/agent/binary?os=&arch=` — streams the server's own binary so agents

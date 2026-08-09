@@ -367,12 +367,15 @@ async fn get_request(app: Router, uri: &str, token: Option<&str>) -> StatusCode 
 }
 
 #[test]
-fn platform_self_servable_only_linux_x86_64() {
+fn platform_release_available_for_fleet_platforms() {
+    assert!(platform_release_available("linux", "x86_64"));
+    assert!(platform_release_available("linux", "amd64"));
+    assert!(platform_release_available("Linux", "x86_64"));
+    assert!(platform_release_available("windows", "x86_64"));
+    assert!(platform_release_available("windows", "amd64"));
+    assert!(!platform_release_available("linux", "riscv64"));
     assert!(platform_self_servable("linux", "x86_64"));
-    assert!(platform_self_servable("linux", "amd64"));
-    assert!(platform_self_servable("Linux", "x86_64"));
     assert!(!platform_self_servable("windows", "x86_64"));
-    assert!(!platform_self_servable("linux", "riscv64"));
 }
 
 #[test]
@@ -387,7 +390,7 @@ fn directive_for_decisions() {
         .directive_for("linux", "x86_64", "0.0.0")
         .expect("stale linux agent gets a directive");
     assert_eq!(d.version, SERVER_VERSION);
-    assert_eq!(d.sha256, "abc123");
+    assert_eq!(d.sha256.as_deref(), Some("abc123"));
     assert!(d.path.contains("os=linux"));
     assert!(d.path.contains("arch=x86_64"));
     // Matching version → no directive.
@@ -396,12 +399,13 @@ fn directive_for_decisions() {
             .directive_for("linux", "x86_64", SERVER_VERSION)
             .is_none()
     );
-    // Unsupported platform → no directive.
-    assert!(
-        release
-            .directive_for("windows", "x86_64", "0.0.0")
-            .is_none()
-    );
+    // Stale Windows agent → a server-mediated release directive.
+    let windows = release
+        .directive_for("windows", "x86_64", "0.0.0")
+        .expect("stale Windows agent gets a directive");
+    assert_eq!(windows.version, SERVER_VERSION);
+    assert!(windows.path.contains("os=windows"));
+    assert!(windows.path.contains("arch=x86_64"));
 
     // No sha (binary unreadable) → never advertise.
     let no_sha = AgentReleaseInfo {
@@ -423,6 +427,30 @@ async fn heartbeat_ack_advertises_update_for_stale_linux_agent() {
     assert_eq!(update["version"], json!(SERVER_VERSION));
     assert!(update["path"].as_str().unwrap().contains("os=linux"));
     assert!(!update["sha256"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn heartbeat_ack_advertises_server_mediated_release_for_stale_windows_agent() {
+    let (app, _pool, _dir) = test_app(Some("secret"));
+    let mut payload = heartbeat_payload();
+    payload["host"]["os"] = json!("windows");
+    let (status, body) = post_json(app, "/v1/heartbeats", Some("secret"), payload).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let update = &body["agent_update"];
+    assert_eq!(update["version"], json!(SERVER_VERSION));
+    assert_eq!(update["format"], json!("binary"));
+    assert_eq!(
+        update["path"],
+        json!(format!(
+            "/v1/agent/release?os=windows&arch=x86_64&version={SERVER_VERSION}&kind=binary"
+        ))
+    );
+    assert_eq!(
+        update["checksum_path"],
+        json!(format!(
+            "/v1/agent/release?os=windows&arch=x86_64&version={SERVER_VERSION}&kind=checksum"
+        ))
+    );
 }
 
 #[tokio::test]
@@ -453,4 +481,56 @@ async fn agent_binary_endpoint_rejects_unsupported_platform() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn agent_release_endpoint_rejects_versions_other_than_running_server() {
+    let (app, _pool, _dir) = test_app(Some("secret"));
+    let status = get_request(
+        app,
+        "/v1/agent/release?os=windows&arch=x86_64&version=0.0.0&kind=binary",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn agent_release_endpoint_proxies_authenticated_release_asset() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v{SERVER_VERSION}/cortex-windows-x86_64.exe.sha256"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(64)))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("heartbeat-test.db"));
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let mut state = HeartbeatState::new(
+        pool,
+        Some("secret".to_string()),
+        AuthPolicy::Mounted { auth_state: None },
+    );
+    state.release_base_url = upstream.uri();
+    let app = router(state).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let request = Request::builder()
+        .uri(format!(
+            "/v1/agent/release?os=windows&arch=x86_64&version={SERVER_VERSION}&kind=checksum"
+        ))
+        .header("authorization", "Bearer secret")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 4096).await.unwrap(),
+        "a".repeat(64)
+    );
 }
