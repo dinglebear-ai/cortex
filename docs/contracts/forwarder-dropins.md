@@ -231,7 +231,8 @@ long-lived token (BLAKE3-hashed server-side). See
 
 ```bash
 # Single host
-cortex agent issue --host=<DEV_HOST>
+source deploy/hosts.env
+cortex agent issue --host="$DEV_HOST"
 
 # Output (token is shown ONCE; re-run if lost):
 #   host_id:       2b9a0b3a-7e3c-4d2a-9c0e-9bbf5d3a1f01
@@ -350,7 +351,8 @@ For agent-mode hosts, also check:
 
 ```bash
 cortex agent list                      # Active state, recent last_seen
-cortex tail --host=<host> --limit=5  # logs.push entries landing
+host="$DEV_HOST" # choose a value sourced from deploy/hosts.env
+cortex tail --host="$host" --limit=5  # logs.push entries landing
 ```
 
 For OTLP hosts:
@@ -365,7 +367,7 @@ curl -s http://<server>:3100/health | jq '.otlp_logs_received'
 ### Rsyslog-only host
 
 ```bash
-ssh <host> '
+ssh "$host" '
   sudo rm -f /etc/rsyslog.d/99-cortex.conf \
              /etc/rsyslog.d/40-ai-transcripts.conf  # if present
   sudo rsyslogd -N1
@@ -383,7 +385,7 @@ retention.
 cortex agent revoke <host_id>
 
 # Host-side: stop the service and remove the token.
-ssh <host> '
+ssh "$host" '
   sudo systemctl disable --now syslog-agent
   sudo rm -f /var/lib/syslog-agent/token
   sudo rm -f /etc/systemd/system/syslog-agent.service
@@ -423,8 +425,8 @@ fallback during the cutover, then is removed via §10.
 
 | Symptom                                  | Check                                                                                                    |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| No logs from `<host>`                    | (a) `ssh <host> systemctl status rsyslog` — is the daemon running?                                       |
-|                                          | (b) `ssh <host> sudo rsyslogd -N1` — does the config parse?                                              |
+| No logs from `$host`                     | (a) `ssh "$host" systemctl status rsyslog` — is the daemon running?                                    |
+|                                          | (b) `ssh "$host" sudo rsyslogd -N1` — does the config parse?                                           |
 |                                          | (c) on the server: `sudo tcpdump -ni any port 1514` — are frames arriving?                              |
 |                                          | (d) `cortex hosts` — does `<host>` appear in the known-hosts list at all?                                |
 |                                          | (e) `cortex silent_hosts` — is it a known host that's gone quiet?                                       |

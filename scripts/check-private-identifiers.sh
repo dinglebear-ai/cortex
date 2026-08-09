@@ -4,19 +4,24 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-# Agent-memory files intentionally document the private deployment. They are
-# not product/public surfaces and are excluded from this repository contract.
-mapfile -t files < <(
-  git ls-files -z \
-    | while IFS= read -r -d '' file; do
-        case "$file" in
-          CLAUDE.md|AGENTS.md|GEMINI.md|.beads|.beads/*|scripts/check-private-identifiers.sh)
-            continue
-            ;;
-        esac
-        printf '%s\n' "$file"
-      done
-)
+if [ "$#" -gt 0 ]; then
+  # Explicit paths support hermetic negative fixtures.
+  files=("$@")
+  fixture_mode=true
+else
+  mapfile -t files < <(
+    git ls-files -z \
+      | while IFS= read -r -d '' file; do
+          case "$file" in
+            AGENTS.md|GEMINI.md|.beads|.beads/*|scripts/check-private-identifiers.sh)
+              continue
+              ;;
+          esac
+          printf '%s\n' "$file"
+        done
+  )
+  fixture_mode=false
+fi
 
 patterns=(
   dookie squirts shart steamy vivobook
@@ -43,7 +48,8 @@ done
 set +e
 tootie_matches="$(
   rg -n --text --ignore-case --word-regexp -- 'tootie' "${files[@]}" \
-    | grep -Fv 'aurora.tootie.tv'
+    | sed -E 's/aurora\.tootie\.tv/aurora.PUBLIC-REGISTRY.tv/gI' \
+    | rg --ignore-case --word-regexp -- 'tootie'
 )"
 tootie_status=$?
 set -e
@@ -58,11 +64,19 @@ fi
 
 # Documentation ranges are valid in examples and redacted history, but never
 # in files that directly control CI, image metadata, or Compose routing.
-active_files=(docker-compose.yml config/Dockerfile)
-while IFS= read -r file; do
-  active_files+=("$file")
-done < <(git ls-files '.github/*')
-if rg -n --text -e '192\.0\.2\.[0-9]+' -e '198\.51\.100\.[0-9]+' -e '203\.0\.113\.[0-9]+' "${active_files[@]}"; then
+if [ "$fixture_mode" = true ]; then
+  active_files=("${files[@]}")
+else
+  active_files=(config.toml docker-compose.yml config/Dockerfile)
+  while IFS= read -r file; do
+    active_files+=("$file")
+  done < <(git ls-files '.github/*')
+fi
+if rg -n --text \
+  -e '^[[:space:]]*[^#[:space:]].*192\.0\.2\.[0-9]+' \
+  -e '^[[:space:]]*[^#[:space:]].*198\.51\.100\.[0-9]+' \
+  -e '^[[:space:]]*[^#[:space:]].*203\.0\.113\.[0-9]+' \
+  "${active_files[@]}"; then
   echo "[private-identifiers] FAIL - non-routable documentation address found in active configuration" >&2
   status=1
 fi
