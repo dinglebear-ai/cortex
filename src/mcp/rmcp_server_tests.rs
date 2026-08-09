@@ -218,6 +218,26 @@ fn structured_json(response: &Value) -> &Value {
     &response["result"]["structuredContent"]
 }
 
+fn assert_invalid_tool_error(response: &Value, action: &str, message_fragment: &str) {
+    assert!(
+        response.get("error").is_none(),
+        "tool validation must use an isError result, not a JSON-RPC error: {response}"
+    );
+    assert_eq!(response["result"]["isError"], json!(true));
+
+    let structured = structured_json(response);
+    assert_eq!(structured["kind"], "invalid_param");
+    assert_eq!(structured["action"], action);
+    assert_eq!(structured["retryable"], json!(false));
+    assert!(
+        structured["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(message_fragment)),
+        "expected validation message containing {message_fragment:?}: {structured}"
+    );
+    assert_eq!(content_json(response), structured.clone());
+}
+
 #[test]
 fn allowed_hosts_include_bracketed_ipv6_authority_variants() {
     let mut config = McpConfig {
@@ -516,7 +536,7 @@ async fn rmcp_search_logs_works_against_seeded_data() {
 }
 
 #[tokio::test]
-async fn rmcp_correlate_events_rejects_bad_reference_time_as_invalid_params() {
+async fn rmcp_correlate_events_returns_structured_error_for_bad_reference_time() {
     let (state, _pool, _dir) = test_state();
     let (status, response) = post_rmcp(
         rmcp_router(state),
@@ -528,11 +548,11 @@ async fn rmcp_correlate_events_rejects_bad_reference_time_as_invalid_params() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(response["error"]["code"], -32602);
+    assert_invalid_tool_error(&response, "correlate", "reference_time");
 }
 
 #[tokio::test]
-async fn rmcp_correlate_events_rejects_bad_severity_as_invalid_params() {
+async fn rmcp_correlate_events_returns_structured_error_for_bad_severity() {
     let (state, _pool, _dir) = test_state();
     let (status, response) = post_rmcp(
         rmcp_router(state),
@@ -551,11 +571,11 @@ async fn rmcp_correlate_events_rejects_bad_severity_as_invalid_params() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(response["error"]["code"], -32602);
+    assert_invalid_tool_error(&response, "correlate", "severity_min");
 }
 
 #[tokio::test]
-async fn rmcp_search_rejects_bad_severity_as_invalid_params() {
+async fn rmcp_search_returns_structured_error_for_bad_severity() {
     let (state, _pool, _dir) = test_state();
     let (status, response) = post_rmcp(
         rmcp_router(state),
@@ -573,16 +593,17 @@ async fn rmcp_search_rejects_bad_severity_as_invalid_params() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(response["error"]["code"], -32602);
+    assert_invalid_tool_error(&response, "search", "severity");
 }
 
 #[tokio::test]
-async fn rmcp_numeric_args_reject_wrong_type_values() {
-    for (id, arguments) in [
-        (7, json!({"action": "tail", "n": "10"})),
-        (8, json!({"action": "search", "limit": "5"})),
+async fn rmcp_numeric_args_return_structured_errors_for_wrong_types() {
+    for (id, action, arguments) in [
+        (7, "tail", json!({"action": "tail", "n": "10"})),
+        (8, "search", json!({"action": "search", "limit": "5"})),
         (
             9,
+            "correlate",
             json!({
                 "action": "correlate",
                 "reference_time": "2026-01-01T00:00:00Z",
@@ -591,6 +612,7 @@ async fn rmcp_numeric_args_reject_wrong_type_values() {
         ),
         (
             10,
+            "correlate",
             json!({
                 "action": "correlate",
                 "reference_time": "2026-01-01T00:00:00Z",
@@ -609,7 +631,46 @@ async fn rmcp_numeric_args_reject_wrong_type_values() {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(response["error"]["code"], -32602);
+        assert_invalid_tool_error(&response, action, "invalid");
+    }
+}
+
+#[tokio::test]
+async fn rmcp_action_specific_unknown_fields_return_structured_errors() {
+    for (id, action, arguments, rejected_field) in [
+        (
+            101,
+            "project_context",
+            json!({
+                "action": "project_context",
+                "project": "/home/jmagar/workspace/cortex",
+                "since": "2026-08-01T00:00:00Z"
+            }),
+            "since",
+        ),
+        (
+            102,
+            "list_ai_projects",
+            json!({"action": "list_ai_projects", "limit": 20}),
+            "limit",
+        ),
+    ] {
+        let (state, _pool, _dir) = test_state();
+        let (status, response) = post_rmcp(
+            rmcp_router(state),
+            jsonrpc_request(
+                id,
+                "tools/call",
+                Some(json!({"name": "cortex", "arguments": arguments})),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_invalid_tool_error(
+            &response,
+            action,
+            &format!("unknown field `{rejected_field}`"),
+        );
     }
 }
 

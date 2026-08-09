@@ -145,7 +145,7 @@ CREATE INDEX idx_logs_hostname_received_at ON logs(hostname, received_at);
 | --- | --- | --- |
 | Auth middleware | Missing/invalid token | HTTP 401, JSON error -32001 |
 | Tool dispatch | Unknown tool name | RMCP method/tool error |
-| Tool handler | Missing required param | RMCP invalid params error |
+| Tool handler | Missing or invalid action argument | Structured MCP tool error with `isError: true` |
 | Database | Query error | MCP content with `isError: true` |
 | Syslog | Oversized message | Dropped with WARN log |
 | Syslog | Write channel full | Backpressure applied |
