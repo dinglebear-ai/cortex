@@ -5,6 +5,7 @@ use crate::db::{
     TRUST_LEVELS, insert_logs_batch, is_known_entity_type, is_known_evidence_source_kind,
     is_known_reason_code, is_known_relationship_type, is_known_trust_level,
 };
+use rusqlite::OptionalExtension;
 
 fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
     StorageConfig::for_test(db_path)
@@ -365,6 +366,693 @@ fn known_schema_version_matches_migration_head() {
     let info = read_schema_version_info(&pool).unwrap();
     assert_eq!(info.version, KNOWN_SCHEMA_VERSION);
     assert_eq!(info.known_version, KNOWN_SCHEMA_VERSION);
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_repository_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-repositories.db"));
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repositories)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "repository_key",
+            "hostname",
+            "common_git_dir",
+            "primary_path",
+            "display_name",
+            "remote_url_hash",
+            "first_seen_at",
+            "last_seen_at",
+            "removed_at",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'repositories'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repositories_display")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repositories_host_seen")
+    );
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        rusqlite::params![
+            "v1|6:devhost|20:/workspace/cortex/.git",
+            "devhost",
+            "/workspace/cortex/.git",
+            "/workspace/cortex",
+            "cortex",
+            "2026-07-31T23:00:00.000Z",
+        ],
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "v1|6:devhost|20:/workspace/cortex/.git",
+                "other-host",
+                "/workspace/other/.git",
+                "/workspace/other",
+                "other",
+                "2026-07-31T23:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "repository_key must be globally unique"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "different-key",
+                "devhost",
+                "/workspace/cortex/.git",
+                "/workspace/cortex-copy",
+                "cortex-copy",
+                "2026-07-31T23:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "hostname/common_git_dir must identify one repository"
+    );
+    drop(conn);
+    drop(pool);
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(row_count, 1, "reopening must preserve repository rows");
+    let migration_44_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        migration_44_count, 1,
+        "completed migration 44 must remain marked exactly once"
+    );
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_worktree_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-worktrees.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        rusqlite::params![
+            "repo-key",
+            "devhost",
+            "/workspace/cortex/.git",
+            "/workspace/cortex",
+            "cortex",
+            "2026-08-01T01:00:00.000Z",
+        ],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repository_worktrees)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "worktree_key",
+            "repository_id",
+            "hostname",
+            "path",
+            "git_dir",
+            "branch_ref",
+            "branch_name",
+            "head_sha",
+            "upstream_ref",
+            "detached",
+            "bare",
+            "locked",
+            "lock_reason",
+            "prunable",
+            "prune_reason",
+            "dirty",
+            "staged_count",
+            "unstaged_count",
+            "untracked_count",
+            "ahead",
+            "behind",
+            "status_hash",
+            "first_seen_at",
+            "last_seen_at",
+            "removed_at",
+            "created_at",
+            "updated_at",
+        ]
+    );
+
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, branch_ref,
+             branch_name, head_sha, upstream_ref, dirty, staged_count,
+             unstaged_count, untracked_count, ahead, behind, first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 2, 3, 4, 5, 6, ?10, ?10)",
+        rusqlite::params![
+            "worktree-key",
+            repository_id,
+            "devhost",
+            "/workspace/cortex",
+            "/workspace/cortex/.git",
+            "refs/heads/feat/agent-observatory",
+            "feat/agent-observatory",
+            "0123456789012345678901234567890123456789",
+            "refs/remotes/origin/feat/agent-observatory",
+            "2026-08-01T01:00:00.000Z",
+        ],
+    )
+    .unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO repository_worktrees
+                (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            rusqlite::params![
+                "different-key",
+                repository_id,
+                "devhost",
+                "/workspace/cortex",
+                "/workspace/cortex/.git/worktrees/duplicate",
+                "2026-08-01T01:00:00.000Z",
+            ],
+        )
+        .is_err(),
+        "hostname/path must identify one worktree"
+    );
+
+    let state: (String, String, i64, i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT branch_name, head_sha, dirty, staged_count, unstaged_count,
+                    untracked_count, ahead
+             FROM repository_worktrees WHERE worktree_key = 'worktree-key'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            "feat/agent-observatory".to_string(),
+            "0123456789012345678901234567890123456789".to_string(),
+            1,
+            2,
+            3,
+            4,
+            5,
+        )
+    );
+
+    conn.execute("DELETE FROM repositories WHERE id = ?1", [repository_id])
+        .unwrap();
+    let remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repository_worktrees", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "repository deletion must cascade to worktrees"
+    );
+
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_observation_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-observations.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO repositories
+            (repository_key, hostname, common_git_dir, primary_path, display_name,
+             first_seen_at, last_seen_at)
+         VALUES ('repo-key', 'devhost', '/workspace/cortex/.git',
+                 '/workspace/cortex', 'cortex', ?1, ?1)",
+        ["2026-08-01T01:00:00.000Z"],
+    )
+    .unwrap();
+    let repository_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO repository_worktrees
+            (worktree_key, repository_id, hostname, path, git_dir, first_seen_at, last_seen_at)
+         VALUES ('worktree-key', ?1, 'devhost', '/workspace/cortex',
+                 '/workspace/cortex/.git', ?2, ?2)",
+        rusqlite::params![repository_id, "2026-08-01T01:00:00.000Z"],
+    )
+    .unwrap();
+    let worktree_id = conn.last_insert_rowid();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(repository_observations)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "observation_key",
+            "repository_id",
+            "worktree_id",
+            "observed_at",
+            "observation_kind",
+            "old_head_sha",
+            "new_head_sha",
+            "summary",
+            "payload_json",
+            "created_at",
+        ]
+    );
+
+    let insert = |key: &str, observed_at: &str, kind: &str| {
+        conn.execute(
+            "INSERT INTO repository_observations
+                (observation_key, repository_id, worktree_id, observed_at,
+                 observation_kind, summary, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '{}')",
+            rusqlite::params![key, repository_id, worktree_id, observed_at, kind, key],
+        )
+    };
+    insert("obs-1", "2026-08-01T01:00:00.000Z", "discovered").unwrap();
+    insert("obs-2", "2026-08-01T01:00:01.000Z", "status").unwrap();
+    insert("obs-3", "2026-08-01T01:00:01.000Z", "head").unwrap();
+
+    assert!(
+        insert("obs-1", "2026-08-01T01:00:02.000Z", "status").is_err(),
+        "observation_key must be globally unique"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO repository_observations
+                (observation_key, repository_id, observed_at, observation_kind, payload_json)
+             VALUES ('bad-json', ?1, ?2, 'error', '{')",
+            rusqlite::params![repository_id, "2026-08-01T01:00:03.000Z"],
+        )
+        .is_err(),
+        "payload_json must be valid JSON"
+    );
+
+    let ordered: Vec<String> = conn
+        .prepare(
+            "SELECT observation_key FROM repository_observations
+             WHERE repository_id = ?1
+             ORDER BY observed_at DESC, id DESC",
+        )
+        .unwrap()
+        .query_map([repository_id], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ordered, vec!["obs-3", "obs-2", "obs-1"]);
+
+    let repo_plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM repository_observations
+             WHERE repository_id = ?1
+             ORDER BY observed_at DESC, id DESC LIMIT 10",
+        )
+        .unwrap()
+        .query_map([repository_id], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        repo_plan
+            .iter()
+            .any(|detail| detail.contains("idx_repository_observations_repo_time")),
+        "repository timeline query must use its chronological index: {repo_plan:?}"
+    );
+
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'repository_observations'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repository_observations_repo_time")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_repository_observations_worktree_time")
+    );
+}
+
+#[test]
+fn init_pool_creates_agent_observatory_git_commit_schema_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-commits.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    for (key, common_dir, path, name) in [
+        ("repo-1", "/workspace/one/.git", "/workspace/one", "one"),
+        ("repo-2", "/workspace/two/.git", "/workspace/two", "two"),
+    ] {
+        conn.execute(
+            "INSERT INTO repositories
+                (repository_key, hostname, common_git_dir, primary_path, display_name,
+                 first_seen_at, last_seen_at)
+             VALUES (?1, 'devhost', ?2, ?3, ?4, ?5, ?5)",
+            rusqlite::params![key, common_dir, path, name, "2026-08-01T01:00:00.000Z"],
+        )
+        .unwrap();
+    }
+    let repo_one: i64 = conn
+        .query_row(
+            "SELECT id FROM repositories WHERE repository_key = 'repo-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let repo_two: i64 = conn
+        .query_row(
+            "SELECT id FROM repositories WHERE repository_key = 'repo-2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(git_commits)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "repository_id",
+            "sha",
+            "parent_shas_json",
+            "author_name",
+            "author_email_hash",
+            "authored_at",
+            "committed_at",
+            "subject",
+            "changed_files",
+            "insertions",
+            "deletions",
+            "changed_paths_json",
+            "first_observed_at",
+            "last_observed_at",
+            "reachable",
+            "metadata_json",
+        ]
+    );
+    assert!(
+        !columns
+            .iter()
+            .any(|name| matches!(name.as_str(), "diff" | "patch" | "blob" | "author_email"))
+    );
+
+    let sha = "0123456789012345678901234567890123456789";
+    let insert_commit = |repository_id: i64| {
+        conn.execute(
+            "INSERT INTO git_commits
+                (repository_id, sha, parent_shas_json, author_name, author_email_hash,
+                 authored_at, committed_at, subject, changed_files, insertions,
+                 deletions, changed_paths_json, first_observed_at, last_observed_at,
+                 metadata_json)
+             VALUES (?1, ?2, '[]', 'Cortex Test', 'sha256:test', ?3, ?3,
+                     'test commit', 2, 10, 3, '[\"src/lib.rs\"]', ?3, ?3, '{}')",
+            rusqlite::params![repository_id, sha, "2026-08-01T01:00:00.000Z"],
+        )
+    };
+    insert_commit(repo_one).unwrap();
+    assert!(
+        insert_commit(repo_one).is_err(),
+        "same SHA must dedupe within a repository"
+    );
+    insert_commit(repo_two).unwrap();
+
+    assert!(
+        conn.execute(
+            "INSERT INTO git_commits
+                (repository_id, sha, parent_shas_json, changed_paths_json,
+                 first_observed_at, last_observed_at)
+             VALUES (?1, 'bad-json', '{', '[]', ?2, ?2)",
+            rusqlite::params![repo_one, "2026-08-01T01:00:00.000Z"],
+        )
+        .is_err(),
+        "commit JSON columns must reject invalid JSON"
+    );
+
+    conn.execute(
+        "UPDATE git_commits
+         SET reachable = 0, last_observed_at = ?1
+         WHERE repository_id = ?2 AND sha = ?3",
+        rusqlite::params!["2026-08-01T02:00:00.000Z", repo_one, sha],
+    )
+    .unwrap();
+    let state: (i64, String, String) = conn
+        .query_row(
+            "SELECT reachable, subject, last_observed_at FROM git_commits
+             WHERE repository_id = ?1 AND sha = ?2",
+            rusqlite::params![repo_one, sha],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            0,
+            "test commit".to_string(),
+            "2026-08-01T02:00:00.000Z".to_string()
+        )
+    );
+
+    let repo_one_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_commits WHERE repository_id = ?1",
+            [repo_one],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let repo_two_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_commits WHERE repository_id = ?1",
+            [repo_two],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!((repo_one_count, repo_two_count), (1, 1));
+
+    let index_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'idx_git_commits_repo_time'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_exists, 1);
+}
+
+#[test]
+fn migration_44_applies_from_schema_43_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("observatory-migration-44.db");
+    let config = test_storage_config(db_path.clone());
+
+    {
+        let pool = init_pool(&config).unwrap();
+        drop(pool);
+    }
+
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TABLE IF EXISTS git_commits;
+             DROP TABLE IF EXISTS repository_observations;
+             DROP TABLE IF EXISTS repository_worktrees;
+             DROP TABLE IF EXISTS repositories;
+             DELETE FROM schema_migrations WHERE version = 44;
+             INSERT OR REPLACE INTO stream_last_seen
+                 (hostname, source_kind, last_seen_at)
+             VALUES ('legacy-host', 'syslog-tcp', '2026-08-01T01:00:00.000Z');
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+    }
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let max_version: i64 = conn
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(max_version, 44);
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+
+    for table in [
+        "repositories",
+        "repository_worktrees",
+        "repository_observations",
+        "git_commits",
+    ] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "migration 44 must create {table}");
+    }
+
+    let legacy_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM stream_last_seen
+             WHERE hostname = 'legacy-host' AND source_kind = 'syslog-tcp'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_rows, 1, "migration must preserve schema-43 data");
+    let foreign_key_violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()
+        .unwrap();
+    assert_eq!(foreign_key_violation, None);
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(conn);
+    drop(pool);
+
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 44",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1, "reopening must not duplicate migration 44");
+}
+
+#[test]
+fn init_pool_does_not_create_partial_agent_observatory_migration_45() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("observatory-runs.db"));
+    let pool = init_pool(&config).unwrap();
+    let conn = pool.get().unwrap();
+
+    for table in ["agent_runs", "agent_run_actors", "agent_run_worktrees"] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            exists, 0,
+            "partial migration-45 table {table} must not exist"
+        );
+    }
 }
 
 #[test]

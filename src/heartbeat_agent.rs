@@ -23,9 +23,12 @@ pub const DEFAULT_COLLECTION_DEADLINE_MS: u64 = 5_000;
 pub const DEFAULT_RETRY_BUFFER_LIMIT: usize = 32;
 pub const DEFAULT_TARGET: &str = "http://127.0.0.1:3100";
 pub const DEFAULT_DOCKER_URL: &str = "unix:///var/run/docker.sock";
+pub const AI_TRANSCRIPT_FORWARD_ENV: &str = "CORTEX_AGENT_AI_TRANSCRIPT_FORWARD";
+pub const AI_TRANSCRIPT_FORWARD_LEGACY_ENV: &str = "CORTEX_AGENT_AI_TRANSCRIPTS";
 pub const OPTIONAL_ENV_KEYS: &[&str] = &[
     "CORTEX_AGENT_FILE_TAILS",
-    "CORTEX_AGENT_AI_TRANSCRIPTS",
+    AI_TRANSCRIPT_FORWARD_ENV,
+    AI_TRANSCRIPT_FORWARD_LEGACY_ENV,
     "CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT",
     "CORTEX_AGENT_COMMAND_FORWARD",
     "CORTEX_AGENT_COMMAND_SPOOL",
@@ -33,6 +36,63 @@ pub const OPTIONAL_ENV_KEYS: &[&str] = &[
     "CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT",
     "CORTEX_AGENT_AUTO_UPDATE",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TranscriptForwardEnvWarning {
+    LegacyAlias,
+    ConflictingValues,
+}
+
+impl TranscriptForwardEnvWarning {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::LegacyAlias => "agent_ai_transcript_forward_legacy_alias",
+            Self::ConflictingValues => "agent_ai_transcript_forward_conflict",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TranscriptForwardEnvResolution {
+    pub(crate) enabled: bool,
+    pub(crate) warning: Option<TranscriptForwardEnvWarning>,
+}
+
+fn parse_forward_flag(value: &str) -> bool {
+    value.eq_ignore_ascii_case("true") || value == "1"
+}
+
+pub(crate) fn resolve_ai_transcript_forward_env(
+    current: Option<&str>,
+    legacy: Option<&str>,
+) -> TranscriptForwardEnvResolution {
+    match (current, legacy) {
+        (Some(current), Some(legacy)) => {
+            let enabled = parse_forward_flag(current);
+            let warning = if enabled == parse_forward_flag(legacy) {
+                TranscriptForwardEnvWarning::LegacyAlias
+            } else {
+                TranscriptForwardEnvWarning::ConflictingValues
+            };
+            TranscriptForwardEnvResolution {
+                enabled,
+                warning: Some(warning),
+            }
+        }
+        (Some(current), None) => TranscriptForwardEnvResolution {
+            enabled: parse_forward_flag(current),
+            warning: None,
+        },
+        (None, Some(legacy)) => TranscriptForwardEnvResolution {
+            enabled: parse_forward_flag(legacy),
+            warning: Some(TranscriptForwardEnvWarning::LegacyAlias),
+        },
+        (None, None) => TranscriptForwardEnvResolution {
+            enabled: false,
+            warning: None,
+        },
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeartbeatAgentConfig {
@@ -102,10 +162,29 @@ impl HeartbeatAgentConfig {
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
         let syslog_target = std::env::var("CORTEX_SYSLOG_TARGET").ok();
-        let ai_transcripts = std::env::var("CORTEX_AGENT_AI_TRANSCRIPTS")
-            .ok()
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+        let current_transcript_forward = std::env::var(AI_TRANSCRIPT_FORWARD_ENV).ok();
+        let legacy_transcript_forward = std::env::var(AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok();
+        let transcript_forward = resolve_ai_transcript_forward_env(
+            current_transcript_forward.as_deref(),
+            legacy_transcript_forward.as_deref(),
+        );
+        if let Some(warning) = transcript_forward.warning {
+            match warning {
+                TranscriptForwardEnvWarning::LegacyAlias => tracing::warn!(
+                    warning_code = warning.code(),
+                    legacy_env = AI_TRANSCRIPT_FORWARD_LEGACY_ENV,
+                    replacement_env = AI_TRANSCRIPT_FORWARD_ENV,
+                    "deprecated remote transcript-forwarding environment alias is configured"
+                ),
+                TranscriptForwardEnvWarning::ConflictingValues => tracing::warn!(
+                    warning_code = warning.code(),
+                    legacy_env = AI_TRANSCRIPT_FORWARD_LEGACY_ENV,
+                    replacement_env = AI_TRANSCRIPT_FORWARD_ENV,
+                    "conflicting remote transcript-forwarding environment values; replacement wins"
+                ),
+            }
+        }
+        let ai_transcripts = transcript_forward.enabled;
         let ai_transcript_checkpoint_path = std::env::var("CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT")
             .ok()
             .map(PathBuf::from)

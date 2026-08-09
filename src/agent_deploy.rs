@@ -542,7 +542,22 @@ fn resolve_linux_agent_env(
     if let Some(syslog_file) = prev_get("CORTEX_AGENT_SYSLOG_FILE") {
         out.push(("CORTEX_AGENT_SYSLOG_FILE".to_string(), syslog_file));
     }
+    let transcript_forward = prev_get(crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV)
+        .or_else(|| prev_get(crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV));
+    if let Some(value) = transcript_forward {
+        out.push((
+            crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV.to_string(),
+            value,
+        ));
+    }
     for key in crate::heartbeat_agent::OPTIONAL_ENV_KEYS {
+        if matches!(
+            *key,
+            crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV
+                | crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV
+        ) {
+            continue;
+        }
         if let Some(value) = prev_get(key) {
             out.push(((*key).to_string(), value));
         }

@@ -57,6 +57,7 @@ pub async fn run_setup_doctor(fix: bool, yes: bool) -> io::Result<SetupReport> {
             .phases,
     );
     phases.push(runtime_current_phase(&repo_path));
+    phases.push(check_transcript_forward_env_migration(&env_path, fix, yes));
     phases.push(stale_agent_command_units_phase(fix, yes).await);
 
     let elapsed_ms = started.elapsed().as_millis();
@@ -289,6 +290,116 @@ pub(crate) async fn stale_agent_command_units_phase(fix: bool, yes: bool) -> Set
     }
 }
 
+/// ENV-003: Check for deprecated transcript forwarding environment variable
+/// configurations and optionally migrate unambiguous files. This is called
+/// from `run_setup_doctor` and integrates with the existing fix authorization
+/// pattern (both `--fix` AND `--yes` required for mutation).
+pub(crate) fn check_transcript_forward_env_migration(
+    env_path: &Path,
+    fix: bool,
+    yes: bool,
+) -> SetupPhase {
+    check_transcript_forward_env_migration_with_hook(env_path, fix, yes, || {})
+}
+
+fn check_transcript_forward_env_migration_with_hook<F>(
+    env_path: &Path,
+    fix: bool,
+    yes: bool,
+    after_read: F,
+) -> SetupPhase
+where
+    F: FnOnce(),
+{
+    use crate::heartbeat_agent::{AI_TRANSCRIPT_FORWARD_ENV, AI_TRANSCRIPT_FORWARD_LEGACY_ENV};
+
+    let timer = PhaseTimer::start("transcript-forward-env-migration");
+
+    // Replacing a symlink would detach it from its target. Refuse before any
+    // read or write so an operator can migrate the real file deliberately.
+    if std::fs::symlink_metadata(env_path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return timer.finish(
+            SetupStatus::Error,
+            ".env is a symbolic link; migrate its target explicitly",
+        );
+    }
+
+    if !env_path.exists() {
+        return timer.finish(SetupStatus::Ok, ".env file not found; skipped");
+    }
+
+    let content = match std::fs::read_to_string(env_path) {
+        Ok(content) => content,
+        Err(error) => {
+            return timer.finish(
+                SetupStatus::Error,
+                format!("failed to read .env file: {error}"),
+            );
+        }
+    };
+    after_read();
+
+    let mut assignments = Vec::new();
+
+    for (line_num, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        for (key, legacy) in [
+            (AI_TRANSCRIPT_FORWARD_ENV, false),
+            (AI_TRANSCRIPT_FORWARD_LEGACY_ENV, true),
+        ] {
+            if let Some(value) = trimmed
+                .strip_prefix(key)
+                .and_then(|rest| rest.strip_prefix('='))
+            {
+                assignments.push((line_num, value.to_string(), legacy));
+                break;
+            }
+        }
+    }
+
+    if assignments.is_empty() {
+        return timer.finish(SetupStatus::Ok, "no transcript forwarding configuration");
+    }
+    let value = &assignments[0].1;
+    if assignments
+        .iter()
+        .any(|(_, candidate, _)| candidate != value)
+    {
+        return timer.finish(
+            SetupStatus::Error,
+            "conflicting duplicate transcript forwarding values; manual resolution required",
+        );
+    }
+    let has_legacy = assignments.iter().any(|(_, _, legacy)| *legacy);
+    if !has_legacy && assignments.len() == 1 {
+        return timer.finish(
+            SetupStatus::Ok,
+            "transcript forwarding uses current variable name",
+        );
+    }
+    if !fix || !yes {
+        let authorization = if fix { "--yes" } else { "--fix --yes" };
+        return timer.finish(
+            SetupStatus::Warn,
+            format!(
+                "deprecated {AI_TRANSCRIPT_FORWARD_LEGACY_ENV} or duplicate transcript forwarding configuration; run with {authorization} to normalize to {AI_TRANSCRIPT_FORWARD_ENV}"
+            ),
+        );
+    }
+
+    timer.finish(
+        SetupStatus::Error,
+        format!(
+            "automatic rewrite is disabled to prevent concurrent edit or symlink-swap data loss; edit {} manually, replace {AI_TRANSCRIPT_FORWARD_LEGACY_ENV} with {AI_TRANSCRIPT_FORWARD_ENV}, and collapse equal duplicates",
+            env_path.display()
+        ),
+    )
+}
+
 #[cfg(test)]
 #[path = "doctor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "doctor_transcript_forward_tests.rs"]
+mod transcript_forward_tests;

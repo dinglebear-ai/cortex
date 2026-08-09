@@ -2,7 +2,7 @@
 //! core.
 //!
 //! Owns the full schema: the `logs` table + FTS5 index, AI/graph/heartbeat
-//! projections, and the **40 sequential migrations** tracked by
+//! projections, and the **44 sequential migrations** tracked by
 //! `KNOWN_SCHEMA_VERSION`. Migrations run at startup; heavy ones log
 //! `Migration N: starting ...` lines, and the one-time
 //! `auto_vacuum=INCREMENTAL` conversion VACUUM is logged loudly (it can take
@@ -39,7 +39,7 @@ pub fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 43;
+pub const KNOWN_SCHEMA_VERSION: i64 = 44;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -2507,6 +2507,120 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              COMMIT;",
         )?;
         tracing::info!("Migration 43: stream_last_seen rollup for stream-silence alerting");
+    }
+
+    // Migration 44: Agent Observatory repository, worktree, observation,
+    // and exact-commit topology. The DDL and version marker share one
+    // transaction so startup never reports a partially applied migration.
+    if !migration_applied(&conn, 44)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE IF NOT EXISTS repositories (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_key      TEXT NOT NULL UNIQUE,
+             hostname            TEXT NOT NULL,
+             common_git_dir      TEXT NOT NULL,
+             primary_path        TEXT NOT NULL,
+             display_name        TEXT NOT NULL,
+             remote_url_hash     TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, common_git_dir)
+         );
+         CREATE INDEX IF NOT EXISTS idx_repositories_host_seen
+             ON repositories(hostname, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_repositories_display
+             ON repositories(display_name COLLATE NOCASE);
+
+         CREATE TABLE IF NOT EXISTS repository_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             worktree_key        TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             hostname            TEXT NOT NULL,
+             path                TEXT NOT NULL,
+             git_dir             TEXT NOT NULL,
+             branch_ref          TEXT,
+             branch_name         TEXT,
+             head_sha            TEXT,
+             upstream_ref        TEXT,
+             detached            INTEGER NOT NULL DEFAULT 0 CHECK (detached IN (0, 1)),
+             bare                INTEGER NOT NULL DEFAULT 0 CHECK (bare IN (0, 1)),
+             locked              INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+             lock_reason         TEXT,
+             prunable            INTEGER NOT NULL DEFAULT 0 CHECK (prunable IN (0, 1)),
+             prune_reason        TEXT,
+             dirty               INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+             staged_count        INTEGER NOT NULL DEFAULT 0 CHECK (staged_count >= 0),
+             unstaged_count      INTEGER NOT NULL DEFAULT 0 CHECK (unstaged_count >= 0),
+             untracked_count     INTEGER NOT NULL DEFAULT 0 CHECK (untracked_count >= 0),
+             ahead               INTEGER CHECK (ahead IS NULL OR ahead >= 0),
+             behind              INTEGER CHECK (behind IS NULL OR behind >= 0),
+             status_hash         TEXT,
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             removed_at          TEXT,
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, path)
+         );
+         CREATE INDEX IF NOT EXISTS idx_worktrees_repo_active
+             ON repository_worktrees(repository_id, removed_at, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_worktrees_branch
+             ON repository_worktrees(branch_name, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_worktrees_head
+             ON repository_worktrees(repository_id, head_sha);
+
+         CREATE TABLE IF NOT EXISTS repository_observations (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             observation_key     TEXT NOT NULL UNIQUE,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE CASCADE,
+             observed_at         TEXT NOT NULL,
+             observation_kind    TEXT NOT NULL CHECK (observation_kind IN (
+                 'discovered', 'status', 'head', 'branch', 'worktree_added',
+                 'worktree_removed', 'overflow_reconcile', 'periodic_reconcile', 'error'
+             )),
+             old_head_sha        TEXT,
+             new_head_sha        TEXT,
+             summary             TEXT NOT NULL DEFAULT '',
+             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_worktree_time
+             ON repository_observations(worktree_id, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_repository_observations_repo_time
+             ON repository_observations(repository_id, observed_at DESC, id DESC);
+
+         CREATE TABLE IF NOT EXISTS git_commits (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             repository_id       INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             sha                 TEXT NOT NULL,
+             parent_shas_json    TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parent_shas_json)),
+             author_name         TEXT,
+             author_email_hash   TEXT,
+             authored_at         TEXT,
+             committed_at        TEXT,
+             subject             TEXT NOT NULL DEFAULT '',
+             changed_files       INTEGER CHECK (changed_files IS NULL OR changed_files >= 0),
+             insertions          INTEGER CHECK (insertions IS NULL OR insertions >= 0),
+             deletions           INTEGER CHECK (deletions IS NULL OR deletions >= 0),
+             changed_paths_json  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(changed_paths_json)),
+             first_observed_at   TEXT NOT NULL,
+             last_observed_at    TEXT NOT NULL,
+             reachable           INTEGER NOT NULL DEFAULT 1 CHECK (reachable IN (0, 1)),
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(repository_id, sha)
+         );
+         CREATE INDEX IF NOT EXISTS idx_git_commits_repo_time
+             ON git_commits(repository_id, committed_at DESC, id DESC);
+         INSERT OR IGNORE INTO schema_migrations (version) VALUES (44);
+         COMMIT;",
+        )?;
+        tracing::info!("Migration 44: Agent Observatory repository topology");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
