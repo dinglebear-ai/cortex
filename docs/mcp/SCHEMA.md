@@ -26,7 +26,7 @@ wins.
 ## Current Actions
 
 cortex exposes one MCP tool named `cortex`. The required `action` argument
-selects one of these 54 actions:
+selects one of these 56 actions:
 
 | Action | Scope | Cost | Purpose |
 | --- | --- | --- | --- |

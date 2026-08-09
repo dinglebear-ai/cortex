@@ -36,7 +36,7 @@ protected endpoint still requires transport auth when configured.
 
 ## Current Action Index
 
-The live registry currently contains 54 actions (this snapshot may lag
+The live registry currently contains 56 actions (this snapshot may lag
 `src/mcp/actions.rs::ACTION_SPECS`, the authoritative source):
 
 | Action | Scope | Cost | Purpose |
