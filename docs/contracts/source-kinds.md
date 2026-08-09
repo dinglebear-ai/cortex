@@ -122,9 +122,9 @@ percent-encoded as required.
 | `otlp` | `otlp://<peer_ip>` (no port; one exporter, many records) | `otlp://10.0.0.5/plex` (optional path: `service.name`) |
 | `unifi-api` | `unifi://<controller_host>/` (single-site v1; per spec C §14 open question 1) | `unifi://udm-pro.lan/` |
 | `adguard-api` | `adguard://<adguard_host>/` | `adguard://adguard.lan/` |
-| `shell-history` | `shell-history://<hostname>/<user>/<shell>` | `shell-history://dookie/jmagar/zsh` |
-| `agent-command` | `agent-command://<hostname>/<agent>/<session_id>` | `agent-command://dookie/claude-code/019e588f` |
-| `file-tail` | `file-tail://<hostname>/<source_id>` | `file-tail://squirts/swag-access` |
+| `shell-history` | `shell-history://<hostname>/<user>/<shell>` | `shell-history://devhost/jmagar/zsh` |
+| `agent-command` | `agent-command://<hostname>/<agent>/<session_id>` | `agent-command://devhost/claude-code/019e588f` |
+| `file-tail` | `file-tail://<hostname>/<source_id>` | `file-tail://edgehost/swag-access` |
 
 ### Notes on the `agent://` authority
 
@@ -336,7 +336,7 @@ identity). Mitigations in receiver enrichment
   exact IPs or `10.0.0.`-style subnet prefixes) to restrict extraction to
   the hosts that actually run the cortex agent. When unset, extraction is
   accepted from any sender for compatibility.
-- Each prefix entry must be a **full IP literal** (`100.64.0.5` or
+- Each prefix entry must be a **full IP literal** (`198.51.100.7` or
   `2001:db8::1`, exact-host match) or a **dot-terminated partial IPv4
   quad** (`100.64.0.`, subnet-prefix match). A partial quad without its
   trailing dot (`100.64.0`) is treated as an exact-host literal that

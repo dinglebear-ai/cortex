@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-06 22:59:31 EST
 repo: https://github.com/jmagar/syslog-mcp
@@ -116,7 +118,7 @@ curl -s -X POST http://localhost:3100/mcp \
 | `systemctl --user is-active syslog-mcp` | `active` | `active` | ✓ PASS |
 | `nc -z -w2 localhost 1514` | exit 0 | exit 0 | ✓ PASS |
 | MCP `action=stats` | isError=false | 402 logs, 4 hosts | ✓ PASS |
-| MCP `action=hosts` | isError=false | dookie, STEAMY, vivobook, squirts | ✓ PASS |
+| MCP `action=hosts` | isError=false | devhost, WINHOST, laptophost, edgehost | ✓ PASS |
 | MCP `action=tail n=1` | isError=false | timestamp 2026-05-07T01:41:19 | ✓ PASS |
 
 ## Risks and Rollback

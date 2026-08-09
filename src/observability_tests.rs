@@ -35,7 +35,7 @@ fn snapshot_reports_docker_ingest_counters() {
     obs.record_docker_ingest_task_spawned();
     obs.record_docker_ingest_host_stream_started();
     obs.record_docker_ingest_container_stream_started();
-    obs.record_remote_docker_event_stream_failure("tootie", "exit status 255");
+    obs.record_remote_docker_event_stream_failure("nashost", "exit status 255");
 
     let snapshot = obs.snapshot();
 
@@ -56,7 +56,7 @@ fn snapshot_reports_docker_ingest_counters() {
     assert!(snapshot.last_remote_docker_event_stream_error_at.is_some());
     assert_eq!(
         snapshot.last_remote_docker_event_stream_error.as_deref(),
-        Some("tootie: exit status 255")
+        Some("nashost: exit status 255")
     );
 
     obs.record_docker_ingest_host_stream_ended();

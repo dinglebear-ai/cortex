@@ -63,20 +63,20 @@ fn seed_rollup(conn: &Connection, hostname: &str, kind: &str, age_secs: i64) {
 #[test]
 fn refresh_classifies_prefixes_and_metadata_kinds() {
     let conn = conn_with_schema();
-    insert_log(&conn, "tootie", "docker://tootie/plex/stdout", None, 10);
+    insert_log(&conn, "nashost", "docker://nashost/plex/stdout", None, 10);
     insert_log(
         &conn,
-        "dookie",
-        "10.1.0.6:1234",
+        "devhost",
+        "192.0.2.6:1234",
         Some(r#"{"source_kind":"agent-docker"}"#),
         10,
     );
-    insert_log(&conn, "squirts", "10.1.0.8:99", None, 10); // no kind — skipped
+    insert_log(&conn, "edgehost", "192.0.2.8:99", None, 10); // no kind — skipped
 
     refresh_stream_last_seen(&conn, 3600).expect("refresh");
 
-    assert!(rollup_entry(&conn, "tootie", "docker-stream").is_some());
-    assert!(rollup_entry(&conn, "dookie", "agent-docker").is_some());
+    assert!(rollup_entry(&conn, "nashost", "docker-stream").is_some());
+    assert!(rollup_entry(&conn, "devhost", "agent-docker").is_some());
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM stream_last_seen", [], |r| r.get(0))
         .unwrap();
@@ -86,11 +86,11 @@ fn refresh_classifies_prefixes_and_metadata_kinds() {
 #[test]
 fn refresh_is_monotonic_and_window_bounded() {
     let conn = conn_with_schema();
-    seed_rollup(&conn, "tootie", "syslog-tcp", 30);
+    seed_rollup(&conn, "nashost", "syslog-tcp", 30);
     // An older row inside the window must not regress the newer entry.
     insert_log(
         &conn,
-        "tootie",
+        "nashost",
         "1.2.3.4:1",
         Some(r#"{"source_kind":"syslog-tcp"}"#),
         600,
@@ -98,7 +98,7 @@ fn refresh_is_monotonic_and_window_bounded() {
     // A row outside the window must be invisible to the refresh.
     insert_log(
         &conn,
-        "shart",
+        "backuphost",
         "1.2.3.5:1",
         Some(r#"{"source_kind":"syslog-tcp"}"#),
         7200,
@@ -106,7 +106,7 @@ fn refresh_is_monotonic_and_window_bounded() {
 
     refresh_stream_last_seen(&conn, 3600).expect("refresh");
 
-    let kept = rollup_entry(&conn, "tootie", "syslog-tcp").expect("entry");
+    let kept = rollup_entry(&conn, "nashost", "syslog-tcp").expect("entry");
     let age: i64 = conn
         .query_row(
             "SELECT CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', ?1) AS INTEGER)",
@@ -116,7 +116,7 @@ fn refresh_is_monotonic_and_window_bounded() {
         .unwrap();
     assert!(age < 120, "newer rollup value must survive, got age {age}s");
     assert!(
-        rollup_entry(&conn, "shart", "syslog-tcp").is_none(),
+        rollup_entry(&conn, "backuphost", "syslog-tcp").is_none(),
         "row outside window must not enter the rollup"
     );
 }
@@ -124,16 +124,16 @@ fn refresh_is_monotonic_and_window_bounded() {
 #[test]
 fn silent_streams_applies_threshold_forget_and_kind_bounds() {
     let conn = conn_with_schema();
-    seed_rollup(&conn, "tootie", "agent-docker", 7200); // silent 2h — alertable
-    seed_rollup(&conn, "dookie", "agent-docker", 60); // fresh — not silent
-    seed_rollup(&conn, "shart", "agent-docker", 700_000); // past forget — ignored
-    seed_rollup(&conn, "tootie", "shell-history", 7200); // silent but kind not listed
+    seed_rollup(&conn, "nashost", "agent-docker", 7200); // silent 2h — alertable
+    seed_rollup(&conn, "devhost", "agent-docker", 60); // fresh — not silent
+    seed_rollup(&conn, "backuphost", "agent-docker", 700_000); // past forget — ignored
+    seed_rollup(&conn, "nashost", "shell-history", 7200); // silent but kind not listed
 
     let kinds = vec!["agent-docker".to_string()];
     let silent = silent_streams(&conn, &kinds, 3600, 604_800).expect("query");
 
     assert_eq!(silent.len(), 1, "exactly one alertable stream: {silent:?}");
-    assert_eq!(silent[0].hostname, "tootie");
+    assert_eq!(silent[0].hostname, "nashost");
     assert_eq!(silent[0].source_kind, "agent-docker");
     assert!(silent[0].age_secs > 3600 && silent[0].age_secs < 8000);
 }
@@ -141,7 +141,7 @@ fn silent_streams_applies_threshold_forget_and_kind_bounds() {
 #[test]
 fn silent_streams_empty_kinds_returns_nothing() {
     let conn = conn_with_schema();
-    seed_rollup(&conn, "tootie", "agent-docker", 7200);
+    seed_rollup(&conn, "nashost", "agent-docker", 7200);
     let silent = silent_streams(&conn, &[], 3600, 604_800).expect("query");
     assert!(silent.is_empty());
 }
@@ -149,19 +149,19 @@ fn silent_streams_empty_kinds_returns_nothing() {
 #[test]
 fn prune_drops_only_forgotten_entries() {
     let conn = conn_with_schema();
-    seed_rollup(&conn, "tootie", "agent-docker", 700_000);
-    seed_rollup(&conn, "dookie", "agent-docker", 60);
+    seed_rollup(&conn, "nashost", "agent-docker", 700_000);
+    seed_rollup(&conn, "devhost", "agent-docker", 60);
 
     let deleted = prune_stream_last_seen(&conn, 604_800).expect("prune");
     assert_eq!(deleted, 1);
-    assert!(rollup_entry(&conn, "dookie", "agent-docker").is_some());
-    assert!(rollup_entry(&conn, "tootie", "agent-docker").is_none());
+    assert!(rollup_entry(&conn, "devhost", "agent-docker").is_some());
+    assert!(rollup_entry(&conn, "nashost", "agent-docker").is_none());
 }
 
 #[test]
 fn is_empty_reflects_rollup_population() {
     let conn = conn_with_schema();
     assert!(stream_last_seen_is_empty(&conn).unwrap());
-    seed_rollup(&conn, "tootie", "agent-docker", 60);
+    seed_rollup(&conn, "nashost", "agent-docker", 60);
     assert!(!stream_last_seen_is_empty(&conn).unwrap());
 }

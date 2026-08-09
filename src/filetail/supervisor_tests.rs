@@ -17,7 +17,7 @@ fn source(id: &str, path: &str, tag: &str) -> FileTailSource {
         id: id.into(),
         path: path.into(),
         tag: tag.into(),
-        hostname: Some("squirts".into()),
+        hostname: Some("edgehost".into()),
         facility: Some("local4".into()),
         severity: "info".into(),
         start_at_end: true,
@@ -37,13 +37,13 @@ fn file_tail_line_to_entry_sets_expected_envelope() {
     let entry = file_tail_line_to_entry(&source, "GET / HTTP/1.1\" 401", "2026-06-11T20:01:00Z");
 
     assert_eq!(entry.timestamp, "2026-06-11T20:01:00Z");
-    assert_eq!(entry.hostname, "squirts");
+    assert_eq!(entry.hostname, "edgehost");
     assert_eq!(entry.facility.as_deref(), Some("local4"));
     assert_eq!(entry.severity, "info");
     assert_eq!(entry.app_name.as_deref(), Some("swag-access"));
     assert_eq!(entry.message, "GET / HTTP/1.1\" 401");
     assert_eq!(entry.raw, "GET / HTTP/1.1\" 401");
-    assert_eq!(entry.source_ip, "file-tail://squirts/swag-access");
+    assert_eq!(entry.source_ip, "file-tail://edgehost/swag-access");
     let metadata: serde_json::Value =
         serde_json::from_str(entry.metadata_json.as_deref().unwrap()).unwrap();
     assert_eq!(metadata["source_kind"], "file-tail");
@@ -716,7 +716,7 @@ async fn tail_file_once_sends_existing_lines_when_not_starting_at_end() {
         id: "authelia".into(),
         path: file_path.to_string_lossy().into_owned(),
         tag: "authelia".into(),
-        hostname: Some("squirts".into()),
+        hostname: Some("edgehost".into()),
         facility: Some("local5".into()),
         severity: "info".into(),
         start_at_end: false,

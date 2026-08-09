@@ -171,7 +171,7 @@ All clients use the same `mcpServers` JSON structure. The only difference is the
 When cortex is behind SWAG, the MCP endpoint becomes:
 
 ```
-https://cortex.tootie.tv/mcp
+https://cortex.example.invalid/mcp
 ```
 
 Configure clients to use this URL instead of `localhost:3100`.

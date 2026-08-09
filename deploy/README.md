@@ -13,11 +13,25 @@ the rest of the homelab's posture.
 
 ## Phase 3 — host-wide journald + AI transcripts
 
-Hosts: **dookie, squirts, steamy-wsl, vivobook-wsl**.
+Copy the environment template, replace every value with a resolvable host or
+address for your deployment, then source it before running any command below:
+
+```bash
+cp deploy/hosts.env.example deploy/hosts.env
+${EDITOR:-vi} deploy/hosts.env
+set -a
+source deploy/hosts.env
+set +a
+: "${DEV_HOST:?}" "${EDGE_HOST:?}" "${WINDOWS_WSL_HOST:?}" "${LAPTOP_WSL_HOST:?}"
+scripts/check-deploy-hosts.sh
+```
+
+`deploy/hosts.env` is gitignored. Hosts: `${DEV_HOST}`, `${EDGE_HOST}`,
+`${WINDOWS_WSL_HOST}`, `${LAPTOP_WSL_HOST}`.
 
 ### Prerequisites
 
-* WSL hosts (steamy-wsl, vivobook-wsl) need `[boot] systemd=true` in
+* WSL hosts (<WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>) need `[boot] systemd=true` in
   `/etc/wsl.conf`, then `wsl --shutdown` from PowerShell to restart. Verify
   with `systemctl status` after restart — must show "running."
 * `/var/spool/rsyslog/` must exist on every host. Create with
@@ -28,20 +42,21 @@ Hosts: **dookie, squirts, steamy-wsl, vivobook-wsl**.
 
 ```bash
 # imjournal — all four hosts
-scp deploy/rsyslog/10-imjournal.conf <host>:/tmp/
-ssh <host> 'sudo mv /tmp/10-imjournal.conf /etc/rsyslog.d/ \
+host="$DEV_HOST" # select one sourced host variable for this iteration
+scp deploy/rsyslog/10-imjournal.conf "${host}:/tmp/"
+ssh "$host" 'sudo mv /tmp/10-imjournal.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
 # imfile loader — required before any file-tail drop-ins
-scp deploy/rsyslog/11-imfile.conf <host>:/tmp/
-ssh <host> 'sudo mv /tmp/11-imfile.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/11-imfile.conf "${host}:/tmp/"
+ssh "$host" 'sudo mv /tmp/11-imfile.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
-# AI transcripts — dookie, squirts, steamy-wsl, vivobook-wsl
-scp deploy/rsyslog/40-ai-transcripts.conf <host>:/tmp/
-ssh <host> 'sudo mv /tmp/40-ai-transcripts.conf /etc/rsyslog.d/ \
+# AI transcripts — <DEV_HOST>, <EDGE_HOST>, <WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>
+scp deploy/rsyslog/40-ai-transcripts.conf "${host}:/tmp/"
+ssh "$host" 'sudo mv /tmp/40-ai-transcripts.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 ```
@@ -52,7 +67,7 @@ WSL alternative to `systemctl restart`: `sudo service rsyslog restart`.
 
 ```bash
 # Generate a test journald entry, confirm it arrives
-ssh <host> 'logger -t deploy-test "hello from journald"'
+ssh "$host" 'logger -t deploy-test "hello from journald"'
 mcporter call --config config/mcporter.json cortex.search query=deploy-test limit=5
 
 # After a claude session runs, confirm transcripts arrive
@@ -61,7 +76,7 @@ mcporter call --config config/mcporter.json cortex.search 'tag:claude-transcript
 
 ---
 
-## Phase 4 — squirts specialty sources
+## Phase 4 — <EDGE_HOST> specialty sources
 
 Three drop-ins, deploy in the **specified order** (authelia → swag → adguard).
 The order matters: AdGuard is the highest-volume source — deploy it last so
@@ -70,11 +85,11 @@ the other sources are already stable.
 ### Resolve `<PATH-TO-...>` placeholders first
 
 ```bash
-ssh squirts 'find /mnt /opt /srv -name authelia.log     2>/dev/null | head -3'
-ssh squirts 'find /mnt /opt /srv -path "*/nginx/access.log" 2>/dev/null | head -3'
-ssh squirts 'find /mnt /opt /srv -path "*/nginx/error.log"  2>/dev/null | head -3'
-ssh squirts 'find /mnt /opt /srv -path "*/fail2ban/fail2ban.log" 2>/dev/null | head -3'
-ssh squirts 'find /mnt /opt /srv -name querylog.json    2>/dev/null | head -3'
+ssh "$EDGE_HOST" 'find /mnt /opt /srv -name authelia.log     2>/dev/null | head -3'
+ssh "$EDGE_HOST" 'find /mnt /opt /srv -path "*/nginx/access.log" 2>/dev/null | head -3'
+ssh "$EDGE_HOST" 'find /mnt /opt /srv -path "*/nginx/error.log"  2>/dev/null | head -3'
+ssh "$EDGE_HOST" 'find /mnt /opt /srv -path "*/fail2ban/fail2ban.log" 2>/dev/null | head -3'
+ssh "$EDGE_HOST" 'find /mnt /opt /srv -name querylog.json    2>/dev/null | head -3'
 ```
 
 Edit each `.conf` to substitute the real paths before scp'ing.
@@ -83,13 +98,13 @@ Edit each `.conf` to substitute the real paths before scp'ing.
 
 Ubuntu's `rsyslogd` AppArmor profile allows `/var/log/**` by default, but not
 the `/mnt/appdata/**` service paths or normal `~/.claude`, `~/.codex`, and
-`~/.gemini` transcript paths on squirts. Install the local profile override and
+`~/.gemini` transcript paths on <EDGE_HOST>. Install the local profile override and
 grant the `syslog` user read ACLs for private Authelia/AdGuard logs and AI
 transcript trees before restarting rsyslog:
 
 ```bash
-scp deploy/apparmor/usr.sbin.rsyslogd.cortex squirts:/tmp/
-ssh squirts 'sudo install -o root -g root -m 0644 \
+scp deploy/apparmor/usr.sbin.rsyslogd.cortex "${EDGE_HOST}:/tmp/"
+ssh "$EDGE_HOST" 'sudo install -o root -g root -m 0644 \
   /tmp/usr.sbin.rsyslogd.cortex /etc/apparmor.d/local/usr.sbin.rsyslogd \
   && sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.rsyslogd \
   && sudo setfacl -m u:syslog:rx \
@@ -118,26 +133,26 @@ ssh squirts 'sudo install -o root -g root -m 0644 \
 
 ```bash
 # Shared imfile loader. Install once before source-specific drop-ins.
-scp deploy/rsyslog/11-imfile.conf squirts:/tmp/
-ssh squirts 'sudo mv /tmp/11-imfile.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/11-imfile.conf "${EDGE_HOST}:/tmp/"
+ssh "$EDGE_HOST" 'sudo mv /tmp/11-imfile.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
 # 1. authelia
-scp deploy/rsyslog/35-authelia.conf squirts:/tmp/
-ssh squirts 'sudo mv /tmp/35-authelia.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/35-authelia.conf "${EDGE_HOST}:/tmp/"
+ssh "$EDGE_HOST" 'sudo mv /tmp/35-authelia.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
 # 2. SWAG (nginx + fail2ban)
-scp deploy/rsyslog/30-swag.conf squirts:/tmp/
-ssh squirts 'sudo mv /tmp/30-swag.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/30-swag.conf "${EDGE_HOST}:/tmp/"
+ssh "$EDGE_HOST" 'sudo mv /tmp/30-swag.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
 # 3. AdGuard — LAST
-scp deploy/rsyslog/36-adguard.conf squirts:/tmp/
-ssh squirts 'sudo mv /tmp/36-adguard.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/36-adguard.conf "${EDGE_HOST}:/tmp/"
+ssh "$EDGE_HOST" 'sudo mv /tmp/36-adguard.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 ```
@@ -161,35 +176,41 @@ tailnet hosts from sending crafted messages with `tag=authelia` or
 `tag=adguard-query` to spoof severity/classification:
 
 ```bash
-CORTEX_AUTHELIA_SOURCE_IP=100.74.16.82   # squirts tailnet IP
-CORTEX_ADGUARD_SOURCE_IP=100.74.16.82
+export CORTEX_AUTHELIA_SOURCE_IP="$EDGE_SOURCE_IP"
+export CORTEX_ADGUARD_SOURCE_IP="$EDGE_SOURCE_IP"
 ```
 
 ---
 
 ## Phase 5 — OTel client config (claude code + codex)
 
-Hosts: **dookie, steamy-wsl, vivobook-wsl**.
+Hosts: **<DEV_HOST>, <WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>**.
 
 ### Prerequisite
 
 Phase 1 must be deployed and healthy first:
 
 ```bash
-curl -s http://dookie:3100/health | jq
+curl -s "http://${DEV_HOST}:3100/health" | jq
 # {"status":"ok","otlp_logs_received":0,"otlp_decode_errors":0}
 ```
 
 ### Claude Code
 
+Render both endpoint templates using the sourced environment first:
+
+```bash
+scripts/render-deploy-templates.sh
+```
+
 `~/.claude/settings.json` — **merge** the `env` block from
-`deploy/otel/claude-code-settings.example.json` into the existing file
+`deploy/rendered/claude-code-settings.example.json` into the existing file
 (do not overwrite). On a fresh host, copy the example file directly.
 
 ### Codex
 
 `~/.codex/config.toml` — append the `[otel]` block from
-`deploy/otel/codex-config.example.toml`. Create the file if absent.
+`deploy/rendered/codex-config.example.toml`. Create the file if absent.
 
 ### Verify
 
@@ -197,7 +218,7 @@ After each config change, start a new claude/codex session, then:
 
 ```bash
 # Should increment after each session
-curl -s http://dookie:3100/health | jq .otlp_logs_received
+curl -s "http://${DEV_HOST}:3100/health" | jq .otlp_logs_received
 
 # Records should be searchable
 mcporter call --config config/mcporter.json cortex.search 'service:claude-code' limit=5

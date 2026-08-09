@@ -122,13 +122,13 @@ fn test_default_excludes_do_not_drop_warning_healthcheck_rows() {
                 &conn,
                 "GET request for '/' received from 127.0.0.1 using 'curl/8.14.1'",
                 "warning",
-                "squirts",
+                "edgehost",
             );
             insert_log(
                 &conn,
                 "Permission denied reading /home/jmagar/.claude/projects/session.jsonl",
                 "warning",
-                "squirts",
+                "edgehost",
             );
         }
     }
@@ -278,7 +278,7 @@ fn test_process_chunk_skips_excluded_patterns() {
                 &conn,
                 "apprise: Sent Gotify notification",
                 "warning",
-                "tootie",
+                "nashost",
             );
         }
         // A genuine error that must still be detected and counted.

@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-07-23 16:18:37 EST
 repo: git@github.com:jmagar/cortex.git
@@ -17,18 +19,18 @@ Verify every Rust project's deployed `.env` and `config.toml` arrangement is com
 
 ## Session Overview
 
-Cortex was confirmed to be an intentional env-only Docker deployment on tootie. Its live source is `/mnt/user/appdata/cortex/.env`; the local canonical copy was secured, and the repo-root dotenv was moved to the protected audit backup.
+Cortex was confirmed to be an intentional env-only Docker deployment on nashost. Its live source is `/mnt/user/appdata/cortex/.env`; the local canonical copy was secured, and the repo-root dotenv was moved to the protected audit backup.
 
 ## Sequence of Events
 
-1. Inspected Cortex config lookup and live tootie container mounts.
+1. Inspected Cortex config lookup and live nashost container mounts.
 2. Verified the live appdata env and healthy container.
 3. Secured the local canonical env and relocated the repo-root dotenv backup.
 
 ## Key Findings
 
 - Cortex does not require a `config.toml` for the deployed Docker mode.
-- Live runtime truth is on tootie, not the local checkout.
+- Live runtime truth is on nashost, not the local checkout.
 
 ## Technical Decisions
 
@@ -63,7 +65,7 @@ No bead activity observed for Cortex.
 
 | command | result |
 |---|---|
-| `ssh tootie docker inspect cortex` | Confirmed live mounts and healthy state |
+| `ssh nashost docker inspect cortex` | Confirmed live mounts and healthy state |
 | Canonical file matrix | Env present and private; config intentionally absent |
 
 ## Behavior Changes (Before/After)
@@ -77,12 +79,12 @@ No bead activity observed for Cortex.
 
 | command | expected | actual | status |
 |---|---|---|---|
-| Tootie container inspect | Healthy | Healthy | pass |
+| Nashost container inspect | Healthy | Healthy | pass |
 | Env-mode audit | No TOML required | Env-only confirmed | pass |
 
 ## Risks and Rollback
 
-Restore the protected backup to the checkout only if an old repo-root workflow requires it; the live tootie deployment was not changed.
+Restore the protected backup to the checkout only if an old repo-root workflow requires it; the live nashost deployment was not changed.
 
 ## Decisions Not Taken
 

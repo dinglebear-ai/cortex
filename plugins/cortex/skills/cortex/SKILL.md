@@ -104,13 +104,13 @@ The graph connects entities (hosts, apps, source_ips, error_signatures,
 sessions, git_commits, users, devices, compose_projects) projected from logs.
 
 - `graph` resolves entities and neighborhoods. Pick a `mode`:
-  - `entity` — resolve one entity: `action="graph", mode="entity", entity_type="host", key="tootie"`
-  - `around` (default) — one-hop neighborhood: `mode="around", entity_type="host", key="tootie"`.
+  - `entity` — resolve one entity: `action="graph", mode="entity", entity_type="host", key="nashost"`
+  - `around` (default) — one-hop neighborhood: `mode="around", entity_type="host", key="nashost"`.
     Neighbors are fair-shared across types, so apps/source_ips aren't buried under
     high-churn `error_signature` edges; raise `payload_budget` for a fuller view.
   - `explain` — deterministic evidence-backed chains (`depth` up to 3).
   - `evidence` — inspect one evidence row: `mode="evidence", evidence_id=123`.
-  - `compose_project` keys are host-scoped (`dookie:axon`), but you can resolve by the
+  - `compose_project` keys are host-scoped (`devhost:axon`), but you can resolve by the
     bare project name (`entity_type="compose_project", key="axon"`) — multiple hosts come
     back as `candidates`.
 - `topic_correlate` is the one-shot "everything related to X" — it resolves a free-text
@@ -228,7 +228,7 @@ mcp__cortex__cortex(action="hosts")
 
 ```
 # Docker ingest sets source_ip to docker://host/container/stream
-mcp__cortex__cortex(action="search", source="docker://squirts/postgres/stdout", limit=50)
+mcp__cortex__cortex(action="search", source="docker://edgehost/postgres/stdout", limit=50)
 ```
 
 ### Storage health

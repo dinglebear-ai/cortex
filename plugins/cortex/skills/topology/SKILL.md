@@ -28,7 +28,7 @@ shape:
   "what's out there" broad surveys.
 - `host_services` (needs `host`) — services running on one host.
 - `service_dependencies` (needs `service`, as a `service_instance` key
-  `host/name` — e.g. `tootie/plex` — or `host` + bare name) — what a
+  `host/name` — e.g. `nashost/plex` — or `host` + bare name) — what a
   service depends on / is depended on by. Legacy `host:name` identities
   are rejected with `rejected_legacy_shape`.
 - `domain_routes` (needs `domain`) — which reverse-proxy routes serve a
@@ -48,7 +48,7 @@ answer, not a hard error.
 `cortex action=fleet_state [include_ok=false] [sort=pressure|freshness|hostname]`
 (CLI: `cortex state fleet [--sort ...]`)
 
-Use `host_state` when the user names a specific host ("what's dookie's
+Use `host_state` when the user names a specific host ("what's devhost's
 state"); use `fleet_state` for "what's unhealthy across the fleet" —
 `include_ok=false` (the default) already filters to hosts that aren't
 `status == "ok"`, so you don't need to filter the response yourself.
@@ -88,8 +88,8 @@ Look up one entity. Valid `entity_type` values: `host`, `container`,
 `device`.
 
 Service identity is `logical_service` (key like `plex`) plus
-`service_instance` (key like `tootie/plex`). Legacy nested identities
-(`tootie:plex`, `tootie:plex:plex`, `plex/plex/plex`) are rejected with
+`service_instance` (key like `nashost/plex`). Legacy nested identities
+(`nashost:plex`, `nashost:plex:plex`, `plex/plex/plex`) are rejected with
 `rejected_legacy_shape` — resolve the logical service first, then follow
 its `instance_of` instances.
 

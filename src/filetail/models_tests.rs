@@ -6,7 +6,7 @@ fn add_request_builds_enabled_source_with_defaults() {
         id: "swag-access".into(),
         path: "/mnt/appdata/swag/log/nginx/access.log".into(),
         tag: "swag-access".into(),
-        host: Some("squirts".into()),
+        host: Some("edgehost".into()),
         facility: None,
         severity: None,
         start_at_end: None,
@@ -17,7 +17,7 @@ fn add_request_builds_enabled_source_with_defaults() {
     assert_eq!(source.id, "swag-access");
     assert_eq!(source.path, "/mnt/appdata/swag/log/nginx/access.log");
     assert_eq!(source.tag, "swag-access");
-    assert_eq!(source.hostname.as_deref(), Some("squirts"));
+    assert_eq!(source.hostname.as_deref(), Some("edgehost"));
     assert_eq!(source.facility.as_deref(), Some("local7"));
     assert_eq!(source.severity, "info");
     assert!(source.start_at_end);
@@ -33,7 +33,7 @@ fn add_request_normalizes_and_validates_hostname() {
             id: "swag-access".into(),
             path: "/mnt/appdata/swag/log/nginx/access.log".into(),
             tag: "swag-access".into(),
-            host: Some(" Squirts.LOCAL ".into()),
+            host: Some(" Edgehost.LOCAL ".into()),
             facility: None,
             severity: None,
             start_at_end: None,
@@ -41,7 +41,7 @@ fn add_request_normalizes_and_validates_hostname() {
         "2026-06-11T20:00:00Z",
     )
     .unwrap();
-    assert_eq!(source.hostname.as_deref(), Some("squirts.local"));
+    assert_eq!(source.hostname.as_deref(), Some("edgehost.local"));
 
     let err = FileTailSource::from_add(
         FileTailAddRequest {

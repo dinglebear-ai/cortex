@@ -60,7 +60,7 @@ Reports:
 
 If the agent MCP preflight fails, fix the agent's MCP configuration first. In
 the observed Codex environment, the headless run saw `lab`, `codex_apps`,
-`context7`, and `steamy-windows-mcp`, but not `cortex`; the script now stops at
+`context7`, and `winhost-windows-mcp`, but not `cortex`; the script now stops at
 that point instead of spending a large token budget exploring local fallbacks.
 
 ## Claude Code Headless Surface

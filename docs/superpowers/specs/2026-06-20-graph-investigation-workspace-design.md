@@ -52,7 +52,7 @@ not a general dashboard.
 The main loop is Ask + Explain:
 
 1. The operator asks a natural-language question such as
-   `Why did squirts start OOMing around 02:15?`
+   `Why did edgehost start OOMing around 02:15?`
 2. Cortex resolves relevant entities, time hints, graph neighborhoods, and
    evidence-backed explanation chains.
 3. The app shows a ranked answer stack, graph canvas, proof panel, and

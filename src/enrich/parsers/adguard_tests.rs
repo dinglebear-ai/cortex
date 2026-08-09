@@ -96,13 +96,13 @@ fn file_querylog_ip_field_is_used_as_client() {
     // AdGuard Home ≥0.107 file query log records the client as `IP` (not
     // `Client`), with a `Question` map for the domain. The parser must still
     // surface the client + query for graph device/domain extraction.
-    let line = r#"{"T":"2026-06-18T16:01:45Z","QH":"www.microsoft.com","QT":"A","IP":"100.88.16.79","Result":{},"Cached":false}"#;
+    let line = r#"{"T":"2026-06-18T16:01:45Z","QH":"www.microsoft.com","QT":"A","IP":"198.51.100.1","Result":{},"Cached":false}"#;
     let out = parse(line, SourceKind::FileTail).unwrap();
     assert_eq!(
         out.metadata["query"],
         serde_json::json!("www.microsoft.com")
     );
-    assert_eq!(out.metadata["client"], serde_json::json!("100.88.16.79"));
+    assert_eq!(out.metadata["client"], serde_json::json!("198.51.100.1"));
 }
 
 #[test]

@@ -48,27 +48,27 @@ fn syslog_row(ts: &str, host: &str, app: &str) -> LogBatchEntry {
 #[test]
 fn search_logs_for_service_instances_uses_service_predicates_not_host_fanout() {
     let (_dir, pool) = test_pool("service-instance-predicates.db");
-    let mut plex = syslog_row("2026-01-01T00:01:00Z", "tootie", "plex/plex/plex");
+    let mut plex = syslog_row("2026-01-01T00:01:00Z", "nashost", "plex/plex/plex");
     plex.metadata_json = Some(
-        r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abc","container_name":"plex","compose_service":"plex","stream":"stdout"}}"#
+        r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abc","container_name":"plex","compose_service":"plex","stream":"stdout"}}"#
             .to_string(),
     );
-    let mut exact = syslog_row("2026-01-01T00:02:00Z", "tootie", "plex");
+    let mut exact = syslog_row("2026-01-01T00:02:00Z", "nashost", "plex");
     exact.metadata_json = None;
     insert_logs_batch(
         &pool,
         &[
-            syslog_row("2026-01-01T00:00:00Z", "tootie", "kernel"),
+            syslog_row("2026-01-01T00:00:00Z", "nashost", "kernel"),
             plex,
             exact,
-            syslog_row("2026-01-01T00:03:00Z", "shart", "plex"),
+            syslog_row("2026-01-01T00:03:00Z", "backuphost", "plex"),
         ],
     )
     .unwrap();
 
     let rows = search_logs_for_service_instances(
         &pool,
-        &["tootie/plex".to_string()],
+        &["nashost/plex".to_string()],
         None,
         None,
         None,
@@ -79,7 +79,7 @@ fn search_logs_for_service_instances_uses_service_predicates_not_host_fanout() {
     // service — all scoped to the instance's host. The kernel row on the
     // same host and the other host's plex row stay out.
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| row.entry.hostname == "tootie"));
+    assert!(rows.iter().all(|row| row.entry.hostname == "nashost"));
     assert!(
         rows.iter()
             .all(|row| row.entry.app_name.as_deref() != Some("kernel"))
@@ -103,14 +103,14 @@ fn search_logs_for_service_instances_escapes_like_wildcards() {
         &[
             // `_` is a LIKE single-char wildcard; an unescaped pattern
             // `my_app/%` would match this row.
-            syslog_row("2026-01-01T00:00:00Z", "tootie", "myxapp/x"),
-            syslog_row("2026-01-01T00:01:00Z", "tootie", "my_app/x"),
+            syslog_row("2026-01-01T00:00:00Z", "nashost", "myxapp/x"),
+            syslog_row("2026-01-01T00:01:00Z", "nashost", "my_app/x"),
         ],
     )
     .unwrap();
     let rows = search_logs_for_service_instances(
         &pool,
-        &["tootie/my_app".to_string()],
+        &["nashost/my_app".to_string()],
         None,
         None,
         None,
@@ -141,7 +141,16 @@ fn service_instance_fanout_arms_use_index_search_without_temp_btree() {
         .unwrap()
         .query_map(
             rusqlite::params![
-                "tootie", "plex", "plex/%", "plex", 100, "shart", "plex", "plex/%", "plex", 100
+                "nashost",
+                "plex",
+                "plex/%",
+                "plex",
+                100,
+                "backuphost",
+                "plex",
+                "plex/%",
+                "plex",
+                100
             ],
             |row| row.get::<_, String>(3),
         )
@@ -168,13 +177,13 @@ fn search_logs_for_service_instances_rejects_legacy_keys() {
     let (_dir, pool) = test_pool("service-instance-legacy-keys.db");
     insert_logs_batch(
         &pool,
-        &[syslog_row("2026-01-01T00:00:00Z", "tootie", "plex")],
+        &[syslog_row("2026-01-01T00:00:00Z", "nashost", "plex")],
     )
     .unwrap();
     // Legacy shapes never split into (host, service) and yield no predicate.
     let rows = search_logs_for_service_instances(
         &pool,
-        &["tootie:plex".to_string(), "plex/plex/plex".to_string()],
+        &["nashost:plex".to_string(), "plex/plex/plex".to_string()],
         None,
         None,
         None,
@@ -192,15 +201,15 @@ fn service_instance_fanout_truncates_globally_newest_first_across_arms() {
     let mut rows = Vec::new();
     for i in 0..8 {
         let ts = format!("2026-01-01T00:00:{i:02}Z");
-        rows.push(syslog_row(&ts, "tootie", "plex"));
-        rows.push(syslog_row(&ts, "shart", "plex"));
+        rows.push(syslog_row(&ts, "nashost", "plex"));
+        rows.push(syslog_row(&ts, "backuphost", "plex"));
     }
     insert_logs_batch(&pool, &rows).unwrap();
 
     let limit = 6;
     let out = search_logs_for_service_instances(
         &pool,
-        &["tootie/plex".to_string(), "shart/plex".to_string()],
+        &["nashost/plex".to_string(), "backuphost/plex".to_string()],
         None,
         None,
         None,
@@ -233,18 +242,18 @@ fn mixed_case_hostname_does_not_match_canonical_instance_key() {
     let (_dir, pool) = test_pool("service-instance-case-miss.db");
     insert_logs_batch(
         &pool,
-        &[syslog_row("2026-01-01T00:00:00Z", "Tootie", "plex")],
+        &[syslog_row("2026-01-01T00:00:00Z", "Nashost", "plex")],
     )
     .unwrap();
     // Pins the case-sensitivity limitation: canonical keys are lowercase
     // and the log predicates compare with SQLite's default BINARY
-    // collation, so a mixed-case syslog hostname ("Tootie") never matches
-    // the canonical instance key ("tootie/plex"). Documented in
+    // collation, so a mixed-case syslog hostname ("Nashost") never matches
+    // the canonical instance key ("nashost/plex"). Documented in
     // docs/contracts/investigation-graph.md; hostname case normalization
     // at ingest is tracked separately.
     let rows = search_logs_for_service_instances(
         &pool,
-        &["tootie/plex".to_string()],
+        &["nashost/plex".to_string()],
         None,
         None,
         None,
@@ -272,7 +281,7 @@ fn glob_prefix_pattern_escapes_glob_metacharacters() {
 fn resolve_topic_entities_exact_and_prefix_use_indexed_tier() {
     let (_dir, pool) = test_pool("resolve-topic-exact-prefix.db");
     let conn = pool.get().unwrap();
-    insert_entity(&conn, graph::ENTITY_TYPE_HOST, "tootie");
+    insert_entity(&conn, graph::ENTITY_TYPE_HOST, "nashost");
     insert_entity(&conn, graph::ENTITY_TYPE_APP, "plex");
     insert_entity(&conn, graph::ENTITY_TYPE_APP, "plexmediaserver");
 

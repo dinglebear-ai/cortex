@@ -61,7 +61,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "topic": {
                     "type": "string",
-                    "description": "For action=topic_correlate, or action=correlate without reference_time: topic/entity string to resolve through the graph and correlate into a unified timeline. Service topics resolve to logical_service (`plex`) and its service_instance deployments (`tootie/plex`); legacy nested identities such as `tootie:plex` or `tootie:plex:plex` are rejected with rejected_legacy_shape."
+                    "description": "For action=topic_correlate, or action=correlate without reference_time: topic/entity string to resolve through the graph and correlate into a unified timeline. Service topics resolve to logical_service (`plex`) and its service_instance deployments (`nashost/plex`); legacy nested identities such as `nashost:plex` or `nashost:plex:plex` are rejected with rejected_legacy_shape."
                 },
                 "mode": {
                     "type": "string",
@@ -81,7 +81,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 "entity_type": {
                     "type": "string",
                     "enum": ["host", "container", "logical_service", "service_instance", "app", "source_ip", "ai_project", "ai_session", "error_signature", "compose_project", "config_artifact", "domain", "network", "reverse_proxy", "storage", "git_commit", "user", "device"],
-                    "description": "For action=graph: entity type for exact canonical-key lookup. Service identity is logical_service (key like 'plex') or service_instance (key like 'tootie/plex'); legacy nested keys such as 'tootie:plex' or 'tootie:plex:plex' are rejected with rejected_legacy_shape."
+                    "description": "For action=graph: entity type for exact canonical-key lookup. Service identity is logical_service (key like 'plex') or service_instance (key like 'nashost/plex'); legacy nested keys such as 'nashost:plex' or 'nashost:plex:plex' are rejected with rejected_legacy_shape."
                 },
                 "key": {
                     "type": "string",
@@ -105,11 +105,11 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "domain": {
                     "type": "string",
-                    "description": "For action=map mode=domain_routes: target domain, e.g. adguard.tootie.tv."
+                    "description": "For action=map mode=domain_routes: target domain, e.g. adguard.example.invalid."
                 },
                 "service": {
                     "type": "string",
-                    "description": "For action=map mode=service_dependencies: target service_instance key (`host/name`, e.g. `tootie/plex`) or bare service name when host is also provided. Legacy `host:name` keys are rejected with rejected_legacy_shape."
+                    "description": "For action=map mode=service_dependencies: target service_instance key (`host/name`, e.g. `nashost/plex`) or bare service name when host is also provided. Legacy `host:name` keys are rejected with rejected_legacy_shape."
                 },
                 "include_ok": {
                     "type": "boolean",

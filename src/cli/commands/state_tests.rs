@@ -6,11 +6,11 @@ fn strings(values: &[&str]) -> Vec<String> {
 
 #[test]
 fn parse_state_host() {
-    let command = parse_state(&strings(&["host", "dookie", "--limit", "3", "--json"])).unwrap();
+    let command = parse_state(&strings(&["host", "devhost", "--limit", "3", "--json"])).unwrap();
 
     match command {
         CliCommand::State(StateCommand::Host(args)) => {
-            assert_eq!(args.host.as_deref(), Some("dookie"));
+            assert_eq!(args.host.as_deref(), Some("devhost"));
             assert_eq!(args.limit, Some(3));
             assert!(args.json);
         }

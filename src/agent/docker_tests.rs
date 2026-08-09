@@ -121,7 +121,7 @@ fn container_identity_metadata_carries_compose_context() {
         ),
     ]);
     let metadata = container_identity_metadata(
-        "tootie",
+        "nashost",
         "abcdef1234567890",
         "plex",
         "stdout",
@@ -129,7 +129,7 @@ fn container_identity_metadata_carries_compose_context() {
         &labels,
     );
     assert_eq!(metadata["source_kind"], "agent-docker");
-    assert_eq!(metadata["agent_docker"]["host"], "tootie");
+    assert_eq!(metadata["agent_docker"]["host"], "nashost");
     assert_eq!(metadata["agent_docker"]["container_id"], "abcdef1234567890");
     assert_eq!(metadata["agent_docker"]["compose_project"], "plex");
     assert_eq!(metadata["agent_docker"]["compose_service"], "plex");
@@ -156,7 +156,7 @@ fn long_compose_app_name_still_has_structured_metadata() {
     let app_name = container_app_name("very-long-container-name-for-plex", &labels);
     assert!(app_name.len() > 48);
     let metadata = container_identity_metadata(
-        "tootie",
+        "nashost",
         "abcdef1234567890",
         "very-long-container-name-for-plex",
         "stderr",
@@ -188,7 +188,7 @@ fn docker_die_event_is_rendered_with_lifecycle_metadata() {
         ..Default::default()
     };
 
-    let line = docker_event_line("tootie", &event).expect("supported lifecycle event");
+    let line = docker_event_line("nashost", &event).expect("supported lifecycle event");
     assert!(line.contains("2026-05-05T01:02:03.123456789Z"));
     assert!(line.contains("docker container event: die container=plex"));
     assert!(line.contains("\"stream\":\"event\""));
@@ -214,7 +214,7 @@ fn lifecycle_event(action: &str, exit_code: Option<i32>) -> EventMessage {
 #[test]
 fn forwarded_health_action_uses_canonical_collapsed_normalization() {
     let line = docker_event_line(
-        "tootie",
+        "nashost",
         &lifecycle_event("health_status:   unhealthy", None),
     )
     .unwrap();
@@ -238,7 +238,7 @@ fn forwarded_event_severity_matches_canonical_mapping() {
         ("health_status: healthy", None, 133),
         ("health_status: unhealthy", None, 132),
     ] {
-        let line = docker_event_line("tootie", &lifecycle_event(action, exit_code)).unwrap();
+        let line = docker_event_line("nashost", &lifecycle_event(action, exit_code)).unwrap();
         assert!(line.starts_with(&format!("<{pri}>")), "{action}: {line}");
     }
 }

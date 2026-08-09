@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Do not remove or rename `cortex setup deploy remote`; it remains the escape hatch and debug primitive.
-- `cortex update` must not require repeating `--home /mnt/cache/appdata/cortex tootie` after the server profile has been saved.
+- `cortex update` must not require repeating `--home /mnt/cache/appdata/cortex nashost` after the server profile has been saved.
 - `cortex update` defaults to scope `all`: update the configured server, then update configured host-agent clients if any are configured.
 - `clients` means Cortex host agents in this implementation. `agents` is accepted as an alias for `clients`.
 - The default profile path is `<cortex-home>/deployments.toml`, where `<cortex-home>` is resolved by `cortex::setup::cortex_home_dir()`.
@@ -74,12 +74,12 @@ fn update_profile_round_trips_server_and_clients() {
     let path = dir.path().join("deployments.toml");
     let profile = UpdateProfile {
         server: Some(ServerUpdateProfile {
-            host: "tootie".to_string(),
+            host: "nashost".to_string(),
             home: "/mnt/cache/appdata/cortex".to_string(),
         }),
         clients: ClientsUpdateProfile {
-            hosts: vec!["dookie".to_string(), "shart".to_string()],
-            target: Some("https://cortex.tootie.tv".to_string()),
+            hosts: vec!["devhost".to_string(), "backuphost".to_string()],
+            target: Some("https://cortex.example.invalid".to_string()),
             docker: Some(true),
             journald: None,
         },
@@ -100,8 +100,8 @@ fn configure_server_profile_validates_and_preserves_clients() {
         &UpdateProfile {
             server: None,
             clients: ClientsUpdateProfile {
-                hosts: vec!["dookie".to_string()],
-                target: Some("https://cortex.tootie.tv".to_string()),
+                hosts: vec!["devhost".to_string()],
+                target: Some("https://cortex.example.invalid".to_string()),
                 docker: Some(true),
                 journald: Some(false),
             },
@@ -110,14 +110,14 @@ fn configure_server_profile_validates_and_preserves_clients() {
     .unwrap();
 
     let updated =
-        configure_server_profile(Some(&path), "tootie", "/mnt/cache/appdata/cortex").unwrap();
+        configure_server_profile(Some(&path), "nashost", "/mnt/cache/appdata/cortex").unwrap();
 
-    assert_eq!(updated.server.as_ref().unwrap().host, "tootie");
+    assert_eq!(updated.server.as_ref().unwrap().host, "nashost");
     assert_eq!(
         updated.server.as_ref().unwrap().home,
         "/mnt/cache/appdata/cortex"
     );
-    assert_eq!(updated.clients.hosts, vec!["dookie"]);
+    assert_eq!(updated.clients.hosts, vec!["devhost"]);
 }
 
 #[test]
@@ -133,11 +133,11 @@ fn configure_server_profile_rejects_unsafe_values() {
     .unwrap_err();
     assert!(bad_host.to_string().contains("unsafe ssh host"));
 
-    let bad_home = configure_server_profile(Some(&path), "tootie", "relative/path").unwrap_err();
+    let bad_home = configure_server_profile(Some(&path), "nashost", "relative/path").unwrap_err();
     assert!(bad_home.to_string().contains("absolute path"));
 
     let parent_home =
-        configure_server_profile(Some(&path), "tootie", "/mnt/cache/../cortex").unwrap_err();
+        configure_server_profile(Some(&path), "nashost", "/mnt/cache/../cortex").unwrap_err();
     assert!(parent_home.to_string().contains("must not contain '..'"));
 }
 ```
@@ -419,7 +419,7 @@ impl UpdateRunner for FakeUpdateRunner {
 fn update_server_uses_saved_profile_without_repeating_home_arg() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("deployments.toml");
-    configure_server_profile(Some(&path), "tootie", "/mnt/cache/appdata/cortex").unwrap();
+    configure_server_profile(Some(&path), "nashost", "/mnt/cache/appdata/cortex").unwrap();
     let mut runner = FakeUpdateRunner::default();
 
     let report = run_update_with_runner(
@@ -435,7 +435,7 @@ fn update_server_uses_saved_profile_without_repeating_home_arg() {
 
     assert!(!report.has_errors);
     assert_eq!(runner.server_calls.len(), 1);
-    assert_eq!(runner.server_calls[0].0, "tootie");
+    assert_eq!(runner.server_calls[0].0, "nashost");
     assert_eq!(
         runner.server_calls[0].1.home.as_deref(),
         Some("/mnt/cache/appdata/cortex")
@@ -450,8 +450,8 @@ fn update_clients_deploys_every_configured_client() {
     let path = dir.path().join("deployments.toml");
     configure_clients_profile(
         Some(&path),
-        vec!["dookie".to_string(), "shart".to_string()],
-        Some("https://cortex.tootie.tv".to_string()),
+        vec!["devhost".to_string(), "backuphost".to_string()],
+        Some("https://cortex.example.invalid".to_string()),
         Some(true),
         None,
     )
@@ -470,7 +470,7 @@ fn update_clients_deploys_every_configured_client() {
     .unwrap();
 
     assert!(!report.has_errors);
-    assert_eq!(runner.client_calls, vec!["dookie", "shart"]);
+    assert_eq!(runner.client_calls, vec!["devhost", "backuphost"]);
     assert_eq!(report.clients.len(), 2);
 }
 
@@ -478,11 +478,11 @@ fn update_clients_deploys_every_configured_client() {
 fn update_all_stops_before_clients_when_server_fails() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("deployments.toml");
-    configure_server_profile(Some(&path), "tootie", "/mnt/cache/appdata/cortex").unwrap();
+    configure_server_profile(Some(&path), "nashost", "/mnt/cache/appdata/cortex").unwrap();
     configure_clients_profile(
         Some(&path),
-        vec!["dookie".to_string()],
-        Some("https://cortex.tootie.tv".to_string()),
+        vec!["devhost".to_string()],
+        Some("https://cortex.example.invalid".to_string()),
         None,
         None,
     )
@@ -811,7 +811,7 @@ fn mode_parse_accepts_update_config_server() {
         "config".into(),
         "server".into(),
         "--host".into(),
-        "tootie".into(),
+        "nashost".into(),
         "--home".into(),
         "/mnt/cache/appdata/cortex".into(),
         "--profile".into(),
@@ -829,7 +829,7 @@ fn mode_parse_accepts_update_config_server() {
                 profile: Some(ref profile),
             },
             json: true,
-        }) if host == "tootie" && home == "/mnt/cache/appdata/cortex" && profile == "/tmp/deployments.toml"
+        }) if host == "nashost" && home == "/mnt/cache/appdata/cortex" && profile == "/tmp/deployments.toml"
     ));
 }
 
@@ -840,9 +840,9 @@ fn mode_parse_accepts_update_config_clients() {
         "config".into(),
         "clients".into(),
         "--hosts".into(),
-        "dookie,shart".into(),
+        "devhost,backuphost".into(),
         "--target".into(),
-        "https://cortex.tootie.tv".into(),
+        "https://cortex.example.invalid".into(),
         "--docker".into(),
     ])
     .unwrap();
@@ -858,8 +858,8 @@ fn mode_parse_accepts_update_config_clients() {
                 profile: None,
             },
             json: false,
-        }) if hosts == &vec!["dookie".to_string(), "shart".to_string()]
-             && target == "https://cortex.tootie.tv"
+        }) if hosts == &vec!["devhost".to_string(), "backuphost".to_string()]
+             && target == "https://cortex.example.invalid"
     ));
 }
 ```
@@ -1200,7 +1200,7 @@ fn parse_deploy_remote_home_has_enough_data_to_save_update_profile() {
         "remote".into(),
         "--home".into(),
         "/mnt/cache/appdata/cortex".into(),
-        "tootie".into(),
+        "nashost".into(),
     ])
     .unwrap();
 
@@ -1210,7 +1210,7 @@ fn parse_deploy_remote_home_has_enough_data_to_save_update_profile() {
             ref host,
             dry_run: false,
             home: Some(ref home),
-        } if host == "tootie" && home == "/mnt/cache/appdata/cortex"
+        } if host == "nashost" && home == "/mnt/cache/appdata/cortex"
     ));
 }
 ```
@@ -1359,8 +1359,8 @@ shell history, and command events into the server.
 Configure the update profile once:
 
 ```bash
-cortex update config server --host tootie --home /mnt/cache/appdata/cortex
-cortex update config clients --hosts dookie,shart,squirts --target https://cortex.tootie.tv --docker
+cortex update config server --host nashost --home /mnt/cache/appdata/cortex
+cortex update config clients --hosts devhost,backuphost,edgehost --target https://cortex.example.invalid --docker
 ```
 
 The profile lives at `~/.cortex/deployments.toml` by default. A successful
@@ -1370,7 +1370,7 @@ so a one-off low-level deploy can seed future `cortex update server` runs.
 
 - [ ] **Step 5: Update `docs/mcp/DEPLOY.md`**
 
-Replace the paragraph that starts with “Tootie's canonical update path is” with:
+Replace the paragraph that starts with “Nashost's canonical update path is” with:
 
 ````markdown
 The normal update workflow is:
@@ -1381,7 +1381,7 @@ cortex update server --dry-run
 cortex update server
 ```
 
-`cortex setup deploy remote --home /mnt/cache/appdata/cortex tootie` remains the
+`cortex setup deploy remote --home /mnt/cache/appdata/cortex nashost` remains the
 low-level primitive and a useful escape hatch. A successful low-level remote
 deploy records the server profile so later updates do not repeat host/home
 details.
@@ -1435,24 +1435,24 @@ Expected: every command exits 0.
 Run from the implementation worktree with the release binary built in Step 1:
 
 ```bash
-./.cache/cargo/release/cortex update config server --host tootie --home /mnt/cache/appdata/cortex --json
+./.cache/cargo/release/cortex update config server --host nashost --home /mnt/cache/appdata/cortex --json
 ./.cache/cargo/release/cortex update server --dry-run --json
 ./.cache/cargo/release/cortex update server --json
 ```
 
 Expected:
-- `config server` writes a profile containing `server.host = "tootie"` and `server.home = "/mnt/cache/appdata/cortex"`.
-- `update server --dry-run` reports `host: tootie`, `home: /mnt/cache/appdata/cortex`, and no errors.
+- `config server` writes a profile containing `server.host = "nashost"` and `server.home = "/mnt/cache/appdata/cortex"`.
+- `update server --dry-run` reports `host: nashost`, `home: /mnt/cache/appdata/cortex`, and no errors.
 - `update server` reports all phases ok and no errors.
 
-- [ ] **Step 3: Verify live tootie server state**
+- [ ] **Step 3: Verify live nashost server state**
 
 Run:
 
 ```bash
-ssh tootie "docker compose --env-file /mnt/cache/appdata/cortex/.env -f /mnt/cache/appdata/cortex/compose/docker-compose.yml config --images"
-ssh tootie "docker ps --filter name=cortex --format '{{.Names}}\t{{.Image}}\t{{.Status}}'"
-ssh tootie 'set -eu; token=$(grep "^CORTEX_API_TOKEN=" /mnt/cache/appdata/cortex/.env | cut -d= -f2-); curl -fsS -H "Authorization: Bearer ${token}" http://127.0.0.1:3100/api/version'
+ssh nashost "docker compose --env-file /mnt/cache/appdata/cortex/.env -f /mnt/cache/appdata/cortex/compose/docker-compose.yml config --images"
+ssh nashost "docker ps --filter name=cortex --format '{{.Names}}\t{{.Image}}\t{{.Status}}'"
+ssh nashost 'set -eu; token=$(grep "^CORTEX_API_TOKEN=" /mnt/cache/appdata/cortex/.env | cut -d= -f2-); curl -fsS -H "Authorization: Bearer ${token}" http://127.0.0.1:3100/api/version'
 ```
 
 Expected:

@@ -37,7 +37,7 @@ async fn mocked_docker_engine_fixture_lists_containers_and_maps_log_frame() {
     assert_eq!(container.app_name(), "swag");
 
     let entry = log_output_to_entry(
-        "squirts",
+        "edgehost",
         container,
         LogOutput::StdOut {
             message: Bytes::from_static(b"2026-06-12T12:34:56.789Z live docker fixture marker\n"),
@@ -46,9 +46,9 @@ async fn mocked_docker_engine_fixture_lists_containers_and_maps_log_frame() {
     .expect("log frame should parse")
     .expect("stdout frame should produce an entry");
 
-    assert_eq!(entry.hostname, "squirts");
+    assert_eq!(entry.hostname, "edgehost");
     assert_eq!(entry.app_name.as_deref(), Some("swag"));
-    assert_eq!(entry.source_ip, "docker://squirts/swag-1/stdout");
+    assert_eq!(entry.source_ip, "docker://edgehost/swag-1/stdout");
     assert_eq!(entry.message, "live docker fixture marker");
     assert_eq!(
         entry

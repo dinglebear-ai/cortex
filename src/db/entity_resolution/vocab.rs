@@ -29,7 +29,7 @@ pub enum LegacyShape {
 
 /// Canonical logical-service key: lowercased, trimmed, non-key characters
 /// mapped to `-`. Kept characters are ASCII alphanumerics plus `-`, `_`,
-/// and `.` (dots preserve raw hostnames like `tootie.lan`). Returns `None`
+/// and `.` (dots preserve raw hostnames like `nashost.lan`). Returns `None`
 /// when nothing canonical remains.
 pub fn logical_service_key(name: &str) -> Option<String> {
     canonical_component(name)
@@ -75,8 +75,8 @@ pub fn container_key_host(key: &str) -> Option<&str> {
     Some(host)
 }
 
-/// Classify legacy service identity shapes (`tootie:plex`,
-/// `tootie:plex:plex`, `plex/plex/plex`). Canonical inputs return `None`, as
+/// Classify legacy service identity shapes (`nashost:plex`,
+/// `nashost:plex:plex`, `plex/plex/plex`). Canonical inputs return `None`, as
 /// do free-text inputs that merely contain colons or slashes without looking
 /// like legacy keys: anything with ASCII whitespace, colon shapes whose
 /// segments are not all name-like (`10.0.0.5:443`, `12:30`) or contain a

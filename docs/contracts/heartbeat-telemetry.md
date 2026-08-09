@@ -165,7 +165,7 @@ Unknown top-level fields are rejected.
 ```json
 {
   "host_id": "01jyn5j7n3h9wc0x0mx2x2fb9c",
-  "hostname": "tootie",
+  "hostname": "nashost",
   "os": "linux",
   "kernel": "6.8.0-60-generic",
   "architecture": "x86_64",
@@ -594,7 +594,7 @@ Params:
 ```json
 {
   "action": "host_state",
-  "host": "tootie",
+  "host": "nashost",
   "since": "2026-05-24T14:00:00Z",
   "limit": 20
 }
@@ -614,7 +614,7 @@ Result:
 ```json
 {
   "host_id": "01jyn5j7n3h9wc0x0mx2x2fb9c",
-  "hostname": "tootie",
+  "hostname": "nashost",
   "latest": {},
   "samples": [],
   "derived": {
@@ -653,7 +653,7 @@ Result:
   "hosts": [
     {
       "host_id": "01jyn5j7n3h9wc0x0mx2x2fb9c",
-      "hostname": "tootie",
+      "hostname": "nashost",
       "last_heartbeat_at": "2026-05-24T14:30:00Z",
       "status": "ok",
       "pressure": ["container_unhealthy"],
@@ -681,7 +681,7 @@ Params:
   "action": "correlate_state",
   "reference_time": "2026-05-24T14:30:00Z",
   "window_minutes": 10,
-  "host": "tootie",
+  "host": "nashost",
   "severity_min": "warning",
   "limit": 100
 }
@@ -705,7 +705,7 @@ Result:
   "hosts": [
     {
       "host_id": "01jyn5j7n3h9wc0x0mx2x2fb9c",
-      "hostname": "tootie",
+      "hostname": "nashost",
       "heartbeat_summary": {
         "samples": 20,
         "partial_samples": 0,
@@ -729,7 +729,7 @@ plan explicitly records the deferral and the reason.
 Expected CLI shape:
 
 ```bash
-cortex state host --host tootie --json
+cortex state host --host nashost --json
 cortex state fleet --json
 cortex correlate state --reference-time 2026-05-24T14:30:00Z --window-minutes 10 --json
 ```

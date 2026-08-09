@@ -253,7 +253,7 @@ fn disk_fill_zero_thresholds_do_not_fire() {
 
 #[test]
 fn ingest_queue_pressure_fires_on_drops() {
-    let result = evaluate_ingest_queue_pressure("dookie", 1, 2, 3, 99, 100, "[]");
+    let result = evaluate_ingest_queue_pressure("devhost", 1, 2, 3, 99, 100, "[]");
 
     let params = result.expect("queue pressure should fire");
     assert_eq!(params.rule_id, "ingest_queue_pressure");
@@ -263,41 +263,41 @@ fn ingest_queue_pressure_fires_on_drops() {
 
 #[test]
 fn ingest_queue_pressure_ok_does_not_fire() {
-    let result = evaluate_ingest_queue_pressure("dookie", 0, 0, 0, 0, 100, "[]");
+    let result = evaluate_ingest_queue_pressure("devhost", 0, 0, 0, 0, 100, "[]");
     assert!(result.is_none());
 }
 
 #[test]
 fn ingest_silence_fires_when_newest_row_exceeds_threshold() {
-    let result = evaluate_ingest_silence("dookie", Some(1800), 900, "[]");
+    let result = evaluate_ingest_silence("devhost", Some(1800), 900, "[]");
     let params = result.expect("silence should fire");
     assert_eq!(params.rule_id, "ingest_silence");
     assert_eq!(params.severity, "critical");
-    assert_eq!(params.dedup_key, "ingest_silence:dookie");
+    assert_eq!(params.dedup_key, "ingest_silence:devhost");
     assert!(params.body.contains("30 minutes"));
 }
 
 #[test]
 fn ingest_silence_recent_rows_do_not_fire() {
-    assert!(evaluate_ingest_silence("dookie", Some(60), 900, "[]").is_none());
+    assert!(evaluate_ingest_silence("devhost", Some(60), 900, "[]").is_none());
 }
 
 #[test]
 fn ingest_silence_empty_db_does_not_fire() {
     // No rows ever = fresh install, not an outage.
-    assert!(evaluate_ingest_silence("dookie", None, 900, "[]").is_none());
+    assert!(evaluate_ingest_silence("devhost", None, 900, "[]").is_none());
 }
 
 #[test]
 fn ingest_silence_zero_threshold_does_not_fire() {
-    assert!(evaluate_ingest_silence("dookie", Some(10_000), 0, "[]").is_none());
+    assert!(evaluate_ingest_silence("devhost", Some(10_000), 0, "[]").is_none());
 }
 
 #[test]
 fn heartbeat_silence_builds_once_per_outage_dedup_key() {
     let params = evaluate_heartbeat_silence(
         "syslog_7014e4ed",
-        "shart",
+        "backuphost",
         "2026-07-14T18:34:36.613Z",
         200_000,
         600,
@@ -305,19 +305,19 @@ fn heartbeat_silence_builds_once_per_outage_dedup_key() {
     );
     assert_eq!(params.rule_id, "heartbeat_silence");
     assert_eq!(params.severity, "critical");
-    assert_eq!(params.hostname, "shart");
+    assert_eq!(params.hostname, "backuphost");
     assert_eq!(
         params.dedup_key, "heartbeat_silence:syslog_7014e4ed:2026-07-14T18:34:36.613Z",
         "host_id plus the stalled heartbeat timestamp key the outage — same outage, same key"
     );
-    assert!(params.title.contains("shart"));
+    assert!(params.title.contains("backuphost"));
     assert!(params.body.contains("2026-07-14T18:34:36.613Z"));
     assert!(params.body.contains("threshold: 10 min"));
 
     // A recovery followed by a new outage produces a different key.
     let next = evaluate_heartbeat_silence(
         "syslog_7014e4ed",
-        "shart",
+        "backuphost",
         "2026-07-20T00:00:00.000Z",
         900,
         600,
@@ -329,7 +329,7 @@ fn heartbeat_silence_builds_once_per_outage_dedup_key() {
 #[test]
 fn stream_silence_builds_once_per_outage_dedup_key() {
     let params = evaluate_stream_silence(
-        "tootie",
+        "nashost",
         "agent-docker",
         "2026-07-16T20:00:00.000Z",
         7200,
@@ -338,12 +338,12 @@ fn stream_silence_builds_once_per_outage_dedup_key() {
     );
     assert_eq!(params.rule_id, "stream_silence");
     assert_eq!(params.severity, "warning");
-    assert_eq!(params.hostname, "tootie");
+    assert_eq!(params.hostname, "nashost");
     assert_eq!(
         params.dedup_key,
-        "stream_silence:tootie:agent-docker:2026-07-16T20:00:00.000Z"
+        "stream_silence:nashost:agent-docker:2026-07-16T20:00:00.000Z"
     );
     assert!(params.title.contains("agent-docker"));
-    assert!(params.title.contains("tootie"));
+    assert!(params.title.contains("nashost"));
     assert!(params.body.contains("threshold: 60 min"));
 }

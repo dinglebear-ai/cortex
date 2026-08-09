@@ -12,7 +12,7 @@
 
 - No new hyphenated CLI subcommand words anywhere in this plan — the whole point is eliminating `agent-command` / `ingest-spool`. New words introduced: `user`, `agent`, `index`, `completions` (all single words, no hyphens). This applies to both `ingest` (`ingest shell user ...` / `ingest shell agent ...`) and `setup` (`setup shell agent ...` / `setup shell completions ...`) — `setup` gets a new `shell` grouping exactly like `ingest` did, rather than keeping its older flat hyphenated siblings (`heartbeat-agent`, `debug-wrapper`, etc.) as precedent. Those older siblings are untouched by this plan; only the agent-command/completions surfaces move under `setup shell`.
 - Data-model identity (`SourceKind::AgentCommand` → wire string `"agent-command"`, DB `source_type`/`source_kind` values, MCP schema enum entries) is **out of scope** and must NOT change — only CLI-facing grammar changes. Existing rows and cross-host consistency depend on that string staying stable.
-- Backward compatibility: the already-installed wrapper script and any manually-created systemd timers on live hosts (e.g. `dookie`) still invoke the pre-rename grammar until `cortex setup shell agent install` is rerun. The CLI parser must keep accepting the immediately-prior grammar (`cortex ingest agent-command {ingest-spool|wrap}`) as a deprecated alias so an unattended host is never bricked by this rename the same way bead `syslog-mcp-4n4a6` happened.
+- Backward compatibility: the already-installed wrapper script and any manually-created systemd timers on live hosts (e.g. `devhost`) still invoke the pre-rename grammar until `cortex setup shell agent install` is rerun. The CLI parser must keep accepting the immediately-prior grammar (`cortex ingest agent-command {ingest-spool|wrap}`) as a deprecated alias so an unattended host is never bricked by this rename the same way bead `syslog-mcp-4n4a6` happened.
 - `cargo xtask bump-version patch|minor|major` and a `CHANGELOG.md` entry are required before this lands on `main`, per this repo's CLAUDE.md. This plan does not itself dictate which bump size — pick per the final commit's conventional-commit prefix when you open the PR.
 - `cargo clippy --all-targets --all-features --locked -- -D warnings` and `cargo fmt --check` must pass (repo's `lefthook.yml` pre-push gate enforces this already).
 
@@ -1467,7 +1467,7 @@ git commit -m "refactor(setup): rename agent-command setup domain to shell-agent
 - Consumes: nothing new
 - Produces: nothing new — this closes the loop so the wrapper never double-logs an `ingest shell agent index` (or its immediately-prior grammar form) invocation.
 
-**Engineering-review change applied to this task**: the plan originally tolerated a third, even-older "pre-move" grammar (`cortex agent-command ingest-spool`, with no `ingest` prefix at all). Simplicity review flagged this as dead code: that bare top-level form is a `MovedIntoGroupedDomain` surface in `src/surfaces.rs` — the CLI's own top-level parser rejects it with a "did you mean `ingest shell agent`" error and never executes it, so no live process can ever actually invoke `cortex agent-command ingest-spool` for this guard to catch. Tolerating it here added a `matches!` arm and a test case for a shape that's provably unreachable. Dropped — this guard now tolerates exactly two shapes: the canonical grammar and the one immediately-prior grouped grammar that real, already-deployed wrapper scripts on hosts like `dookie` actually still emit.
+**Engineering-review change applied to this task**: the plan originally tolerated a third, even-older "pre-move" grammar (`cortex agent-command ingest-spool`, with no `ingest` prefix at all). Simplicity review flagged this as dead code: that bare top-level form is a `MovedIntoGroupedDomain` surface in `src/surfaces.rs` — the CLI's own top-level parser rejects it with a "did you mean `ingest shell agent`" error and never executes it, so no live process can ever actually invoke `cortex agent-command ingest-spool` for this guard to catch. Tolerating it here added a `matches!` arm and a test case for a shape that's provably unreachable. Dropped — this guard now tolerates exactly two shapes: the canonical grammar and the one immediately-prior grouped grammar that real, already-deployed wrapper scripts on hosts like `devhost` actually still emit.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1495,7 +1495,7 @@ fn agent_command_ingest_spool_guard_is_argv_scoped() {
     ]));
     // Grouped grammar predating this rename: `cortex ingest agent-command
     // ingest-spool`. This is the one already deployed on live hosts (e.g.
-    // dookie) and the only legacy shape worth tolerating here — the even
+    // devhost) and the only legacy shape worth tolerating here — the even
     // older bare `cortex agent-command ingest-spool` (no `ingest` prefix) is
     // unreachable: the CLI's top-level parser rejects it outright (see
     // `src/surfaces.rs`'s `MovedIntoGroupedDomain` entry), so no process can
@@ -1569,7 +1569,7 @@ fn is_agent_command_ingest_spool_invocation(command_args: &[String]) -> bool {
     // Canonical grammar: `cortex ingest shell agent index`. Grouped
     // pre-restructure grammar: `cortex ingest agent-command ingest-spool` —
     // the one immediately-prior grammar already deployed on live hosts (e.g.
-    // dookie), accepted defensively so a lingering unregenerated
+    // devhost), accepted defensively so a lingering unregenerated
     // wrapper/timer can never be self-ingested. The even-older bare
     // `cortex agent-command ingest-spool` (no `ingest` prefix) is
     // deliberately NOT tolerated here — it's unreachable, since the CLI's
@@ -3586,5 +3586,5 @@ git commit -m "feat(doctor): detect and optionally disable stale agent-command s
 - [ ] Add a `CHANGELOG.md` entry under the bumped version summarizing: CLI rename (`ingest shell user|agent`, `setup shell agent`), new `setup shell completions`, agent-command forwarding (`--server`/`--token` on `ingest shell agent index`, new `/v1/agent-commands` endpoint), and `cortex doctor --fix` stale-unit detection.
 - [ ] `cargo xtask check-version-sync` and `cargo xtask check-release-versions` both pass.
 - [ ] Update `README.md`'s "Syslog Forwarder Setup"/CLI reference sections (search `grep -n "agent-command\|ingest-spool" README.md docs/*.md openwiki/*.md`) for any remaining stale grammar mentions this plan's `grep` sweeps didn't catch — the codebase-wide sweep in Task 8, Step 6 only covers `src/`, not `README.md`/`docs/`/`openwiki/`.
-- [ ] On any host with an already-installed wrapper or manually-created timer (confirmed: `dookie` has one), after deploying this change run `cortex setup shell agent install` to regenerate the wrapper, and `cortex doctor --fix` (or manual `systemctl --user cat <unit>` review) to catch and retire the stale timer this whole plan exists to fix in the first place.
-- [ ] Close beads `syslog-mcp-4n4a6`'s remaining follow-up decision (or open two fresh beads if you'd rather track "forwarding" and "stale-timer detection" as separate trackable units retroactively) once this lands and is verified on `dookie`.
+- [ ] On any host with an already-installed wrapper or manually-created timer (confirmed: `devhost` has one), after deploying this change run `cortex setup shell agent install` to regenerate the wrapper, and `cortex doctor --fix` (or manual `systemctl --user cat <unit>` review) to catch and retire the stale timer this whole plan exists to fix in the first place.
+- [ ] Close beads `syslog-mcp-4n4a6`'s remaining follow-up decision (or open two fresh beads if you'd rather track "forwarding" and "stale-timer detection" as separate trackable units retroactively) once this lands and is verified on `devhost`.

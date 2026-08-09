@@ -99,8 +99,8 @@ fn should_ingest_container_honors_global_exclude() {
         ..Default::default()
     };
     let host = DockerHostConfig {
-        name: "dookie".into(),
-        base_url: "http://dookie:2375".into(),
+        name: "devhost".into(),
+        base_url: "http://devhost:2375".into(),
         allow_insecure_http: true,
         excluded_containers: Vec::new(),
     };
@@ -119,8 +119,8 @@ fn should_ingest_container_honors_global_exclude() {
 fn should_ingest_container_honors_host_exclude_case_insensitive() {
     let config = DockerIngestConfig::default();
     let host = DockerHostConfig {
-        name: "dookie".into(),
-        base_url: "http://dookie:2375".into(),
+        name: "devhost".into(),
+        base_url: "http://devhost:2375".into(),
         allow_insecure_http: true,
         excluded_containers: vec!["ARCANE-MCP".into()],
     };

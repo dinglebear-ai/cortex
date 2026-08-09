@@ -28,7 +28,7 @@ fn heartbeat_payload() -> Value {
     json!({
         "host": {
             "host_id": "host-1",
-            "hostname": "tootie",
+            "hostname": "nashost",
             "os": "linux",
             "kernel": "6.8.0",
             "architecture": "x86_64",

@@ -66,8 +66,8 @@ fn seed_latest(
 #[test]
 fn host_state_returns_latest_by_host_id() {
     let (pool, _dir) = test_pool();
-    let older = insert_heartbeat(&pool, "host-a", "tootie", 1, "2026-05-25T00:00:00Z", false);
-    let latest = insert_heartbeat(&pool, "host-a", "tootie", 2, "2026-05-25T00:01:00Z", true);
+    let older = insert_heartbeat(&pool, "host-a", "nashost", 1, "2026-05-25T00:00:00Z", false);
+    let latest = insert_heartbeat(&pool, "host-a", "nashost", 2, "2026-05-25T00:01:00Z", true);
     let conn = pool.get().unwrap();
     conn.execute(
         "INSERT INTO heartbeat_cpu (heartbeat_id, load1, load5, load15)
@@ -129,7 +129,7 @@ fn host_state_caps_limit_and_filters_since() {
         insert_heartbeat(
             &pool,
             "host-a",
-            "tootie",
+            "nashost",
             sequence,
             &format!("2026-05-25T00:{sequence:03}:00Z"),
             false,
@@ -165,8 +165,8 @@ fn fleet_state_explain_does_not_scan_main_table() {
     let (pool, _dir) = test_pool();
     // Seed the cache with two hosts; main table is intentionally empty for
     // this test (the cache is populated by the ingest path, or migration 19).
-    seed_latest(&pool, "host-a", 1, "tootie", "2026-05-25T00:01:00Z", false);
-    seed_latest(&pool, "host-b", 2, "dookie", "2026-05-25T00:01:00Z", false);
+    seed_latest(&pool, "host-a", 1, "nashost", "2026-05-25T00:01:00Z", false);
+    seed_latest(&pool, "host-b", 2, "devhost", "2026-05-25T00:01:00Z", false);
 
     let conn = pool.get().unwrap();
     let plan: Vec<String> = {
@@ -219,9 +219,9 @@ fn heartbeat_latest_all_returns_one_row_per_host_ordered_by_hostname() {
 #[test]
 fn cache_upsert_only_advances_on_newer_sampled_at() {
     let (pool, _dir) = test_pool();
-    seed_latest(&pool, "host-a", 1, "tootie", "2026-05-25T00:01:00Z", false);
+    seed_latest(&pool, "host-a", 1, "nashost", "2026-05-25T00:01:00Z", false);
     // "Older" heartbeat: sampled_at is earlier, should NOT overwrite.
-    seed_latest(&pool, "host-a", 99, "tootie", "2026-05-24T00:00:00Z", true);
+    seed_latest(&pool, "host-a", 99, "nashost", "2026-05-24T00:00:00Z", true);
 
     let entries = heartbeat_latest_all(&pool).unwrap();
     assert_eq!(entries.len(), 1);
@@ -238,7 +238,7 @@ fn cache_upsert_only_advances_on_newer_sampled_at() {
 #[test]
 fn heartbeat_metric_snapshot_returns_aggregates() {
     let (pool, _dir) = test_pool();
-    let hb_id = insert_heartbeat(&pool, "host-a", "tootie", 1, "2026-05-25T00:00:00Z", false);
+    let hb_id = insert_heartbeat(&pool, "host-a", "nashost", 1, "2026-05-25T00:00:00Z", false);
     let conn = pool.get().unwrap();
     conn.execute(
         "INSERT INTO heartbeat_cpu (heartbeat_id, load1, load5, load15, usage_percent)
@@ -311,7 +311,7 @@ fn heartbeat_metric_snapshot_ignores_pseudo_mounts_for_disk_pressure() {
     let hb_id = insert_heartbeat(
         &pool,
         "host-a",
-        "vivobook",
+        "laptophost",
         1,
         "2026-05-25T00:00:00Z",
         false,
@@ -348,7 +348,7 @@ fn heartbeat_metric_snapshot_ignores_pseudo_mounts_for_disk_pressure() {
 #[test]
 fn heartbeat_metric_snapshot_keeps_unraid_user_share_pressure() {
     let (pool, _dir) = test_pool();
-    let hb_id = insert_heartbeat(&pool, "host-a", "tootie", 1, "2026-05-25T00:00:00Z", false);
+    let hb_id = insert_heartbeat(&pool, "host-a", "nashost", 1, "2026-05-25T00:00:00Z", false);
     let conn = pool.get().unwrap();
     conn.execute(
         "INSERT INTO heartbeat_disks
@@ -389,14 +389,14 @@ fn insert_memory(pool: &DbPool, heartbeat_id: i64, available_bytes: i64) {
 fn heartbeat_window_summaries_resolves_latest_sample_metrics() {
     let (pool, _dir) = test_pool();
     // Two samples for host-a in the window; the second is the latest.
-    let id1 = insert_heartbeat(&pool, "host-a", "tootie", 1, "2026-05-25T00:01:00Z", false);
-    let id2 = insert_heartbeat(&pool, "host-a", "tootie", 2, "2026-05-25T00:02:00Z", true);
+    let id1 = insert_heartbeat(&pool, "host-a", "nashost", 1, "2026-05-25T00:01:00Z", false);
+    let id2 = insert_heartbeat(&pool, "host-a", "nashost", 2, "2026-05-25T00:02:00Z", true);
     insert_cpu(&pool, id1, 10.0);
     insert_cpu(&pool, id2, 80.0);
     insert_memory(&pool, id1, 8_000);
     insert_memory(&pool, id2, 2_000);
     // A second host to confirm per-group resolution and ordering.
-    let id3 = insert_heartbeat(&pool, "host-b", "dookie", 1, "2026-05-25T00:01:30Z", false);
+    let id3 = insert_heartbeat(&pool, "host-b", "devhost", 1, "2026-05-25T00:01:30Z", false);
     insert_cpu(&pool, id3, 42.0);
     insert_memory(&pool, id3, 4_000);
 
@@ -406,10 +406,10 @@ fn heartbeat_window_summaries_resolves_latest_sample_metrics() {
     // All-hosts path (host omitted): bounded cross-host plan.
     let all = heartbeat_window_summaries(&pool, from, to, None).unwrap();
     assert_eq!(all.len(), 2, "expected one summary row per host");
-    // Ordered by hostname ASC: dookie, tootie.
-    assert_eq!(all[0].hostname, "dookie");
-    assert_eq!(all[1].hostname, "tootie");
-    // tootie's metrics come from the latest sample (id2), not the first.
+    // Ordered by hostname ASC: devhost, nashost.
+    assert_eq!(all[0].hostname, "devhost");
+    assert_eq!(all[1].hostname, "nashost");
+    // nashost's metrics come from the latest sample (id2), not the first.
     assert_eq!(all[1].samples, 2);
     assert_eq!(all[1].partial_samples, 1);
     assert_eq!(all[1].max_cpu_usage_percent, Some(80.0));
@@ -459,9 +459,9 @@ mod stale_heartbeat_hosts_tests {
     #[test]
     fn returns_only_hosts_between_threshold_and_forget() {
         let conn = conn_with_latest(&[
-            ("id-fresh", "dookie", 30),           // current — below threshold
-            ("id-stale", "shart", 1200),          // stale — alertable
-            ("id-ancient", "steamdeck", 700_000), // past forget horizon
+            ("id-fresh", "devhost", 30),         // current — below threshold
+            ("id-stale", "backuphost", 1200),    // stale — alertable
+            ("id-ancient", "deckhost", 700_000), // past forget horizon
         ]);
         let stale = crate::db::stale_heartbeat_hosts(&conn, 600, 604_800).expect("query");
         assert_eq!(
@@ -469,7 +469,7 @@ mod stale_heartbeat_hosts_tests {
             1,
             "only the stale-but-remembered host: {stale:?}"
         );
-        assert_eq!(stale[0].hostname, "shart");
+        assert_eq!(stale[0].hostname, "backuphost");
         assert_eq!(stale[0].host_id, "id-stale");
         assert!(stale[0].age_secs > 600 && stale[0].age_secs < 2000);
         assert!(!stale[0].received_at.is_empty());

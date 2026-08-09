@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-31 12:01:04 EST
 repo: git@github.com:jmagar/cortex.git
@@ -73,7 +75,7 @@ All bead changes were pushed to the Dolt remote (`bd dolt push` — "Push comple
 
 ## Repository Maintenance
 - **Plans**: Inspected `docs/plans/` (5 files, all pre-dating this session — unifi-cef, rmcp-stdio, rmcp-streamable-http, mnemo-feature-port, compose-lifecycle-cli). None are this session's work and completion could not be safely verified, so **none moved**; `docs/plans/complete/` not created. No-op by design.
-- **Beads**: Full pass completed (5 closed, 15 annotated, pushed). The Dolt server (`100.75.111.118:3311`) went unreachable briefly mid-session (circuit breaker open) then recovered; the `ad04`/`vy59` closes were re-confirmed CLOSED and re-pushed after recovery.
+- **Beads**: Full pass completed (5 closed, 15 annotated, pushed). The Dolt server (`198.51.100.3:3311`) went unreachable briefly mid-session (circuit breaker open) then recovered; the `ad04`/`vy59` closes were re-confirmed CLOSED and re-pushed after recovery.
 - **Worktrees/branches**: One worktree only (`/home/jmagar/workspace/cortex`). Branches: `main` (e8f69ae) and the active PR #60 branch `feat/heartbeat-state-parity-and-incident-findings` (aba264f). **No cleanup** — the feature branch is an active PR with uncommitted WIP owned by a concurrent session.
 - **Stale docs**: Found `docs/contracts/log-row-shape.md:32` (INTEGER vs TEXT) and the subprotocol / Probe-trait contradictions. **Not edited** — recorded on the relevant beads as follow-ups instead, to avoid modifying docs on a concurrent agent's PR branch.
 - **Transparency**: The git commit/push of this session file was deliberately **held** — see Risks and Open Questions.
@@ -99,7 +101,7 @@ All bead changes were pushed to the Dolt remote (`bd dolt push` — "Push comple
 
 ## Errors Encountered
 - **`git add: exit status 128`** (repeated, from `bd` auto-export of JSONL into git): root cause — the optional JSONL git-export colliding with the concurrent feature branch state; impact — none (Dolt is the canonical store). Left as-is.
-- **Dolt server unreachable** (`dial tcp 100.75.111.118:3311: i/o timeout`, circuit breaker open): root cause — external homelab host blip; resolution — waited; server recovered; pending `ad04`/`vy59` closes re-confirmed and pushed.
+- **Dolt server unreachable** (`dial tcp 198.51.100.3:3311: i/o timeout`, circuit breaker open): root cause — external homelab host blip; resolution — waited; server recovered; pending `ad04`/`vy59` closes re-confirmed and pushed.
 
 ## Behavior Changes (Before/After)
 | area | before | after |

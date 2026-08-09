@@ -34,7 +34,7 @@ fn test_app_with(
 fn sample_record() -> serde_json::Value {
     serde_json::json!({
         "source": "zsh",
-        "hostname": "dookie",
+        "hostname": "devhost",
         "timestamp": "2026-07-09T00:00:00Z",
         "duration_ms": 500,
         "command": "cargo test",

@@ -384,8 +384,8 @@ pub(super) fn graph_rebuild_stats_response(
     }
 }
 
-/// Reject legacy nested service identity keys (`tootie:plex`,
-/// `tootie:plex:plex`, `plex/plex/plex`) on service-identity lookups before
+/// Reject legacy nested service identity keys (`nashost:plex`,
+/// `nashost:plex:plex`, `plex/plex/plex`) on service-identity lookups before
 /// any graph query runs. The check is scoped to service-identity entity
 /// types: other entity types (`ai_session`, `user`, `git_commit`, `storage`)
 /// legitimately use `:`-separated key grammars and must not be rejected.

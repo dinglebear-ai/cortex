@@ -154,14 +154,14 @@ cortex sessions incidents --limit 3 --json
 cortex sessions investigate --limit 1 --json
 
 # Heartbeat fleet state parity commands
-cortex state host --host tootie --json
+cortex state host --host nashost --json
 cortex state fleet --json
 cortex correlate state --reference-time 2026-01-01T00:00:00Z --window-minutes 10 --json
 
 # Graph lookup commands
-cortex entity host tootie --json
-cortex graph around host tootie --limit 25 --json
-cortex graph explain host tootie --depth 2 --json
+cortex entity host nashost --json
+cortex graph around host nashost --limit 25 --json
+cortex graph explain host nashost --depth 2 --json
 ```
 
 ### curl-based testing

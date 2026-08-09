@@ -22,10 +22,10 @@ fn seed_inventory(pool: &DbPool, services: usize) {
         "2026-01-01T00:00:00Z".to_string(),
     );
     inventory.nodes.push(InventoryNode {
-        id: "node:squirts".to_string(),
-        hostname: "squirts".to_string(),
+        id: "node:edgehost".to_string(),
+        hostname: "edgehost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:squirts"),
+        provenance: provenance("ssh:edgehost"),
         roles: Vec::new(),
         ips: Vec::new(),
         os: None,
@@ -38,12 +38,12 @@ fn seed_inventory(pool: &DbPool, services: usize) {
     for idx in 0..services {
         let name = format!("svc-{idx}");
         inventory.services.push(InventoryService {
-            id: format!("container:squirts:{name}"),
+            id: format!("container:edgehost:{name}"),
             name: name.clone(),
             kind: "container".to_string(),
             trust_level: TrustLevel::Observed,
-            provenance: provenance("docker:squirts"),
-            host: Some("squirts".to_string()),
+            provenance: provenance("docker:edgehost"),
+            host: Some("edgehost".to_string()),
             image: None,
             status: Some("running".to_string()),
             domains: Vec::new(),
@@ -62,7 +62,7 @@ fn seed_inventory(pool: &DbPool, services: usize) {
         id: "proxy:one.example.test".to_string(),
         server_names: vec!["one.example.test".to_string()],
         upstreams: vec!["svc-0:80".to_string()],
-        provenance: provenance("swag:squirts:/redacted.conf"),
+        provenance: provenance("swag:edgehost:/redacted.conf"),
     });
     let _guard = crate::db::graph::GRAPH_TEST_LOCK.lock();
     crate::db::graph::refresh_graph_projection(pool).unwrap();
@@ -75,10 +75,10 @@ fn seed_inventory_without_route_target(pool: &DbPool) {
         "2026-01-01T00:00:00Z".to_string(),
     );
     inventory.nodes.push(InventoryNode {
-        id: "node:squirts".to_string(),
-        hostname: "squirts".to_string(),
+        id: "node:edgehost".to_string(),
+        hostname: "edgehost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:squirts"),
+        provenance: provenance("ssh:edgehost"),
         roles: Vec::new(),
         ips: Vec::new(),
         os: None,
@@ -92,7 +92,7 @@ fn seed_inventory_without_route_target(pool: &DbPool) {
         id: "proxy:orphan.example.test".to_string(),
         server_names: vec!["orphan.example.test".to_string()],
         upstreams: vec!["missing-service:80".to_string()],
-        provenance: provenance("swag:squirts:/redacted.conf"),
+        provenance: provenance("swag:edgehost:/redacted.conf"),
     });
     let _guard = crate::db::graph::GRAPH_TEST_LOCK.lock();
     crate::db::graph::refresh_graph_projection(pool).unwrap();
@@ -110,7 +110,7 @@ fn public_route_findings_return_route_target_and_evidence() {
     assert_eq!(rows[0].domain_key, "one.example.test");
     assert_eq!(rows[0].proxy_key, "proxy:one.example.test");
     // Canonical service-instance key (`host/service`), never `host:service`.
-    assert_eq!(rows[0].service_key.as_deref(), Some("squirts/svc-0"));
+    assert_eq!(rows[0].service_key.as_deref(), Some("edgehost/svc-0"));
     assert!(rows[0].exposes_evidence_id.is_some());
     assert!(rows[0].routes_evidence_id.is_some());
 }

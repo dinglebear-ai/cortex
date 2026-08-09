@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Session Save: Syslog Expansion, Runtime Freshness, and Skills
 
 Date: 2026-05-07 08:42 EDT
@@ -6,12 +8,12 @@ Branch context: working tree is dirty with feature work in progress.
 
 ## Summary
 
-This session expanded syslog-mcp deployment coverage and tightened plugin/runtime operations after PR 13 style ingest expansion work. The active deployment on dookie was confirmed to be systemd, not Docker, and the repo/plugin was adjusted to keep systemd as the intended mode.
+This session expanded syslog-mcp deployment coverage and tightened plugin/runtime operations after PR 13 style ingest expansion work. The active deployment on devhost was confirmed to be systemd, not Docker, and the repo/plugin was adjusted to keep systemd as the intended mode.
 
 Major outcomes:
 
 - Deployed/verified rsyslog drop-ins across the fleet, including journald and AI transcript ingestion.
-- Confirmed SWAG, Authelia, AdGuard, and AI transcript file locations for squirts-style appdata paths.
+- Confirmed SWAG, Authelia, AdGuard, and AI transcript file locations for edgehost-style appdata paths.
 - Added configurable ingest queue capacity to absorb journald/transcript bursts.
 - Added runtime freshness checking for systemd and Docker.
 - Converted plugin slash command surfaces to skills and removed plugin command registration.
