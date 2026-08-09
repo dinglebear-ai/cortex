@@ -277,6 +277,29 @@ export interface StreamEnvelope<TData extends Record<string, unknown> = Record<s
   data: TData
 }
 
+export type BackfillStatus =
+  | "accepted"
+  | "running"
+  | "cancel_requested"
+  | "cancelled"
+  | "completed"
+  | "failed"
+
+export interface BackfillJob {
+  job_id: Id
+  source: "logs" | "mcp_events" | "hook_events" | "skill_events" | "llm_invocations" | "otel_spans" | "otel_metric_points" | "repository_observations" | "all"
+  from_id: Id | null
+  until_id: Id | null
+  status: BackfillStatus
+  processed: number
+  total: number | null
+  created_at: Timestamp
+  started_at: Timestamp | null
+  finished_at: Timestamp | null
+  error: string | null
+  restart_of_job_id: Id | null
+}
+
 export interface ProjectionCursorStatus {
   source_name: string
   last_source_id: Id

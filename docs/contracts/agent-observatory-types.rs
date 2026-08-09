@@ -274,6 +274,18 @@ pub struct MetricPoint {
     pub exemplars_json: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentRunTelemetry {
+    pub run_key: String,
+    pub spans: Vec<SpanSummary>,
+    pub metrics: Vec<MetricPoint>,
+    pub summary: JsonObject,
+    pub freshness: RunFreshness,
+    pub span_pagination: Pagination,
+    pub metric_pagination: Pagination,
+    pub as_of: Timestamp,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pagination {
     pub limit: u32,
@@ -307,6 +319,32 @@ pub struct StreamEnvelope {
     pub run_key: Option<String>,
     pub occurred_at: Timestamp,
     pub data: JsonObject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackfillStatus {
+    Accepted,
+    Running,
+    CancelRequested,
+    Cancelled,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackfillJob {
+    pub job_id: Id,
+    pub source: String,
+    pub from_id: Option<Id>,
+    pub until_id: Option<Id>,
+    pub status: BackfillStatus,
+    pub processed: u64,
+    pub total: Option<u64>,
+    pub created_at: Timestamp,
+    pub started_at: Option<Timestamp>,
+    pub finished_at: Option<Timestamp>,
+    pub error: Option<String>,
+    pub restart_of_job_id: Option<Id>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

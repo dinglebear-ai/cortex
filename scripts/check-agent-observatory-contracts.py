@@ -90,10 +90,10 @@ if Draft202012Validator({"$ref": "#/$defs/Page", "$defs": schema["$defs"]}).is_v
 
 rust = (CONTRACTS / "agent-observatory-types.rs").read_text()
 typescript = (CONTRACTS / "agent-observatory-types.ts").read_text()
-for token in ("pub run: AgentRunSummary", "pub commit_summary: Option<GitCommitSummary>", "pub payload: Option<JsonObject>", "pub data: JsonObject"):
+for token in ("pub run: AgentRunSummary", "pub commit_summary: Option<GitCommitSummary>", "pub payload: Option<JsonObject>", "pub data: JsonObject", "pub freshness: RunFreshness", "pub struct BackfillJob"):
     if token not in rust:
         fail(f"Rust contract missing {token}")
-for token in ("run: AgentRunSummary", "commit_summary: GitCommitSummary | null", "payload: TPayload | null", "data: TData", "freshness: RunFreshness"):
+for token in ("run: AgentRunSummary", "commit_summary: GitCommitSummary | null", "payload: TPayload | null", "data: TData", "freshness: RunFreshness", "export interface BackfillJob"):
     if token not in typescript:
         fail(f"TypeScript contract missing {token}")
 
