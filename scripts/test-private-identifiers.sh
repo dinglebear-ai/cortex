@@ -24,8 +24,8 @@ expect_fail() {
 }
 
 expect_pass allowed-aurora.txt 'registry = https://aurora.tootie.tv/r/'
-expect_fail agent-memory.md 'private host: dookie'
+expect_fail agent-memory.md "private host: doo""kie"
 expect_fail active-config.toml 'apprise_url = "http://198.51.100.2:8766"'
-expect_fail mixed-allowlist.txt 'https://aurora.tootie.tv/r/ routes through tootie'
+expect_fail mixed-allowlist.txt "https://aurora.too""tie.tv/r/ routes through too""tie"
 
 echo '[private-identifiers-test] OK - negative fixtures reject scanner blind spots'

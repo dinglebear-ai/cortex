@@ -129,6 +129,7 @@ jobs:
           bash scripts/check-public-identity.sh
           bash scripts/check-private-identifiers.sh
           bash scripts/test-private-identifiers.sh
+          bash scripts/test-render-deploy-templates.sh
 
   fmt:
     name: Formatting

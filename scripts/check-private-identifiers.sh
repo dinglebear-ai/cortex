@@ -81,6 +81,11 @@ if rg -n --text \
   status=1
 fi
 
+if rg -n --text --ignore-case --word-regexp -- 'nashost' docs/mcp/DEPLOY.md deploy/README.md; then
+  echo '[private-identifiers] FAIL - literal synthetic host found in executable deployment guidance' >&2
+  status=1
+fi
+
 if [ "$status" -eq 0 ]; then
   echo "[private-identifiers] OK - public surfaces are scrubbed and active configuration is routable"
 fi

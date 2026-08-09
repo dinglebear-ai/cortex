@@ -23,6 +23,7 @@ set -a
 source deploy/hosts.env
 set +a
 : "${DEV_HOST:?}" "${EDGE_HOST:?}" "${WINDOWS_WSL_HOST:?}" "${LAPTOP_WSL_HOST:?}"
+scripts/check-deploy-hosts.sh
 ```
 
 `deploy/hosts.env` is gitignored. Hosts: `${DEV_HOST}`, `${EDGE_HOST}`,

@@ -59,7 +59,9 @@ cortex setup deploy local           # operator-facing local deploy/reconcile
 cortex setup deploy local --dry-run # preflight without Docker mutation
 cortex setup deploy remote host-a --dry-run # SSH preflight for a remote Compose host
 cortex setup deploy remote host-a           # SSH deploy/reconcile on a remote host
-cortex setup deploy remote --home /mnt/cache/appdata/cortex nashost # nashost appdata runtime
+set -a && source deploy/hosts.env && set +a
+scripts/check-deploy-hosts.sh
+cortex setup deploy remote --home /mnt/cache/appdata/cortex "$NAS_HOST"
 ```
 
 `cortex setup` also disables and removes stale user-level
@@ -79,7 +81,7 @@ cortex update --dry-run
 cortex update
 ```
 
-`cortex setup deploy remote --home /mnt/cache/appdata/cortex nashost` remains the
+`cortex setup deploy remote --home /mnt/cache/appdata/cortex "$NAS_HOST"` remains the
 low-level primitive and a useful escape hatch. A successful low-level remote
 deploy records the server profile so later updates do not repeat host/home
 details; otherwise configure it with
