@@ -125,6 +125,16 @@ NOTES: Replacement values are authoritative; legacy persisted values are normali
 RED: review beads `syslog-mcp-2axwk`, `syslog-mcp-e5o51`, `syslog-mcp-ftiu1`, and `syslog-mcp-34jai`
 RED result: startup created an unversioned migration-45 subset; doctor inspected only the final duplicate, replaced symlinks, and could overwrite a concurrently changed file; validation allowlisted whole files and ignored extensionless tracked text.
 GREEN: focused database and doctor tests plus both transcript-forward validator scripts
-GREEN result: migration-45 tables remain absent; equal duplicates collapse to one current assignment; conflicting duplicates, stale snapshots, and symlinks fail without mutation; tracked occurrence validation rejects both extensionless fixtures and invalid occurrences inside an otherwise approved file.
+GREEN result: migration-45 tables remain absent; ambiguous legacy/duplicate configuration fails closed for manual editing; conflicting duplicates and symlinks fail without mutation; tracked occurrence validation rejects both extensionless fixtures and invalid occurrences inside an otherwise approved file.
 FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`, `src/setup/doctor.rs`, `src/setup/doctor_tests.rs`, `scripts/validate-transcript-forward-env-rename.sh`, `scripts/test-validate-transcript-forward-env-rename.sh`, `Justfile`
 NOTES: Contract, OpenAPI, schema, Rust/TypeScript type, architecture, research, specification, validator, and golden-fixture artifacts were resolved to the versions already validated and merged through PR #172.
+
+## PR-173 independent re-review remediation
+RED: review beads `syslog-mcp-afx03` and `syslog-mcp-ya4a7`
+RED result: reread-before-rename still allowed a noncooperative edit or symlink swap in the final compare/replace window; documentation context accepted the substring `red` inside unrelated words such as `configured`.
+GREEN: fail-closed doctor migration plus injected post-read mutation tests; whole-word documentation context grammar plus an executable-assignment rejection and code-fence negative fixture.
+GREEN result: no automatic rewrite path remains, so forced noncooperative edits and symlink swaps are preserved; executable legacy assignments are rejected even in allowlisted documentation, and unrelated substrings grant no exception.
+REGRESSION: post-merge privacy scanner and adversarial fixtures, render-template hostile-input test, Agent Observatory contracts, transcript validator fixtures, doctor tests, workflow/Kache contracts, full clippy, and full nextest.
+REGRESSION result: all hermetic gates passed; full nextest ran 2,754 tests with 2 skipped and no failures. The live deployment-host check requires a deployment-local `hosts.env`, which is intentionally absent from this worktree.
+FILES: `src/setup/doctor.rs`, `src/setup/doctor_tests.rs`, `src/setup/doctor_transcript_forward_tests.rs`, `scripts/validate-transcript-forward-env-rename.sh`, `scripts/test-validate-transcript-forward-env-rename.sh`
+NOTES: Current `origin/main` through PR #174 was merged without conflicts, preserving the privacy scanner/config/runbook changes and the validated PR #172 Agent Observatory artifacts.
