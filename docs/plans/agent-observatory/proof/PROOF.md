@@ -77,7 +77,7 @@ REGRESSION result: 4 topology tests passed; schema-head test passed at 44; forma
 FILES: src/db/pool.rs, src/db/pool_tests.rs
 NOTES: KNOWN_SCHEMA_VERSION now advances truthfully to 44 only after the complete topology migration commits atomically.
 
-## AO-008 Implement migration 45 agent_runs
+## AO-008 Superseded: partial migration 45 agent_runs scaffold removed
 commit/worktree SHA: 696d60c5 (task started)
 RED: isolated pinned-target init_pool_creates_agent_observatory_run_schema_scaffold
 RED result: expected run columns, got an empty list because agent_runs did not exist
@@ -86,9 +86,9 @@ GREEN result: 1 passed; lifecycle status constraints, host/tool/native-session i
 REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt, and git diff --check
 REGRESSION result: runtime schema remains 44; formatting and diff checks clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
-NOTES: Migration 45 remains unmarked until actors, evidence, events, cursors, and stream outbox are complete.
+NOTES: Adversarial review found that creating unversioned migration-45 tables exposed a partial schema. The scaffold was removed; migration 45 must land atomically in its complete implementation PR.
 
-## AO-009 Add actors and run/worktree evidence
+## AO-009 Superseded: partial actors and run/worktree evidence scaffold removed
 commit/worktree SHA: cb6f7f77 (task started)
 RED: isolated pinned-target init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema
 RED result: expected actor columns, got an empty list because agent_run_actors and agent_run_worktrees did not exist
@@ -97,7 +97,7 @@ GREEN result: 1 passed; actor identity and JSON checks, confidence/trust constra
 REGRESSION: pinned-target known_schema_version_matches_migration_head, cargo fmt --all -- --check, git diff --check
 REGRESSION result: runtime schema remains 44; formatting and diff clean
 FILES: src/db/pool.rs, src/db/pool_tests.rs
-NOTES: Migration 45 remains intentionally unmarked until AO-013.
+NOTES: These unversioned tables were removed with AO-008. `init_pool_does_not_create_partial_agent_observatory_migration_45` now proves all three partial tables remain absent.
 
 ## ENV-001 Add the new resolver and compatibility alias
 commit/worktree SHA: 2e22dc19 (task started)
@@ -120,3 +120,11 @@ REGRESSION: setup::heartbeat_agent::tests, agent_deploy::tests, cargo fmt, git d
 REGRESSION result: 12 setup tests and 32 deployment tests passed; the only non-test source occurrence of CORTEX_AGENT_AI_TRANSCRIPTS is the compatibility constant
 FILES: src/setup/heartbeat_agent.rs, src/setup/heartbeat_agent_tests.rs, src/agent_deploy.rs, src/agent_deploy_tests.rs
 NOTES: Replacement values are authoritative; legacy persisted values are normalized instead of copied verbatim, and generated files never contain both names.
+
+## PR-173 adversarial remediation
+RED: review beads `syslog-mcp-2axwk`, `syslog-mcp-e5o51`, `syslog-mcp-ftiu1`, and `syslog-mcp-34jai`
+RED result: startup created an unversioned migration-45 subset; doctor inspected only the final duplicate, replaced symlinks, and could overwrite a concurrently changed file; validation allowlisted whole files and ignored extensionless tracked text.
+GREEN: focused database and doctor tests plus both transcript-forward validator scripts
+GREEN result: migration-45 tables remain absent; equal duplicates collapse to one current assignment; conflicting duplicates, stale snapshots, and symlinks fail without mutation; tracked occurrence validation rejects both extensionless fixtures and invalid occurrences inside an otherwise approved file.
+FILES: `src/db/pool.rs`, `src/db/pool_tests.rs`, `src/setup/doctor.rs`, `src/setup/doctor_tests.rs`, `scripts/validate-transcript-forward-env-rename.sh`, `scripts/test-validate-transcript-forward-env-rename.sh`, `Justfile`
+NOTES: Contract, OpenAPI, schema, Rust/TypeScript type, architecture, research, specification, validator, and golden-fixture artifacts were resolved to the versions already validated and merged through PR #172.

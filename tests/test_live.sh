@@ -502,14 +502,13 @@ phase_tools() {
     file_tails_result="$(call_tool cortex '{"action":"file_tails","op":"status"}')" || file_tails_result=""
     assert_jq "cortex file_tails — sources array present"       "${file_tails_result}" '.sources | type == "array"'
     assert_jq "cortex file_tails — statuses array present"      "${file_tails_result}" '.statuses | type == "array"'
+    # Invalid params now come back as a structured tool-level error
+    # (isError result with a JSON body), not a JSON-RPC-level failure —
+    # see fix(mcp): return structured validation errors.
     local file_tails_missing_op
-    if file_tails_missing_op="$(call_tool cortex '{"action":"file_tails"}' 2>&1)"; then
-      _fail "cortex file_tails — missing op rejected" "request unexpectedly succeeded: ${file_tails_missing_op}"
-    elif [[ "${file_tails_missing_op}" == *"op"* || "${file_tails_missing_op}" == *"missing"* || "${file_tails_missing_op}" == *"required"* ]]; then
-      _pass "cortex file_tails — missing op rejected"
-    else
-      _fail "cortex file_tails — missing op rejected" "response did not mention op: ${file_tails_missing_op}"
-    fi
+    file_tails_missing_op="$(call_tool cortex '{"action":"file_tails"}')" || file_tails_missing_op=""
+    assert_jq "cortex file_tails — missing op rejected"             "${file_tails_missing_op}" '.kind' "invalid_param"
+    assert_jq "cortex file_tails — missing op rejected mentions op" "${file_tails_missing_op}" '.message | contains("op")' "true"
     if file_tail_smoke_available; then
       local server_path write_path source_id tag marker add_result search_result count attempt
       server_path="${CORTEX_FILE_TAIL_SMOKE_PATH:-${FILE_TAIL_SMOKE_SERVER_PATH}}"

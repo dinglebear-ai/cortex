@@ -1,0 +1,8 @@
+{
+  "name": "cortex-mcpb-build-tools",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  }
+}

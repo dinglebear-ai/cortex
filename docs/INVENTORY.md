@@ -29,7 +29,7 @@ The following files describe a planned feature and are not part of the current
 | `contracts/agent-observatory.sql` | Planned additive schema versions 44-47 |
 | `contracts/agent-observatory.schema.json` | JSON Schema definitions |
 | `contracts/agent-observatory.openapi.json` | Proposed REST/OpenAPI surface |
-| `contracts/agent-observatory-types.rs` | Compile-checked Rust contract declarations |
+| `contracts/agent-observatory-types.rs` | Rust contract declarations; intended to be compile-checked once wired into CI (not currently referenced by any Cargo target, build.rs, or CI step) |
 | `contracts/agent-observatory-types.ts` | Type-checked TypeScript declarations |
 | `contracts/agent-observatory-aurora-lock.example.json` | Pinned Aurora source and generated-file lock contract |
 | `plans/2026-07-31-agent-observatory-implementation.md` | 116-task TDD implementation index and phase gates, including the transcript-forward env compatibility track |

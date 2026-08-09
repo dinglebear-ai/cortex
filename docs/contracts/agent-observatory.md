@@ -1,7 +1,7 @@
 ---
-title: "Agent Observatory Contract"
+title: "agent observatory contract"
 created: 2026-07-31
-updated: 2026-08-01
+updated: 2026-08-05
 ---
 
 # Agent Observatory contract
@@ -43,7 +43,7 @@ v1|<host-length>:<host>|<tool-length>:<tool>|<session-length>:<native-session-id
 Example:
 
 ```text
-v1|6:dookie|6:claude|36:00112233-4455-6677-8899-aabbccddeeff
+v1|7:devhost|6:claude|36:00112233-4455-6677-8899-aabbccddeeff
 ```
 
 Input components are trimmed, Unicode-preserving, and length-counted in UTF-8 bytes. Empty host, tool, or session is invalid. Canonical tools are lower-case `claude`, `codex`, `gemini`, or `unknown:<normalized>`.
@@ -344,8 +344,12 @@ Planned admin-only routes:
 - `POST /api/agent-observatory/reconcile`
 - `POST /api/agent-observatory/backfill`
 - `GET /api/agent-observatory/backfill/{job_id}`
+- `DELETE /api/agent-observatory/backfill/{job_id}`
+- `POST /api/agent-observatory/backfill/{job_id}/restart`
 
-Request bodies reject unknown fields. Reconcile supports repository ID or bounded all. Backfill supports source and cursor range. Both are single-flight per operation class and audit caller/action/result.
+Request bodies reject unknown fields. Reconcile requires exactly one target: a `repository_id`, or `all: true`; both, neither, and `all: false` are invalid. Backfill supports source and cursor range, and when both bounds are present their decimal values must satisfy `from_id <= until_id`. Both operations are single-flight per operation class and audit caller/action/result.
+
+Backfill creation returns a job ID. Status exposes `accepted | running | cancel_requested | cancelled | completed | failed`, processed and optional total counts, timestamps, a safe failure message, and restart lineage. Cancellation is cooperative and observable: DELETE returns the updated job and status remains `cancel_requested` until the worker checkpoints and reaches `cancelled`. Restart is permitted only for failed or cancelled jobs and creates a new job with the same bounded request.
 
 ## 8. Error envelope
 
@@ -501,46 +505,6 @@ Doctor migration behavior under explicit `--fix --yes`:
 4. neither: make no change
 
 File ownership and restrictive permissions must be preserved. A second doctor run is idempotent. The alias remains accepted through Cortex 3.x and is removed in Cortex 4.0 only when parser, warning, doctor migration, tests, docs, and occurrence allowlist are updated together.
-
-### 10.2 Cortex 4.0 removal checklist
-
-When removing the deprecated `CORTEX_AGENT_AI_TRANSCRIPTS` alias in Cortex 4.0, all of the following must be deleted together in a single coordinated change:
-
-1. **Parser compatibility code** in `src/heartbeat_agent.rs`:
-   - Remove `AI_TRANSCRIPT_FORWARD_LEGACY_ENV` constant
-   - Remove legacy variable resolution logic
-   - Remove deprecation and conflict warning emission
-
-2. **Doctor migration** in `src/setup/doctor.rs` and tests:
-   - Remove `check_transcript_forward_env_migration()` function
-   - Remove `migrate_legacy_only()` and `migrate_both_equal()` helpers
-   - Remove all migration tests from `doctor_tests.rs`
-
-3. **Compatibility tests** in `src/heartbeat_agent_tests.rs`:
-   - Remove all test cases referencing the legacy variable name
-   - Remove `EnvGuard` setup for `CORTEX_AGENT_AI_TRANSCRIPTS`
-
-4. **Deployment regression tests** in `src/agent_deploy_tests.rs`:
-   - Remove fixtures containing the legacy variable
-   - Remove assertions checking for the legacy name
-
-5. **Documentation updates**:
-   - Update `docs/contracts/agent-observatory.md` section 10.1 to remove deprecated alias table
-   - Update or remove this section 10.2 removal checklist
-   - Update CHANGELOG.md with breaking change notice
-   - Remove legacy variable references from plan and research docs (or archive them)
-
-6. **Validation script**:
-   - Remove or update `scripts/validate-transcript-forward-env-rename.sh` to check for absence of legacy variable
-
-7. **Setup generation** (if any legacy references remain in comments or examples):
-   - Audit `src/setup/heartbeat_agent.rs` for any lingering references
-   - Update any help text or examples
-
-Verification after removal:
-- `scripts/validate-transcript-forward-env-rename.sh` must report the legacy variable is absent
-- All tests must pass without any `CORTEX_AGENT_AI_TRANSCRIPTS` references
-- `grep -R "CORTEX_AGENT_AI_TRANSCRIPTS"` should return only this contract section (for historical reference)
 
 ## 11. CLI contract
 

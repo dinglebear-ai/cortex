@@ -115,6 +115,20 @@ pub(super) enum ActionHandler {
     Help,
 }
 
+/// Machine-readable input contract for an MCP action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ActionInputContract {
+    /// The action still relies on the shared flat schema and runtime parsing.
+    LegacyFlat,
+    /// The action advertises an exact allowed/required field set.
+    Exact {
+        /// Allowed fields other than the always-present `action` discriminator.
+        allowed: &'static [&'static str],
+        /// Required fields other than the always-required `action` discriminator.
+        required: &'static [&'static str],
+    },
+}
+
 /// Metadata for a single MCP action.
 #[derive(Debug)]
 pub(super) struct ActionSpec {
@@ -128,6 +142,8 @@ pub(super) struct ActionSpec {
     pub cost: Cost,
     /// Registry-owned executable handler for this action.
     pub handler: ActionHandler,
+    /// Machine-readable public input contract used to generate JSON Schema.
+    pub input_contract: ActionInputContract,
     /// CLI flags for this action (canonical names). Drives completion + help.
     pub flags: &'static [FlagSpec],
     /// Copy-paste example invocations.
@@ -141,6 +157,25 @@ pub(super) struct ActionSpec {
 }
 
 macro_rules! action_spec {
+    // Exact short form: no CLI flag metadata, but a strict MCP input contract.
+    ($name:literal, $scope:ident, $description:literal, $cost:ident, $handler:ident,
+     exact: { allowed: $allowed:expr, required: $required:expr }) => {
+        ActionSpec {
+            name: $name,
+            scope: Scope::$scope,
+            description: $description,
+            cost: Cost::$cost,
+            handler: ActionHandler::$handler,
+            input_contract: ActionInputContract::Exact {
+                allowed: $allowed,
+                required: $required,
+            },
+            flags: &[],
+            examples: &[],
+            positional: None,
+            defaults: Defaults::new(),
+        }
+    };
     // Canonical form: flags + examples + positional + defaults.
     ($name:literal, $scope:ident, $description:literal, $cost:ident, $handler:ident,
      flags: $flags:expr, examples: $examples:expr,
@@ -151,6 +186,7 @@ macro_rules! action_spec {
             description: $description,
             cost: Cost::$cost,
             handler: ActionHandler::$handler,
+            input_contract: ActionInputContract::LegacyFlat,
             flags: $flags,
             examples: $examples,
             positional: $positional,
@@ -397,7 +433,11 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Read,
         "Full project context from AI transcripts",
         Expensive,
-        ProjectContext
+        ProjectContext,
+        exact: {
+            allowed: &["project", "tool", "limit"],
+            required: &["project"]
+        }
     ),
     action_spec!(
         "list_ai_tools",
@@ -411,7 +451,11 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Read,
         "List AI projects with transcript activity",
         Cheap,
-        ListAiProjects
+        ListAiProjects,
+        exact: {
+            allowed: &["tool", "since", "until"],
+            required: &[]
+        }
     ),
     action_spec!(
         "source_ips",

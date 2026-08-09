@@ -306,7 +306,15 @@ pub(crate) fn check_transcript_forward_env_migration(
 
     let timer = PhaseTimer::start("transcript-forward-env-migration");
 
-    // If file doesn't exist, nothing to migrate
+    // Replacing a symlink would detach it from its target. Refuse before any
+    // read or write so an operator can migrate the real file deliberately.
+    if std::fs::symlink_metadata(env_path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return timer.finish(
+            SetupStatus::Error,
+            ".env is a symbolic link; migrate its target explicitly",
+        );
+    }
+
     if !env_path.exists() {
         return timer.finish(SetupStatus::Ok, ".env file not found; skipped");
     }
@@ -321,182 +329,96 @@ pub(crate) fn check_transcript_forward_env_migration(
         }
     };
 
-    // Parse the env file to find transcript forwarding variables
-    let mut current_value: Option<String> = None;
-    let mut legacy_value: Option<String> = None;
-    let mut legacy_line: Option<usize> = None;
+    let mut assignments = Vec::new();
 
     for (line_num, line) in content.lines().enumerate() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix(AI_TRANSCRIPT_FORWARD_ENV) {
-            if let Some(value) = rest.strip_prefix('=') {
-                current_value = Some(value.to_string());
+        let trimmed = line.trim();
+        for (key, legacy) in [
+            (AI_TRANSCRIPT_FORWARD_ENV, false),
+            (AI_TRANSCRIPT_FORWARD_LEGACY_ENV, true),
+        ] {
+            if let Some(value) = trimmed
+                .strip_prefix(key)
+                .and_then(|rest| rest.strip_prefix('='))
+            {
+                assignments.push((line_num, value.to_string(), legacy));
+                break;
             }
-        } else if let Some(rest) = line.strip_prefix(AI_TRANSCRIPT_FORWARD_LEGACY_ENV)
-            && let Some(value) = rest.strip_prefix('=')
-        {
-            legacy_value = Some(value.to_string());
-            legacy_line = Some(line_num);
         }
     }
 
-    // Determine the migration case
-    match (current_value, legacy_value) {
-        (None, None) => {
-            // Neither variable set - nothing to migrate
-            timer.finish(SetupStatus::Ok, "no transcript forwarding configuration")
-        }
-        (Some(_), None) => {
-            // New variable only - already correct
-            timer.finish(
-                SetupStatus::Ok,
-                "transcript forwarding uses current variable name",
-            )
-        }
-        (None, Some(_)) => {
-            // Legacy only - need to migrate
-            if !fix {
-                return timer.finish(
-                    SetupStatus::Warn,
-                    format!(
-                        "deprecated {} is set; run with --fix --yes to rename to {}",
-                        AI_TRANSCRIPT_FORWARD_LEGACY_ENV, AI_TRANSCRIPT_FORWARD_ENV
-                    ),
-                );
-            }
-            if !yes {
-                return timer.finish(
-                    SetupStatus::Warn,
-                    format!(
-                        "deprecated {} is set; run with --yes to confirm migration",
-                        AI_TRANSCRIPT_FORWARD_LEGACY_ENV
-                    ),
-                );
-            }
-            // Perform migration
-            migrate_legacy_only(env_path, &content, legacy_line.unwrap(), timer)
-        }
-        (Some(current_val), Some(legacy_val)) => {
-            if current_val == legacy_val {
-                // Both set to same value - remove legacy
-                if !fix {
-                    return timer.finish(
-                        SetupStatus::Warn,
-                        format!(
-                            "duplicate transcript forwarding configuration; run with --fix --yes to remove {}",
-                            AI_TRANSCRIPT_FORWARD_LEGACY_ENV
-                        ),
-                    );
-                }
-                if !yes {
-                    return timer.finish(
-                        SetupStatus::Warn,
-                        format!(
-                            "duplicate configuration; run with --yes to confirm removal of {}",
-                            AI_TRANSCRIPT_FORWARD_LEGACY_ENV
-                        ),
-                    );
-                }
-                // Perform migration: remove legacy line
-                migrate_both_equal(env_path, &content, legacy_line.unwrap(), timer)
-            } else {
-                // Conflicting values - error, cannot auto-migrate
-                timer.finish(
-                    SetupStatus::Error,
-                    format!(
-                        "conflicting transcript forwarding values: {}={} vs {}={}; manual resolution required",
-                        AI_TRANSCRIPT_FORWARD_ENV, current_val, AI_TRANSCRIPT_FORWARD_LEGACY_ENV, legacy_val
-                    ),
-                )
-            }
-        }
+    if assignments.is_empty() {
+        return timer.finish(SetupStatus::Ok, "no transcript forwarding configuration");
     }
+    let value = &assignments[0].1;
+    if assignments
+        .iter()
+        .any(|(_, candidate, _)| candidate != value)
+    {
+        return timer.finish(
+            SetupStatus::Error,
+            "conflicting duplicate transcript forwarding values; manual resolution required",
+        );
+    }
+    let has_legacy = assignments.iter().any(|(_, _, legacy)| *legacy);
+    if !has_legacy && assignments.len() == 1 {
+        return timer.finish(
+            SetupStatus::Ok,
+            "transcript forwarding uses current variable name",
+        );
+    }
+    if !fix || !yes {
+        let authorization = if fix { "--yes" } else { "--fix --yes" };
+        return timer.finish(
+            SetupStatus::Warn,
+            format!(
+                "deprecated {AI_TRANSCRIPT_FORWARD_LEGACY_ENV} or duplicate transcript forwarding configuration; run with {authorization} to normalize to {AI_TRANSCRIPT_FORWARD_ENV}"
+            ),
+        );
+    }
+
+    normalize_transcript_forward_assignments(env_path, &content, &assignments, timer)
 }
 
-/// Migrate legacy-only configuration by renaming the key atomically.
-/// Uses the same atomic write pattern as firstrun.rs.
-///
-/// Only rewrites the single `legacy_line` identified by the same
-/// line-anchored `trim()` + `strip_prefix(KEY) + strip_prefix('=')` match
-/// used by the detection logic above, so incidental substring occurrences
-/// elsewhere in the file (e.g. a comment like
-/// `# migrated from CORTEX_AGENT_AI_TRANSCRIPTS=true`) are left untouched.
-fn migrate_legacy_only(
+fn normalize_transcript_forward_assignments(
     env_path: &Path,
     content: &str,
-    legacy_line: usize,
+    assignments: &[(usize, String, bool)],
     timer: PhaseTimer,
 ) -> SetupPhase {
-    use crate::heartbeat_agent::{AI_TRANSCRIPT_FORWARD_ENV, AI_TRANSCRIPT_FORWARD_LEGACY_ENV};
-
-    let rewritten_lines: Vec<String> = content
+    let assignment_lines = assignments
+        .iter()
+        .map(|(line, _, _)| *line)
+        .collect::<std::collections::HashSet<_>>();
+    let first_line = assignments[0].0;
+    let value = &assignments[0].1;
+    let rewritten_lines = content
         .lines()
         .enumerate()
-        .map(|(line_num, line)| {
-            if line_num != legacy_line {
-                return line.to_string();
+        .filter_map(|(line_num, line)| {
+            if line_num == first_line {
+                let leading = &line[..line.len() - line.trim_start().len()];
+                return Some(format!(
+                    "{leading}{}={value}",
+                    crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV
+                ));
             }
-            let trimmed = line.trim();
-            let leading_ws = &line[..line.len() - line.trim_start().len()];
-            let trailing_ws = &line[line.trim_end().len()..];
-            match trimmed.strip_prefix(AI_TRANSCRIPT_FORWARD_LEGACY_ENV) {
-                Some(rest) if rest.starts_with('=') => {
-                    format!("{leading_ws}{AI_TRANSCRIPT_FORWARD_ENV}{rest}{trailing_ws}")
-                }
-                _ => line.to_string(),
+            if assignment_lines.contains(&line_num) {
+                None
+            } else {
+                Some(line.to_string())
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
     let mut new_content = rewritten_lines.join("\n");
     if content.ends_with('\n') && !new_content.ends_with('\n') {
         new_content.push('\n');
     }
 
-    match atomic_write_env_file(env_path, &new_content) {
+    match atomic_write_env_file(env_path, content, &new_content) {
         Ok(()) => timer.finish(
             SetupStatus::Ok,
-            format!(
-                "renamed {} to {}",
-                crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV,
-                crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV
-            ),
-        ),
-        Err(error) => timer.finish(
-            SetupStatus::Error,
-            format!("failed to migrate .env file: {error}"),
-        ),
-    }
-}
-
-/// Migrate both-equal configuration by removing the legacy line atomically.
-fn migrate_both_equal(
-    env_path: &Path,
-    content: &str,
-    legacy_line: usize,
-    timer: PhaseTimer,
-) -> SetupPhase {
-    let new_content = content
-        .lines()
-        .enumerate()
-        .filter(|(line_num, _)| *line_num != legacy_line)
-        .map(|(_, line)| line)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Ensure file ends with newline
-    let new_content = if new_content.ends_with('\n') {
-        new_content
-    } else {
-        new_content + "\n"
-    };
-
-    match atomic_write_env_file(env_path, &new_content) {
-        Ok(()) => timer.finish(
-            SetupStatus::Ok,
-            format!(
-                "removed duplicate {}",
-                crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV
-            ),
+            "normalized transcript forwarding configuration",
         ),
         Err(error) => timer.finish(
             SetupStatus::Error,
@@ -507,7 +429,7 @@ fn migrate_both_equal(
 
 /// Atomic write implementation matching the pattern from firstrun.rs.
 /// This ensures the .env file is never in a partially written state.
-fn atomic_write_env_file(path: &Path, out: &str) -> io::Result<()> {
+fn atomic_write_env_file(path: &Path, expected: &str, out: &str) -> io::Result<()> {
     use std::io::Write;
 
     let parent = path.parent().ok_or_else(|| {
@@ -546,6 +468,14 @@ fn atomic_write_env_file(path: &Path, out: &str) -> io::Result<()> {
         return Err(err);
     }
 
+    if std::fs::read_to_string(path)? != expected {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "env file changed concurrently; refusing to overwrite it",
+        ));
+    }
+
     if let Err(err) = std::fs::rename(&tmp_path, path) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(err);
@@ -569,3 +499,7 @@ fn atomic_write_env_file(path: &Path, out: &str) -> io::Result<()> {
 #[cfg(test)]
 #[path = "doctor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "doctor_transcript_forward_tests.rs"]
+mod transcript_forward_tests;
