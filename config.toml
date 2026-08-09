@@ -85,13 +85,13 @@ reconnect_max_ms = 30000
 # [enrichment]
 # Restrict extraction of the agent Docker identity marker
 # ([cortex-agent-docker-meta:...]) to trusted sender IPs. Each entry is a
-# full IPv4 dotted quad ("100.64.0.5", exact-host match) or a
+# full IPv4 dotted quad ("198.51.100.7", exact-host match) or a
 # dot-terminated partial quad ("100.64.0.", subnet-prefix match — the
 # trailing dot is required; "100.64.0" would match nothing). IPv6 sources
 # are not matchable by this gate. Empty (default) accepts the marker from
 # any sender for compatibility. Env: CORTEX_AGENT_DOCKER_SOURCE_PREFIXES
 # (comma-separated).
-# agent_docker_source_prefixes = ["100.88.16.79", "100.120.242."]
+# agent_docker_source_prefixes = ["198.51.100.1", "198.51.100."]
 
 # Managed file-tail sources are runtime-managed in data/file-tails.json
 # (parent directory of [storage].db_path). Configure with:
@@ -104,12 +104,14 @@ reconnect_max_ms = 30000
 # enabled=true with an empty apprise_urls (it would silently drop every firing),
 # so enable this only alongside at least one apprise_urls delivery target.
 enabled = false
-apprise_url = "http://100.120.242.29:8766"
+# Legacy single-target setting. Keep empty here and provide a real endpoint via
+# CORTEX_NOTIFICATIONS_APPRISE_URL in deployment-local environment config.
+apprise_url = ""
 # Apprise notification delivery URLs. Add at least one to enable delivery.
 # The dispatcher will silently no-op if empty (startup validation rejects
 # enabled=true with an empty list — set enabled=false if intentionally skipping).
 # Examples:
-#   "gotify://gotify.tootie.tv/<token>"
+#   "gotify://gotify.example.invalid/<token>"
 #   "ntfy://ntfy.sh/my-channel"
 #   "tgram://<bot-token>/<chat-id>"
 apprise_urls = []

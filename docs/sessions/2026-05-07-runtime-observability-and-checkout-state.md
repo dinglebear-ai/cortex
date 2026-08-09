@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-07 01:58:00 EST
 repo: /home/jmagar/workspace/syslog-mcp
@@ -158,7 +160,7 @@ Those rsyslog deploy edits appear unrelated to the runtime observability patch.
 The current dirty deploy changes do the following:
 
 - Add deployment instructions for shared `deploy/rsyslog/11-imfile.conf`.
-- Replace placeholder SWAG paths with verified squirts paths under `/mnt/appdata/swag/log/...`.
+- Replace placeholder SWAG paths with verified edgehost paths under `/mnt/appdata/swag/log/...`.
 - Replace placeholder Authelia path with `/mnt/appdata/authelia/logs/authelia.log`.
 - Replace placeholder AdGuard query log path with `/mnt/appdata/adguard/var/data/querylog.json`.
 - Remove per-source `module(load="imfile")` and `MaxMessageSize` settings from source drop-ins.

@@ -61,13 +61,13 @@ fn result_event(call_id: &str, is_error: bool) -> ExtractedMcpEvent {
 #[test]
 fn insert_and_list_round_trips_a_call_event() {
     let (pool, _dir) = test_pool();
-    let log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
+    let log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
     let insert = McpEventInsert {
         log_id,
         ai_tool: "claude".to_string(),
         ai_project: Some("cortex".to_string()),
         ai_session_id: Some("sess-1".to_string()),
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         timestamp: "2026-06-01T00:00:00.000Z".to_string(),
         event: call_event(
             "toolu_1",
@@ -93,13 +93,13 @@ fn insert_and_list_round_trips_a_call_event() {
 #[test]
 fn insert_or_ignore_is_idempotent_on_duplicate() {
     let (pool, _dir) = test_pool();
-    let log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
+    let log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
     let insert = McpEventInsert {
         log_id,
         ai_tool: "claude".to_string(),
         ai_project: None,
         ai_session_id: None,
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         timestamp: "2026-06-01T00:00:00.000Z".to_string(),
         event: call_event("toolu_dup", "Bash", None, None),
     };
@@ -116,8 +116,8 @@ fn insert_or_ignore_is_idempotent_on_duplicate() {
 #[test]
 fn result_event_resolves_tool_name_from_paired_call_row() {
     let (pool, _dir) = test_pool();
-    let call_log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
-    let result_log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:01.000Z");
+    let call_log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
+    let result_log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:01.000Z");
 
     insert_mcp_events(
         &pool,
@@ -127,7 +127,7 @@ fn result_event_resolves_tool_name_from_paired_call_row() {
                 ai_tool: "claude".to_string(),
                 ai_project: Some("cortex".to_string()),
                 ai_session_id: Some("sess-1".to_string()),
-                hostname: "dookie".to_string(),
+                hostname: "devhost".to_string(),
                 timestamp: "2026-06-01T00:00:00.000Z".to_string(),
                 event: call_event(
                     "toolu_paired",
@@ -141,7 +141,7 @@ fn result_event_resolves_tool_name_from_paired_call_row() {
                 ai_tool: "claude".to_string(),
                 ai_project: Some("cortex".to_string()),
                 ai_session_id: Some("sess-1".to_string()),
-                hostname: "dookie".to_string(),
+                hostname: "devhost".to_string(),
                 timestamp: "2026-06-01T00:00:01.000Z".to_string(),
                 event: result_event("toolu_paired", false),
             },
@@ -173,13 +173,13 @@ fn result_event_resolves_tool_name_from_paired_call_row() {
 #[test]
 fn result_event_without_paired_call_still_inserts_unclassified() {
     let (pool, _dir) = test_pool();
-    let log_id = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
+    let log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
     let insert = McpEventInsert {
         log_id,
         ai_tool: "claude".to_string(),
         ai_project: None,
         ai_session_id: None,
-        hostname: "dookie".to_string(),
+        hostname: "devhost".to_string(),
         timestamp: "2026-06-01T00:00:00.000Z".to_string(),
         event: result_event("toolu_orphan", true),
     };
@@ -194,8 +194,8 @@ fn result_event_without_paired_call_still_inserts_unclassified() {
 #[test]
 fn list_filters_by_mcp_server_project_and_is_error() {
     let (pool, _dir) = test_pool();
-    let log_id_a = insert_log_row(&pool, "dookie", "2026-06-01T00:00:00.000Z");
-    let log_id_b = insert_log_row(&pool, "tootie", "2026-06-01T01:00:00.000Z");
+    let log_id_a = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
+    let log_id_b = insert_log_row(&pool, "nashost", "2026-06-01T01:00:00.000Z");
     insert_mcp_events(
         &pool,
         &[
@@ -204,7 +204,7 @@ fn list_filters_by_mcp_server_project_and_is_error() {
                 ai_tool: "claude".to_string(),
                 ai_project: Some("cortex".to_string()),
                 ai_session_id: Some("sess-a".to_string()),
-                hostname: "dookie".to_string(),
+                hostname: "devhost".to_string(),
                 timestamp: "2026-06-01T00:00:00.000Z".to_string(),
                 event: call_event(
                     "toolu_a",
@@ -218,7 +218,7 @@ fn list_filters_by_mcp_server_project_and_is_error() {
                 ai_tool: "codex".to_string(),
                 ai_project: Some("axon".to_string()),
                 ai_session_id: Some("sess-b".to_string()),
-                hostname: "tootie".to_string(),
+                hostname: "nashost".to_string(),
                 timestamp: "2026-06-01T01:00:00.000Z".to_string(),
                 event: {
                     let mut e =

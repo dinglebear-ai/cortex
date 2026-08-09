@@ -179,8 +179,8 @@ sample lines:
 ### Worked Example B — Docker container die
 
 ```text
-INCIDENT inc_2026-05-15T14:02:03Z_squirts_b7e2
-host=squirts app=dockerd source=docker_event
+INCIDENT inc_2026-05-15T14:02:03Z_edgehost_b7e2
+host=edgehost app=dockerd source=docker_event
 window=2026-05-15T14:02:00Z..2026-05-15T14:02:15Z (15s) event_count=2
 signature: docker_event action=die container=<name> exitCode=<n>
 
@@ -200,8 +200,8 @@ sample lines:
 ### Worked Example C — Fail2ban cluster
 
 ```text
-INCIDENT inc_2026-05-15T07:44:00Z_tootie_c1a3
-host=tootie app=fail2ban source=fail2ban
+INCIDENT inc_2026-05-15T07:44:00Z_nashost_c1a3
+host=nashost app=fail2ban source=fail2ban
 window=2026-05-15T07:44:00Z..2026-05-15T07:48:51Z (291s) event_count=14
 signature: fail2ban Ban <ip> jail=<jail>
 
@@ -416,9 +416,9 @@ All three actions live in `src/mcp/tools.rs` alongside existing handlers; servic
 ```json
 {
   "action": "ask_history",
-  "query": "what causes qbittorrent to keep dying on squirts?",
+  "query": "what causes qbittorrent to keep dying on edgehost?",
   "since": "180d",
-  "host_filter": "squirts",
+  "host_filter": "edgehost",
   "max_context_incidents": 8,
   "max_context_sessions": 5
 }
@@ -428,7 +428,7 @@ All three actions live in `src/mcp/tools.rs` alongside existing handlers; servic
 
 ```json
 {
-  "answer": "qbittorrent on squirts has died 14 times in the last 90 days...",
+  "answer": "qbittorrent on edgehost has died 14 times in the last 90 days...",
   "citations": [
     {"type": "incident", "incident_id": "...", "score": 0.72},
     {"type": "session",  "session_id":  "...", "score": 0.65}
@@ -541,7 +541,7 @@ A `tests/fixtures/incidents/` directory with hand-curated incident families:
 For each fixture incident, a hand-annotated set of "correct similar incidents" (typically 3–5 within the same family on similar hosts). Stored as `tests/fixtures/incidents/gold.json`:
 
 ```json
-{"query_incident": "fix_oom_plex_jenny_01", "expected_hits": ["fix_oom_plex_jenny_02", "fix_oom_plex_squirts_01"], "must_not_hit": ["fix_swag_5xx_01"]}
+{"query_incident": "fix_oom_plex_jenny_01", "expected_hits": ["fix_oom_plex_jenny_02", "fix_oom_plex_edgehost_01"], "must_not_hit": ["fix_swag_5xx_01"]}
 ```
 
 ### Metrics

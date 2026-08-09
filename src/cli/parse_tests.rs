@@ -84,7 +84,7 @@ fn parses_file_tail_add() {
         "--tag".into(),
         "swag-access".into(),
         "--host".into(),
-        "squirts".into(),
+        "edgehost".into(),
         "--facility".into(),
         "local4".into(),
         "--severity".into(),
@@ -101,7 +101,7 @@ fn parses_file_tail_add() {
                 id: Some("swag-access".into()),
                 path: "/mnt/appdata/swag/log/nginx/access.log".into(),
                 tag: Some("swag-access".into()),
-                host: Some("squirts".into()),
+                host: Some("edgehost".into()),
                 facility: Some("local4".into()),
                 severity: Some("info".into()),
                 start_at_end: false,
@@ -384,7 +384,7 @@ fn removed_command_replacements_parse() {
         vec!["hosts", "sources"],
         vec!["hosts", "silent"],
         vec!["compose", "logs", "cortex.service"],
-        vec!["state", "host", "dookie"],
+        vec!["state", "host", "devhost"],
         vec!["state", "fleet"],
         vec!["state", "clockskew"],
         vec!["stats", "ingestrate"],
@@ -404,7 +404,7 @@ fn removed_command_replacements_parse() {
             "now",
         ],
         vec!["correlate", "state", "--reference-time", "1h"],
-        vec!["correlate", "topic", "dookie"],
+        vec!["correlate", "topic", "devhost"],
     ];
 
     for replacement in replacements {
@@ -422,7 +422,7 @@ fn parse_routes_host_state() {
             "state".to_string(),
             "host".to_string(),
             "--host".to_string(),
-            "tootie".to_string(),
+            "nashost".to_string(),
             "--json".to_string(),
         ])
         .unwrap(),
@@ -435,13 +435,13 @@ fn parse_host_state_binds_bare_positional_to_host() {
     let cmd = parse_command(vec![
         "state".to_string(),
         "host".to_string(),
-        "dookie".to_string(),
+        "devhost".to_string(),
     ])
     .unwrap();
     let CliCommand::State(StateCommand::Host(args)) = cmd else {
         panic!("expected HostState")
     };
-    assert_eq!(args.host.as_deref(), Some("dookie"));
+    assert_eq!(args.host.as_deref(), Some("devhost"));
 }
 
 #[test]
@@ -449,9 +449,9 @@ fn parse_host_state_positional_and_host_flag_are_mutually_exclusive() {
     let err = parse_command(vec![
         "state".to_string(),
         "host".to_string(),
-        "dookie".to_string(),
+        "devhost".to_string(),
         "--host".to_string(),
-        "tootie".to_string(),
+        "nashost".to_string(),
     ])
     .unwrap_err()
     .to_string();
@@ -499,7 +499,7 @@ fn parse_routes_entity_lookup() {
     let command = parse_command(vec![
         "entity".to_string(),
         "host".to_string(),
-        "tootie".to_string(),
+        "nashost".to_string(),
         "--limit=5".to_string(),
         "--json".to_string(),
     ])
@@ -507,7 +507,7 @@ fn parse_routes_entity_lookup() {
     match command {
         CliCommand::Entity(args) => {
             assert_eq!(args.entity_type.as_deref(), Some("host"));
-            assert_eq!(args.key.as_deref(), Some("tootie"));
+            assert_eq!(args.key.as_deref(), Some("nashost"));
             assert_eq!(args.limit, Some(5));
             assert!(args.json);
         }
@@ -522,13 +522,13 @@ fn parse_routes_entity_alias_lookup() {
         "--alias-type".to_string(),
         "hostname".to_string(),
         "--alias-key".to_string(),
-        "tootie".to_string(),
+        "nashost".to_string(),
     ])
     .unwrap();
     match command {
         CliCommand::Entity(args) => {
             assert_eq!(args.alias_type.as_deref(), Some("hostname"));
-            assert_eq!(args.alias_key.as_deref(), Some("tootie"));
+            assert_eq!(args.alias_key.as_deref(), Some("nashost"));
         }
         other => panic!("unexpected command: {other:?}"),
     }
@@ -539,7 +539,7 @@ fn parse_routes_graph_around_type_key() {
     let command = parse_command(vec![
         "graph".to_string(),
         "around".to_string(),
-        "host:tootie".to_string(),
+        "host:nashost".to_string(),
         "--depth".to_string(),
         "1".to_string(),
         "--evidence-sample-limit=2".to_string(),
@@ -551,7 +551,7 @@ fn parse_routes_graph_around_type_key() {
     match command {
         CliCommand::Graph(crate::cli::GraphCommand::Around(args)) => {
             assert_eq!(args.entity_type.as_deref(), Some("host"));
-            assert_eq!(args.key.as_deref(), Some("tootie"));
+            assert_eq!(args.key.as_deref(), Some("nashost"));
             assert_eq!(args.depth, Some(1));
             assert_eq!(args.evidence_sample_limit, Some(2));
             assert_eq!(args.payload_budget, Some(8192));
@@ -566,7 +566,7 @@ fn parse_routes_graph_explain_type_key() {
     let command = parse_command(vec![
         "graph".to_string(),
         "explain".to_string(),
-        "host:tootie".to_string(),
+        "host:nashost".to_string(),
         "--depth".to_string(),
         "3".to_string(),
         "--beam-width=12".to_string(),
@@ -581,7 +581,7 @@ fn parse_routes_graph_explain_type_key() {
     match command {
         CliCommand::Graph(crate::cli::GraphCommand::Explain(args)) => {
             assert_eq!(args.entity_type.as_deref(), Some("host"));
-            assert_eq!(args.key.as_deref(), Some("tootie"));
+            assert_eq!(args.key.as_deref(), Some("nashost"));
             assert_eq!(args.depth, Some(3));
             assert_eq!(args.beam_width, Some(12));
             assert_eq!(args.max_chains, Some(50));
@@ -666,7 +666,7 @@ fn parse_graph_explain_rejects_bad_depth() {
         "graph".to_string(),
         "explain".to_string(),
         "host".to_string(),
-        "tootie".to_string(),
+        "nashost".to_string(),
         "--depth".to_string(),
         "nope".to_string(),
     ])
@@ -681,7 +681,7 @@ fn parse_graph_around_rejects_bad_entity_type() {
         "graph".to_string(),
         "around".to_string(),
         "bogus".to_string(),
-        "tootie".to_string(),
+        "nashost".to_string(),
     ])
     .unwrap_err()
     .to_string();
@@ -694,7 +694,7 @@ fn parse_graph_around_rejects_bad_depth() {
         "graph".to_string(),
         "around".to_string(),
         "host".to_string(),
-        "tootie".to_string(),
+        "nashost".to_string(),
         "--depth".to_string(),
         "nope".to_string(),
     ])
@@ -731,19 +731,19 @@ fn parse_correlate_state_rejects_unknown_flag() {
 
 #[test]
 fn parse_correlate_nontime_positional_points_to_topic_correlate() {
-    // `correlate squirts dockersocket` fed `squirts` into the time parser and
+    // `correlate edgehost dockersocket` fed `edgehost` into the time parser and
     // produced a cryptic "unrecognized time value". The error must now explain
     // that the positional is a reference time and point at topic-correlate.
     let err = parse_command(vec![
         "correlate".to_string(),
         "events".to_string(),
-        "squirts".to_string(),
+        "edgehost".to_string(),
         "dockersocket".to_string(),
     ])
     .unwrap_err()
     .to_string();
     assert!(err.contains("reference time"), "got: {err}");
-    assert!(err.contains("correlate topic squirts"), "got: {err}");
+    assert!(err.contains("correlate topic edgehost"), "got: {err}");
 }
 
 // Regression: every CLI flag whose value is bound into a SQL timestamp
@@ -814,7 +814,7 @@ fn time_flags_normalize_relative_across_state_admin_and_ai_commands() {
     let CliCommand::State(StateCommand::Host(hs)) = parse_command(vec![
         "state".into(),
         "host".into(),
-        "dookie".into(),
+        "devhost".into(),
         "--since".into(),
         "30m".into(),
     ])
@@ -862,7 +862,7 @@ fn time_flags_reject_non_time_values() {
         vec![
             "state".to_string(),
             "host".into(),
-            "dookie".into(),
+            "devhost".into(),
             "--since".into(),
             "notatime".into(),
         ],

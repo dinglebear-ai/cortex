@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the clean hard-break canonical entity-resolution layer for Cortex so `plex` resolves to `logical_service:plex`, concrete instances such as `service_instance:tootie/plex`, and evidence-backed graph/query neighborhoods without preserving old nested service keys.
+**Goal:** Build the clean hard-break canonical entity-resolution layer for Cortex so `plex` resolves to `logical_service:plex`, concrete instances such as `service_instance:nashost/plex`, and evidence-backed graph/query neighborhoods without preserving old nested service keys.
 
 **Architecture:** Add a small neutral resolver module under `src/db/entity_resolution.rs` and `src/db/entity_resolution/*` that owns key grammar, source observations, deterministic resolver decisions, diagnostics, and stale-key classification. Runtime graph projection, inventory projection, map/findings, and `topic_correlate` consume resolver decisions instead of building service topology strings inline. The graph remains a rebuildable SQLite projection over authoritative logs, heartbeats, inventory, sessions, signatures, and agent Docker metadata.
 
@@ -11,12 +11,12 @@
 ## Global Constraints
 
 - This is a clean hard break in the graph contract. Do not preserve support for previous graph key shapes as public API behavior.
-- Do not keep `tootie:plex`, `tootie:plex:plex`, or `plex/plex/plex` as accepted service identity inputs.
+- Do not keep `nashost:plex`, `nashost:plex:plex`, or `plex/plex/plex` as accepted service identity inputs.
 - Do not add a transitional lookup layer for previous key shapes.
 - Do not emit previous `service` topology rows as part of the new canonical graph projection.
 - Historical rows can exist in an unrebuilt database before migration/rebuild, but the implementation target is replacement, not coexistence.
 - Any tests that mention previous key shapes must assert removal/rejection, not continued operation.
-- Keep logical identity and deployment topology separate. `plex` is the logical service identity; `tootie/plex` is a host-scoped runtime instance.
+- Keep logical identity and deployment topology separate. `plex` is the logical service identity; `nashost/plex` is a host-scoped runtime instance.
 - Do not silently redefine `app`. It remains a raw observed log/error application label.
 - Agent-first Docker ingest is the supported Docker identity source for this milestone. Central Docker pull is not proof for the new behavior.
 - Verified inventory/heartbeat/agent metadata outranks sender-claimed syslog hostnames and weak log app labels.
@@ -255,17 +255,17 @@ use super::vocab::*;
 fn canonical_service_keys_separate_logic_from_topology() {
     assert_eq!(logical_service_key(" Plex "), Some("plex".to_string()));
     assert_eq!(
-        service_instance_key("Tootie", " Plex "),
-        Some("tootie/plex".to_string())
+        service_instance_key("Nashost", " Plex "),
+        Some("nashost/plex".to_string())
     );
-    assert_eq!(split_service_instance_key("tootie/plex"), Some(("tootie", "plex")));
+    assert_eq!(split_service_instance_key("nashost/plex"), Some(("nashost", "plex")));
 }
 
 #[test]
 fn old_nested_service_shapes_are_classified_not_normalized() {
-    assert_eq!(classify_legacy_shape("tootie:plex"), Some(LegacyShape::HostService));
+    assert_eq!(classify_legacy_shape("nashost:plex"), Some(LegacyShape::HostService));
     assert_eq!(
-        classify_legacy_shape("tootie:plex:plex"),
+        classify_legacy_shape("nashost:plex:plex"),
         Some(LegacyShape::HostProjectService)
     );
     assert_eq!(
@@ -273,7 +273,7 @@ fn old_nested_service_shapes_are_classified_not_normalized() {
         Some(LegacyShape::SlashTriplet)
     );
     assert_eq!(classify_legacy_shape("plex"), None);
-    assert_eq!(classify_legacy_shape("tootie/plex"), None);
+    assert_eq!(classify_legacy_shape("nashost/plex"), None);
 }
 ```
 
@@ -429,7 +429,7 @@ fn graph_schema_accepts_entity_resolution_vocabulary() {
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
          VALUES
             ('logical_service', 'plex', 'plex', 'resolver', 'fixture', 'verified'),
-            ('service_instance', 'tootie/plex', 'tootie/plex', 'resolver', 'fixture', 'verified')",
+            ('service_instance', 'nashost/plex', 'nashost/plex', 'resolver', 'fixture', 'verified')",
         [],
     )
     .unwrap();
@@ -466,8 +466,8 @@ fn stale_service_topology_cleanup_removes_old_canonical_rows() {
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
          VALUES
-            ('service', 'tootie:plex', 'plex', 'log', 'fixture', 'inferred'),
-            ('service', 'tootie:plex:plex', 'tootie/plex/plex', 'log', 'fixture', 'inferred'),
+            ('service', 'nashost:plex', 'plex', 'log', 'fixture', 'inferred'),
+            ('service', 'nashost:plex:plex', 'nashost/plex/plex', 'log', 'fixture', 'inferred'),
             ('app', 'plex/plex/plex', 'plex/plex/plex', 'log', 'fixture', 'claimed')",
         [],
     ).unwrap();
@@ -602,7 +602,7 @@ use super::observation::*;
 #[test]
 fn agent_docker_identity_extracts_structured_service_instance() {
     let identity = AgentDockerIdentity {
-        agent_host: "Tootie".to_string(),
+        agent_host: "Nashost".to_string(),
         container_id: "abcdef1234567890".to_string(),
         container_name: "plex".to_string(),
         compose_project: Some("plex".to_string()),
@@ -614,7 +614,7 @@ fn agent_docker_identity_extracts_structured_service_instance() {
     let observations = observations_from_agent_docker_identity(&identity);
     assert!(observations.iter().any(|o| {
         o.kind == ObservationKind::ServiceInstance
-            && o.service_instance_key.as_deref() == Some("tootie/plex")
+            && o.service_instance_key.as_deref() == Some("nashost/plex")
             && o.logical_service_key.as_deref() == Some("plex")
             && o.trust == ResolverTrust::Verified
             && o.structured
@@ -625,7 +625,7 @@ fn agent_docker_identity_extracts_structured_service_instance() {
 fn raw_app_label_does_not_create_logical_service_observation_by_itself() {
     let observations = observations_from_raw_app_label(
         "plex/plex/plex",
-        "tootie",
+        "nashost",
         "log",
         "42",
         "2026-01-01T00:00:00Z",
@@ -847,43 +847,43 @@ use super::resolver::*;
 
 #[test]
 fn resolver_converges_duplicate_hosts_under_one_logical_service() {
-    let tootie = ResolverObservation {
+    let nashost = ResolverObservation {
         kind: ObservationKind::ServiceInstance,
-        observed_key: "tootie/plex".to_string(),
-        display_label: "tootie/plex".to_string(),
-        host_key: Some("tootie".to_string()),
+        observed_key: "nashost/plex".to_string(),
+        display_label: "nashost/plex".to_string(),
+        host_key: Some("nashost".to_string()),
         logical_service_key: Some("plex".to_string()),
-        service_instance_key: Some("tootie/plex".to_string()),
+        service_instance_key: Some("nashost/plex".to_string()),
         source_kind: "app_inventory".to_string(),
-        source_id: "inventory:tootie".to_string(),
+        source_id: "inventory:nashost".to_string(),
         evidence_path: "inventory.services.plex".to_string(),
         observed_at: "2026-01-01T00:00:00Z".to_string(),
         trust: ResolverTrust::Verified,
         structured: true,
     };
-    let shart = ResolverObservation {
-        service_instance_key: Some("shart/plex".to_string()),
-        host_key: Some("shart".to_string()),
-        source_id: "inventory:shart".to_string(),
-        observed_key: "shart/plex".to_string(),
-        display_label: "shart/plex".to_string(),
-        ..tootie.clone()
+    let backuphost = ResolverObservation {
+        service_instance_key: Some("backuphost/plex".to_string()),
+        host_key: Some("backuphost".to_string()),
+        source_id: "inventory:backuphost".to_string(),
+        observed_key: "backuphost/plex".to_string(),
+        display_label: "backuphost/plex".to_string(),
+        ..nashost.clone()
     };
-    let decisions = resolve_observations(&[tootie, shart]);
+    let decisions = resolve_observations(&[nashost, backuphost]);
     assert!(decisions.iter().any(|d| {
         d.entity_type == ENTITY_TYPE_LOGICAL_SERVICE && d.canonical_key == "plex"
     }));
     assert!(decisions.iter().any(|d| {
-        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "tootie/plex"
+        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "nashost/plex"
     }));
     assert!(decisions.iter().any(|d| {
-        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "shart/plex"
+        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "backuphost/plex"
     }));
 }
 
 #[test]
 fn resolver_rejects_old_key_shapes_before_lookup() {
-    for input in ["tootie:plex", "tootie:plex:plex", "plex/plex/plex"] {
+    for input in ["nashost:plex", "nashost:plex:plex", "plex/plex/plex"] {
         let diagnostic = diagnose_lookup_input(input);
         assert_eq!(diagnostic.status, ResolverStatus::RejectedLegacyShape);
         assert_eq!(diagnostic.reason, "rejected_legacy_shape");
@@ -895,7 +895,7 @@ fn resolver_rejects_old_key_shapes_before_lookup() {
 fn weak_raw_labels_do_not_upgrade_themselves() {
     let observations = observations_from_raw_app_label(
         "complex",
-        "tootie",
+        "nashost",
         "log",
         "99",
         "2026-01-01T00:00:00Z",
@@ -1021,7 +1021,7 @@ cargo test db::entity_resolution::tests::resolver_ -- --nocapture
 cargo test app::services::graph -- --nocapture
 ```
 
-Expected: all PASS; graph service tests that submit `tootie:plex` now expect `ServiceError::InvalidInput`.
+Expected: all PASS; graph service tests that submit `nashost:plex` now expect `ServiceError::InvalidInput`.
 
 - [ ] **Step 7: Commit Task 3**
 
@@ -1071,7 +1071,7 @@ fn container_identity_metadata_carries_compose_context() {
         ("com.docker.compose.config-hash".to_string(), "abc".to_string()),
     ]);
     let metadata = container_identity_metadata(
-        "tootie",
+        "nashost",
         "abcdef1234567890",
         "plex",
         "stdout",
@@ -1079,7 +1079,7 @@ fn container_identity_metadata_carries_compose_context() {
         &labels,
     );
     assert_eq!(metadata["source_kind"], "agent-docker");
-    assert_eq!(metadata["agent_docker"]["host"], "tootie");
+    assert_eq!(metadata["agent_docker"]["host"], "nashost");
     assert_eq!(metadata["agent_docker"]["container_id"], "abcdef1234567890");
     assert_eq!(metadata["agent_docker"]["compose_project"], "plex");
     assert_eq!(metadata["agent_docker"]["compose_service"], "plex");
@@ -1100,7 +1100,7 @@ fn long_compose_app_name_still_has_structured_metadata() {
     let app_name = container_app_name("very-long-container-name-for-plex", &labels);
     assert!(app_name.len() > 48);
     let metadata = container_identity_metadata(
-        "tootie",
+        "nashost",
         "abcdef1234567890",
         "very-long-container-name-for-plex",
         "stderr",
@@ -1196,7 +1196,7 @@ Append to `src/db/entity_resolution_tests.rs`:
 #[test]
 fn structured_agent_docker_metadata_resolves_without_central_docker_uri() {
     let identity = AgentDockerIdentity {
-        agent_host: "tootie".to_string(),
+        agent_host: "nashost".to_string(),
         container_id: "abcdef1234567890".to_string(),
         container_name: "plex".to_string(),
         compose_project: Some("plex".to_string()),
@@ -1208,7 +1208,7 @@ fn structured_agent_docker_metadata_resolves_without_central_docker_uri() {
     let observations = observations_from_agent_docker_identity(&identity);
     let decisions = resolve_observations(&observations);
     assert!(decisions.iter().any(|d| {
-        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "tootie/plex"
+        d.entity_type == ENTITY_TYPE_SERVICE_INSTANCE && d.canonical_key == "nashost/plex"
     }));
 }
 ```
@@ -1292,7 +1292,7 @@ fn graph_projection_emits_service_instance_not_nested_service_key() {
         &pool,
         &[LogBatchEntry {
             timestamp: "2026-01-01T00:00:00Z".to_string(),
-            hostname: "tootie".to_string(),
+            hostname: "nashost".to_string(),
             facility: None,
             severity: "info".to_string(),
             app_name: Some("plex/plex/plex".to_string()),
@@ -1305,7 +1305,7 @@ fn graph_projection_emits_service_instance_not_nested_service_key() {
             ai_project: None,
             ai_session_id: None,
             ai_transcript_path: None,
-            metadata_json: Some(r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#.to_string()),
+            metadata_json: Some(r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#.to_string()),
             http_status: None,
             auth_outcome: None,
             dns_blocked: None,
@@ -1321,11 +1321,11 @@ fn graph_projection_emits_service_instance_not_nested_service_key() {
         1
     );
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'tootie/plex'"),
+        count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'nashost/plex'"),
         1
     );
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service' AND canonical_key IN ('tootie:plex', 'tootie:plex:plex')"),
+        count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service' AND canonical_key IN ('nashost:plex', 'nashost:plex:plex')"),
         0
     );
     assert_eq!(
@@ -1437,12 +1437,12 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
         "2026-01-01T00:00:00Z".to_string(),
     );
     inventory.nodes.push(InventoryNode {
-        id: "node:tootie".to_string(),
-        hostname: "tootie".to_string(),
+        id: "node:nashost".to_string(),
+        hostname: "nashost".to_string(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:tootie", "source_inventory"),
+        provenance: provenance("ssh:nashost", "source_inventory"),
         roles: Vec::new(),
-        ips: vec!["100.120.242.29".to_string()],
+        ips: vec!["198.51.100.2".to_string()],
         os: Some("Unraid".to_string()),
         cpu: None,
         memory: None,
@@ -1451,20 +1451,20 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
         extras: Default::default(),
     });
     inventory.services.push(InventoryService {
-        id: "service:tootie:plex".to_string(),
+        id: "service:nashost:plex".to_string(),
         name: "plex".to_string(),
-        host: Some("tootie".to_string()),
+        host: Some("nashost".to_string()),
         image: Some("lscr.io/linuxserver/plex:latest".to_string()),
         ports: vec![PortMapping { host: Some(32400), container: Some(32400), protocol: Some("tcp".to_string()) }],
-        domains: vec!["plex.tootie.tv".to_string()],
+        domains: vec!["plex.example.invalid".to_string()],
         mounts: Vec::new(),
         trust_level: TrustLevel::Observed,
-        provenance: provenance("ssh:tootie", "app_inventory"),
+        provenance: provenance("ssh:nashost", "app_inventory"),
         extras: Default::default(),
     });
     project_inventory(&pool, &inventory).unwrap();
     let conn = pool.get().unwrap();
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'tootie/plex'"), 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'nashost/plex'"), 1);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service'"), 0);
 }
 ```
@@ -1476,11 +1476,11 @@ Adjust field names to the actual `InventoryService` struct if the compile error 
 In `src/db/graph_inventory.rs`, replace `graph::ENTITY_TYPE_SERVICE` entities with resolver decisions from `observations_from_inventory_service`. Ensure these edges are emitted:
 
 ```text
-service_instance:tootie/plex instance_of logical_service:plex
-service_instance:tootie/plex runs_on host:tootie
-compose_project:tootie/plex defines_service service_instance:tootie/plex
-reverse_proxy:<route> routes_to service_instance:tootie/plex
-service_instance:tootie/plex mounts storage:<safe-key>
+service_instance:nashost/plex instance_of logical_service:plex
+service_instance:nashost/plex runs_on host:nashost
+compose_project:nashost/plex defines_service service_instance:nashost/plex
+reverse_proxy:<route> routes_to service_instance:nashost/plex
+service_instance:nashost/plex mounts storage:<safe-key>
 ```
 
 Delete or stop using `service_key(service)` from `src/db/graph_inventory/sql.rs`.
@@ -1583,10 +1583,10 @@ async fn topic_plex_uses_service_instance_without_host_wide_fanout() {
     insert_logs_batch(
         &pool,
         &[
-            syslog("2026-01-01T00:00:00Z", "tootie", "kernel"),
+            syslog("2026-01-01T00:00:00Z", "nashost", "kernel"),
             LogBatchEntry {
                 timestamp: "2026-01-01T00:01:00Z".to_string(),
-                hostname: "tootie".to_string(),
+                hostname: "nashost".to_string(),
                 facility: None,
                 severity: "info".to_string(),
                 app_name: Some("plex/plex/plex".to_string()),
@@ -1599,7 +1599,7 @@ async fn topic_plex_uses_service_instance_without_host_wide_fanout() {
                 ai_project: None,
                 ai_session_id: None,
                 ai_transcript_path: None,
-                metadata_json: Some(r#"{"source_kind":"agent-docker","agent_docker":{"host":"tootie","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#.to_string()),
+                metadata_json: Some(r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","stream":"stdout"}}"#.to_string()),
                 http_status: None,
                 auth_outcome: None,
                 dns_blocked: None,
@@ -1629,7 +1629,7 @@ async fn topic_plex_uses_service_instance_without_host_wide_fanout() {
 #[tokio::test]
 async fn topic_rejects_legacy_service_shapes() {
     let (svc, _pool, _dir) = test_service();
-    for topic in ["tootie:plex", "tootie:plex:plex", "plex/plex/plex"] {
+    for topic in ["nashost:plex", "nashost:plex:plex", "plex/plex/plex"] {
         let err = svc.topic_correlate(TopicCorrelateRequest {
             topic: topic.to_string(),
             ..Default::default()
@@ -1794,10 +1794,10 @@ In `src/mcp/schemas.rs`, change graph entity enum to include `logical_service` a
 
 ```bash
 cortex graph --mode around --entity-type logical_service --key plex
-cortex graph --mode around --entity-type service_instance --key tootie/plex
+cortex graph --mode around --entity-type service_instance --key nashost/plex
 ```
 
-Document that `tootie:plex` and `tootie:plex:plex` return `rejected_legacy_shape`.
+Document that `nashost:plex` and `nashost:plex:plex` return `rejected_legacy_shape`.
 
 - [ ] **Step 9: Run Task 6 tests**
 
@@ -1873,7 +1873,7 @@ fi
 old_count="$(sqlite3 "$db_path" "
 SELECT COUNT(*)
   FROM graph_entities
- WHERE (entity_type = 'service' AND canonical_key IN ('tootie:plex', 'tootie:plex:plex'))
+ WHERE (entity_type = 'service' AND canonical_key IN ('nashost:plex', 'nashost:plex:plex'))
     OR (entity_type = 'app' AND canonical_key = 'plex/plex/plex');
 ")"
 echo "old_key_count=$old_count"
@@ -1882,7 +1882,7 @@ new_count="$(sqlite3 "$db_path" "
 SELECT COUNT(*)
   FROM graph_entities
  WHERE (entity_type = 'logical_service' AND canonical_key = 'plex')
-    OR (entity_type = 'service_instance' AND canonical_key IN ('tootie/plex', 'shart/plex'));
+    OR (entity_type = 'service_instance' AND canonical_key IN ('nashost/plex', 'backuphost/plex'));
 ")"
 echo "new_key_count=$new_count"
 
@@ -1891,7 +1891,7 @@ EXPLAIN QUERY PLAN
 SELECT id, entity_type, canonical_key
   FROM graph_entities
  WHERE entity_type IN ('logical_service', 'service_instance')
-   AND canonical_key IN ('plex', 'tootie/plex');
+   AND canonical_key IN ('plex', 'nashost/plex');
 "
 
 echo "Read-only validation complete. old_key_count must be 0 after rebuild; new_key_count must be greater than 0 after resolver projection."
@@ -1908,10 +1908,10 @@ chmod +x scripts/validate-canonical-plex-graph.sh
 In `src/db/graph_tests.rs`, add one combined fixture test that inserts:
 
 ```text
-agent-docker Plex row for tootie
-agent-docker Plex row for shart
-raw syslog app row complex on tootie
-raw syslog app row plex-backup on tootie
+agent-docker Plex row for nashost
+agent-docker Plex row for backuphost
+raw syslog app row complex on nashost
+raw syslog app row plex-backup on nashost
 AI command row with project path mentioning plex
 ```
 
@@ -1919,9 +1919,9 @@ Assertions:
 
 ```rust
 assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'logical_service' AND canonical_key = 'plex'"), 1);
-assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'tootie/plex'"), 1);
-assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'shart/plex'"), 1);
-assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE canonical_key IN ('tootie:plex', 'tootie:plex:plex', 'plex/plex/plex')"), 0);
+assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'nashost/plex'"), 1);
+assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE entity_type = 'service_instance' AND canonical_key = 'backuphost/plex'"), 1);
+assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE canonical_key IN ('nashost:plex', 'nashost:plex:plex', 'plex/plex/plex')"), 0);
 assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE canonical_key = 'complex' AND entity_type = 'logical_service'"), 0);
 assert_eq!(count(&conn, "SELECT COUNT(*) FROM graph_entities WHERE canonical_key = 'plex-backup' AND entity_type = 'logical_service'"), 0);
 ```
@@ -1934,13 +1934,13 @@ Update `openwiki/inventory-graph.md` with a section named `Canonical Resolver Pr
 The canonical graph shape for Plex is:
 
 - `logical_service:plex`
-- `service_instance:tootie/plex`
-- `service_instance:tootie/plex instance_of logical_service:plex`
-- `service_instance:tootie/plex runs_on host:tootie`
-- `compose_project:tootie/plex defines_service service_instance:tootie/plex`
+- `service_instance:nashost/plex`
+- `service_instance:nashost/plex instance_of logical_service:plex`
+- `service_instance:nashost/plex runs_on host:nashost`
+- `compose_project:nashost/plex defines_service service_instance:nashost/plex`
 - route/domain/storage/container/error/session evidence links to the service instance when deterministic evidence exists
 
-`tootie:plex`, `tootie:plex:plex`, and `plex/plex/plex` are not supported service identity inputs. They are stale defect shapes.
+`nashost:plex`, `nashost:plex:plex`, and `plex/plex/plex` are not supported service identity inputs. They are stale defect shapes.
 ```
 
 Add read-only proof commands:
@@ -1948,7 +1948,7 @@ Add read-only proof commands:
 ```bash
 scripts/validate-canonical-plex-graph.sh
 cortex graph --mode around --entity-type logical_service --key plex
-cortex graph --mode around --entity-type service_instance --key tootie/plex
+cortex graph --mode around --entity-type service_instance --key nashost/plex
 cortex topic-correlate plex --limit 20
 ```
 
@@ -1959,7 +1959,7 @@ State that central Docker pull rows are not proof for this milestone; the proof 
 In `README.md`, add a short operator-facing example:
 
 ```markdown
-Searching `plex` resolves the logical service first, then concrete service instances such as `tootie/plex`. Cortex no longer treats `tootie:plex` or `tootie:plex:plex` as canonical service identities.
+Searching `plex` resolves the logical service first, then concrete service instances such as `nashost/plex`. Cortex no longer treats `nashost:plex` or `nashost:plex:plex` as canonical service identities.
 ```
 
 In `docs/mcp/TOOLS.md`, `docs/mcp/SCHEMA.md`, and `docs/CLI.md`, mirror the commands from Step 4 and mention `rejected_legacy_shape`.

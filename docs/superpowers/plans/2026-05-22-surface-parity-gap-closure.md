@@ -1627,12 +1627,12 @@ impl AppsArgs {
 #[test]
 fn parse_apps_with_hostname_limit() {
     let cmd = CliCommand::parse(strings(&[
-        "apps", "--host", "dookie", "--limit", "50",
+        "apps", "--host", "devhost", "--limit", "50",
     ]))
     .expect("parse apps");
     match cmd {
         CliCommand::Apps(args) => {
-            assert_eq!(args.hostname.as_deref(), Some("dookie"));
+            assert_eq!(args.hostname.as_deref(), Some("devhost"));
             assert_eq!(args.limit, Some(50));
         }
         other => panic!("expected Apps, got {other:?}"),

@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-07 07:19:27 EST
 repo: https://github.com/jmagar/syslog-mcp
@@ -29,7 +31,7 @@ Earlier in the session also fixed an unrelated runtime crash (`SYSLOG_DOCKER_HOS
    - Brainstorm: epic `syslog-mcp-6uoy` + 5 phase beads
    - Plan: detail enriched, dependencies wired (`.2 → .1`, `.5 → .1`)
    - Research: 5 agents (best-practices, framework-docs, security, performance, data-integrity) returned ~30 findings; revised the plan to lock composite index, body limits, Bearer auth, LazyLock regex
-   - CEO review: HOLD SCOPE; resolved deployment mechanism (manual SSH), OTLP observability (health counters + INFO log), scrubbing knob, OTel endpoint hard-coded to dookie:3100
+   - CEO review: HOLD SCOPE; resolved deployment mechanism (manual SSH), OTLP observability (health counters + INFO log), scrubbing knob, OTel endpoint hard-coded to devhost:3100
    - Engineering review: 4 agents (architecture, simplicity, security, performance) ran in parallel
    - Final lock: epic + 5 child bead descriptions saturated with implementation detail
 2. Worktree created (`feat/otlp-expansion`), `.env` and `config.toml` copied in
@@ -71,7 +73,7 @@ Earlier in the session also fixed an unrelated runtime crash (`SYSLOG_DOCKER_HOS
 - **Tag-based retention runs BEFORE global purge**: Avoids SQLite write-lock contention from concurrent chunked DELETEs; consolidates FTS merge work.
 - **Severity-exempt retention with documented coupling**: `err+` rows skip time-based purge; `enforce_storage_budget` still deletes them under disk pressure with a `tracing::warn!` so operators are not surprised.
 - **`fts_incremental_merge` M=0 default, configurable**: Forces unconditional merge after bulk deletes (M=250 may be a no-op without concurrent inserts). Made configurable via `SYSLOG_MCP_FTS_MERGE_PAGES` so rollback is config-only, not binary.
-- **No staged rollout / no shart migration**: User overrode the expansion.md plan — implement all phases at once, syslog-mcp stays on `dookie`.
+- **No staged rollout / no backuphost migration**: User overrode the expansion.md plan — implement all phases at once, syslog-mcp stays on `devhost`.
 - **CRITICAL fix taken from 3 reviewers concurring (Codex P1 + CodeRabbit Major + Copilot)**: OTLP partial-enqueue. Pre-flight `IngestTx::capacity()` check rejects whole batch with 503 BEFORE any try_send, eliminating the duplicate-on-retry path.
 
 ## Files Modified
@@ -213,8 +215,8 @@ python3 .../mark_resolved.py PRRT_... × 18  # All 18 review threads resolved
 - Pull on `main` after merge: ✅ done. The OTLP work is fully in.
 
 **Follow-on work (not yet started)**:
-- Watch first 24h of OTLP traffic on `dookie` once Phase 5 (Claude/Codex OTel client config) deploys to confirm the receiver, scrubber, and retention behave under live volume.
-- Manual deploy of Phases 3–5 (rsyslog drop-ins on dookie/squirts/steamy-wsl/vivobook-wsl, OTel client config edits) per `deploy/README.md` — operator task.
+- Watch first 24h of OTLP traffic on `devhost` once Phase 5 (Claude/Codex OTel client config) deploys to confirm the receiver, scrubber, and retention behave under live volume.
+- Manual deploy of Phases 3–5 (rsyslog drop-ins on devhost/edgehost/winhost-wsl/laptophost-wsl, OTel client config edits) per `deploy/README.md` — operator task.
 - Consider implementing the new `syslog-mcp-brt0` OAuth epic if/when it's prioritised.
 - Decide what to do with the four uncommitted WIP files in the working tree.
 - Optional simplifications surfaced by reviewers but not applied: drop `OtlpState::new` no-op constructor, consider folding `fts_merge_pages` into `StorageConfig`, add accessors on `OtlpCounters`.

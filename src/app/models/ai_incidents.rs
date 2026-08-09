@@ -281,7 +281,7 @@ pub struct AiCorrelateResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TopicCorrelateRequest {
-    /// Topic string, e.g. `axon` or `dookie dns adguard` (terms OR-ed).
+    /// Topic string, e.g. `axon` or `devhost dns adguard` (terms OR-ed).
     pub topic: String,
     pub since: Option<String>,
     pub until: Option<String>,

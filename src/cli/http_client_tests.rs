@@ -615,7 +615,7 @@ fn correlate_state_request_query_omits_none_options() {
     let req = CorrelateStateRequest {
         reference_time: Some("2026-05-25T00:00:00Z".into()),
         window_minutes: Some(15),
-        host: Some("tootie".into()),
+        host: Some("nashost".into()),
         severity_min: None,
         limit: None,
     };
@@ -632,7 +632,7 @@ fn correlate_state_request_query_omits_none_options() {
         "required field missing: {qs}"
     );
     assert!(qs.contains("window_minutes=15"), "set option missing: {qs}");
-    assert!(qs.contains("host=tootie"), "set option missing: {qs}");
+    assert!(qs.contains("host=nashost"), "set option missing: {qs}");
     // None options must be dropped entirely, not emitted as bare keys.
     assert!(!qs.contains("severity_min"), "None option leaked: {qs}");
     assert!(!qs.contains("limit"), "None option leaked: {qs}");

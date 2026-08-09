@@ -49,7 +49,7 @@ pub const ENTITY_TYPE_DEVICE: &str = "device";
 /// Canonical logical service identity (`plex`), resolver-owned.
 pub const ENTITY_TYPE_LOGICAL_SERVICE: &str =
     crate::db::entity_resolution::vocab::ENTITY_TYPE_LOGICAL_SERVICE;
-/// Host-scoped runtime deployment of a logical service (`tootie/plex`).
+/// Host-scoped runtime deployment of a logical service (`nashost/plex`).
 pub const ENTITY_TYPE_SERVICE_INSTANCE: &str =
     crate::db::entity_resolution::vocab::ENTITY_TYPE_SERVICE_INSTANCE;
 
@@ -599,7 +599,7 @@ fn fair_share_relationships(
 }
 
 /// Resolve `compose_project` entities by a bare project name. Compose-project
-/// canonical keys are host-scoped (`<host>:<project>`, e.g. `dookie:axon`), so a
+/// canonical keys are host-scoped (`<host>:<project>`, e.g. `devhost:axon`), so a
 /// plain `key="axon"` never matches via [`find_graph_entity_by_key`]. This
 /// matches the project portion (the segment after the last `:`) — or the full
 /// key — and returns every host that runs that project as candidates, so the

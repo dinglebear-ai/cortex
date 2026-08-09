@@ -181,8 +181,8 @@ fn insert_logs_batch_in_tx_returns_ids_in_input_order() {
     let tx = conn.transaction().unwrap();
 
     let entries = vec![
-        make_entry("2026-06-01T00:00:00.000Z", "dookie", "info", "first"),
-        make_entry("2026-06-01T00:00:01.000Z", "dookie", "info", "second"),
+        make_entry("2026-06-01T00:00:00.000Z", "devhost", "info", "first"),
+        make_entry("2026-06-01T00:00:01.000Z", "devhost", "info", "second"),
     ];
 
     let ids = insert_logs_batch_in_tx(&tx, &entries).unwrap();

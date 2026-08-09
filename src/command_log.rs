@@ -798,7 +798,7 @@ pub(crate) fn is_current_shell_agent_index_argv(rest: &[&str]) -> bool {
 
 /// True for the grouped pre-restructure grammar: `ingest agent-command
 /// ingest-spool` — the one immediately-prior grammar already deployed on
-/// live hosts (e.g. dookie).
+/// live hosts (e.g. devhost).
 pub(crate) fn is_grouped_legacy_agent_command_argv(rest: &[&str]) -> bool {
     matches!(rest, ["ingest", "agent-command", "ingest-spool", ..])
 }

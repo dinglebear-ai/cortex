@@ -114,7 +114,7 @@ fn service_dependency_key(host: Option<&str>, service: Option<&str>) -> ServiceR
     }
     if let Some((host_part, service_part)) = service.split_once('/') {
         // Canonicalize an explicit `host/service` target instead of passing
-        // it through verbatim: a mixed-case `Tootie/Plex` would otherwise
+        // it through verbatim: a mixed-case `Nashost/Plex` would otherwise
         // silently miss the lowercase canonical instance key.
         return crate::db::entity_resolution::service_instance_key(host_part, service_part)
             .ok_or_else(|| {

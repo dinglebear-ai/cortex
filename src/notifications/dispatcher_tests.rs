@@ -283,13 +283,13 @@ async fn dispatch_cycle_suppresses_old_firing_for_same_stream_outage() {
         ))
         .unwrap(),
     );
-    let dedup_key = "stream_silence:tootie:agent-docker:2026-07-17T02:43:30.292Z";
+    let dedup_key = "stream_silence:nashost:agent-docker:2026-07-17T02:43:30.292Z";
     let conn = pool.get().unwrap();
     let params = crate::db::notifications::OutboxInsertParams {
         dedup_key: dedup_key.to_string(),
         rule_id: "stream_silence".to_string(),
         severity: "warning".to_string(),
-        hostname: "tootie".to_string(),
+        hostname: "nashost".to_string(),
         title: "Silent stream".to_string(),
         body: "Body".to_string(),
         apprise_urls_json: "[]".to_string(),
@@ -310,7 +310,7 @@ async fn dispatch_cycle_suppresses_old_firing_for_same_stream_outage() {
             outbox_id: first_id,
             rule_id: "stream_silence",
             severity: "warning",
-            hostname: "tootie",
+            hostname: "nashost",
             status_code: Some(200),
             notes: None,
             dedup_key,

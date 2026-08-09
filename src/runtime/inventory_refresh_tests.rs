@@ -250,7 +250,7 @@ fn remote_docker_events_ssh_args_include_safe_options_and_remote_command() {
         )))
         .with_event_stream_defaults(),
     );
-    let args = remote_docker_events_ssh_args(&context, "squirts").unwrap();
+    let args = remote_docker_events_ssh_args(&context, "edgehost").unwrap();
 
     assert_eq!(args[0], "-o");
     assert_eq!(args[1], "IgnoreUnknown=WarnWeakCrypto");
@@ -260,7 +260,7 @@ fn remote_docker_events_ssh_args_include_safe_options_and_remote_command() {
     assert!(args.contains(&"StrictHostKeyChecking=yes".to_string()));
     assert!(args.contains(&"ServerAliveInterval=15".to_string()));
     assert!(args.contains(&"--".to_string()));
-    assert_eq!(args[args.len() - 2], "squirts");
+    assert_eq!(args[args.len() - 2], "edgehost");
     let command = &args[args.len() - 1];
     assert!(command.contains("command -v docker"));
     assert!(command.contains(REMOTE_DOCKER_EVENTS_UNSUPPORTED_MARKER));
@@ -369,7 +369,7 @@ fn remote_docker_event_tasks_return_empty_when_disabled_even_with_hosts() {
         std::env::set_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS", "false");
     }
     let mut config = crate::inventory::InventoryConfig::from_env();
-    config.ssh_hosts = vec!["tootie".into()];
+    config.ssh_hosts = vec!["nashost".into()];
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
 
     let tasks = spawn_remote_docker_event_tasks(
@@ -389,7 +389,7 @@ fn remote_docker_event_tasks_return_empty_when_disabled_even_with_hosts() {
 fn event_stream_failure_log_counts_saturating_failures() {
     let mut log = EventStreamFailureLog { failures: u64::MAX };
 
-    log.record("tootie", "ssh failed");
+    log.record("nashost", "ssh failed");
 
     assert_eq!(log.failures, u64::MAX);
 }
@@ -408,7 +408,7 @@ async fn remote_docker_event_stream_cancels_while_waiting_for_ssh_limiter() {
 
     let task = tokio::spawn({
         let context = context.clone();
-        async move { run_remote_docker_events_once("tootie", &context, tx, child).await }
+        async move { run_remote_docker_events_once("nashost", &context, tx, child).await }
     });
     token.cancel();
 

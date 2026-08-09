@@ -452,7 +452,7 @@ fn delete_orphan_heartbeat_latest_removes_cache_rows_without_parent_sample() {
         "INSERT INTO host_heartbeats_latest
              (host_id, heartbeat_id, hostname, sampled_at, received_at,
               partial, agent_version, os, architecture, metadata_json)
-         VALUES ('host-a', 12345, 'dookie', '2026-07-16T00:00:00Z',
+         VALUES ('host-a', 12345, 'devhost', '2026-07-16T00:00:00Z',
                  '2026-07-16T00:00:00Z', 0, '0.1.0', 'linux', 'x86_64', '{}')",
         [],
     )

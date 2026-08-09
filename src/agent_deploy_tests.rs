@@ -70,23 +70,23 @@ exit 0
 
 #[test]
 fn parse_ssh_config_skips_wildcards_and_github() {
-    let config = "Host *\n  ServerAliveInterval 60\n\nHost dookie\n  HostName 100.88.16.79\n\nHost github.com\n  User git\n\nHost tootie squirts\n  User jmagar\n";
+    let config = "Host *\n  ServerAliveInterval 60\n\nHost devhost\n  HostName 198.51.100.1\n\nHost github.com\n  User git\n\nHost nashost edgehost\n  User jmagar\n";
     let hosts = parse_ssh_config_hosts(config);
-    assert_eq!(hosts, vec!["dookie", "tootie", "squirts"]);
+    assert_eq!(hosts, vec!["devhost", "nashost", "edgehost"]);
 }
 
 #[test]
 fn parse_ssh_config_deduplicates() {
-    let config = "Host dookie\nHost dookie\nHost tootie\n";
+    let config = "Host devhost\nHost devhost\nHost nashost\n";
     let hosts = parse_ssh_config_hosts(config);
-    assert_eq!(hosts, vec!["dookie", "tootie"]);
+    assert_eq!(hosts, vec!["devhost", "nashost"]);
 }
 
 #[test]
 fn parse_ssh_config_skips_unsafe_hosts() {
-    let config = "Host dookie\nHost -bad\nHost ok-host\n";
+    let config = "Host devhost\nHost -bad\nHost ok-host\n";
     let hosts = parse_ssh_config_hosts(config);
-    assert_eq!(hosts, vec!["dookie", "ok-host"]);
+    assert_eq!(hosts, vec!["devhost", "ok-host"]);
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn shell_quote_escapes_single_quotes() {
 #[test]
 fn host_probe_label_formats_reachable_with_agent() {
     let probe = HostProbe {
-        host: "dookie".to_string(),
+        host: "devhost".to_string(),
         reachable: true,
         cortex_version: Some("1.17.0".to_string()),
         agent_active: Some(true),
@@ -112,7 +112,7 @@ fn host_probe_label_formats_reachable_with_agent() {
 #[test]
 fn host_probe_label_formats_unreachable() {
     let probe = HostProbe {
-        host: "steamy".to_string(),
+        host: "winhost".to_string(),
         reachable: false,
         cortex_version: None,
         agent_active: None,
@@ -561,9 +561,9 @@ fn resolve_agent_env_flagless_upgrade_preserves_everything() {
     let persisted = vec![
         (
             "CORTEX_HEARTBEAT_TARGET".into(),
-            "https://cortex.tootie.tv".into(),
+            "https://cortex.example.invalid".into(),
         ),
-        ("CORTEX_SYSLOG_TARGET".into(), "100.88.16.79:1514".into()),
+        ("CORTEX_SYSLOG_TARGET".into(), "198.51.100.1:1514".into()),
         ("CORTEX_AGENT_DOCKER".into(), "true".into()),
         ("CORTEX_HEARTBEAT_TOKEN".into(), "the-secret".into()),
         (
@@ -575,11 +575,11 @@ fn resolve_agent_env_flagless_upgrade_preserves_everything() {
     assert_eq!(env_get(&env, "CORTEX_HEARTBEAT_TOKEN"), Some("the-secret"));
     assert_eq!(
         env_get(&env, "CORTEX_HEARTBEAT_TARGET"),
-        Some("https://cortex.tootie.tv")
+        Some("https://cortex.example.invalid")
     );
     assert_eq!(
         env_get(&env, "CORTEX_SYSLOG_TARGET"),
-        Some("100.88.16.79:1514")
+        Some("198.51.100.1:1514")
     );
     // Preserved as true — NOT reset to the false default.
     assert_eq!(env_get(&env, "CORTEX_AGENT_DOCKER"), Some("true"));
@@ -630,12 +630,12 @@ fn resolve_linux_agent_env_preserves_auth_and_flags_without_defaults() {
     let persisted = vec![
         (
             "CORTEX_HEARTBEAT_TARGET".into(),
-            "https://cortex.tootie.tv".into(),
+            "https://cortex.example.invalid".into(),
         ),
         ("CORTEX_HEARTBEAT_TOKEN".into(), "the-secret".into()),
         ("CORTEX_AGENT_DOCKER".into(), "true".into()),
         ("CORTEX_AGENT_JOURNALD".into(), "true".into()),
-        ("CORTEX_SYSLOG_TARGET".into(), "100.88.16.79:1514".into()),
+        ("CORTEX_SYSLOG_TARGET".into(), "198.51.100.1:1514".into()),
         (
             "CORTEX_AGENT_FILE_TAILS".into(),
             "/var/log/app.log:app".into(),
@@ -649,14 +649,14 @@ fn resolve_linux_agent_env_preserves_auth_and_flags_without_defaults() {
 
     assert_eq!(
         env_get(&env, "CORTEX_HEARTBEAT_TARGET"),
-        Some("https://cortex.tootie.tv")
+        Some("https://cortex.example.invalid")
     );
     assert_eq!(env_get(&env, "CORTEX_HEARTBEAT_TOKEN"), Some("the-secret"));
     assert_eq!(env_get(&env, "CORTEX_AGENT_DOCKER"), Some("true"));
     assert_eq!(env_get(&env, "CORTEX_AGENT_JOURNALD"), Some("true"));
     assert_eq!(
         env_get(&env, "CORTEX_SYSLOG_TARGET"),
-        Some("100.88.16.79:1514")
+        Some("198.51.100.1:1514")
     );
     assert_eq!(
         env_get(&env, "CORTEX_AGENT_FILE_TAILS"),

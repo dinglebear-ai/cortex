@@ -312,7 +312,7 @@ print(json.dumps({
         "name": "infra.service-outage",
         "arguments": {
             "service": "plex",
-            "host": "tootie",
+            "host": "nashost",
             "window": "last 45 minutes",
         },
     },
@@ -325,7 +325,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     text = d['result']['messages'][0]['content']['text']
-    for needle in ['service \`plex\`', 'Host: tootie', 'bucket=minute', 'limit=10', 'cortex://schema/prompt-output']:
+    for needle in ['service \`plex\`', 'Host: nashost', 'bucket=minute', 'limit=10', 'cortex://schema/prompt-output']:
         assert needle in text, needle
     print('ok')
 except Exception as e:
@@ -1296,7 +1296,7 @@ fi
 echo ""
 echo "CLI: positionals + defaults"
 if CLI_BIN="$(resolve_cortex_bin)"; then
-    # `cortex tail dookie` — bare positional binds to --host; default n=50.
+    # `cortex tail devhost` — bare positional binds to --host; default n=50.
     CLI_TAIL_HOST="$TEST_HOST"
     if [[ -n "$CLI_TAIL_HOST" ]]; then
         if CORTEX_URL="${MCP_URL%/mcp}" "$CLI_BIN" tail "$CLI_TAIL_HOST" -n 1 >/dev/null 2>&1; then

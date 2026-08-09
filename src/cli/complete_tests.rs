@@ -98,7 +98,7 @@ fn flags_resolve_from_longest_leaf_after_positionals_and_options() {
         "disk".into(),
         "full".into(),
         "--host".into(),
-        "dookie".into(),
+        "devhost".into(),
     ])
     .unwrap();
     assert!(top_level.iter().any(|line| line.starts_with("--since\t")));

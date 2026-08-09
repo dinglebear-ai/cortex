@@ -42,8 +42,8 @@ fn graph_walk_service_topic_traverses_proof_edges_and_caps_results() {
     let (_dir, pool) = test_pool("service-topic-walk.db");
     let conn = pool.get().unwrap();
     let logical = insert_entity(&conn, "logical_service", "plex");
-    let instance = insert_entity(&conn, "service_instance", "tootie/plex");
-    let host = insert_entity(&conn, "host", "tootie");
+    let instance = insert_entity(&conn, "service_instance", "nashost/plex");
+    let host = insert_entity(&conn, "host", "nashost");
     let app = insert_entity(&conn, "app", "kernel");
     insert_rel(&conn, instance, logical, "instance_of");
     insert_rel(&conn, instance, host, "runs_on");
@@ -53,8 +53,8 @@ fn graph_walk_service_topic_traverses_proof_edges_and_caps_results() {
     let (entities, truncated) = graph_walk_service_topic(&conn, &["plex".to_string()], 3).unwrap();
     let walked = keys(&entities);
     assert!(walked.contains(&"plex".to_string()));
-    assert!(walked.contains(&"tootie/plex".to_string()));
-    assert!(walked.contains(&"tootie".to_string()));
+    assert!(walked.contains(&"nashost/plex".to_string()));
+    assert!(walked.contains(&"nashost".to_string()));
     assert!(
         !walked.contains(&"kernel".to_string()),
         "service-topic walk must not traverse broad log-identity edges: {walked:?}"
@@ -105,8 +105,8 @@ fn stale_service_topology_cleanup_removes_old_canonical_rows() {
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
          VALUES
-            ('service', 'tootie:plex', 'plex', 'log', 'fixture', 'inferred'),
-            ('service', 'tootie:plex:plex', 'tootie/plex/plex', 'log', 'fixture', 'inferred'),
+            ('service', 'nashost:plex', 'plex', 'log', 'fixture', 'inferred'),
+            ('service', 'nashost:plex:plex', 'nashost/plex/plex', 'log', 'fixture', 'inferred'),
             ('app', 'plex/plex/plex', 'plex/plex/plex', 'log', 'fixture', 'claimed')",
         [],
     )
@@ -128,7 +128,7 @@ fn stale_service_topology_cleanup_removes_old_canonical_rows() {
         tx.execute(
             "INSERT INTO graph_entities
                 (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-             VALUES ('host', 'tootie', 'tootie', 'log', 'fixture', 'verified')",
+             VALUES ('host', 'nashost', 'nashost', 'log', 'fixture', 'verified')",
             [],
         )
         .unwrap();
@@ -143,7 +143,7 @@ fn stale_service_topology_cleanup_removes_old_canonical_rows() {
              SELECT s.id || ':runs_on:' || h.id, s.id, h.id, 'runs_on',
                     'docker_service_label', 'inferred', 0.5
                FROM graph_entities s, graph_entities h
-              WHERE s.entity_type = 'service' AND h.canonical_key = 'tootie';
+              WHERE s.entity_type = 'service' AND h.canonical_key = 'nashost';
              INSERT INTO graph_relationship_evidence
                 (relationship_id, evidence_key, source_kind, source_id,
                  observed_at, reason_code, trust_level)
@@ -181,7 +181,7 @@ fn stale_service_topology_cleanup_removes_old_canonical_rows() {
     // The unrelated host entity survives the cleanup.
     let hosts: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM graph_entities WHERE canonical_key = 'tootie'",
+            "SELECT COUNT(*) FROM graph_entities WHERE canonical_key = 'nashost'",
             [],
             |row| row.get(0),
         )

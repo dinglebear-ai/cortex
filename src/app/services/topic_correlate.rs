@@ -34,8 +34,8 @@ impl CortexService {
         let since = Some(rfc3339_z(since_dt));
         let until = Some(rfc3339_z(until_dt));
 
-        // Hard break: legacy nested service identities (`tootie:plex`,
-        // `tootie:plex:plex`, `plex/plex/plex`) are rejected before any
+        // Hard break: legacy nested service identities (`nashost:plex`,
+        // `nashost:plex:plex`, `plex/plex/plex`) are rejected before any
         // graph lookup runs.
         if let Some(rejected) = super::graph_support::reject_legacy_service_identity(&req.topic) {
             return Err(rejected);

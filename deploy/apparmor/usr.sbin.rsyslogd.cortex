@@ -1,4 +1,4 @@
-# cortex file-tail sources on squirts.
+# cortex file-tail sources on edgehost.
 # Install to /etc/apparmor.d/local/usr.sbin.rsyslogd, then reload the
 # rsyslogd profile with:
 #   sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.rsyslogd

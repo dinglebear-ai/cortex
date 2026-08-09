@@ -1319,8 +1319,8 @@ pub struct SilentHostEntry {
 pub fn silent_hosts(pool: &DbPool, cutoff: &str, now_unix: i64) -> Result<Vec<SilentHostEntry>> {
     // Route through list_hosts so case/FQDN variants of one machine are merged
     // (taking the latest last_seen) BEFORE applying the silence cutoff. Reading
-    // the raw `hosts` table here would flag a dormant `shart` identity as silent
-    // while the live `SHART` keeps forwarding — the merged host is correctly
+    // the raw `hosts` table here would flag a dormant `backuphost` identity as silent
+    // while the live `BACKUPHOST` keeps forwarding — the merged host is correctly
     // considered alive.
     let mut out: Vec<SilentHostEntry> = super::queries::list_hosts(pool)?
         .into_iter()
@@ -1399,7 +1399,7 @@ pub fn clock_skew(pool: &DbPool, since: &str, limit: Option<u32>) -> Result<Vec<
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    // Merge case/FQDN variants of one machine (e.g. `SHART`/`shart`) into a single
+    // Merge case/FQDN variants of one machine (e.g. `BACKUPHOST`/`backuphost`) into a single
     // skew row: sum samples, recombine the mean as a sample-weighted average, and
     // widen min/max. Without this a host's clock skew is reported once per casing.
     let names: Vec<String> = rows.iter().map(|r| r.hostname.clone()).collect();

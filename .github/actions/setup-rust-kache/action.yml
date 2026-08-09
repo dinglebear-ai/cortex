@@ -171,7 +171,6 @@ runs:
       run: |
         set -euo pipefail
         config_file="$HOME/.config/kache/config.toml"
-        host_credentials_file="$HOME/.aws/credentials"
         mkdir -p "$HOME/.config/kache"
 
         # Persistent hosts own their default store through systemd. Farm
@@ -221,24 +220,6 @@ runs:
         profile = "kache"
         TOML
           echo "kache remote: s3://$KACHE_S3_BUCKET/$KACHE_S3_PREFIX via $KACHE_S3_ENDPOINT"
-        elif [ -r "$host_credentials_file" ] &&
-             grep -Eq '^[[:space:]]*\[kache\][[:space:]]*$' "$host_credentials_file"; then
-          cat > "$config_file" <<TOML
-        [cache]
-        local_store = "$cache_dir"
-        daemon_idle_timeout_secs = 0
-        prefetch_max_bytes = "8GiB"
-        local_max_size = "40GiB"
-
-        [cache.remote]
-        type = "s3"
-        bucket = "kache"
-        endpoint = "http://192.0.2.2:9000"
-        region = "us-east-1"
-        prefix = "rust"
-        profile = "kache"
-        TOML
-          echo "kache remote: s3://kache/rust via Nashost MinIO"
         else
           cat > "$config_file" <<TOML
         [cache]

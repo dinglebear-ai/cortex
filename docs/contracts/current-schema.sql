@@ -5,7 +5,7 @@
 -- Pinning
 --   This file pins the current production DB schema as of commit 6640f5d
 --   (branch `main`, 2026-05-16). Source: `src/db/pool.rs` `init_pool()` plus
---   migrations 1..9. The production deployment on `tootie` operates at
+--   migrations 1..9. The production deployment on `nashost` operates at
 --   ~4.9M log rows against this exact schema.
 --
 --   `db-additions.sql` LAYERS ONTO this baseline. Changing this file is a
@@ -102,8 +102,8 @@ CREATE TABLE IF NOT EXISTS graph_entities (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     -- Migration 41 (entity_resolution_v2): adds 'logical_service' and
     -- 'service_instance'. Canonical service identity is
-    -- `logical_service:plex` + `service_instance:tootie/plex`; legacy
-    -- 'service' rows ('tootie:plex', 'tootie:plex:plex') are deleted by the
+    -- `logical_service:plex` + `service_instance:nashost/plex`; legacy
+    -- 'service' rows ('nashost:plex', 'nashost:plex:plex') are deleted by the
     -- migration and no longer projected.
     entity_type   TEXT NOT NULL CHECK (entity_type IN (
         'host', 'container', 'service', 'app', 'source_ip',

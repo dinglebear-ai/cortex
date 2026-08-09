@@ -262,7 +262,7 @@ fn cidr_v4_host_route_prefix32() {
 #[test]
 fn cidr_v4_class_c() {
     let inside: std::net::IpAddr = "10.0.0.100".parse().unwrap();
-    let outside: std::net::IpAddr = "10.1.0.1".parse().unwrap();
+    let outside: std::net::IpAddr = "192.0.2.1".parse().unwrap();
     let cidrs = vec!["10.0.0.0/24".to_string()];
     assert!(is_source_allowed(inside, &cidrs));
     assert!(!is_source_allowed(outside, &cidrs));

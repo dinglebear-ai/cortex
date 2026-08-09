@@ -352,7 +352,7 @@ Step (1) wrote `unifi.*`; step (4) wrote `source_kind`. No `parser` key
 
 ### 7.3 Agent log row with free-form metadata
 
-Source: `cortex agent` on `dookie`, journald source, app `sshd`.
+Source: `cortex agent` on `devhost`, journald source, app `sshd`.
 `AgentLogEntry.metadata` = `{"pid": 12345, "comm": "sshd", "user": "alice"}`.
 
 ```json
@@ -437,7 +437,7 @@ structured identity prefix; receiver enrichment merges it into
 {
   "source_kind": "agent-docker",
   "agent_docker": {
-    "host": "tootie",
+    "host": "nashost",
     "container_id": "abcdef1234567890",
     "container_name": "plex",
     "compose_project": "plex",

@@ -3,8 +3,8 @@ use super::*;
 #[test]
 fn syslog_target_from_heartbeat_extracts_host_and_uses_syslog_port() {
     assert_eq!(
-        AgentStreamsConfig::syslog_target_from_heartbeat("http://dookie:3100"),
-        Some("dookie:1514".to_string())
+        AgentStreamsConfig::syslog_target_from_heartbeat("http://devhost:3100"),
+        Some("devhost:1514".to_string())
     );
     assert_eq!(
         AgentStreamsConfig::syslog_target_from_heartbeat("https://cortex.example.test:3100/mcp/"),
@@ -15,7 +15,7 @@ fn syslog_target_from_heartbeat_extracts_host_and_uses_syslog_port() {
 #[test]
 fn syslog_target_from_heartbeat_rejects_non_http_or_missing_host() {
     assert_eq!(
-        AgentStreamsConfig::syslog_target_from_heartbeat("dookie:3100"),
+        AgentStreamsConfig::syslog_target_from_heartbeat("devhost:3100"),
         None
     );
     assert_eq!(

@@ -53,7 +53,7 @@ Every prompt is written as a bounded investigation runbook:
   "name": "infra.service-outage",
   "arguments": {
     "service": "plex",
-    "host": "tootie",
+    "host": "nashost",
     "window": "last 45 minutes"
   }
 }

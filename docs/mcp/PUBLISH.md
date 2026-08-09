@@ -63,7 +63,7 @@ Steps executed:
 | --- | --- | --- |
 | crates.io | `cargo publish` via GitHub Actions | `v*` tag push |
 | GHCR | Docker image build and push | `v*` tag push |
-| MCP Registry | `server.json` under `tv.tootie/cortex` namespace | manual update |
+| MCP Registry | `server.json` under `ai.dinglebear/cortex` namespace | manual update |
 | MCPB (Linux) | `dist/cortex-X.Y.Z-linux.mcpb` | `just build-mcpb` |
 | MCPB (Windows) | `dist/cortex-X.Y.Z-windows.mcpb` | `bash scripts/build-mcpb.sh --target windows` |
 
@@ -73,7 +73,7 @@ MCP Registry metadata at repo root:
 
 ```json
 {
-  "name": "tv.tootie/cortex",
+  "name": "ai.dinglebear/cortex",
   "title": "Cortex",
   "description": "Syslog receiver and MCP server for homelab log intelligence.",
   "version": "X.Y.Z",

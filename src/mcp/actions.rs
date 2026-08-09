@@ -149,7 +149,7 @@ pub(super) struct ActionSpec {
     /// Copy-paste example invocations.
     pub examples: &'static [&'static str],
     /// Canonical flag a bare positional argument binds to (`None` = the action
-    /// takes no positional). E.g. `tail dookie` binds the positional to
+    /// takes no positional). E.g. `tail devhost` binds the positional to
     /// `--host`.
     pub positional: Option<&'static str>,
     /// Zero-flag defaults applied when the user omits `--limit` / `--since`.
@@ -243,7 +243,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         flags: COMMON_LOG_FLAGS,
         examples: &[
             "cortex search \"oom killer\"",
-            "cortex search \"oom\" --host dookie --since 1h",
+            "cortex search \"oom\" --host devhost --since 1h",
             "cortex search --grep \"smoke-test\" --limit 20",
         ],
         positional: Some("--query"),
@@ -256,7 +256,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Cheap,
         FilterLogs,
         flags: COMMON_LOG_FLAGS,
-        examples: &["cortex filter --host tootie --severity err --since 6h"]
+        examples: &["cortex filter --host nashost --severity err --since 6h"]
     ),
     action_spec!(
         "tail",
@@ -265,7 +265,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Cheap,
         TailLogs,
         flags: COMMON_LOG_FLAGS,
-        examples: &["cortex tail dookie", "cortex tail --host dookie -n 100"],
+        examples: &["cortex tail devhost", "cortex tail --host devhost -n 100"],
         positional: Some("--host"),
         defaults: Defaults { limit: Some(50), since: None }
     ),
@@ -306,7 +306,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Moderate,
         HostState,
         flags: HOST_STATE_FLAGS,
-        examples: &["cortex state host", "cortex state host dookie --since 30m"],
+        examples: &["cortex state host", "cortex state host devhost --since 30m"],
         positional: Some("--host"),
         defaults: Defaults::new()
     ),
@@ -415,7 +415,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         examples: &[
             "cortex topic-correlate axon",
             "cortex topic-correlate axon --since 1h --limit 200",
-            "cortex topic-correlate 'dookie dns adguard' --since 6h",
+            "cortex topic-correlate 'devhost dns adguard' --since 6h",
             "cortex topic-correlate axon --source-kinds docker-stream,agent-command",
         ],
         positional: Some("--topic"),
@@ -473,7 +473,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Cheap,
         Timeline,
         flags: &[],
-        examples: &["cortex timeline --bucket hour --host dookie"]
+        examples: &["cortex timeline --bucket hour --host devhost"]
     ),
     action_spec!(
         "patterns",

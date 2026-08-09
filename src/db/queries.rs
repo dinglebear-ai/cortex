@@ -1884,7 +1884,7 @@ pub fn topic_correlate_inputs(
     }
     if !generic_seeds.is_empty() {
         // SeedHostsOnly: a host reached transitively from an app/container
-        // seed (e.g. app:plex —emitted_by→ host:tootie) must never drive
+        // seed (e.g. app:plex —emitted_by→ host:nashost) must never drive
         // host-wide `l.hostname IN (…)` inclusion labelled `resolved`. Only
         // hosts that were exact topic matches themselves fan out.
         logs.extend(

@@ -135,7 +135,7 @@ pub fn resolve_observations(observations: &[ResolverObservation]) -> Vec<Resolve
 }
 
 /// Classify a lookup input before any graph lookup. Legacy nested service
-/// shapes (`tootie:plex`, `tootie:plex:plex`, `plex/plex/plex`) are rejected
+/// shapes (`nashost:plex`, `nashost:plex:plex`, `plex/plex/plex`) are rejected
 /// outright; anything else is degraded pending candidate resolution by the
 /// caller (which owns database access).
 pub fn diagnose_lookup_input(input: &str) -> ResolverDiagnostic {

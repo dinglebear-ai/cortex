@@ -25,7 +25,7 @@
     "server_url": {
       "type": "string",
       "title": "Server URL",
-      "description": "Base URL the MCP client in this Claude Code session connects to (always used — both modes). Server mode: keep the default http://localhost:3100 so the local MCP client talks to the local server. Client mode: set to the remote server, e.g. http://dookie:3100, http://syslog.lan:3100, or https://syslog.example.com if fronted by a reverse proxy. Must include the scheme and (if non-default) port; do NOT include a trailing /mcp path — the plugin appends it.",
+      "description": "Base URL the MCP client in this Claude Code session connects to (always used — both modes). Server mode: keep the default http://localhost:3100 so the local MCP client talks to the local server. Client mode: set to the remote server, e.g. http://devhost:3100, http://syslog.lan:3100, or https://syslog.example.com if fronted by a reverse proxy. Must include the scheme and (if non-default) port; do NOT include a trailing /mcp path — the plugin appends it.",
       "required": true,
       "default": "http://localhost:3100"
     },
@@ -155,7 +155,7 @@
     "fleet_hosts": {
       "type": "string",
       "title": "Fleet hosts",
-      "description": "Hostnames for hosts in your fleet. Used for Docker ingest: when docker_ingest_enabled is true, each entry becomes the docker-socket-proxy URL http://<host>:2375. Entries must be reachable by name — resolvable DNS or an /etc/hosts entry, not just an SSH config alias. Add one entry per host, e.g. dookie, squirts, tootie. Leave empty if you don't use Docker ingest.",
+      "description": "Hostnames for hosts in your fleet. Used for Docker ingest: when docker_ingest_enabled is true, each entry becomes the docker-socket-proxy URL http://<host>:2375. Entries must be reachable by name — resolvable DNS or an /etc/hosts entry, not just an SSH config alias. Add one entry per host, e.g. devhost, edgehost, nashost. Leave empty if you don't use Docker ingest.",
       "required": true,
       "multiple": true
     }

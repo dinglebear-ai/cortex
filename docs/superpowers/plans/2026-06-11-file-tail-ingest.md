@@ -52,7 +52,7 @@ fn add_request_builds_enabled_source_with_defaults() {
         id: "swag-access".into(),
         path: "/mnt/appdata/swag/log/nginx/access.log".into(),
         tag: "swag-access".into(),
-        hostname: Some("squirts".into()),
+        hostname: Some("edgehost".into()),
         facility: None,
         severity: None,
         start_at_end: None,
@@ -63,7 +63,7 @@ fn add_request_builds_enabled_source_with_defaults() {
     assert_eq!(source.id, "swag-access");
     assert_eq!(source.path, "/mnt/appdata/swag/log/nginx/access.log");
     assert_eq!(source.tag, "swag-access");
-    assert_eq!(source.hostname.as_deref(), Some("squirts"));
+    assert_eq!(source.hostname.as_deref(), Some("edgehost"));
     assert_eq!(source.facility.as_deref(), Some("local7"));
     assert_eq!(source.severity, "info");
     assert!(source.start_at_end);
@@ -368,7 +368,7 @@ fn registry_adds_lists_and_removes_sources() {
             id: "swag-access".into(),
             path: "/tmp/access.log".into(),
             tag: "swag-access".into(),
-            hostname: Some("squirts".into()),
+            hostname: Some("edgehost".into()),
             facility: None,
             severity: None,
             start_at_end: None,
@@ -568,7 +568,7 @@ fn file_tail_line_to_entry_sets_expected_envelope() {
         id: "swag-access".into(),
         path: "/tmp/access.log".into(),
         tag: "swag-access".into(),
-        hostname: Some("squirts".into()),
+        hostname: Some("edgehost".into()),
         facility: Some("local4".into()),
         severity: "info".into(),
         start_at_end: true,
@@ -580,13 +580,13 @@ fn file_tail_line_to_entry_sets_expected_envelope() {
     let entry = file_tail_line_to_entry(&source, "GET / HTTP/1.1\" 401", "2026-06-11T20:01:00Z");
 
     assert_eq!(entry.timestamp, "2026-06-11T20:01:00Z");
-    assert_eq!(entry.hostname, "squirts");
+    assert_eq!(entry.hostname, "edgehost");
     assert_eq!(entry.facility.as_deref(), Some("local4"));
     assert_eq!(entry.severity, "info");
     assert_eq!(entry.app_name.as_deref(), Some("swag-access"));
     assert_eq!(entry.message, "GET / HTTP/1.1\" 401");
     assert_eq!(entry.raw, "GET / HTTP/1.1\" 401");
-    assert_eq!(entry.source_ip, "file-tail://squirts/swag-access");
+    assert_eq!(entry.source_ip, "file-tail://edgehost/swag-access");
     assert!(entry.metadata_json.as_deref().unwrap().contains("\"source_kind\":\"file-tail\""));
     assert!(entry.metadata_json.as_deref().unwrap().contains("\"path\":\"/tmp/access.log\""));
 }
@@ -606,7 +606,7 @@ async fn tail_file_once_sends_existing_lines_when_not_starting_at_end() {
         id: "authelia".into(),
         path: file_path.to_string_lossy().into_owned(),
         tag: "authelia".into(),
-        hostname: Some("squirts".into()),
+        hostname: Some("edgehost".into()),
         facility: Some("local5".into()),
         severity: "info".into(),
         start_at_end: false,
@@ -940,7 +940,7 @@ async fn file_tails_add_list_disable_enable_remove_round_trip() {
             id: Some("swag-access".into()),
             path: Some("/tmp/access.log".into()),
             tag: Some("swag-access".into()),
-            hostname: Some("squirts".into()),
+            hostname: Some("edgehost".into()),
             facility: Some("local4".into()),
             severity: Some("info".into()),
             start_at_end: Some(true),
@@ -1367,7 +1367,7 @@ fn parses_file_tail_add() {
         "--tag".into(),
         "swag-access".into(),
         "--host".into(),
-        "squirts".into(),
+        "edgehost".into(),
         "--facility".into(),
         "local4".into(),
         "--severity".into(),
@@ -1379,7 +1379,7 @@ fn parses_file_tail_add() {
 
     assert_eq!(
         format!("{command:?}"),
-        "FileTail(Add(FileTailAddArgs { id: \"swag-access\", path: \"/mnt/appdata/swag/log/nginx/access.log\", tag: \"swag-access\", hostname: Some(\"squirts\"), facility: Some(\"local4\"), severity: Some(\"info\"), start_at_end: false, json: true }))"
+        "FileTail(Add(FileTailAddArgs { id: \"swag-access\", path: \"/mnt/appdata/swag/log/nginx/access.log\", tag: \"swag-access\", hostname: Some(\"edgehost\"), facility: Some(\"local4\"), severity: Some(\"info\"), start_at_end: false, json: true }))"
     );
 }
 
@@ -1794,14 +1794,14 @@ cortex file-tail add \
   --id swag-access \
   --path /mnt/appdata/swag/log/nginx/access.log \
   --tag swag-access \
-  --host squirts \
+  --host edgehost \
   --facility local4
 
 cortex file-tail add \
   --id swag-error \
   --path /mnt/appdata/swag/log/nginx/error.log \
   --tag swag-error \
-  --host squirts \
+  --host edgehost \
   --facility local4 \
   --severity warning
 
@@ -1809,21 +1809,21 @@ cortex file-tail add \
   --id fail2ban \
   --path /mnt/appdata/swag/log/fail2ban/fail2ban.log \
   --tag fail2ban \
-  --host squirts \
+  --host edgehost \
   --facility local5
 
 cortex file-tail add \
   --id authelia \
   --path /mnt/appdata/authelia/logs/authelia.log \
   --tag authelia \
-  --host squirts \
+  --host edgehost \
   --facility local5
 
 cortex file-tail add \
   --id adguard-query \
   --path /mnt/appdata/adguard/var/data/querylog.json \
   --tag adguard-query \
-  --host squirts \
+  --host edgehost \
   --facility local6
 ```
 
@@ -1865,7 +1865,7 @@ Request:
   "id": "swag-access",
   "path": "/mnt/appdata/swag/log/nginx/access.log",
   "tag": "swag-access",
-  "hostname": "squirts",
+  "hostname": "edgehost",
   "facility": "local4",
   "severity": "info",
   "start_at_end": true

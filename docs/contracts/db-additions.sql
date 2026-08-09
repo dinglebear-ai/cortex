@@ -188,7 +188,7 @@ CREATE TABLE IF NOT EXISTS metrics_gauge (
     ts           INTEGER NOT NULL                -- unix epoch millis
 );
 
--- "Latest mem.used_pct for dookie" / per-host time slice. (Source: §6)
+-- "Latest mem.used_pct for devhost" / per-host time slice. (Source: §6)
 CREATE INDEX IF NOT EXISTS idx_metrics_host_metric_ts
     ON metrics_gauge(host_id, metric_name, ts DESC);
 

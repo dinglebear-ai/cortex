@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the common case flagless — `cortex tail dookie`, `cortex search "oom"`, `cortex host-state dookie` — and give each action sensible zero-flag defaults so you rarely need to type a flag at all.
+**Goal:** Make the common case flagless — `cortex tail devhost`, `cortex search "oom"`, `cortex host-state devhost` — and give each action sensible zero-flag defaults so you rarely need to type a flag at all.
 
 **Architecture:** Add two pieces of metadata to the `ACTION_SPECS` registry: a `positional` mapping (which canonical flag a bare argument binds to) and a `defaults` block (limit / time-window applied when the user omits them). The parse layer reads this metadata via small shared helpers, so behavior is declarative, not per-command special-casing. This is Plan 3 of 3; it depends on Plan 2 (registry flag metadata) and Plan 1 (time parser).
 
@@ -139,8 +139,8 @@ use super::*;
 #[test]
 fn bind_positional_returns_value_for_action_with_positional() {
     // tail binds a bare positional to --host.
-    let bound = positional_value("tail", &["dookie".to_string()]).unwrap();
-    assert_eq!(bound.as_deref(), Some("dookie"));
+    let bound = positional_value("tail", &["devhost".to_string()]).unwrap();
+    assert_eq!(bound.as_deref(), Some("devhost"));
 }
 
 #[test]
@@ -231,15 +231,15 @@ git commit -m "feat(cli): declarative positional + defaults helpers"
 ```rust
 #[test]
 fn tail_positional_sets_host_and_default_limit() {
-    let cmd = parse_tail(&["dookie".into()]).unwrap();
+    let cmd = parse_tail(&["devhost".into()]).unwrap();
     let CliCommand::Tail(args) = cmd else { panic!("expected Tail") };
-    assert_eq!(args.hostname.as_deref(), Some("dookie"));
+    assert_eq!(args.hostname.as_deref(), Some("devhost"));
     assert_eq!(args.limit, Some(50)); // default applied when n/--limit omitted
 }
 
 #[test]
 fn tail_explicit_limit_overrides_default() {
-    let cmd = parse_tail(&["dookie".into(), "-n".into(), "10".into()]).unwrap();
+    let cmd = parse_tail(&["devhost".into(), "-n".into(), "10".into()]).unwrap();
     let CliCommand::Tail(args) = cmd else { panic!("expected Tail") };
     assert_eq!(args.limit, Some(10));
 }
@@ -248,7 +248,7 @@ fn tail_explicit_limit_overrides_default() {
 - [ ] **Step 2: Run to confirm failure**
 
 Run: `cargo test -p cortex --lib parse_logs::tests::tail_positional_sets_host_and_default_limit`
-Expected: FAIL — bare `dookie` is currently an unknown-arg error / no default limit.
+Expected: FAIL — bare `devhost` is currently an unknown-arg error / no default limit.
 
 - [ ] **Step 3: Implement in `parse_tail`**
 
@@ -308,8 +308,8 @@ fn errors_defaults_to_one_hour_window() {
 // commands/host_state tests
 #[test]
 fn host_state_positional_sets_host() {
-    let cmd = parse_host_state(&["dookie".into()]).unwrap();
-    // assert the resolved host field equals "dookie" (match the HostStateArgs shape)
+    let cmd = parse_host_state(&["devhost".into()]).unwrap();
+    // assert the resolved host field equals "devhost" (match the HostStateArgs shape)
 }
 ```
 
@@ -352,9 +352,9 @@ In the registry `examples` for these actions, lead with the flagless case:
 
 ```
 search:     cortex search "oom killer"
-tail:       cortex tail dookie
+tail:       cortex tail devhost
 errors:     cortex errors
-host_state: cortex host-state dookie
+host_state: cortex host-state devhost
 ```
 
 (Keep one flagged example each to show the knobs exist.)
@@ -364,7 +364,7 @@ host_state: cortex host-state dookie
 In `scripts/smoke-test.sh`:
 
 ```bash
-run_case "tail positional host" cortex tail dookie -n 1
+run_case "tail positional host" cortex tail devhost -n 1
 run_case "errors default window" cortex errors
 ```
 
@@ -393,10 +393,10 @@ Run: `cargo fmt --check` → clean.
 - [ ] **Step 2: Manual common-case sweep (server up)**
 
 ```bash
-cortex tail dookie            # bare host, n=50
+cortex tail devhost            # bare host, n=50
 cortex search "oom killer"    # bare query, limit 50
 cortex errors                 # last hour
-cortex host-state dookie      # bare host
+cortex host-state devhost      # bare host
 ```
 
 - [ ] **Step 3: Commit cleanup**

@@ -5,24 +5,24 @@ fn service_dependency_key_canonicalizes_mixed_case_slash_input() {
     // Mixed-case `host/service` input must resolve to the lowercase
     // canonical instance key, not pass through verbatim.
     assert_eq!(
-        service_dependency_key(None, Some("Tootie/Plex")).unwrap(),
-        "tootie/plex"
+        service_dependency_key(None, Some("Nashost/Plex")).unwrap(),
+        "nashost/plex"
     );
     // Already-canonical input is unchanged.
     assert_eq!(
-        service_dependency_key(None, Some("tootie/plex")).unwrap(),
-        "tootie/plex"
+        service_dependency_key(None, Some("nashost/plex")).unwrap(),
+        "nashost/plex"
     );
     // Plain service + host still combine into the canonical instance key.
     assert_eq!(
-        service_dependency_key(Some("Tootie"), Some(" Plex ")).unwrap(),
-        "tootie/plex"
+        service_dependency_key(Some("Nashost"), Some(" Plex ")).unwrap(),
+        "nashost/plex"
     );
 }
 
 #[test]
 fn service_dependency_key_keeps_legacy_shape_rejection() {
-    for legacy in ["tootie:plex", "tootie:plex:plex", "plex/plex/plex"] {
+    for legacy in ["nashost:plex", "nashost:plex:plex", "plex/plex/plex"] {
         let err = service_dependency_key(None, Some(legacy)).unwrap_err();
         assert!(
             err.to_string().contains("rejected_legacy_shape"),

@@ -124,12 +124,12 @@ service_instance
 
 `logical_service` is the canonical logical service identity (key like `plex`).
 `service_instance` is a host-scoped runtime deployment of a logical service
-(key like `tootie/plex`). These two types replace the legacy `service`
-topology rows as the supported service identity: `tootie:plex`,
-`tootie:plex:plex`, and `plex/plex/plex` are stale defect shapes that are
+(key like `nashost/plex`). These two types replace the legacy `service`
+topology rows as the supported service identity: `nashost:plex`,
+`nashost:plex:plex`, and `plex/plex/plex` are stale defect shapes that are
 deleted by migration 41 and rejected on lookup surfaces with
 `rejected_legacy_shape`. Keep logical identity and deployment topology
-separate: `plex` answers "what is this service", `tootie/plex` answers
+separate: `plex` answers "what is this service", `nashost/plex` answers
 "where does it run".
 
 The retired `service` entity type is **schema-tolerated but not
@@ -143,8 +143,8 @@ lookup list above.
 Case sensitivity: canonical keys are lowercase, but the log fan-out
 predicates compare `logs.hostname` / `logs.app_name` with SQLite's default
 BINARY collation, so matching is case-sensitive. A mixed-case syslog
-hostname (`Tootie`) never matches the canonical instance key
-(`tootie/plex`) — syslog senders should emit lowercase hostnames. Hostname
+hostname (`Nashost`) never matches the canonical instance key
+(`nashost/plex`) — syslog senders should emit lowercase hostnames. Hostname
 case normalization at ingest is tracked separately.
 
 `user` is a human/identity principal (operator name, authenticated username),
@@ -188,7 +188,7 @@ instance_of
 reached (AdGuard DNS, shell-history). `communicates_with` (device↔peer, UniFi
 flow data) is vocabulary-reserved for future flow ingestion. `instance_of`
 links a `service_instance` to its `logical_service`
-(`service_instance:tootie/plex instance_of logical_service:plex`).
+(`service_instance:nashost/plex instance_of logical_service:plex`).
 
 ### 4.3 Trust Levels
 
@@ -498,7 +498,7 @@ Outputs:
 
 ```text
 logical_service entity            (canonical key: plex)
-service_instance entity           (canonical key: tootie/plex)
+service_instance entity           (canonical key: nashost/plex)
 service_instance instance_of logical_service
 ```
 
@@ -589,7 +589,7 @@ Fields:
 
 The inventory projection paths (`compose_config`, `reverse_proxy_config`,
 `docker_network`) are **active**, projected from the homelab inventory snapshot
-(`app_inventory`). Service-instance keying is `host/service` (`tootie/plex`);
+(`app_inventory`). Service-instance keying is `host/service` (`nashost/plex`);
 legacy `{host}:{service}` keys are never emitted. A service without host
 context projects the `logical_service` only.
 
@@ -673,8 +673,8 @@ Entity lookup MUST:
 - reject unknown entity types with `unsupported graph entity_type`,
   including the retired `service` type (schema-tolerated for migration
   compatibility but not a valid lookup type — see §4.1),
-- reject legacy nested service identity keys (`tootie:plex`,
-  `tootie:plex:plex`, `plex/plex/plex`) on service-identity lookups with
+- reject legacy nested service identity keys (`nashost:plex`,
+  `nashost:plex:plex`, `plex/plex/plex`) on service-identity lookups with
   `rejected_legacy_shape` before any graph query runs (alias lookups query
   first and reject a legacy-shaped alias key only when the alias does not
   resolve — a resolving alias, e.g. a colon-bearing `ai_session` key, is

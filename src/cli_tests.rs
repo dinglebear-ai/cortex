@@ -144,7 +144,7 @@ fn parse_incident_accepts_window_service_and_json() {
         "--service",
         "cortex-sessions-watch",
         "--host",
-        "dookie",
+        "devhost",
         "--limit",
         "25",
         "--json",
@@ -158,7 +158,7 @@ fn parse_incident_accepts_window_service_and_json() {
             around: "2026-05-20T04:00:00+00:00".into(),
             minutes: Some(10),
             service: Some("cortex-sessions-watch".into()),
-            host: Some("dookie".into()),
+            host: Some("devhost".into()),
             limit: Some(25),
             json: true,
         })
@@ -1615,11 +1615,11 @@ fn parse_compare_with_ranges() {
 
 #[test]
 fn parse_apps_with_hostname_limit() {
-    let cmd = CliCommand::parse(strings(&["apps", "--host", "dookie", "--limit", "50"]))
+    let cmd = CliCommand::parse(strings(&["apps", "--host", "devhost", "--limit", "50"]))
         .expect("parse apps");
     match cmd {
         CliCommand::Apps(args) => {
-            assert_eq!(args.host.as_deref(), Some("dookie"));
+            assert_eq!(args.host.as_deref(), Some("devhost"));
             assert_eq!(args.limit, Some(50));
         }
         other => panic!("expected Apps, got {other:?}"),

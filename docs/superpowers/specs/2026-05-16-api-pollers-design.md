@@ -317,7 +317,7 @@ for 7-day retention (line 58).
 | `LogBatchEntry` field | AdGuard source                                          |
 |-----------------------|---------------------------------------------------------|
 | `timestamp`           | `time`                                                   |
-| `hostname`            | configured `adguard.hostname` (e.g. `"adguard-tootie"`) |
+| `hostname`            | configured `adguard.hostname` (e.g. `"adguard-nashost"`) |
 | `facility`            | `"local6"`                                               |
 | `severity`            | `notice` for blocked, `info` otherwise                   |
 | `app_name`            | `"adguard"`                                              |

@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-06 15:53:15 EST
 repo: https://github.com/jmagar/syslog-mcp
@@ -11,7 +13,7 @@ working directory: /home/jmagar/workspace/syslog-mcp
 
 ## User Request
 
-Diagnose and fix recurring `Docker log stream failed; retrying error=error reading a body from connection` warnings emitted in mass simultaneous bursts across all Docker ingest hosts (tootie, squirts, dookie). Then make the `Syslog ingest summary` show container names instead of SHA256 IDs.
+Diagnose and fix recurring `Docker log stream failed; retrying error=error reading a body from connection` warnings emitted in mass simultaneous bursts across all Docker ingest hosts (nashost, edgehost, devhost). Then make the `Syslog ingest summary` show container names instead of SHA256 IDs.
 
 ## Session Overview
 

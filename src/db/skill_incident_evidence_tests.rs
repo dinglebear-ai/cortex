@@ -84,7 +84,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
 
     let skill_log = make_ai_entry(
         "2026-01-01T00:00:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -92,7 +92,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
     );
     let before_log = make_ai_entry(
         "2026-01-01T00:00:00.000Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -100,7 +100,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
     );
     let correction_log = make_ai_entry(
         "2026-01-01T00:02:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -108,7 +108,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
     );
     let failure_log = make_ai_entry(
         "2026-01-01T00:03:00Z",
-        "dookie",
+        "devhost",
         "codex",
         "/tmp/project-d",
         "sess-d",
@@ -133,7 +133,7 @@ fn investigate_ai_skill_incidents_bundle_has_bounded_collections_and_truncation_
         "codex",
         "/tmp/project-d",
         "sess-d",
-        "dookie",
+        "devhost",
         "2026-01-01T00:00:00Z",
         "lavra:lavra-plan",
         Some("lavra"),

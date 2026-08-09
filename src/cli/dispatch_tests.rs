@@ -113,7 +113,7 @@ fn search_args_into_request_snapshot() {
 fn filter_args_into_request_snapshot() {
     let args = FilterArgs {
         source_kind: Some("docker-stream".into()),
-        docker_host: Some("dookie".into()),
+        docker_host: Some("devhost".into()),
         container: Some("cortex".into()),
         stream: Some("stdout".into()),
         event_action: Some("die".into()),
@@ -127,7 +127,7 @@ fn filter_args_into_request_snapshot() {
     let req = args.into_request();
     assert_eq!(
         format!("{req:?}"),
-        "FilterLogsRequest { host: None, source: None, severity: None, app: None, facility: None, exclude_facility: None, process_id: None, since: None, until: None, received_since: None, received_until: None, limit: Some(25), source_kind: Some(\"docker-stream\"), tool: Some(\"claude\"), project: Some(\"/tmp/project\"), session_id: Some(\"abc123\"), container: Some(\"cortex\"), docker_host: Some(\"dookie\"), stream: Some(\"stdout\"), event_action: Some(\"die\") }"
+        "FilterLogsRequest { host: None, source: None, severity: None, app: None, facility: None, exclude_facility: None, process_id: None, since: None, until: None, received_since: None, received_until: None, limit: Some(25), source_kind: Some(\"docker-stream\"), tool: Some(\"claude\"), project: Some(\"/tmp/project\"), session_id: Some(\"abc123\"), container: Some(\"cortex\"), docker_host: Some(\"devhost\"), stream: Some(\"stdout\"), event_action: Some(\"die\") }"
     );
 }
 
@@ -151,7 +151,7 @@ fn tail_args_into_request_snapshot() {
 fn entity_args_into_graph_lookup_request_snapshot() {
     let args = EntityArgs {
         entity_type: Some("host".into()),
-        key: Some("tootie".into()),
+        key: Some("nashost".into()),
         limit: Some(5),
         evidence_sample_limit: Some(2),
         payload_budget: Some(8192),
@@ -161,7 +161,7 @@ fn entity_args_into_graph_lookup_request_snapshot() {
     let req = args.into_request();
     assert_eq!(
         format!("{req:?}"),
-        "GraphEntityLookupRequest { mode: Some(\"entity\"), entity_id: None, entity_type: Some(\"host\"), key: Some(\"tootie\"), alias_type: None, alias_key: None, limit: Some(5), evidence_sample_limit: Some(2), payload_budget: Some(8192) }"
+        "GraphEntityLookupRequest { mode: Some(\"entity\"), entity_id: None, entity_type: Some(\"host\"), key: Some(\"nashost\"), alias_type: None, alias_key: None, limit: Some(5), evidence_sample_limit: Some(2), payload_budget: Some(8192) }"
     );
 }
 
@@ -169,7 +169,7 @@ fn entity_args_into_graph_lookup_request_snapshot() {
 fn graph_around_args_into_request_snapshot() {
     let args = GraphAroundArgs {
         entity_type: Some("host".into()),
-        key: Some("tootie".into()),
+        key: Some("nashost".into()),
         depth: Some(1),
         limit: Some(25),
         evidence_sample_limit: Some(3),
@@ -180,7 +180,7 @@ fn graph_around_args_into_request_snapshot() {
     let req = args.into_request();
     assert_eq!(
         format!("{req:?}"),
-        "GraphAroundRequest { mode: Some(\"around\"), entity_id: None, entity_type: Some(\"host\"), key: Some(\"tootie\"), alias_type: None, alias_key: None, depth: Some(1), limit: Some(25), evidence_sample_limit: Some(3), payload_budget: Some(16384) }"
+        "GraphAroundRequest { mode: Some(\"around\"), entity_id: None, entity_type: Some(\"host\"), key: Some(\"nashost\"), alias_type: None, alias_key: None, depth: Some(1), limit: Some(25), evidence_sample_limit: Some(3), payload_budget: Some(16384) }"
     );
 }
 
@@ -189,7 +189,7 @@ fn graph_explain_args_into_request_snapshot() {
     let args = GraphExplainArgs {
         entity_id: None,
         entity_type: Some("host".into()),
-        key: Some("tootie".into()),
+        key: Some("nashost".into()),
         alias_type: None,
         alias_key: None,
         depth: Some(2),
@@ -201,7 +201,7 @@ fn graph_explain_args_into_request_snapshot() {
     };
     assert_eq!(
         format!("{:?}", args.into_request()),
-        "GraphExplainRequest { mode: Some(\"explain\"), entity_id: None, entity_type: Some(\"host\"), key: Some(\"tootie\"), alias_type: None, alias_key: None, depth: Some(2), beam_width: Some(20), max_chains: Some(100), evidence_sample_limit: Some(2), payload_budget: Some(16384) }"
+        "GraphExplainRequest { mode: Some(\"explain\"), entity_id: None, entity_type: Some(\"host\"), key: Some(\"nashost\"), alias_type: None, alias_key: None, depth: Some(2), beam_width: Some(20), max_chains: Some(100), evidence_sample_limit: Some(2), payload_budget: Some(16384) }"
     );
 }
 
