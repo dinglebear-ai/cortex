@@ -24,7 +24,7 @@ updated: 2026-07-30
 
 ## Endpoint matrix
 
-63 routes total. Scope is `read` (mounted via `axum::routing::get`,
+64 routes total. Scope is `read` (mounted via `axum::routing::get`,
 hits read-side `db_permits`) or `admin` (POST + `MAINTENANCE_PERMIT`
 single-flight, audited via `tracing::warn!` before the service call).
 All responses are JSON; error bodies are `{"error": "<message>"}`
@@ -40,6 +40,7 @@ to them by default.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/search` | read | query params: `query?`, `hostname?`, `source_ip?`, `severity?`, `app_name?`, `facility?`, `process_id?`, `from?`, `to?`, `limit?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` | 200, 400, 401, 503, 500 | Y | FTS5 search; `deny_unknown_fields` rejects typos. |
 | GET | `/api/filter` | read | query params: `hostname?`, `source_ip?`, `source_kind?`, `tool?`, `project?`, `session_id?`, `container?`, `docker_host?`, `stream?`, `event_action?`, `severity?`, `app_name?`, `facility?`, `exclude_facility?`, `process_id?`, `from?`, `to?`, `received_from?`, `received_to?`, `limit?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` | 200, 400, 401, 503, 500 | Y | Structured filter-only retrieval; `query` and unknown fields are rejected. |
+| GET | `/api/feed` | read | query: `after_id?` (i64), `host?`, `limit?` (u32, max 1000) | `FeedLogsResponse { logs: [LogEntryWithRaw], next_after_id: i64, has_more: bool }` | 200, 400, 401, 503, 500 | Y | Ascending cursor feed for external consumers. Omit `after_id` to start at the current high-water mark; pass `after_id=0` to replay retained history. |
 | GET | `/api/tail` | read | query: `hostname?`, `source_ip?`, `app_name?`, `severity_min?`, `n?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` (tail order) | 200, 400, 401, 503, 500 | Y | `severity_min` honoured per RFC severity ordering. |
 | GET | `/api/errors` | read | query: `from?`, `to?`, `group_by?` (`app_name` only) | `GetErrorsResponse { summary: [ErrorSummaryEntry] }` | 200, 400, 401, 503, 500 | Y | Counts by host (and optional secondary key). |
 | GET | `/api/hosts` | read | (none) | `ListHostsResponse { hosts: [HostEntry] }` | 200, 401, 503, 500 | Y | Inventory of seen hostnames. |
@@ -112,7 +113,7 @@ to them by default.
 | GET | `/api/graph/explain` | read | query: entity selector, `depth?` (clamped to 3), `beam_width?`, `max_chains?`, `evidence_sample_limit?`, `payload_budget?` | `GraphExplainResponse { resolved_entity, chains, narrative, open_questions, missing_evidence, next_queries, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Deterministic evidence-backed explanation; weak evidence becomes open questions, not causal claims. |
 | GET | `/api/graph/evidence` | read | query: `evidence_id` (REQUIRED, minimum 1), `payload_budget?` | `GraphEvidenceLookupResponse { evidence, relationship, src_entity, dst_entity, source_log_summary?, missing_source_reason?, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Proof lookup for one evidence row. Source summaries are redacted/truncated and exclude raw frames and raw metadata. |
 
-**Total: 63 routes** (current `src/api.rs` router surface, including syslog,
+**Total: 64 routes** (current `src/api.rs` router surface, including syslog,
 surface-parity, AI, graph, compose, notification, error-ack, and DB routes;
 includes the 3 hook routes above, added alongside the `ai_hook_events`
 subsystem).

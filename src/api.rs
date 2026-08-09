@@ -34,8 +34,8 @@ use crate::app::{
     AiParseErrorsRequest, AiPruneCheckpointsRequest, AiSkillIncidentRequest,
     AiSkillInvestigateRequest, AnomaliesRequest, ClockSkewRequest, CompareRequest, ContextRequest,
     CorrelateEventsRequest, CorrelateStateRequest, CortexService, DbBackupRequest,
-    DbCheckpointRequest, DbIntegrityRequest, DbVacuumRequest, FileTailRequest, FilterLogsRequest,
-    FleetStateRequest, GetErrorsRequest, GetLogRequest, GraphAroundRequest,
+    DbCheckpointRequest, DbIntegrityRequest, DbVacuumRequest, FeedLogsRequest, FileTailRequest,
+    FilterLogsRequest, FleetStateRequest, GetErrorsRequest, GetLogRequest, GraphAroundRequest,
     GraphEntityLookupRequest, GraphEvidenceLookupRequest, GraphExplainRequest, HostStateRequest,
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
     ListAppsRequest, ListHookEventsRequest, ListMcpEventsRequest, ListSessionsRequest,
@@ -234,6 +234,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         // --- syslog queries ---
         .route("/api/search", get(search))
         .route("/api/filter", get(filter))
+        .route("/api/feed", get(feed))
         .route("/api/tail", get(tail))
         .route("/api/errors", get(errors))
         .route("/api/hosts", get(hosts))
@@ -460,6 +461,13 @@ async fn filter(
     Query(query): Query<FilterLogsRequest>,
 ) -> impl IntoResponse {
     respond(state.service.filter_logs(query).await)
+}
+
+async fn feed(
+    State(state): State<ApiState>,
+    Query(query): Query<FeedLogsRequest>,
+) -> impl IntoResponse {
+    respond(state.service.feed_logs(query).await)
 }
 
 #[derive(Debug, Deserialize)]

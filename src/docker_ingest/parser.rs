@@ -172,7 +172,7 @@ fn container_meta_from_event_actor(container_id: &str, actor: &EventActor) -> Co
     }
 }
 
-fn docker_event_timestamp(event: &EventMessage) -> String {
+pub(crate) fn docker_event_timestamp(event: &EventMessage) -> String {
     if let Some(time_nano) = event.time_nano {
         let secs = time_nano.div_euclid(1_000_000_000);
         let nanos = time_nano.rem_euclid(1_000_000_000) as u32;
@@ -190,7 +190,7 @@ fn docker_event_timestamp(event: &EventMessage) -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn docker_event_severity(action: &str, actor: &EventActor) -> Option<&'static str> {
+pub(crate) fn docker_event_severity(action: &str, actor: &EventActor) -> Option<&'static str> {
     match action {
         "create" | "start" | "rename" | "unpause" | "stop" | "destroy" => Some("notice"),
         "restart" | "kill" | "pause" => Some("warning"),
@@ -213,7 +213,7 @@ fn docker_event_exit_code(actor: &EventActor) -> Option<i32> {
         .and_then(|value| value.parse().ok())
 }
 
-fn docker_event_source_action(action: &str) -> String {
+pub(crate) fn docker_event_source_action(action: &str) -> String {
     let mut out = String::with_capacity(action.len());
     let mut previous_separator = false;
     for ch in action.chars() {

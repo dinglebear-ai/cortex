@@ -97,6 +97,8 @@ pub use models::{
     DbVacuumResult,
     ErrorSignatureEntry,
     ErrorSummaryEntry,
+    FeedLogsRequest,
+    FeedLogsResponse,
     FileTailAddRequest,
     FileTailOp,
     FileTailRequest,
