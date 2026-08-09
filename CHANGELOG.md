@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0](https://github.com/dinglebear-ai/cortex/compare/v3.11.3...v3.12.0) (2026-08-09)
+
+
+### Added
+
+* add cursor event feed and Docker lifecycle forwarding ([#185](https://github.com/dinglebear-ai/cortex/issues/185)) ([26a85b8](https://github.com/dinglebear-ai/cortex/commit/26a85b89c96b7f9213af06cdf7ac6903f4667c63))
+* agent observatory schema foundation + transcript-forwarding env rename ([#173](https://github.com/dinglebear-ai/cortex/issues/173)) ([61aa50a](https://github.com/dinglebear-ai/cortex/commit/61aa50ad4e59461a281b29bd559e4a90fa730a26))
+* implement Agent Observatory foundation, projection, and Git observation ([#160](https://github.com/dinglebear-ai/cortex/issues/160)) ([6d3031d](https://github.com/dinglebear-ai/cortex/commit/6d3031dc669624560b7ec29e88206f26189a3b15))
+
+
+### Fixed
+
+* **ci:** pin kache 0.13.0 to match the runner fleet ([#178](https://github.com/dinglebear-ai/cortex/issues/178)) ([04cbd51](https://github.com/dinglebear-ai/cortex/commit/04cbd511a39ac8def9d2d8ba4e7ddcec24eb4f94))
+* **ci:** remove expression syntax from the s3-endpoint description ([#184](https://github.com/dinglebear-ai/cortex/issues/184)) ([74c2db7](https://github.com/dinglebear-ai/cortex/commit/74c2db759421a4d2d4fcce04c1b40b4ca70e34e8))
+* **ci:** remove leaked internal identifiers from setup-rust-kache ([#183](https://github.com/dinglebear-ai/cortex/issues/183)) ([02e3e7f](https://github.com/dinglebear-ai/cortex/commit/02e3e7fc56e71a2c5281749fd4e5a15e1c6d6e5e))
+* **ci:** require complete Kache S3 configuration ([#186](https://github.com/dinglebear-ai/cortex/issues/186)) ([d50e1af](https://github.com/dinglebear-ai/cortex/commit/d50e1aff7af6f8a9d098bd6a16993992385a9919))
+* **ci:** route .github/actions changes through the full CI matrix ([#180](https://github.com/dinglebear-ai/cortex/issues/180)) ([b8e6900](https://github.com/dinglebear-ai/cortex/commit/b8e6900092ab7139166f43ad9adb55d7c1c3fcb5))
+* **mcpb:** add Windows bundle packaging ([#164](https://github.com/dinglebear-ai/cortex/issues/164)) ([a304469](https://github.com/dinglebear-ai/cortex/commit/a304469610a1f9ca98bf725b3f7668d5aa58f359))
+* **mcp:** centralize Registry publication ([#171](https://github.com/dinglebear-ai/cortex/issues/171)) ([b731ec3](https://github.com/dinglebear-ai/cortex/commit/b731ec34a14f3a8a606292c7d90124f3125319c9))
+* **mcp:** return structured errors and exact contracts ([#170](https://github.com/dinglebear-ai/cortex/issues/170)) ([287417c](https://github.com/dinglebear-ai/cortex/commit/287417cb72cfc529cf30cd8c33678a8cb909326c))
+
+
+### Changed
+
+* **ci:** emit line-tables-only debuginfo in dev builds ([#182](https://github.com/dinglebear-ai/cortex/issues/182)) ([1094384](https://github.com/dinglebear-ai/cortex/commit/1094384f063044c998c023d5de0144f0e16c3bc2))
+
 ## [3.11.3](https://github.com/dinglebear-ai/cortex/compare/v3.11.2...v3.11.3) (2026-08-03)
 
 
