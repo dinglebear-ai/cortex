@@ -33,15 +33,26 @@ def any_match(paths: list[str], predicate: Callable[[str], bool]) -> bool:
 
 
 def classify(event: str, paths: list[str]) -> dict[str, bool]:
-    if event in {"schedule", "workflow_dispatch"}:
+    if event == "schedule":
+        # The weekly cron exists solely to surface new RUSTSEC advisories via
+        # cargo-deny (see ci.yml). Only the security lane runs; everything else
+        # would just rebuild unchanged code.
+        return {key: key == "security" for key in OUTPUT_KEYS}
+
+    if event == "workflow_dispatch":
         return {key: True for key in OUTPUT_KEYS}
 
     if not paths:
         return {key: True for key in OUTPUT_KEYS}
 
+    # `.github/actions/` belongs here: the composite actions provision the Rust
+    # toolchain and the kache wrapper for every Rust job, so changing one is a
+    # CI-routing change and takes the same fail-open-to-full-CI path below.
+    # Without this, an action-only commit classified as nothing and every job
+    # skipped -- which is how a broken kache pin reached main showing green.
     workflow = any_match(
         paths,
-        lambda p: starts(p, ".github/workflows/")
+        lambda p: starts(p, ".github/workflows/", ".github/actions/")
         or p
         in {
             "scripts/ci/changed_paths.py",
