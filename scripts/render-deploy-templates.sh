@@ -27,7 +27,8 @@ for source in codex-config.example.toml claude-code-settings.example.json; do
     "$repo_root/deploy/otel/$source" > "$staging_dir/$source"
 done
 jq empty "$staging_dir/claude-code-settings.example.json"
-taplo check "$staging_dir/codex-config.example.toml"
+python3 -c 'import pathlib, sys, tomllib; tomllib.loads(pathlib.Path(sys.argv[1]).read_text())' \
+  "$staging_dir/codex-config.example.toml"
 install -m 0644 "$staging_dir/claude-code-settings.example.json" "$output_dir/"
 install -m 0644 "$staging_dir/codex-config.example.toml" "$output_dir/"
 echo "Rendered deployment templates in $output_dir"

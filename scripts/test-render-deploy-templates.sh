@@ -21,5 +21,6 @@ expect_rejected 'http://valid.example/\backslash'
 
 CORTEX_OTLP_ENDPOINT='https://cortex.example.com:3100' "$renderer" "$output_dir" >/dev/null
 jq empty "$output_dir/claude-code-settings.example.json"
-taplo check "$output_dir/codex-config.example.toml"
+python3 -c 'import pathlib, sys, tomllib; tomllib.loads(pathlib.Path(sys.argv[1]).read_text())' \
+  "$output_dir/codex-config.example.toml"
 echo '[render-deploy-templates-test] OK - safe URL renders; hostile values fail closed'
