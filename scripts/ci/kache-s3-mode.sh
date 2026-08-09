@@ -14,10 +14,16 @@ required=(
 )
 
 for name in "${required[@]}"; do
-  if [ -z "${!name:-}" ]; then
-    printf 'local\n'
-    exit 0
-  fi
+  value="${!name:-}"
+  # These values are written to AWS credentials and TOML basic strings. Reject
+  # whitespace/control bytes and the two TOML string delimiters rather than
+  # attempting lossy escaping of credentials or operator-supplied identifiers.
+  case "$value" in
+    ""|*[[:space:]]*|*[[:cntrl:]]*|*\"*|*\\*)
+      printf 'local\n'
+      exit 0
+      ;;
+  esac
 done
 
 printf 'remote\n'
