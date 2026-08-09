@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.1](https://github.com/dinglebear-ai/cortex/compare/v3.13.0...v3.13.1) (2026-08-09)
+
+
+### Fixed
+
+* **agent:** preserve Windows supervisor ownership ([#189](https://github.com/dinglebear-ai/cortex/issues/189)) ([9004bae](https://github.com/dinglebear-ai/cortex/commit/9004baec3f5b8d927424333031cb8e8363998204))
+
 ## [3.13.0](https://github.com/dinglebear-ai/cortex/compare/v3.12.0...v3.13.0) (2026-08-09)
 
 
