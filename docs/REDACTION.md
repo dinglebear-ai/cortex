@@ -1,3 +1,9 @@
+---
+title: "Redaction policy"
+created: 2026-08-09
+updated: 2026-08-09
+---
+
 # Redaction policy
 
 This public repository uses stable, synthetic identifiers when examples or
