@@ -19,8 +19,8 @@ mapfile -t files < <(
 )
 
 patterns=(
-  dookie tootie squirts shart steamy vivobook
-  manatee-triceratops .tootie.tv
+  dookie squirts shart steamy vivobook
+  manatee-triceratops
   100.88.16.79 100.120.242.29 10.1.0.2
   example.internal tv.nashost/cortex nashost.tv
   9C:05:D6:CA:81:3B
@@ -36,6 +36,25 @@ for pattern in "${patterns[@]}"; do
     status=1
   fi
 done
+
+# `aurora.tootie.tv` is the intentionally public design-system registry and is
+# retained as external provenance. Other uses of the private host token remain
+# forbidden.
+set +e
+tootie_matches="$(
+  rg -n --text --ignore-case --word-regexp -- 'tootie' "${files[@]}" \
+    | grep -Fv 'aurora.tootie.tv'
+)"
+tootie_status=$?
+set -e
+if [ "$tootie_status" -eq 0 ]; then
+  printf '%s\n' "$tootie_matches"
+  echo "[private-identifiers] FAIL - private host identifier found: tootie" >&2
+  status=1
+elif [ "$tootie_status" -gt 1 ]; then
+  echo "[private-identifiers] FAIL - tootie allowlist scan failed" >&2
+  status=1
+fi
 
 # Documentation ranges are valid in examples and redacted history, but never
 # in files that directly control CI, image metadata, or Compose routing.

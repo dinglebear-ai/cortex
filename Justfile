@@ -42,6 +42,9 @@ coverage-html:
 test-doc:
     cargo test --doc
 
+check-agent-observatory-contracts:
+    bash scripts/check-agent-observatory-contracts.sh
+
 docker-build:
     docker build -f config/Dockerfile -t cortex .
 
@@ -192,6 +195,9 @@ install: release
 
 build-mcpb:
     bash scripts/build-mcpb.sh
+
+build-mcpb-windows:
+    bash scripts/build-mcpb.sh --target windows
 
 runtime-current:
     bash scripts/check-runtime-current.sh

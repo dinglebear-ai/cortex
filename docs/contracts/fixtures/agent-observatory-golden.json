@@ -1,0 +1,77 @@
+{
+  "run_detail": {
+    "run": {
+      "id": "42",
+      "run_key": "v1|7:devhost|6:claude|9:session-1",
+      "native_session_id": "session-1",
+      "tool": "claude",
+      "provider_tool": null,
+      "hostname": "devhost",
+      "parent_run_key": null,
+      "previous_run_key": null,
+      "status": "active",
+      "status_reason": "recent_activity",
+      "status_observed_at": "2026-07-31T23:00:00.000Z",
+      "started_at": "2026-07-31T22:00:00.000Z",
+      "last_activity_at": "2026-07-31T23:00:00.000Z",
+      "ended_at": null,
+      "transcript_path": null,
+      "primary_worktree": null,
+      "primary_branch": "main",
+      "start_head_sha": "1111111111111111111111111111111111111111",
+      "current_head_sha": "2222222222222222222222222222222222222222",
+      "event_count": 1,
+      "error_count": 0,
+      "freshness": {
+        "transcript": {"state": "fresh", "last_observed_at": "2026-07-31T23:00:00.000Z", "lag_seconds": 0, "detail": null},
+        "command": {"state": "delayed", "last_observed_at": null, "lag_seconds": 30, "detail": null},
+        "git": {"state": "fresh", "last_observed_at": "2026-07-31T23:00:00.000Z", "lag_seconds": 0, "detail": null},
+        "otlp_log": {"state": "not_observed", "last_observed_at": null, "lag_seconds": null, "detail": null},
+        "trace": {"state": "stale", "last_observed_at": "2026-07-31T22:00:00.000Z", "lag_seconds": 3600, "detail": null},
+        "metric": {"state": "error", "last_observed_at": null, "lag_seconds": null, "detail": "export failed"},
+        "lifecycle": {"state": "fresh", "last_observed_at": "2026-07-31T23:00:00.000Z", "lag_seconds": 0, "detail": null}
+      }
+    },
+    "actors": [{"key": "actor-1", "native_id": "1", "actor_type": null, "display_name": null, "started_at": null, "last_activity_at": null, "ended_at": null}],
+    "worktree_evidence": [],
+    "available_event_kinds": ["command", "git_commit"],
+    "commit_summary": null,
+    "latest_stream_cursor": "19381"
+  },
+  "event": {
+    "id": "9", "event_key": "event-9", "run_key": "v1|7:devhost|6:claude|9:session-1",
+    "actor_key": null, "worktree_id": null, "commit_sha": null,
+    "observed_at": "2026-07-31T23:00:00.000Z", "ingested_at": "2026-07-31T23:00:01.000Z",
+    "kind": "command", "source_kind": "transcript", "source_id": "9", "source_log_id": null,
+    "provider_sequence": null, "trace_id": null, "span_id": null, "severity": "info",
+    "title": "command", "summary": "ran tests", "payload": {"command": "cargo test", "exit_code": 0},
+    "content_scrubbed": false
+  },
+  "stream": {
+    "id": "19381", "event": "run.event", "entity_type": "agent_run", "entity_key": "42",
+    "run_key": "v1|7:devhost|6:claude|9:session-1", "occurred_at": "2026-07-31T23:00:01.000Z",
+    "data": {"event_id": "9"}
+  },
+  "terminal_page": {"limit": 50, "next_cursor": null, "truncated": false},
+  "continued_page": {"limit": 50, "next_cursor": "eyJpZCI6IjQyIn0", "truncated": true},
+  "telemetry": {
+    "run_key": "v1|7:devhost|6:claude|9:session-1", "spans": [], "metrics": [], "summary": {},
+    "freshness": {
+      "transcript": {"state": "fresh", "last_observed_at": null, "lag_seconds": null, "detail": null},
+      "command": {"state": "fresh", "last_observed_at": null, "lag_seconds": null, "detail": null},
+      "git": {"state": "fresh", "last_observed_at": null, "lag_seconds": null, "detail": null},
+      "otlp_log": {"state": "fresh", "last_observed_at": null, "lag_seconds": null, "detail": null},
+      "trace": {"state": "stale", "last_observed_at": null, "lag_seconds": null, "detail": null},
+      "metric": {"state": "not_observed", "last_observed_at": null, "lag_seconds": null, "detail": null},
+      "lifecycle": {"state": "fresh", "last_observed_at": null, "lag_seconds": null, "detail": null}
+    },
+    "span_pagination": {"limit": 100, "next_cursor": null, "truncated": false},
+    "metric_pagination": {"limit": 100, "next_cursor": null, "truncated": false},
+    "as_of": "2026-07-31T23:00:01.000Z"
+  },
+  "backfill_job": {
+    "job_id": "7", "source": "logs", "from_id": "10", "until_id": "20", "status": "running",
+    "processed": 5, "total": 11, "created_at": "2026-07-31T23:00:00.000Z",
+    "started_at": "2026-07-31T23:00:01.000Z", "finished_at": null, "error": null, "restart_of_job_id": null
+  }
+}
