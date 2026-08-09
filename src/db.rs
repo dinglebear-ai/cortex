@@ -1,5 +1,10 @@
 #![allow(unused_imports)]
 
+#[cfg(test)]
+#[path = "db/agent_observatory_models_tests.rs"]
+mod agent_observatory_models_tests;
+
+pub mod agent_observatory;
 mod analytics;
 pub mod entity_resolution;
 pub(crate) mod error_signatures;
@@ -21,8 +26,11 @@ mod mcp_incident_evidence;
 mod mcp_incidents;
 mod models;
 pub(crate) mod notifications;
+pub mod otlp_metrics;
+pub mod otlp_traces;
 mod pool;
 mod queries;
+pub(crate) use queries::page_agent_projection_logs;
 mod queries_hosts;
 mod queries_service_instances;
 mod skill_events;

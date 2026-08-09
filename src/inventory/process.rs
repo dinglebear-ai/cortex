@@ -16,6 +16,15 @@ pub struct CommandOutput {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommandOutputBytes {
+    pub status: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: String,
+    pub elapsed_ms: u128,
+    pub truncated: bool,
+}
+
 pub async fn run_command(program: &str, args: &[&str], timeout: Duration) -> Result<CommandOutput> {
     run_command_capped(program, args, timeout, MAX_COMMAND_OUTPUT_BYTES).await
 }
@@ -26,6 +35,22 @@ pub async fn run_command_capped(
     timeout: Duration,
     max_output_bytes: usize,
 ) -> Result<CommandOutput> {
+    let output = run_command_bytes_capped(program, args, timeout, max_output_bytes).await?;
+    Ok(CommandOutput {
+        status: output.status,
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: output.stderr,
+        elapsed_ms: output.elapsed_ms,
+        truncated: output.truncated,
+    })
+}
+
+pub async fn run_command_bytes_capped(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> Result<CommandOutputBytes> {
     let start = Instant::now();
     let mut child = Command::new(program)
         .args(args)
@@ -38,9 +63,11 @@ pub async fn run_command_capped(
 
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let stdout_task = tokio::spawn(async move { read_capped(&mut stdout, max_output_bytes).await });
+    let stdout_task =
+        tokio::spawn(async move { read_capped_bytes(&mut stdout, max_output_bytes).await });
     let stderr_max_bytes = max_output_bytes.min(MAX_COMMAND_OUTPUT_BYTES);
-    let stderr_task = tokio::spawn(async move { read_capped(&mut stderr, stderr_max_bytes).await });
+    let stderr_task =
+        tokio::spawn(async move { read_capped_bytes(&mut stderr, stderr_max_bytes).await });
     let wait = tokio::time::timeout(timeout, child.wait()).await;
     let status = match wait {
         Ok(Ok(status)) => Some(status.code().unwrap_or(-1)),
@@ -61,8 +88,9 @@ pub async fn run_command_capped(
     };
     let (stdout, out_truncated) = stdout_task.await??;
     let (stderr, err_truncated) = stderr_task.await??;
-    let (stderr, redaction_truncated) = redact_error(stderr);
-    Ok(CommandOutput {
+    let stderr = String::from_utf8_lossy(&stderr);
+    let (stderr, redaction_truncated) = redact_error(&stderr);
+    Ok(CommandOutputBytes {
         status,
         stdout,
         stderr,
@@ -71,10 +99,10 @@ pub async fn run_command_capped(
     })
 }
 
-async fn read_capped<R: AsyncReadExt + Unpin>(
+async fn read_capped_bytes<R: AsyncReadExt + Unpin>(
     reader: &mut R,
     max_bytes: usize,
-) -> Result<(String, bool)> {
+) -> Result<(Vec<u8>, bool)> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 8192];
     let mut truncated = false;
@@ -92,7 +120,7 @@ async fn read_capped<R: AsyncReadExt + Unpin>(
         buf.extend_from_slice(&tmp[..take]);
         truncated |= take < n;
     }
-    Ok((String::from_utf8_lossy(&buf).to_string(), truncated))
+    Ok((buf, truncated))
 }
 
 pub fn shell_words(input: &str) -> Vec<String> {

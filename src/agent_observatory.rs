@@ -1,5 +1,11 @@
 //! Agent Observatory domain constants and coordination entry points.
 
+pub mod attribution;
+pub mod classifier;
+pub mod identity;
+pub mod lifecycle;
+pub mod projector;
+
 /// Schema version reached after all planned Agent Observatory migrations.
 ///
 /// This is intentionally separate from `db::KNOWN_SCHEMA_VERSION` until

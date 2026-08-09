@@ -75,6 +75,145 @@ pub struct Config {
     pub error_detection: ErrorDetectionConfig,
     pub notifications: NotificationsConfig,
     pub llm: LlmConfig,
+    pub agent_observatory: AgentObservatoryConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentObservatoryConfig {
+    pub enabled: bool,
+    pub projector_poll_ms: u64,
+    pub projector_page_rows: usize,
+    pub projector_page_bytes: usize,
+    pub active_window_secs: u64,
+    pub stale_after_secs: u64,
+    pub abandoned_after_secs: u64,
+    pub git: AgentObservatoryGitConfig,
+    pub stream: AgentObservatoryStreamConfig,
+    pub privacy: AgentObservatoryPrivacyConfig,
+    pub retention: AgentObservatoryRetentionConfig,
+}
+
+impl Default for AgentObservatoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            projector_poll_ms: 500,
+            projector_page_rows: 500,
+            projector_page_bytes: 4_194_304,
+            active_window_secs: 15,
+            stale_after_secs: 300,
+            abandoned_after_secs: 86_400,
+            git: AgentObservatoryGitConfig::default(),
+            stream: AgentObservatoryStreamConfig::default(),
+            privacy: AgentObservatoryPrivacyConfig::default(),
+            retention: AgentObservatoryRetentionConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentObservatoryGitConfig {
+    pub enabled: bool,
+    pub roots: Vec<String>,
+    pub max_depth: usize,
+    pub max_repositories: usize,
+    pub reconcile_interval_secs: u64,
+    pub debounce_ms: u64,
+    pub command_timeout_ms: u64,
+    pub max_commits_per_transition: usize,
+    pub store_changed_paths: bool,
+    pub store_author_name: bool,
+    pub store_author_email_hash: bool,
+}
+
+impl Default for AgentObservatoryGitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            roots: vec!["~/workspace".to_string()],
+            max_depth: 3,
+            max_repositories: 120,
+            reconcile_interval_secs: 60,
+            debounce_ms: 500,
+            command_timeout_ms: 5_000,
+            max_commits_per_transition: 500,
+            store_changed_paths: true,
+            store_author_name: true,
+            store_author_email_hash: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentObservatoryStreamConfig {
+    pub outbox_retention_secs: u64,
+    pub replay_limit: usize,
+    pub client_queue: usize,
+    pub max_clients: usize,
+    pub keepalive_secs: u64,
+    pub max_event_bytes: usize,
+}
+
+impl Default for AgentObservatoryStreamConfig {
+    fn default() -> Self {
+        Self {
+            outbox_retention_secs: 86_400,
+            replay_limit: 1_000,
+            client_queue: 256,
+            max_clients: 256,
+            keepalive_secs: 15,
+            max_event_bytes: 65_536,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentObservatoryPrivacyConfig {
+    pub include_prompt_content: bool,
+    pub include_tool_content: bool,
+    pub include_command_content: bool,
+    pub include_paths: bool,
+    pub include_user_identity: bool,
+    pub hash_email: bool,
+}
+
+impl Default for AgentObservatoryPrivacyConfig {
+    fn default() -> Self {
+        Self {
+            include_prompt_content: false,
+            include_tool_content: false,
+            include_command_content: true,
+            include_paths: true,
+            include_user_identity: false,
+            hash_email: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentObservatoryRetentionConfig {
+    pub events_days: u64,
+    pub spans_days: u64,
+    pub metrics_days: u64,
+    pub repository_observations_days: u64,
+    pub removed_worktrees_days: u64,
+}
+
+impl Default for AgentObservatoryRetentionConfig {
+    fn default() -> Self {
+        Self {
+            events_days: 90,
+            spans_days: 30,
+            metrics_days: 30,
+            repository_observations_days: 90,
+            removed_worktrees_days: 365,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1205,6 +1344,150 @@ impl Config {
         )?;
 
         env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_ENABLED",
+            &mut config.agent_observatory.enabled,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_PROJECTOR_POLL_MS",
+            &mut config.agent_observatory.projector_poll_ms,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_PROJECTOR_PAGE_ROWS",
+            &mut config.agent_observatory.projector_page_rows,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_PROJECTOR_PAGE_BYTES",
+            &mut config.agent_observatory.projector_page_bytes,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_ACTIVE_WINDOW_SECS",
+            &mut config.agent_observatory.active_window_secs,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_STALE_AFTER_SECS",
+            &mut config.agent_observatory.stale_after_secs,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_ABANDONED_AFTER_SECS",
+            &mut config.agent_observatory.abandoned_after_secs,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_GIT_ENABLED",
+            &mut config.agent_observatory.git.enabled,
+        )?;
+        env_override_list(
+            "CORTEX_AGENT_OBSERVATORY_GIT_ROOTS",
+            &mut config.agent_observatory.git.roots,
+        );
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_GIT_MAX_DEPTH",
+            &mut config.agent_observatory.git.max_depth,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_GIT_MAX_REPOSITORIES",
+            &mut config.agent_observatory.git.max_repositories,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_GIT_RECONCILE_INTERVAL_SECS",
+            &mut config.agent_observatory.git.reconcile_interval_secs,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_GIT_DEBOUNCE_MS",
+            &mut config.agent_observatory.git.debounce_ms,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_GIT_COMMAND_TIMEOUT_MS",
+            &mut config.agent_observatory.git.command_timeout_ms,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_GIT_MAX_COMMITS_PER_TRANSITION",
+            &mut config.agent_observatory.git.max_commits_per_transition,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_GIT_STORE_CHANGED_PATHS",
+            &mut config.agent_observatory.git.store_changed_paths,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_GIT_STORE_AUTHOR_NAME",
+            &mut config.agent_observatory.git.store_author_name,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_GIT_STORE_AUTHOR_EMAIL_HASH",
+            &mut config.agent_observatory.git.store_author_email_hash,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_STREAM_OUTBOX_RETENTION_SECS",
+            &mut config.agent_observatory.stream.outbox_retention_secs,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_STREAM_REPLAY_LIMIT",
+            &mut config.agent_observatory.stream.replay_limit,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_STREAM_CLIENT_QUEUE",
+            &mut config.agent_observatory.stream.client_queue,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_STREAM_MAX_CLIENTS",
+            &mut config.agent_observatory.stream.max_clients,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_STREAM_KEEPALIVE_SECS",
+            &mut config.agent_observatory.stream.keepalive_secs,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_STREAM_MAX_EVENT_BYTES",
+            &mut config.agent_observatory.stream.max_event_bytes,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PROMPT_CONTENT",
+            &mut config.agent_observatory.privacy.include_prompt_content,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_TOOL_CONTENT",
+            &mut config.agent_observatory.privacy.include_tool_content,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_COMMAND_CONTENT",
+            &mut config.agent_observatory.privacy.include_command_content,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PATHS",
+            &mut config.agent_observatory.privacy.include_paths,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_USER_IDENTITY",
+            &mut config.agent_observatory.privacy.include_user_identity,
+        )?;
+        env_override_bool(
+            "CORTEX_AGENT_OBSERVATORY_PRIVACY_HASH_EMAIL",
+            &mut config.agent_observatory.privacy.hash_email,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_RETENTION_EVENTS_DAYS",
+            &mut config.agent_observatory.retention.events_days,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_RETENTION_SPANS_DAYS",
+            &mut config.agent_observatory.retention.spans_days,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_RETENTION_METRICS_DAYS",
+            &mut config.agent_observatory.retention.metrics_days,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_RETENTION_REPOSITORY_OBSERVATIONS_DAYS",
+            &mut config
+                .agent_observatory
+                .retention
+                .repository_observations_days,
+        )?;
+        env_override_parse(
+            "CORTEX_AGENT_OBSERVATORY_RETENTION_REMOVED_WORKTREES_DAYS",
+            &mut config.agent_observatory.retention.removed_worktrees_days,
+        )?;
+
+        env_override_bool(
             "CORTEX_DOCKER_INGEST_ENABLED",
             &mut config.docker_ingest.enabled,
         )?;
@@ -1277,6 +1560,7 @@ impl Config {
         validate_notifications_config(&config.notifications)?;
         validate_error_detection_config(&config.error_detection)?;
         validate_llm_config(&config.llm)?;
+        validate_agent_observatory_config(&config.agent_observatory)?;
         validate_host(&config.receiver.host)?;
         validate_host(&config.mcp.host)?;
         validate_auth_config(&config, check_bind)?;
@@ -1499,6 +1783,134 @@ fn env_override_bool(key: &str, target: &mut bool) -> anyhow::Result<()> {
             ));
         }
     };
+    Ok(())
+}
+
+pub(crate) fn validate_agent_observatory_config(
+    config: &AgentObservatoryConfig,
+) -> anyhow::Result<()> {
+    if !config.enabled {
+        return Ok(());
+    }
+
+    for (name, value) in [
+        ("projector_poll_ms", config.projector_poll_ms),
+        ("active_window_secs", config.active_window_secs),
+        ("stale_after_secs", config.stale_after_secs),
+        ("abandoned_after_secs", config.abandoned_after_secs),
+    ] {
+        if value == 0 {
+            return Err(anyhow::anyhow!(
+                "agent_observatory.{name} must be greater than zero"
+            ));
+        }
+    }
+    for (name, value) in [
+        ("projector_page_rows", config.projector_page_rows),
+        ("projector_page_bytes", config.projector_page_bytes),
+    ] {
+        if value == 0 {
+            return Err(anyhow::anyhow!(
+                "agent_observatory.{name} must be greater than zero"
+            ));
+        }
+    }
+    if config.stale_after_secs <= config.active_window_secs {
+        return Err(anyhow::anyhow!(
+            "agent_observatory.stale_after_secs must be greater than active_window_secs"
+        ));
+    }
+    if config.abandoned_after_secs <= config.stale_after_secs {
+        return Err(anyhow::anyhow!(
+            "agent_observatory.abandoned_after_secs must be greater than stale_after_secs"
+        ));
+    }
+
+    if config.git.enabled {
+        if config.git.roots.is_empty() || config.git.roots.iter().any(|root| root.trim().is_empty())
+        {
+            return Err(anyhow::anyhow!(
+                "agent_observatory.git.roots must contain at least one non-empty root"
+            ));
+        }
+        for (name, value) in [
+            ("max_depth", config.git.max_depth),
+            ("max_repositories", config.git.max_repositories),
+            (
+                "max_commits_per_transition",
+                config.git.max_commits_per_transition,
+            ),
+        ] {
+            if value == 0 {
+                return Err(anyhow::anyhow!(
+                    "agent_observatory.git.{name} must be greater than zero"
+                ));
+            }
+        }
+        for (name, value) in [
+            (
+                "reconcile_interval_secs",
+                config.git.reconcile_interval_secs,
+            ),
+            ("debounce_ms", config.git.debounce_ms),
+            ("command_timeout_ms", config.git.command_timeout_ms),
+        ] {
+            if value == 0 {
+                return Err(anyhow::anyhow!(
+                    "agent_observatory.git.{name} must be greater than zero"
+                ));
+            }
+        }
+    }
+
+    for (name, value) in [
+        ("replay_limit", config.stream.replay_limit),
+        ("client_queue", config.stream.client_queue),
+        ("max_clients", config.stream.max_clients),
+        ("max_event_bytes", config.stream.max_event_bytes),
+    ] {
+        if value == 0 {
+            return Err(anyhow::anyhow!(
+                "agent_observatory.stream.{name} must be greater than zero"
+            ));
+        }
+    }
+    for (name, value) in [
+        ("outbox_retention_secs", config.stream.outbox_retention_secs),
+        ("keepalive_secs", config.stream.keepalive_secs),
+    ] {
+        if value == 0 {
+            return Err(anyhow::anyhow!(
+                "agent_observatory.stream.{name} must be greater than zero"
+            ));
+        }
+    }
+    if config.stream.max_event_bytes > 1_048_576 {
+        return Err(anyhow::anyhow!(
+            "agent_observatory.stream.max_event_bytes must not exceed 1048576"
+        ));
+    }
+
+    for (name, value) in [
+        ("events_days", config.retention.events_days),
+        ("spans_days", config.retention.spans_days),
+        ("metrics_days", config.retention.metrics_days),
+        (
+            "repository_observations_days",
+            config.retention.repository_observations_days,
+        ),
+        (
+            "removed_worktrees_days",
+            config.retention.removed_worktrees_days,
+        ),
+    ] {
+        if value == 0 {
+            return Err(anyhow::anyhow!(
+                "agent_observatory.retention.{name} must be greater than zero"
+            ));
+        }
+    }
+
     Ok(())
 }
 

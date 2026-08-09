@@ -1,0 +1,35 @@
+#![allow(dead_code)]
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OtelSpanRow {
+    pub id: i64,
+    pub trace_id: String,
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+    pub trace_state: Option<String>,
+    pub flags: i64,
+    pub span_name: String,
+    pub span_kind: i64,
+    pub start_time_unix_nano: i64,
+    pub end_time_unix_nano: i64,
+    pub duration_nano: i64,
+    pub status_code: i64,
+    pub status_message: Option<String>,
+    pub hostname: String,
+    pub service_name: Option<String>,
+    pub service_version: Option<String>,
+    pub scope_name: Option<String>,
+    pub scope_version: Option<String>,
+    pub ai_tool: Option<String>,
+    pub ai_project: Option<String>,
+    pub ai_session_id: Option<String>,
+    pub run_id: Option<i64>,
+    pub resource_json: String,
+    pub attributes_json: String,
+    pub events_json: String,
+    pub links_json: String,
+    pub received_at: String,
+    pub content_scrubbed: bool,
+}

@@ -23,6 +23,7 @@ pub mod deploy;
 pub mod doctor;
 pub mod enrich;
 pub mod filetail;
+pub mod git_observer;
 pub(crate) mod hook_assessment;
 pub(crate) mod hook_config;
 pub(crate) mod skill_assessment;

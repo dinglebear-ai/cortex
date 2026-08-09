@@ -39,7 +39,7 @@ pub fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 44;
+pub const KNOWN_SCHEMA_VERSION: i64 = 47;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -2623,6 +2623,314 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         tracing::info!("Migration 44: Agent Observatory repository topology");
     }
 
+    // Agent Observatory migration 45: run events, evidence, cursors, and outbox.
+    // This migration is wrapped in a transaction with the version marker.
+    let migration_45_applied: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 45",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !migration_45_applied {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+
+             CREATE TABLE IF NOT EXISTS agent_runs (
+             id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+             run_key                 TEXT NOT NULL UNIQUE,
+             native_session_id       TEXT NOT NULL,
+             tool                    TEXT NOT NULL,
+             provider_tool           TEXT,
+             hostname                TEXT NOT NULL,
+             parent_run_id           INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             previous_run_id         INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+             primary_worktree_id     INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             transcript_path         TEXT,
+             process_id              TEXT,
+             status                  TEXT NOT NULL CHECK (status IN (
+                 'starting', 'active', 'waiting', 'idle', 'stale',
+                 'completed', 'failed', 'abandoned'
+             )),
+             status_reason           TEXT NOT NULL DEFAULT '',
+             status_observed_at      TEXT NOT NULL,
+             started_at              TEXT NOT NULL,
+             last_activity_at        TEXT NOT NULL,
+             ended_at                TEXT,
+             first_source_log_id     INTEGER,
+             last_source_log_id      INTEGER,
+             last_event_id           INTEGER,
+             event_count             INTEGER NOT NULL DEFAULT 0 CHECK (event_count >= 0),
+             error_count             INTEGER NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+             primary_branch          TEXT,
+             start_head_sha          TEXT,
+             current_head_sha        TEXT,
+             projection_version      INTEGER NOT NULL DEFAULT 1,
+             freshness_json          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(freshness_json)),
+             metadata_json           TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(hostname, tool, native_session_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_activity
+             ON agent_runs(last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_status_activity
+             ON agent_runs(status, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree_activity
+             ON agent_runs(primary_worktree_id, last_activity_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_runs_tool_host
+             ON agent_runs(tool, hostname, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_actors (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             actor_key           TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             native_actor_id     TEXT NOT NULL,
+             actor_type          TEXT,
+             display_name        TEXT,
+             started_at          TEXT,
+             last_activity_at    TEXT,
+             ended_at            TEXT,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, native_actor_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_actors_run
+             ON agent_run_actors(run_id, last_activity_at DESC);
+
+         CREATE TABLE IF NOT EXISTS agent_run_worktrees (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             relation_key        TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             worktree_id         INTEGER NOT NULL REFERENCES repository_worktrees(id) ON DELETE CASCADE,
+             evidence_kind       TEXT NOT NULL,
+             evidence_source     TEXT NOT NULL,
+             trust_level         TEXT NOT NULL CHECK (trust_level IN (
+                 'verified', 'claimed', 'correlated', 'inferred', 'refuted'
+             )),
+             confidence          REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+             is_primary          INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, worktree_id, evidence_kind, evidence_source)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_run
+             ON agent_run_worktrees(run_id, is_primary DESC, confidence DESC, last_seen_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_worktrees_worktree
+             ON agent_run_worktrees(worktree_id, last_seen_at DESC, run_id);
+
+         CREATE TABLE IF NOT EXISTS agent_run_events (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             event_key           TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             actor_id            INTEGER REFERENCES agent_run_actors(id) ON DELETE SET NULL,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             commit_id           INTEGER REFERENCES git_commits(id) ON DELETE SET NULL,
+             observed_at         TEXT NOT NULL,
+             ingested_at         TEXT NOT NULL,
+             event_kind          TEXT NOT NULL CHECK (event_kind IN (
+                 'lifecycle', 'transcript', 'command', 'shell_history',
+                 'git_status', 'git_head', 'git_commit', 'file_operation',
+                 'mcp', 'hook', 'skill', 'llm', 'otlp_log', 'otlp_span',
+                 'otlp_metric', 'heartbeat', 'error', 'provider_event'
+             )),
+             source_kind         TEXT NOT NULL,
+             source_id           TEXT NOT NULL,
+             source_log_id       INTEGER,
+             provider_sequence   INTEGER,
+             trace_id            TEXT,
+             span_id             TEXT,
+             severity            TEXT NOT NULL DEFAULT 'info',
+             title               TEXT NOT NULL DEFAULT '',
+             summary             TEXT NOT NULL DEFAULT '',
+             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+             content_scrubbed    INTEGER NOT NULL DEFAULT 1 CHECK (content_scrubbed IN (0, 1)),
+             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_order
+             ON agent_run_events(run_id, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_kind
+             ON agent_run_events(run_id, event_kind, observed_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_trace
+             ON agent_run_events(trace_id, span_id);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_events_source_log
+             ON agent_run_events(source_log_id) WHERE source_log_id IS NOT NULL;
+
+         CREATE TABLE IF NOT EXISTS agent_run_commits (
+             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+             relation_key        TEXT NOT NULL UNIQUE,
+             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+             commit_id           INTEGER NOT NULL REFERENCES git_commits(id) ON DELETE CASCADE,
+             worktree_id         INTEGER REFERENCES repository_worktrees(id) ON DELETE SET NULL,
+             evidence_kind       TEXT NOT NULL,
+             evidence_source     TEXT NOT NULL,
+             trust_level         TEXT NOT NULL CHECK (trust_level IN (
+                 'verified', 'claimed', 'correlated', 'inferred', 'refuted'
+             )),
+             confidence          REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+             first_seen_at       TEXT NOT NULL,
+             last_seen_at        TEXT NOT NULL,
+             metadata_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+             UNIQUE(run_id, commit_id, evidence_kind, evidence_source)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_run_commits_run
+             ON agent_run_commits(run_id, last_seen_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_agent_run_commits_commit
+             ON agent_run_commits(commit_id, last_seen_at DESC, run_id);
+
+         CREATE TABLE IF NOT EXISTS agent_projection_cursors (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             cursor_type     TEXT NOT NULL,
+             source_name     TEXT NOT NULL DEFAULT 'default',
+             cursor_value    TEXT NOT NULL DEFAULT '',
+             updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             UNIQUE(cursor_type, source_name)
+         );
+         CREATE INDEX IF NOT EXISTS idx_agent_projection_cursors_type
+             ON agent_projection_cursors(cursor_type, source_name);
+
+         INSERT OR IGNORE INTO agent_projection_cursors (cursor_type, source_name, cursor_value) VALUES
+             ('repositories', 'default', ''),
+             ('repository_worktrees', 'default', ''),
+             ('repository_observations', 'default', ''),
+             ('git_commits', 'default', ''),
+             ('agent_runs', 'default', ''),
+             ('agent_run_events', 'default', ''),
+             ('otel_spans', 'default', ''),
+             ('otel_metric_points', 'default', '');
+
+	         CREATE TABLE IF NOT EXISTS agent_stream_outbox (
+	             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+	             outbox_key          TEXT NOT NULL UNIQUE,
+	             run_id              INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+	             stream_event_type   TEXT NOT NULL,
+	             expires_at          TEXT NOT NULL,
+	             payload_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+	             created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	         );
+	         CREATE INDEX IF NOT EXISTS idx_agent_stream_outbox_run
+	             ON agent_stream_outbox(run_id, id ASC);
+	         CREATE INDEX IF NOT EXISTS idx_agent_stream_outbox_expiry
+	             ON agent_stream_outbox(expires_at ASC);
+
+	     INSERT OR IGNORE INTO schema_migrations (version) VALUES (45);
+	     COMMIT;",
+        )?;
+        tracing::info!("Migration 45: Agent Observatory run events, evidence, cursors, and outbox");
+    }
+
+    // Migration 46: OTLP traces.
+    // The DDL and version marker share one transaction for atomicity.
+    if !migration_applied(&conn, 46)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+
+             CREATE TABLE IF NOT EXISTS otel_spans (
+                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                 trace_id            TEXT NOT NULL CHECK (length(trace_id) = 32),
+                 span_id             TEXT NOT NULL CHECK (length(span_id) = 16),
+                 parent_span_id      TEXT CHECK (parent_span_id IS NULL OR length(parent_span_id) = 16),
+                 trace_state         TEXT,
+                 flags               INTEGER NOT NULL DEFAULT 0,
+                 span_name           TEXT NOT NULL,
+                 span_kind           INTEGER NOT NULL,
+                 start_time_unix_nano INTEGER NOT NULL,
+                 end_time_unix_nano  INTEGER NOT NULL,
+                 duration_nano       INTEGER NOT NULL CHECK (duration_nano >= 0),
+                 status_code         INTEGER NOT NULL DEFAULT 0,
+                 status_message      TEXT,
+                 hostname            TEXT NOT NULL DEFAULT '',
+                 service_name        TEXT,
+                 service_version     TEXT,
+                 scope_name          TEXT,
+                 scope_version       TEXT,
+                 ai_tool             TEXT,
+                 ai_project          TEXT,
+                 ai_session_id       TEXT,
+                 run_id              INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 resource_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(resource_json)),
+                 attributes_json     TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(attributes_json)),
+                 events_json         TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(events_json)),
+                 links_json          TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(links_json)),
+                 received_at         TEXT NOT NULL,
+                 content_scrubbed    INTEGER NOT NULL DEFAULT 1 CHECK (content_scrubbed IN (0, 1)),
+                 UNIQUE(trace_id, span_id)
+             );
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_run_time
+                 ON otel_spans(run_id, start_time_unix_nano DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_session_time
+                 ON otel_spans(hostname, ai_tool, ai_session_id, start_time_unix_nano DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_trace
+                 ON otel_spans(trace_id, start_time_unix_nano, span_id);
+             CREATE INDEX IF NOT EXISTS idx_otel_spans_service_time
+                 ON otel_spans(service_name, start_time_unix_nano DESC);
+
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (46);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 46: OTLP traces");
+    }
+
+    // Agent Observatory migration 47: OTLP metric points.
+    // This migration is wrapped in a transaction with the version marker.
+    let migration_47_applied: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 47",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !migration_47_applied {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+
+             CREATE TABLE IF NOT EXISTS otel_metric_points (
+                 id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                 point_key               TEXT NOT NULL UNIQUE,
+                 metric_name             TEXT NOT NULL,
+                 description             TEXT NOT NULL DEFAULT '',
+                 unit                    TEXT NOT NULL DEFAULT '',
+                 instrument_kind         TEXT NOT NULL CHECK (instrument_kind IN (
+                     'gauge', 'sum', 'histogram', 'exponential_histogram', 'summary'
+                 )),
+                 aggregation_temporality INTEGER,
+                 monotonic               INTEGER CHECK (monotonic IS NULL OR monotonic IN (0, 1)),
+                 start_time_unix_nano    INTEGER,
+                 time_unix_nano          INTEGER NOT NULL,
+                 hostname                TEXT NOT NULL DEFAULT '',
+                 service_name            TEXT,
+                 service_version         TEXT,
+                 scope_name              TEXT,
+                 scope_version           TEXT,
+                 ai_tool                 TEXT,
+                 ai_project              TEXT,
+                 ai_session_id           TEXT,
+                 run_id                  INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 resource_json           TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(resource_json)),
+                 attributes_json         TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(attributes_json)),
+                 value_json              TEXT NOT NULL CHECK (json_valid(value_json)),
+                 exemplars_json          TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(exemplars_json)),
+                 received_at             TEXT NOT NULL,
+                 content_scrubbed        INTEGER NOT NULL DEFAULT 1 CHECK (content_scrubbed IN (0, 1))
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_otel_metric_points_run_time
+                 ON otel_metric_points(run_id, time_unix_nano DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_metric_points_name_time
+                 ON otel_metric_points(metric_name, time_unix_nano DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS idx_otel_metric_points_session_time
+                 ON otel_metric_points(hostname, ai_tool, ai_session_id, time_unix_nano DESC);
+
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (47);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 47: OTLP metric points");
+    }
+
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
         let deleted_heartbeat_latest = conn.execute(
             "DELETE FROM host_heartbeats_latest
@@ -2672,7 +2980,7 @@ pub fn reconcile_interrupted_server_work(pool: &DbPool) -> Result<()> {
         "UPDATE maintenance_jobs
             SET status = 'failed',
                 finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                result_json = json_object('error', 'interrupted by server restart')
+                result_json = json_object('error', \"interrupted by server restart\")
           WHERE status = 'running';
 
          UPDATE llm_invocations

@@ -308,6 +308,26 @@ pub fn tail_logs(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+pub(crate) fn page_agent_projection_logs(
+    pool: &DbPool,
+    after_id: i64,
+    limit: usize,
+) -> Result<Vec<LogEntry>> {
+    if after_id < 0 || !(1..=500).contains(&limit) {
+        anyhow::bail!("projection log cursor/limit out of bounds");
+    }
+    let conn = pool.get()?;
+    let mut statement = conn.prepare(
+        "SELECT id, timestamp, hostname, facility, severity,
+                app_name, process_id, message, received_at, source_ip,
+                ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
+           FROM logs WHERE id > ?1 ORDER BY id LIMIT ?2",
+    )?;
+    Ok(statement
+        .query_map(rusqlite::params![after_id, limit as i64], map_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 fn tail_logs_sql(
     hostname: Option<&str>,
     source_ip: Option<&str>,

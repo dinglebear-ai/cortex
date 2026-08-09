@@ -36,6 +36,7 @@ use crate::otlp::{self, OtlpCounters, OtlpState};
 use crate::receiver::enrichment::EnrichmentConfig;
 use crate::{docker_ingest, mcp, receiver};
 
+mod agent_observatory;
 mod graph_refresh;
 mod inventory_refresh;
 
@@ -79,6 +80,8 @@ pub struct MaintenanceHandles {
     session_rollup: Option<JoinHandle<()>>,
     timeline_rollup: Option<JoinHandle<()>>,
     optimize: Option<JoinHandle<()>>,
+    agent_observatory_projector: Option<JoinHandle<()>>,
+    agent_observatory_git: Option<JoinHandle<()>>,
     /// Monitors the two syslog supervisor JoinHandles (UDP + TCP). The
     /// supervisors loop forever under normal operation; this task logs an error
     /// if either exits unexpectedly (panic or abort) so silent ingest loss is
@@ -136,6 +139,8 @@ impl MaintenanceHandles {
             self.session_rollup,
             self.timeline_rollup,
             self.optimize,
+            self.agent_observatory_projector,
+            self.agent_observatory_git,
             self.syslog_monitor,
             self.file_tail,
         ]
@@ -498,6 +503,16 @@ impl RuntimeCore {
         let timeline_rollup = self.spawn_timeline_rollup_task(token.clone());
         let optimize = self.spawn_optimize_task(token.clone());
         let file_tail = self.spawn_file_tail_task(token.clone());
+        let agent_observatory_projector = agent_observatory::spawn_projector(
+            token.clone(),
+            Arc::clone(&self.pool),
+            self.config.agent_observatory.clone(),
+        );
+        let agent_observatory_git = agent_observatory::spawn_git_reconcile(
+            token.clone(),
+            Arc::clone(&self.pool),
+            self.config.agent_observatory.clone(),
+        );
         MaintenanceHandles {
             token,
             purge,
@@ -514,6 +529,8 @@ impl RuntimeCore {
             session_rollup,
             timeline_rollup,
             optimize,
+            agent_observatory_projector,
+            agent_observatory_git,
             syslog_monitor: None,
         }
     }
