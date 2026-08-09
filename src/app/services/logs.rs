@@ -2,6 +2,23 @@ use super::filters::{filter_request_to_params, search_request_to_params};
 use super::*;
 
 impl CortexService {
+    pub async fn feed_logs(&self, req: FeedLogsRequest) -> ServiceResult<FeedLogsResponse> {
+        let requested_after_id = req.after_id;
+        let host = req.host;
+        let limit = req.limit.unwrap_or(500).clamp(1, 1_000);
+        let (logs, next_after_id, has_more) = self
+            .run_db("feed_logs", move |pool| {
+                db::feed_logs(pool, requested_after_id, host.as_deref(), limit)
+            })
+            .await?;
+
+        Ok(FeedLogsResponse {
+            logs: logs.into_iter().map(Into::into).collect(),
+            next_after_id,
+            has_more,
+        })
+    }
+
     pub async fn health_check(&self) -> ServiceResult<()> {
         self.run_db("health_check", |pool| {
             let conn = pool.get()?;

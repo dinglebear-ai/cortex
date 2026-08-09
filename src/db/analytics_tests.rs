@@ -1492,3 +1492,28 @@ fn clock_skew_merges_case_variants() {
     );
     assert!((result[0].max_skew_secs - 40.0).abs() < 0.5);
 }
+
+#[test]
+fn feed_cursor_is_never_below_the_greatest_returned_id() {
+    let (pool, _d) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[entry("2026-01-01T00:00:00Z", "h", "info", None, "one")],
+    )
+    .unwrap();
+    let (first, cursor, more) = feed_logs(&pool, Some(0), None, 100).unwrap();
+    assert!(!more);
+    assert_eq!(first.len(), 1);
+    assert!(cursor >= first.iter().map(|row| row.id).max().unwrap());
+
+    insert_logs_batch(
+        &pool,
+        &[entry("2026-01-01T00:00:01Z", "h", "info", None, "two")],
+    )
+    .unwrap();
+    let (second, next_cursor, _) = feed_logs(&pool, Some(cursor), None, 100).unwrap();
+    assert_eq!(second.len(), 1);
+    assert!(next_cursor >= second[0].id);
+    let (duplicate, _, _) = feed_logs(&pool, Some(next_cursor), None, 100).unwrap();
+    assert!(duplicate.is_empty());
+}

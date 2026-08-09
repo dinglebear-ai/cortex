@@ -4,6 +4,7 @@ use crate::mcp;
 const CURRENT_API_ROUTES: &[&str] = &[
     "/api/search",
     "/api/filter",
+    "/api/feed",
     "/api/tail",
     "/api/errors",
     "/api/hosts",
