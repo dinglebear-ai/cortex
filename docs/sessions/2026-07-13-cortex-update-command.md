@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-07-13 11:00:41 EDT
 repo: git@github.com:jmagar/cortex.git

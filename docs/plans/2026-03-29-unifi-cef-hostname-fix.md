@@ -15,7 +15,7 @@
 UniFi OS sends RFC 5424 syslog with a malformed hostname field. Example raw message:
 
 ```
-<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog
+<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=02:00:5E:10:00:01 UNIFIdeviceVersion=5.1.5 msg=Test Syslog
 ```
 
 What `syslog_loose` currently produces:
@@ -239,7 +239,7 @@ Inside the `#[cfg(test)]` module, add:
 ```rust
     #[test]
     fn test_extract_cef_fields_test_syslog() {
-        let text = "The Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
+        let text = "The Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=02:00:5E:10:00:01 UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
         let (hostname, app_name, message) = extract_cef_fields(text);
         assert_eq!(hostname, Some("The Gatewayhost".to_string()));
         assert_eq!(app_name, Some("Test Syslog".to_string()));
@@ -248,7 +248,7 @@ Inside the `#[cfg(test)]` module, add:
 
     #[test]
     fn test_extract_cef_fields_config_change() {
-        let text = "The Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1005|Admin Made Config Changes|2|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20";
+        let text = "The Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1005|Admin Made Config Changes|2|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=02:00:5E:10:00:01 UNIFIdeviceVersion=5.1.5 msg=Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20";
         let (hostname, app_name, message) = extract_cef_fields(text);
         assert_eq!(hostname, Some("The Gatewayhost".to_string()));
         assert_eq!(app_name, Some("Admin Made Config Changes".to_string()));
@@ -353,7 +353,7 @@ Inside the `#[cfg(test)]` module, add:
     fn test_parse_syslog_unifi_cef_hostname() {
         // Real-world UniFi OS RFC 5424 message: timestamp in hostname field, device name split
         // across app_name ("The") and message body ("Gatewayhost CEF:0|...")
-        let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
+        let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Gatewayhost CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Gatewayhost UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=02:00:5E:10:00:01 UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
         let parsed = parse_syslog(raw);
         assert_eq!(parsed.hostname, "The Gatewayhost");
         assert_eq!(parsed.app_name.as_deref(), Some("Test Syslog"));

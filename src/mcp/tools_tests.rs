@@ -119,7 +119,7 @@ fn graph_inventory_fixture() -> HomelabInventory {
         host: Some("edgehost".to_string()),
         image: Some("lscr.io/linuxserver/swag:latest".to_string()),
         status: Some("running".to_string()),
-        domains: vec!["adguard.example.internal".to_string()],
+        domains: vec!["adguard.example.invalid".to_string()],
         ports: vec![PortMapping {
             host_ip: Some("0.0.0.0".to_string()),
             host_port: Some(443),
@@ -140,12 +140,12 @@ fn graph_inventory_fixture() -> HomelabInventory {
         provenance: test_provenance("compose:edgehost:/opt/edge/compose.yaml", "app_inventory"),
         services: vec!["swag".to_string()],
         compose_files: vec!["/opt/edge/compose.yaml".to_string()],
-        domains: vec!["adguard.example.internal".to_string()],
+        domains: vec!["adguard.example.invalid".to_string()],
         ports: Vec::new(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:adguard.example.internal".to_string(),
-        server_names: vec!["adguard.example.internal".to_string()],
+        id: "proxy:adguard.example.invalid".to_string(),
+        server_names: vec!["adguard.example.invalid".to_string()],
         upstreams: vec!["swag:443".to_string()],
         provenance: test_provenance("swag:edgehost:/config/nginx/proxy.conf", "app_inventory"),
     });
@@ -192,8 +192,8 @@ fn graph_inventory_without_route_target_fixture() -> HomelabInventory {
         extras: Default::default(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:orphan.example.internal".to_string(),
-        server_names: vec!["orphan.example.internal".to_string()],
+        id: "proxy:orphan.example.invalid".to_string(),
+        server_names: vec!["orphan.example.invalid".to_string()],
         upstreams: vec!["missing-service:443".to_string()],
         provenance: test_provenance("swag:edgehost:/config/nginx/orphan.conf", "app_inventory"),
     });
@@ -639,7 +639,7 @@ async fn map_action_domain_routes_mode_returns_proxy_graph_answer() {
         json!({
             "action": "map",
             "mode": "domain_routes",
-            "domain": "adguard.example.internal"
+            "domain": "adguard.example.invalid"
         }),
         None,
     )
@@ -650,14 +650,14 @@ async fn map_action_domain_routes_mode_returns_proxy_graph_answer() {
     assert_eq!(answer["mode"], "domain_routes");
     assert_eq!(answer["answer_status"], "ok");
     assert_eq!(answer["target"]["entity_type"], "domain");
-    assert_eq!(answer["target"]["key"], "adguard.example.internal");
+    assert_eq!(answer["target"]["key"], "adguard.example.invalid");
     assert!(
         answer["rows"]
             .as_array()
             .unwrap()
             .iter()
             .any(|row| row["entity_type"] == "reverse_proxy"
-                && row["key"] == "proxy:adguard.example.internal"
+                && row["key"] == "proxy:adguard.example.invalid"
                 && row["relationship_type"] == "exposes_domain"),
         "domain_routes should include the proxy config that exposes the domain: {answer}"
     );
@@ -814,7 +814,7 @@ async fn map_action_findings_mode_returns_topology_findings_without_raw_leaks() 
                         .as_array()
                         .unwrap()
                         .iter()
-                        .any(|entity| entity["key"] == "adguard.example.internal")
+                        .any(|entity| entity["key"] == "adguard.example.invalid")
             ),
         "findings should include bounded public route proof: {answer}"
     );

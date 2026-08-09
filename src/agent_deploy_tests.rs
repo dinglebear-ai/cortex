@@ -560,7 +560,7 @@ fn resolve_agent_env_flagless_upgrade_preserves_everything() {
     let persisted = vec![
         (
             "CORTEX_HEARTBEAT_TARGET".into(),
-            "https://cortex.example.internal".into(),
+            "https://cortex.example.invalid".into(),
         ),
         ("CORTEX_SYSLOG_TARGET".into(), "198.51.100.1:1514".into()),
         ("CORTEX_AGENT_DOCKER".into(), "true".into()),
@@ -574,7 +574,7 @@ fn resolve_agent_env_flagless_upgrade_preserves_everything() {
     assert_eq!(env_get(&env, "CORTEX_HEARTBEAT_TOKEN"), Some("the-secret"));
     assert_eq!(
         env_get(&env, "CORTEX_HEARTBEAT_TARGET"),
-        Some("https://cortex.example.internal")
+        Some("https://cortex.example.invalid")
     );
     assert_eq!(
         env_get(&env, "CORTEX_SYSLOG_TARGET"),
@@ -629,7 +629,7 @@ fn resolve_linux_agent_env_preserves_auth_and_flags_without_defaults() {
     let persisted = vec![
         (
             "CORTEX_HEARTBEAT_TARGET".into(),
-            "https://cortex.example.internal".into(),
+            "https://cortex.example.invalid".into(),
         ),
         ("CORTEX_HEARTBEAT_TOKEN".into(), "the-secret".into()),
         ("CORTEX_AGENT_DOCKER".into(), "true".into()),
@@ -648,7 +648,7 @@ fn resolve_linux_agent_env_preserves_auth_and_flags_without_defaults() {
 
     assert_eq!(
         env_get(&env, "CORTEX_HEARTBEAT_TARGET"),
-        Some("https://cortex.example.internal")
+        Some("https://cortex.example.invalid")
     );
     assert_eq!(env_get(&env, "CORTEX_HEARTBEAT_TOKEN"), Some("the-secret"));
     assert_eq!(env_get(&env, "CORTEX_AGENT_DOCKER"), Some("true"));

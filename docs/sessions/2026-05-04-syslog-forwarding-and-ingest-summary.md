@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-04 17:33:32 EDT
 repo: https://github.com/jmagar/syslog-mcp

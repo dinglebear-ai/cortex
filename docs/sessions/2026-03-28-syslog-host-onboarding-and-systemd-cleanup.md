@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Session: Syslog Host Onboarding and Systemd Cleanup
 **Date:** 2026-03-28
 **Branch:** chore/add-lavra-project-config

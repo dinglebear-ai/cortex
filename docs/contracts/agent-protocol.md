@@ -12,7 +12,7 @@ This document is the V1 wire contract derived from the agent-mode design spec at
 
 ## 2. Wire framing
 
-- **Transport.** RFC 6455 WebSocket. Production deployments use `wss://syslog.example.internal/ws/agent` terminated by SWAG; loopback `ws://` is allowed only when `agent.allow_insecure = true`.
+- **Transport.** RFC 6455 WebSocket. Production deployments use `wss://syslog.example.invalid/ws/agent` terminated by SWAG; loopback `ws://` is allowed only when `agent.allow_insecure = true`.
 - **Subprotocol.** Client offers `Sec-WebSocket-Protocol: cortex.v1`. Server confirms the same. Mismatched subprotocol → HTTP `400` and the upgrade is refused.
 - **Encoding.** WebSocket **text** frames. Payload is UTF-8 JSON. Binary frames are reserved for a future compressed log-batch transport and MUST be rejected with close code `1003` in V1.
 - **Compression.** No frame-level or payload-level compression in V1 (no `permessage-deflate`, no zstd application-layer compression). Agents may advertise `compression: ["zstd"]` in `capabilities` but the V1 server ignores the hint.

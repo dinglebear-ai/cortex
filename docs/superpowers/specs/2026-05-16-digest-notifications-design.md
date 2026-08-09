@@ -460,7 +460,7 @@ enabled = true
 transport = "apprise"            # only valid value in V1
 
 [notifications.apprise]
-url        = "https://apprise.example.internal"
+url        = "https://apprise.example.invalid"
 config_key = "syslog-mcp"        # named stored-config on apprise side
 token      = "${SYSLOG_MCP_APPRISE_TOKEN}"  # optional X-Apprise-Token
 default_tag = "syslog"           # appended to every push in addition to severity+host tags

@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Session Addendum: Post-Push State
 
 **Date:** 2026-04-04 (continuation of 2026-04-03 session)

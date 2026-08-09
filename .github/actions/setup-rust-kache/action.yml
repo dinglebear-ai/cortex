@@ -29,9 +29,17 @@ inputs:
     required: false
     default: ""
   s3-endpoint:
-    description: S3-compatible endpoint used when credentials are supplied.
+    description: >-
+      S3-compatible endpoint used when credentials are supplied. Intentionally
+      has NO default: this repository is public, and a real endpoint hostname
+      here would publish internal infrastructure. Every caller that supplies
+      credentials also passes the org variable KACHE_S3_ENDPOINT, so the value
+      lives in org variables, not in source. (Written without expression syntax
+      on purpose: GitHub evaluates ${} in an action description, and the `vars`
+      context is not available there.) An empty value means callers fall back to
+      local-only caching.
     required: false
-    default: "https://s3.example.internal"
+    default: ""
   s3-bucket:
     description: S3 bucket containing the shared cache.
     required: false
@@ -122,6 +130,35 @@ runs:
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         "$HOME/.local/bin/kache" --version
 
+    # Records what RUSTC_WRAPPER will actually resolve to at build time.
+    # Builds in this fleet have intermittently died with
+    #   could not execute process `kache <rustc> ...` (never executed)
+    #   No such file or directory (os error 2)
+    # which is ENOENT on the wrapper itself. /usr/local/bin/kache is a symlink
+    # into /opt/hostedtoolcache, so a dangling target produces exactly that and
+    # leaves no trace in the build log. Cheap to record, and the difference
+    # between a resolvable and a dangling wrapper is the whole diagnosis.
+    - name: Record resolved kache wrapper
+      if: inputs.enable-cache == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -uo pipefail
+        which_kache="$(command -v kache || true)"
+        if [ -z "$which_kache" ]; then
+          echo "::warning::kache is not on PATH; RUSTC_WRAPPER will fail with ENOENT"
+          exit 0
+        fi
+        resolved="$(readlink -f "$which_kache" || true)"
+        printf 'kache on PATH : %s\n' "$which_kache"
+        printf 'resolves to   : %s\n' "$resolved"
+        if [ -x "$resolved" ]; then
+          printf 'target        : executable\n'
+          "$resolved" --version || echo "::warning::kache binary present but --version failed"
+        else
+          echo "::warning::kache resolves to a MISSING or non-executable target: $resolved"
+          ls -l "$which_kache" || true
+        fi
+
     - name: Configure kache
       if: inputs.enable-cache == 'true' && runner.os == 'Linux'
       shell: bash
@@ -134,7 +171,6 @@ runs:
       run: |
         set -euo pipefail
         config_file="$HOME/.config/kache/config.toml"
-        host_credentials_file="$HOME/.aws/credentials"
         mkdir -p "$HOME/.config/kache"
 
         # Persistent hosts own their default store through systemd. Farm
@@ -159,7 +195,9 @@ runs:
               "$config_file" | head -n1
           )"
           [ -z "$configured_store" ] || cache_dir="$configured_store"
-        elif [ -n "${KACHE_S3_ACCESS_KEY:-}" ] && [ -n "${KACHE_S3_SECRET_KEY:-}" ]; then
+        elif [ -n "${KACHE_S3_ACCESS_KEY:-}" ] &&
+             [ -n "${KACHE_S3_SECRET_KEY:-}" ] &&
+             [ -n "${KACHE_S3_ENDPOINT:-}" ]; then
           credentials_file="$RUNNER_TEMP/kache-aws-credentials"
           umask 077
           {
@@ -184,24 +222,6 @@ runs:
         profile = "kache"
         TOML
           echo "kache remote: s3://$KACHE_S3_BUCKET/$KACHE_S3_PREFIX via $KACHE_S3_ENDPOINT"
-        elif [ -r "$host_credentials_file" ] &&
-             grep -Eq '^[[:space:]]*\[kache\][[:space:]]*$' "$host_credentials_file"; then
-          cat > "$config_file" <<TOML
-        [cache]
-        local_store = "$cache_dir"
-        daemon_idle_timeout_secs = 0
-        prefetch_max_bytes = "8GiB"
-        local_max_size = "40GiB"
-
-        [cache.remote]
-        type = "s3"
-        bucket = "kache"
-        endpoint = "http://192.0.2.2:9000"
-        region = "us-east-1"
-        prefix = "rust"
-        profile = "kache"
-        TOML
-          echo "kache remote: s3://kache/rust via Nashost MinIO"
         else
           cat > "$config_file" <<TOML
         [cache]

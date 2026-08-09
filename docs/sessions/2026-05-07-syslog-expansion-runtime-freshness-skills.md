@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Session Save: Syslog Expansion, Runtime Freshness, and Skills
 
 Date: 2026-05-07 08:42 EDT

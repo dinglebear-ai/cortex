@@ -407,16 +407,16 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('reverse_proxy', 'proxy:example.example.internal', 'example.example.internal',
-             'app_inventory', 'proxy:example.example.internal', 'verified')",
+         VALUES ('reverse_proxy', 'proxy:example.example.invalid', 'example.example.invalid',
+             'app_inventory', 'proxy:example.example.invalid', 'verified')",
         [],
     )
     .unwrap();
     conn.execute(
         "INSERT INTO graph_entities
             (entity_type, canonical_key, display_label, source_kind, source_id, trust_level)
-         VALUES ('domain', 'example.example.internal', 'example.example.internal',
-             'app_inventory', 'example.example.internal', 'verified')",
+         VALUES ('domain', 'example.example.invalid', 'example.example.invalid',
+             'app_inventory', 'example.example.invalid', 'verified')",
         [],
     )
     .unwrap();
@@ -477,7 +477,7 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
         "INSERT INTO graph_relationships
             (relationship_key, src_entity_id, dst_entity_id, relationship_type,
              reason_code, trust_level, confidence, evidence_count)
-         VALUES ('reverse_proxy:example.example.internal->domain:example.example.internal',
+         VALUES ('reverse_proxy:example.example.invalid->domain:example.example.invalid',
              ?1, ?2, 'exposes_domain', 'reverse_proxy_config',
              'verified', 0.90, 1)",
         rusqlite::params![proxy_id, domain_id],
@@ -514,7 +514,7 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let proxy_rel_id: i64 = conn
         .query_row(
             "SELECT id FROM graph_relationships
-             WHERE relationship_key = 'reverse_proxy:example.example.internal->domain:example.example.internal'",
+             WHERE relationship_key = 'reverse_proxy:example.example.invalid->domain:example.example.invalid'",
             [],
             |row| row.get(0),
         )
@@ -523,10 +523,10 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
         "INSERT INTO graph_relationship_evidence
             (relationship_id, evidence_key, source_kind, source_id, observed_at,
              reason_code, trust_level, safe_excerpt, evidence_count)
-         VALUES (?1, 'proxy:example.example.internal:route',
-             'app_inventory', 'proxy:example.example.internal',
+         VALUES (?1, 'proxy:example.example.invalid:route',
+             'app_inventory', 'proxy:example.example.invalid',
              '2026-01-01T00:00:00Z', 'reverse_proxy_config',
-             'verified', 'example.example.internal routes through proxy config', 1)",
+             'verified', 'example.example.invalid routes through proxy config', 1)",
         [proxy_rel_id],
     )
     .unwrap();

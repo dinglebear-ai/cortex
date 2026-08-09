@@ -13,11 +13,11 @@ the rest of the homelab's posture.
 
 ## Phase 3 — host-wide journald + AI transcripts
 
-Hosts: **devhost, edgehost, winhost-wsl, laptophost-wsl**.
+Hosts: **<DEV_HOST>, <EDGE_HOST>, <WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>**.
 
 ### Prerequisites
 
-* WSL hosts (winhost-wsl, laptophost-wsl) need `[boot] systemd=true` in
+* WSL hosts (<WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>) need `[boot] systemd=true` in
   `/etc/wsl.conf`, then `wsl --shutdown` from PowerShell to restart. Verify
   with `systemctl status` after restart — must show "running."
 * `/var/spool/rsyslog/` must exist on every host. Create with
@@ -39,7 +39,7 @@ ssh <host> 'sudo mv /tmp/11-imfile.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
-# AI transcripts — devhost, edgehost, winhost-wsl, laptophost-wsl
+# AI transcripts — <DEV_HOST>, <EDGE_HOST>, <WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>
 scp deploy/rsyslog/40-ai-transcripts.conf <host>:/tmp/
 ssh <host> 'sudo mv /tmp/40-ai-transcripts.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
@@ -61,7 +61,7 @@ mcporter call --config config/mcporter.json cortex.search 'tag:claude-transcript
 
 ---
 
-## Phase 4 — edgehost specialty sources
+## Phase 4 — <EDGE_HOST> specialty sources
 
 Three drop-ins, deploy in the **specified order** (authelia → swag → adguard).
 The order matters: AdGuard is the highest-volume source — deploy it last so
@@ -70,11 +70,11 @@ the other sources are already stable.
 ### Resolve `<PATH-TO-...>` placeholders first
 
 ```bash
-ssh edgehost 'find /mnt /opt /srv -name authelia.log     2>/dev/null | head -3'
-ssh edgehost 'find /mnt /opt /srv -path "*/nginx/access.log" 2>/dev/null | head -3'
-ssh edgehost 'find /mnt /opt /srv -path "*/nginx/error.log"  2>/dev/null | head -3'
-ssh edgehost 'find /mnt /opt /srv -path "*/fail2ban/fail2ban.log" 2>/dev/null | head -3'
-ssh edgehost 'find /mnt /opt /srv -name querylog.json    2>/dev/null | head -3'
+ssh <EDGE_HOST> 'find /mnt /opt /srv -name authelia.log     2>/dev/null | head -3'
+ssh <EDGE_HOST> 'find /mnt /opt /srv -path "*/nginx/access.log" 2>/dev/null | head -3'
+ssh <EDGE_HOST> 'find /mnt /opt /srv -path "*/nginx/error.log"  2>/dev/null | head -3'
+ssh <EDGE_HOST> 'find /mnt /opt /srv -path "*/fail2ban/fail2ban.log" 2>/dev/null | head -3'
+ssh <EDGE_HOST> 'find /mnt /opt /srv -name querylog.json    2>/dev/null | head -3'
 ```
 
 Edit each `.conf` to substitute the real paths before scp'ing.
@@ -83,13 +83,13 @@ Edit each `.conf` to substitute the real paths before scp'ing.
 
 Ubuntu's `rsyslogd` AppArmor profile allows `/var/log/**` by default, but not
 the `/mnt/appdata/**` service paths or normal `~/.claude`, `~/.codex`, and
-`~/.gemini` transcript paths on edgehost. Install the local profile override and
+`~/.gemini` transcript paths on <EDGE_HOST>. Install the local profile override and
 grant the `syslog` user read ACLs for private Authelia/AdGuard logs and AI
 transcript trees before restarting rsyslog:
 
 ```bash
-scp deploy/apparmor/usr.sbin.rsyslogd.cortex edgehost:/tmp/
-ssh edgehost 'sudo install -o root -g root -m 0644 \
+scp deploy/apparmor/usr.sbin.rsyslogd.cortex <EDGE_HOST>:/tmp/
+ssh <EDGE_HOST> 'sudo install -o root -g root -m 0644 \
   /tmp/usr.sbin.rsyslogd.cortex /etc/apparmor.d/local/usr.sbin.rsyslogd \
   && sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.rsyslogd \
   && sudo setfacl -m u:syslog:rx \
@@ -118,26 +118,26 @@ ssh edgehost 'sudo install -o root -g root -m 0644 \
 
 ```bash
 # Shared imfile loader. Install once before source-specific drop-ins.
-scp deploy/rsyslog/11-imfile.conf edgehost:/tmp/
-ssh edgehost 'sudo mv /tmp/11-imfile.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/11-imfile.conf <EDGE_HOST>:/tmp/
+ssh <EDGE_HOST> 'sudo mv /tmp/11-imfile.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
 # 1. authelia
-scp deploy/rsyslog/35-authelia.conf edgehost:/tmp/
-ssh edgehost 'sudo mv /tmp/35-authelia.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/35-authelia.conf <EDGE_HOST>:/tmp/
+ssh <EDGE_HOST> 'sudo mv /tmp/35-authelia.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
 # 2. SWAG (nginx + fail2ban)
-scp deploy/rsyslog/30-swag.conf edgehost:/tmp/
-ssh edgehost 'sudo mv /tmp/30-swag.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/30-swag.conf <EDGE_HOST>:/tmp/
+ssh <EDGE_HOST> 'sudo mv /tmp/30-swag.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 
 # 3. AdGuard — LAST
-scp deploy/rsyslog/36-adguard.conf edgehost:/tmp/
-ssh edgehost 'sudo mv /tmp/36-adguard.conf /etc/rsyslog.d/ \
+scp deploy/rsyslog/36-adguard.conf <EDGE_HOST>:/tmp/
+ssh <EDGE_HOST> 'sudo mv /tmp/36-adguard.conf /etc/rsyslog.d/ \
   && sudo rsyslogd -N1 \
   && sudo systemctl restart rsyslog'
 ```
@@ -161,22 +161,22 @@ tailnet hosts from sending crafted messages with `tag=authelia` or
 `tag=adguard-query` to spoof severity/classification:
 
 ```bash
-CORTEX_AUTHELIA_SOURCE_IP=198.51.100.4   # edgehost tailnet IP
-CORTEX_ADGUARD_SOURCE_IP=198.51.100.4
+CORTEX_AUTHELIA_SOURCE_IP=<EDGE_SOURCE_IP>   # <EDGE_HOST> tailnet IP
+CORTEX_ADGUARD_SOURCE_IP=<EDGE_SOURCE_IP>
 ```
 
 ---
 
 ## Phase 5 — OTel client config (claude code + codex)
 
-Hosts: **devhost, winhost-wsl, laptophost-wsl**.
+Hosts: **<DEV_HOST>, <WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>**.
 
 ### Prerequisite
 
 Phase 1 must be deployed and healthy first:
 
 ```bash
-curl -s http://devhost:3100/health | jq
+curl -s http://<DEV_HOST>:3100/health | jq
 # {"status":"ok","otlp_logs_received":0,"otlp_decode_errors":0}
 ```
 
@@ -197,7 +197,7 @@ After each config change, start a new claude/codex session, then:
 
 ```bash
 # Should increment after each session
-curl -s http://devhost:3100/health | jq .otlp_logs_received
+curl -s http://<DEV_HOST>:3100/health | jq .otlp_logs_received
 
 # Records should be searchable
 mcporter call --config config/mcporter.json cortex.search 'service:claude-code' limit=5

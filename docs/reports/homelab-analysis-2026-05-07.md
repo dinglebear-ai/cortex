@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Homelab Log Analysis Report
 **Period:** 2026-05-07 04:00 UTC → 2026-05-08 03:57 UTC (24 hours)
 **Generated:** 2026-05-08T04:00 UTC
@@ -255,7 +257,7 @@ These are well-known Ubuntu/snap packaging issues. The `firmware-updater.firmwar
 
 ### 10. 🟢 nashost — High-Volume SSH from 198.51.100.2 (Automation, Not Attack)
 
-At approximately 03:18 UTC, `nashost` received a burst of rapid-fire SSH connections from `198.51.100.2` (devhost's Tailscale IP), all authenticated via the same ED25519 key (`SHA256:1zMWu3LJd4ETzBOp7gV1Pdi4I3A2P5osYigv/LRCUxU`). Sessions opened and closed within milliseconds, consistent with SSH multiplexing or scripted parallelism (e.g., Ansible, fabric, or rsync-over-SSH). All authenticated successfully as `root`.
+At approximately 03:18 UTC, `nashost` received a burst of rapid-fire SSH connections from `198.51.100.2` (devhost's Tailscale IP), all authenticated via the same ED25519 key (`SHA256:REDACTED_SYNTHETIC_FINGERPRINT`). Sessions opened and closed within milliseconds, consistent with SSH multiplexing or scripted parallelism (e.g., Ansible, fabric, or rsync-over-SSH). All authenticated successfully as `root`.
 
 This appears to be legitimate automation from `devhost` → `nashost`. No concern, but worth noting that root-as-SSH-target is elevated risk if the key is ever compromised.
 

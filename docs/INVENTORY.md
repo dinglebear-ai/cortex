@@ -224,7 +224,7 @@ topology questions backed by the graph projection:
 
 ```json
 {"action":"map","mode":"host_services","host":"edgehost"}
-{"action":"map","mode":"domain_routes","domain":"adguard.example.internal"}
+{"action":"map","mode":"domain_routes","domain":"adguard.example.invalid"}
 {"action":"map","mode":"service_dependencies","host":"edgehost","service":"swag"}
 {"action":"map","mode":"findings","finding_limit":25}
 ```

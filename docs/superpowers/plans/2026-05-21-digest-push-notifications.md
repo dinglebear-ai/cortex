@@ -526,11 +526,11 @@ enabled = true
 apprise_url = "http://198.51.100.2:8766"
 # Add at least one Apprise URL so the dispatcher has somewhere to send alerts.
 # Examples:
-#   gotify://gotify.example.internal/<token>
+#   gotify://gotify.example.invalid/<token>
 #   ntfy://ntfy.sh/my-channel
 #   tgram://<bot-token>/<chat-id>
 apprise_urls = [
-  # "gotify://gotify.example.internal/<token>",
+  # "gotify://gotify.example.invalid/<token>",
 ]
 dispatcher_interval_secs = 30
 evaluator_interval_secs = 30
@@ -546,7 +546,7 @@ In `.env.example`, add (find the notifications section or add after the last ent
 
 ```bash
 # Notification delivery URLs for Apprise (JSON array, overrides config.toml apprise_urls).
-# Example: SYSLOG_MCP_APPRISE_URLS='["gotify://gotify.example.internal/TOKEN"]'
+# Example: SYSLOG_MCP_APPRISE_URLS='["gotify://gotify.example.invalid/TOKEN"]'
 # SYSLOG_MCP_APPRISE_URLS=
 ```
 

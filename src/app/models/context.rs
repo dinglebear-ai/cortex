@@ -28,6 +28,23 @@ pub struct GetLogResponse {
     pub log: LogEntryWithRaw,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeedLogsRequest {
+    /// Last Cortex log ID successfully consumed. When omitted, the feed starts
+    /// at the current high-water mark and returns only subsequently ingested rows.
+    pub after_id: Option<i64>,
+    pub host: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedLogsResponse {
+    pub logs: Vec<LogEntryWithRaw>,
+    pub next_after_id: i64,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntryWithRaw {
     pub id: i64,

@@ -14,7 +14,7 @@ fn normalizes_remote_docker_inspect() {
                 "Env": ["TOKEN=secret", "RUST_LOG=info"],
                 "Labels": {
                     "com.docker.compose.project": "axon",
-                    "traefik.http.routers.axon.rule": "Host(`axon.example.internal`)"
+                    "traefik.http.routers.axon.rule": "Host(`axon.example.invalid`)"
                 }
             },
             "State": {"Status": "running", "Health": {"Status": "healthy"}},
@@ -36,7 +36,7 @@ fn normalizes_remote_docker_inspect() {
         service
             .domains
             .iter()
-            .any(|domain| domain == "axon.example.internal")
+            .any(|domain| domain == "axon.example.invalid")
     );
     assert_eq!(out.networks[0].members, vec!["axon"]);
 }
@@ -46,7 +46,7 @@ fn normalizes_compact_inspect_lines() {
     let mut out = CollectorOutput::new("remote_docker");
     normalize_inspect_lines(
         "edgehost",
-        "\"abc\"\t\"/swag\"\t\"linuxserver/swag\"\t\"running\"\t\"\"\t{\"com.docker.compose.project\":\"swag\",\"traefik.http.routers.swag.rule\":\"Host(`swag.example.internal`)\"}\t{\"443/tcp\":[{\"HostIp\":\"0.0.0.0\",\"HostPort\":\"443\"}]}\t{\"proxy\":{}}\t[{\"Source\":\"/mnt/appdata/swag\",\"Destination\":\"/config\",\"RW\":true}]\t[\"URL=redacted\",\"PUID=99\"]\n",
+        "\"abc\"\t\"/swag\"\t\"linuxserver/swag\"\t\"running\"\t\"\"\t{\"com.docker.compose.project\":\"swag\",\"traefik.http.routers.swag.rule\":\"Host(`swag.example.invalid`)\"}\t{\"443/tcp\":[{\"HostIp\":\"0.0.0.0\",\"HostPort\":\"443\"}]}\t{\"proxy\":{}}\t[{\"Source\":\"/mnt/appdata/swag\",\"Destination\":\"/config\",\"RW\":true}]\t[\"URL=redacted\",\"PUID=99\"]\n",
         &mut out,
     );
 
@@ -59,6 +59,6 @@ fn normalizes_compact_inspect_lines() {
         service
             .domains
             .iter()
-            .any(|domain| domain == "swag.example.internal")
+            .any(|domain| domain == "swag.example.invalid")
     );
 }

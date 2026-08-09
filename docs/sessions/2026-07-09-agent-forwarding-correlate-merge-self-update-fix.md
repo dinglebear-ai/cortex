@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-07-09 21:53:37 EST
 repo: git@github.com:jmagar/cortex.git
@@ -114,7 +116,7 @@ Merged the `ask_history` MCP action into `correlate` (query-derived `reference_t
 | `rustc -O` scratch repro of the self-update collision | confirmed `hard_link`/`copy` both fail with ENOENT against a rewritten own-exe path |
 | `grep -a -c "current binary no longer exists" <binary>` (repeated across hosts) | verified fix presence before/after every deploy, never trusted version strings alone |
 | `ssh agent-os "MSYS_NO_PATHCONV=1 schtasks.exe /Create ..."` | Scheduled Task `CortexHeartbeatAgent` created successfully |
-| `curl https://cortex.example.internal/mcp ... action=fleet_state` | confirmed agent-os heartbeating as hostname `agent-os` after the hostname fix |
+| `curl https://cortex.example.invalid/mcp ... action=fleet_state` | confirmed agent-os heartbeating as hostname `agent-os` after the hostname fix |
 | `git push` (via automated session-close protocol) | pushed commits `9633617` and `c124114`; `git status` confirmed clean and up to date |
 
 ## Errors Encountered

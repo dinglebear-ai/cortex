@@ -1,7 +1,7 @@
 ---
 title: "MCP Tools Reference -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: "2026-08-04"
 ---
 
 # MCP Tools Reference -- cortex
@@ -262,7 +262,10 @@ List distinct AI projects with counts, tools used, and first/last seen timestamp
 
 Required argument: `action = "list_ai_projects"`
 
-Optional arguments: `tool`, `from`, `to`.
+Optional arguments: `tool`, `since`, `until`.
+
+The generated MCP schema rejects unsupported fields such as `limit` before
+dispatch.
 
 ## cortex correlate
 
@@ -461,20 +464,32 @@ Required argument: `action = "help"`
 
 ## Error Responses
 
-Errors follow the MCP content format with `isError: true`:
+Action validation and execution errors use MCP tool results with
+`isError: true`. Validation errors include the same JSON object in the text
+content and `structuredContent` so clients can recover without parsing prose:
 
 ```json
 {
   "content": [
-    {"type": "text", "text": "Tool execution failed"}
+    {
+      "type": "text",
+      "text": "{\"kind\":\"invalid_param\",\"message\":\"...\",\"action\":\"project_context\",\"retryable\":false}"
+    }
   ],
+  "structuredContent": {
+    "kind": "invalid_param",
+    "message": "invalid project_context arguments: unknown field `since`",
+    "action": "project_context",
+    "retryable": false
+  },
   "isError": true
 }
 ```
 
-JSON-RPC level errors use standard codes:
+JSON-RPC level errors are reserved for failures that prevent normal tool
+execution and use standard codes, including:
 
-- `-32602`: Missing or invalid parameter, such as an unknown action or missing `reference_time`
+- `-32602`: Malformed MCP method parameters that cannot be routed to normal tool execution
 - `-32601`: Unknown method
 - `-32001`: Unauthorized, missing, or invalid bearer token
 

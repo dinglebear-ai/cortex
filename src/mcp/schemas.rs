@@ -1,6 +1,6 @@
 use crate::app::topology_findings;
 use crate::app::{PATTERN_SCAN_LIMIT_MAX, SEVERITY_LEVELS};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::actions;
 
@@ -30,7 +30,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
     // Derive the `source_kinds` enum from the canonical SourceKind list so the
     // wire schema can never drift from `crate::enrich::parser::SourceKind`.
     let source_kind_wire_names = crate::enrich::parser::SourceKind::all_wire_names();
-    vec![json!({
+    let mut tool = json!({
         "name": "cortex",
         "description": description,
         "x-cortex-action-metadata": action_metadata,
@@ -105,7 +105,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "domain": {
                     "type": "string",
-                    "description": "For action=map mode=domain_routes: target domain, e.g. adguard.example.internal."
+                    "description": "For action=map mode=domain_routes: target domain, e.g. adguard.example.invalid."
                 },
                 "service": {
                     "type": "string",
@@ -599,7 +599,81 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 }
             ]
         }
-    })]
+    });
+    attach_action_contracts(&mut tool);
+    vec![tool]
+}
+
+fn attach_action_contracts(tool: &mut Value) {
+    let input_schema = tool
+        .get_mut("inputSchema")
+        .and_then(Value::as_object_mut)
+        .expect("cortex tool inputSchema must be an object");
+    let properties = input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("cortex tool properties must be an object")
+        .clone();
+
+    let mut branches = Vec::new();
+    let mut legacy_actions = Vec::new();
+    for spec in actions::ACTION_SPECS {
+        match spec.input_contract {
+            actions::ActionInputContract::LegacyFlat => legacy_actions.push(spec.name),
+            actions::ActionInputContract::Exact { allowed, required } => {
+                branches.push(exact_action_schema(
+                    spec.name,
+                    allowed,
+                    required,
+                    &properties,
+                ));
+            }
+        }
+    }
+    if !legacy_actions.is_empty() {
+        branches.push(json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": legacy_actions
+                }
+            },
+            "required": ["action"]
+        }));
+    }
+
+    input_schema.insert("oneOf".to_string(), Value::Array(branches));
+}
+
+fn exact_action_schema(
+    action: &str,
+    allowed: &[&str],
+    required: &[&str],
+    root_properties: &Map<String, Value>,
+) -> Value {
+    let mut properties = Map::new();
+    properties.insert("action".to_string(), json!({ "const": action }));
+    for field in allowed {
+        let property = root_properties
+            .get(*field)
+            .unwrap_or_else(|| panic!("exact action contract references unknown field: {}", field));
+        properties.insert((*field).to_string(), property.clone());
+    }
+
+    let mut required_fields = vec![Value::String("action".to_string())];
+    required_fields.extend(
+        required
+            .iter()
+            .map(|field| Value::String((*field).to_string())),
+    );
+
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required_fields
+    })
 }
 
 #[cfg(test)]

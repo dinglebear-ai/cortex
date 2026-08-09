@@ -661,7 +661,7 @@ grep -n "syslog\|SYSLOG" .claude-plugin/plugin.json
 Key fields to check:
 - `"name"` → should be `"cortex"` (was `"syslog"`)
 - `"repository"` → should be `https://github.com/jmagar/cortex`
-- `"id"` → should be `"tv.nashost/cortex"` (was `"tv.nashost/syslog-mcp"`)
+- `"id"` → should be `"ai.dinglebear/cortex"` (was `"tv.nashost/syslog-mcp"`)
 - `"mcpServers"` path → update `syslog` → `cortex` in the path string
 - `"hooks"` path → same
 - `"skills"` path → same

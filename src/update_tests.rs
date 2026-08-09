@@ -52,7 +52,7 @@ fn configure_test_clients_profile(path: &Path, hosts: Vec<String>) {
     configure_clients_profile(
         Some(path),
         hosts,
-        Some("https://cortex.example.internal".to_string()),
+        Some("https://cortex.example.invalid".to_string()),
         Some(true),
         None,
     )
@@ -87,7 +87,7 @@ fn update_profile_round_trips_server_and_clients() {
         }),
         clients: ClientsUpdateProfile {
             hosts: client_hosts(),
-            target: Some("https://cortex.example.internal".to_string()),
+            target: Some("https://cortex.example.invalid".to_string()),
             docker: Some(true),
             journald: None,
         },
@@ -109,7 +109,7 @@ fn configure_server_profile_validates_and_preserves_clients() {
             server: None,
             clients: ClientsUpdateProfile {
                 hosts: vec!["devhost".to_string()],
-                target: Some("https://cortex.example.internal".to_string()),
+                target: Some("https://cortex.example.invalid".to_string()),
                 docker: Some(true),
                 journald: Some(false),
             },
@@ -150,7 +150,7 @@ fn configure_clients_profile_merges_omitted_options() {
     configure_clients_profile(
         Some(&path),
         vec!["devhost".to_string()],
-        Some("https://cortex.example.internal".to_string()),
+        Some("https://cortex.example.invalid".to_string()),
         Some(true),
         Some(false),
     )
@@ -168,7 +168,7 @@ fn configure_clients_profile_merges_omitted_options() {
     assert_eq!(updated.clients.hosts, vec!["backuphost"]);
     assert_eq!(
         updated.clients.target.as_deref(),
-        Some("https://cortex.example.internal")
+        Some("https://cortex.example.invalid")
     );
     assert_eq!(updated.clients.docker, Some(true));
     assert_eq!(updated.clients.journald, Some(false));

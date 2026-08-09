@@ -698,7 +698,7 @@ fn mode_parse_accepts_update_config_clients() {
         "--hosts".into(),
         "devhost,backuphost".into(),
         "--target".into(),
-        "https://cortex.example.internal".into(),
+        "https://cortex.example.invalid".into(),
         "--docker".into(),
     ])
     .unwrap();
@@ -715,7 +715,7 @@ fn mode_parse_accepts_update_config_clients() {
             },
             json: false,
         }) if hosts == &vec!["devhost".to_string(), "backuphost".to_string()]
-             && target == "https://cortex.example.internal"
+             && target == "https://cortex.example.invalid"
     ));
 }
 

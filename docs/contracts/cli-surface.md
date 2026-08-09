@@ -48,7 +48,7 @@ This is the most important table for operators — it disambiguates where each c
 | `cortex agent rotate` | server | local SQLite | Returns new token; old hash in grace for 300s. |
 | `cortex agent tail` | server | local SQLite (`logs` view filtered to host) | Convenience wrapper over `cortex search host=...`. |
 | `cortex agent status` (server form) | server | local SQLite + live WS state | Same data as MCP `agent_status` action; omit `--host` for fleet. |
-| `cortex agent run` | client (per-host) | `wss://syslog.example.internal/ws/agent` | Long-lived daemon. |
+| `cortex agent run` | client (per-host) | `wss://syslog.example.invalid/ws/agent` | Long-lived daemon. |
 | `cortex agent enroll` | client | server WS endpoint | Performs one-time-token handshake. |
 | `cortex agent status` (client form) | client | local agent state + WS conn | Local-only; prints buffer depth, errors. |
 | `cortex pollers reset` | server | local SQLite (`poller_checkpoints` row delete) | |
@@ -157,7 +157,7 @@ cortex agent enroll <token> [--server-url <url>] [--host-id <uuid>]
 Accept a one-time token, perform handshake, store the rotated long-lived token in `~/.config/cortex/agent-token` (or `/etc/syslog-agent/token` if running as root).
 
 - `<token>` (positional, required): the one-time string printed by `cortex agent issue`.
-- `--server-url <url>` (optional): defaults to the value in config, or `wss://syslog.example.internal/ws/agent`.
+- `--server-url <url>` (optional): defaults to the value in config, or `wss://syslog.example.invalid/ws/agent`.
 - `--host-id <uuid>` (optional): supply an existing host_id; otherwise generate fresh and persist to `/var/lib/syslog-agent/host_id`.
 
 Exit codes: `0`, `1` (bad flags), `2` (handshake failed — token invalid or expired), `3` (host_id already enrolled with a different token).
@@ -174,7 +174,7 @@ Output (table form):
 
 ```
 state          : Active
-server         : wss://syslog.example.internal/ws/agent
+server         : wss://syslog.example.invalid/ws/agent
 session_id     : 9f3a-...
 last_push_at   : 2026-05-16T13:59:58Z
 acked_seq      : 14820112

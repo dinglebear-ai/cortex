@@ -15,7 +15,7 @@ updated: 2026-07-30
 
 ## 0 · context
 
-- **owner**: jacob · homelab `nashost.tv` · tailscale-meshed
+- **owner**: jacob · homelab `dinglebear.ai` · tailscale-meshed
 - **existing**: `cortex` (Rust/Axum + SQLite FTS5, custom MCP tools) ingesting
   - syslog/journald from limited hosts
   - container stdout via `dockersocketproxy` (not the docker syslog log driver — chosen for container-startup resilience and to avoid per-host fluent agents)
@@ -35,7 +35,7 @@ updated: 2026-07-30
 | **winhost** | Win11 + WSL Ubuntu 25 | primary workstation | i5 11th, 48GB, RTX 3050, 2TB nvme | — | 2.5GbE |
 | **laptophost** | Win11 + WSL Ubuntu 25 | mobile, parsec → winhost | i3 13th, 24GB, 1TB nvme | — | wifi 7 |
 
-**Network edge:** ATT BGW-320 → UCG-Max → 2.5GbE PoE switch + U7 Pro AP. Tailscale flat mesh across all 6 nodes. SWAG terminates `*.nashost.tv` on edgehost; non-public subdomains gated by Authelia + Duo 2FA.
+**Network edge:** ATT BGW-320 → UCG-Max → 2.5GbE PoE switch + U7 Pro AP. Tailscale flat mesh across all 6 nodes. SWAG terminates `*.dinglebear.ai` on edgehost; non-public subdomains gated by Authelia + Duo 2FA.
 
 **Snapshot chain:** nashost/devhost/edgehost → backuphost (hourly) → Google Drive (5TB offsite). Edgehost' ~30GB critical set replicated to every node. devhost repos additionally to nashost.
 

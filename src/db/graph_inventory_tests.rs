@@ -251,7 +251,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         host: Some("edgehost".to_string()),
         image: Some("lscr.io/linuxserver/swag:latest".to_string()),
         status: Some("running".to_string()),
-        domains: vec!["example.example.internal".to_string()],
+        domains: vec!["example.example.invalid".to_string()],
         ports: vec![PortMapping {
             host_ip: Some("0.0.0.0".to_string()),
             host_port: Some(443),
@@ -268,12 +268,12 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         provenance: provenance("compose:edgehost:/opt/edge/compose.yaml", "app_inventory"),
         services: vec!["swag".to_string()],
         compose_files: vec!["/opt/edge/compose.yaml".to_string()],
-        domains: vec!["example.example.internal".to_string()],
+        domains: vec!["example.example.invalid".to_string()],
         ports: Vec::new(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:example.example.internal".to_string(),
-        server_names: vec!["example.example.internal".to_string()],
+        id: "proxy:example.example.invalid".to_string(),
+        server_names: vec!["example.example.invalid".to_string()],
         upstreams: vec!["swag:443".to_string()],
         provenance: provenance("swag:edgehost:/config/nginx/proxy.conf", "app_inventory"),
     });
@@ -316,7 +316,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entity_aliases
-             WHERE alias_type = 'domain' AND alias_key = 'example.example.internal'"
+             WHERE alias_type = 'domain' AND alias_key = 'example.example.invalid'"
         ),
         1
     );
@@ -332,7 +332,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-             WHERE entity_type = 'reverse_proxy' AND canonical_key = 'proxy:example.example.internal'"
+             WHERE entity_type = 'reverse_proxy' AND canonical_key = 'proxy:example.example.invalid'"
         ),
         1
     );
@@ -340,7 +340,7 @@ fn project_inventory_adds_topology_entities_relationships_and_evidence() {
         count(
             &conn,
             "SELECT COUNT(*) FROM graph_entities
-             WHERE entity_type = 'domain' AND canonical_key = 'example.example.internal'"
+             WHERE entity_type = 'domain' AND canonical_key = 'example.example.invalid'"
         ),
         1
     );
@@ -550,8 +550,8 @@ fn project_inventory_does_not_route_to_ambiguous_service_name() {
         });
     }
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:ambiguous.example.internal".to_string(),
-        server_names: vec!["ambiguous.example.internal".to_string()],
+        id: "proxy:ambiguous.example.invalid".to_string(),
+        server_names: vec!["ambiguous.example.invalid".to_string()],
         upstreams: vec!["swag:443".to_string()],
         provenance: provenance("swag:/config/nginx/proxy.conf", "app_inventory"),
     });
@@ -608,8 +608,8 @@ fn project_inventory_routes_to_service_name_beginning_with_http() {
         details: Default::default(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:http-api.example.internal".to_string(),
-        server_names: vec!["http-api.example.internal".to_string()],
+        id: "proxy:http-api.example.invalid".to_string(),
+        server_names: vec!["http-api.example.invalid".to_string()],
         upstreams: vec!["http://http-api:8080".to_string()],
         provenance: provenance("swag:edgehost:/config/nginx/proxy.conf", "app_inventory"),
     });
@@ -934,7 +934,7 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
         host: Some("nashost".to_string()),
         image: Some("lscr.io/linuxserver/plex:latest".to_string()),
         status: Some("running".to_string()),
-        domains: vec!["plex.example.internal".to_string()],
+        domains: vec!["plex.example.invalid".to_string()],
         ports: vec![PortMapping {
             host_ip: Some("0.0.0.0".to_string()),
             host_port: Some(32400),
@@ -959,8 +959,8 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
         ports: Vec::new(),
     });
     inventory.reverse_proxies.push(ReverseProxyRoute {
-        id: "proxy:plex.example.internal".to_string(),
-        server_names: vec!["plex.example.internal".to_string()],
+        id: "proxy:plex.example.invalid".to_string(),
+        server_names: vec!["plex.example.invalid".to_string()],
         upstreams: vec!["plex:32400".to_string()],
         provenance: provenance("swag:nashost:/config/nginx/plex.conf", "app_inventory"),
     });

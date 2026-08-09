@@ -62,7 +62,7 @@ truth for hermetic and live release gates.
 - [ ] `mcpb/manifest.json` is valid JSON with matching package metadata
 - [ ] OCI image published to `ghcr.io/dinglebear-ai/cortex`
 - [ ] Crate published to crates.io (if applicable)
-- [ ] DNS verification for `tv.nashost/cortex`
+- [ ] DNS verification for `ai.dinglebear/cortex`
 
 ## Marketplace (if applicable)
 

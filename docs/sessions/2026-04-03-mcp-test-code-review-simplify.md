@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Session: MCP Tool Test, Code Review, and Simplify
 
 **Date:** 2026-04-03
@@ -16,7 +18,7 @@ End-to-end quality pass on the syslog-mcp codebase: live smoke-tested all six MC
 
 | Time | Activity |
 |------|----------|
-| Start | OAuth auth flow for `syslog.example.internal` MCP endpoint |
+| Start | OAuth auth flow for `syslog.example.invalid` MCP endpoint |
 | +5 min | Live tool test: all 6 MCP tools exercised against production DB |
 | +15 min | `/beagle-rust:review-rust` — loaded 4 skills, reviewed 5 source files |
 | +35 min | `rust-pro` agent dispatched to fix all 6 review findings |
@@ -71,7 +73,7 @@ End-to-end quality pass on the syslog-mcp codebase: live smoke-tested all six MC
 
 ```bash
 # Live tool test
-curl -s https://syslog.example.internal/health
+curl -s https://syslog.example.invalid/health
 # → {"status":"ok"}
 
 # MCP tools via OAuth-authenticated session
@@ -110,7 +112,7 @@ rtk cargo test
 |---------|----------|--------|--------|
 | `cargo clippy --all-targets --all-features -- -D warnings` | No errors | No issues found | ✅ |
 | `cargo test` | 70 passed | 70 passed (0.31s) | ✅ |
-| `curl https://syslog.example.internal/health` | `{"status":"ok"}` | `{"status":"ok"}` | ✅ |
+| `curl https://syslog.example.invalid/health` | `{"status":"ok"}` | `{"status":"ok"}` | ✅ |
 | `mcp__syslog-mcp__get_stats` | DB stats returned | 4.9M logs, 22 hosts | ✅ |
 | `mcp__syslog-mcp__tail_logs` | 5 recent entries | 5 entries returned | ✅ |
 | `mcp__syslog-mcp__search_logs query=error` | FTS5 results | 3 results returned | ✅ |

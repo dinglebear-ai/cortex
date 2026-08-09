@@ -1,4 +1,5 @@
 use super::*;
+use bollard::models::{EventActor, EventMessage};
 
 #[test]
 fn container_display_name_prefers_first_docker_name_without_leading_slash() {
@@ -166,4 +167,84 @@ fn long_compose_app_name_still_has_structured_metadata() {
         metadata["agent_docker"]["compose_service"],
         "very-long-plex-service-name-that-exceeds-the-forty-eight-byte-app-name-limit"
     );
+}
+
+#[test]
+fn docker_die_event_is_rendered_with_lifecycle_metadata() {
+    let attributes = HashMap::from([
+        ("name".to_string(), "plex".to_string()),
+        ("image".to_string(), "plex:latest".to_string()),
+        ("com.docker.compose.project".to_string(), "plex".to_string()),
+        ("com.docker.compose.service".to_string(), "plex".to_string()),
+        ("exitCode".to_string(), "137".to_string()),
+    ]);
+    let event = EventMessage {
+        action: Some("die".to_string()),
+        actor: Some(EventActor {
+            id: Some("abcdef1234567890".to_string()),
+            attributes: Some(attributes),
+        }),
+        time_nano: Some(1_777_942_923_123_456_789),
+        ..Default::default()
+    };
+
+    let line = docker_event_line("nashost", &event).expect("supported lifecycle event");
+    assert!(line.contains("2026-05-05T01:02:03.123456789Z"));
+    assert!(line.contains("docker container event: die container=plex"));
+    assert!(line.contains("\"stream\":\"event\""));
+    assert!(line.contains("\"event_action\":\"die\""));
+    assert!(line.contains("\"exit_code\":137"));
+}
+
+fn lifecycle_event(action: &str, exit_code: Option<i32>) -> EventMessage {
+    let mut attributes = HashMap::from([("name".to_string(), "plex".to_string())]);
+    if let Some(code) = exit_code {
+        attributes.insert("exitCode".to_string(), code.to_string());
+    }
+    EventMessage {
+        action: Some(action.to_string()),
+        actor: Some(EventActor {
+            id: Some("abcdef1234567890".to_string()),
+            attributes: Some(attributes),
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn forwarded_health_action_uses_canonical_collapsed_normalization() {
+    let line = docker_event_line(
+        "nashost",
+        &lifecycle_event("health_status:   unhealthy", None),
+    )
+    .unwrap();
+    assert!(
+        line.starts_with("<132>"),
+        "unhealthy must be warning: {line}"
+    );
+    assert!(line.contains("\"event_action\":\"health_status_unhealthy\""));
+    assert!(line.contains("docker container event: health_status_unhealthy"));
+}
+
+#[test]
+fn forwarded_event_severity_matches_canonical_mapping() {
+    for (action, exit_code, pri) in [
+        ("create", None, 133),
+        ("start", None, 133),
+        ("restart", None, 132),
+        ("die", Some(0), 133),
+        ("die", Some(137), 132),
+        ("oom", None, 131),
+        ("health_status: healthy", None, 133),
+        ("health_status: unhealthy", None, 132),
+    ] {
+        let line = docker_event_line("nashost", &lifecycle_event(action, exit_code)).unwrap();
+        assert!(line.starts_with(&format!("<{pri}>")), "{action}: {line}");
+    }
+}
+
+#[test]
+fn clean_event_stream_eof_is_a_restartable_error() {
+    let error = event_stream_ended().unwrap_err();
+    assert!(error.to_string().contains("ended unexpectedly"));
 }

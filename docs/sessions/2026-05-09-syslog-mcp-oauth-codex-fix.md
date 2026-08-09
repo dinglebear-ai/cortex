@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 ---
 date: 2026-05-09 01:46:00 EST
 repo: https://github.com/jmagar/syslog-mcp
@@ -40,7 +42,7 @@ The OAuth discovery issue was fixed and deployed. The live `syslog-mcp` containe
 ## Technical Decisions
 
 - Kept one canonical runtime `.env` for plugin Docker deployment instead of preserving separate `syslog-mcp.env`-style override files.
-- Kept OAuth active on `syslog.example.internal` because the reverse proxy was restored and Codex needs server-side OAuth discovery at the MCP path.
+- Kept OAuth active on `syslog.example.invalid` because the reverse proxy was restored and Codex needs server-side OAuth discovery at the MCP path.
 - Made local Docker builds opt-in with `CLAUDE_PLUGIN_OPTION_BUILD_LOCAL=true` so plugin setup is stable for users and still supports source development.
 - Mapped `status` to `syslog:read` instead of making it unauthenticated, because it exposes runtime status and should behave like the other read-only MCP actions.
 
@@ -85,8 +87,8 @@ The OAuth discovery issue was fixed and deployed. The live `syslog-mcp` containe
 | --- | --- | --- | --- |
 | `docker exec syslog-mcp syslog --version` | running deployed version | `syslog-mcp 0.17.5` | PASS |
 | `docker inspect syslog-mcp --format ...` | healthy live container | `Health=healthy`, `RestartCount=0`, started `2026-05-09T02:55:50Z` | PASS |
-| `curl https://syslog.example.internal/mcp/.well-known/oauth-authorization-server` | OAuth issuer and endpoints | issuer `https://syslog.example.internal`, authorize/token/register endpoints present | PASS |
-| unauthenticated `POST https://syslog.example.internal/mcp` | `401` with protected-resource metadata | `401`, `WWW-Authenticate: Bearer resource_metadata="https://syslog.example.internal/mcp/.well-known/oauth-protected-resource"` | PASS |
+| `curl https://syslog.example.invalid/mcp/.well-known/oauth-authorization-server` | OAuth issuer and endpoints | issuer `https://syslog.example.invalid`, authorize/token/register endpoints present | PASS |
+| unauthenticated `POST https://syslog.example.invalid/mcp` | `401` with protected-resource metadata | `401`, `WWW-Authenticate: Bearer resource_metadata="https://syslog.example.invalid/mcp/.well-known/oauth-protected-resource"` | PASS |
 | `timeout 25s codex mcp login syslog` | no discovery error | printed browser authorization URL; timed out only because browser completion was not performed | PASS |
 | `cargo test` | all tests pass locally | 285 lib tests, 9 main tests, and integration tests passed | PASS |
 | `cargo clippy -- -D warnings` | no warnings | completed successfully | PASS |
@@ -114,7 +116,7 @@ The OAuth discovery issue was fixed and deployed. The live `syslog-mcp` containe
 ## Open Questions
 
 - Whether to suppress, document, or eliminate the `rsa` RustSec advisory from the `lab-auth` / `jsonwebtoken` dependency path.
-- Whether the eventual gateway at `mcp.example.internal/syslog` should be modeled as a generic upstream MCP registration flow instead of service-specific OAuth wiring.
+- Whether the eventual gateway at `mcp.example.invalid/syslog` should be modeled as a generic upstream MCP registration flow instead of service-specific OAuth wiring.
 
 ## Next Steps
 

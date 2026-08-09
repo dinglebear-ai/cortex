@@ -79,7 +79,7 @@ fn update_profile_round_trips_server_and_clients() {
         }),
         clients: ClientsUpdateProfile {
             hosts: vec!["devhost".to_string(), "backuphost".to_string()],
-            target: Some("https://cortex.example.internal".to_string()),
+            target: Some("https://cortex.example.invalid".to_string()),
             docker: Some(true),
             journald: None,
         },
@@ -101,7 +101,7 @@ fn configure_server_profile_validates_and_preserves_clients() {
             server: None,
             clients: ClientsUpdateProfile {
                 hosts: vec!["devhost".to_string()],
-                target: Some("https://cortex.example.internal".to_string()),
+                target: Some("https://cortex.example.invalid".to_string()),
                 docker: Some(true),
                 journald: Some(false),
             },
@@ -451,7 +451,7 @@ fn update_clients_deploys_every_configured_client() {
     configure_clients_profile(
         Some(&path),
         vec!["devhost".to_string(), "backuphost".to_string()],
-        Some("https://cortex.example.internal".to_string()),
+        Some("https://cortex.example.invalid".to_string()),
         Some(true),
         None,
     )
@@ -482,7 +482,7 @@ fn update_all_stops_before_clients_when_server_fails() {
     configure_clients_profile(
         Some(&path),
         vec!["devhost".to_string()],
-        Some("https://cortex.example.internal".to_string()),
+        Some("https://cortex.example.invalid".to_string()),
         None,
         None,
     )
@@ -842,7 +842,7 @@ fn mode_parse_accepts_update_config_clients() {
         "--hosts".into(),
         "devhost,backuphost".into(),
         "--target".into(),
-        "https://cortex.example.internal".into(),
+        "https://cortex.example.invalid".into(),
         "--docker".into(),
     ])
     .unwrap();
@@ -859,7 +859,7 @@ fn mode_parse_accepts_update_config_clients() {
             },
             json: false,
         }) if hosts == &vec!["devhost".to_string(), "backuphost".to_string()]
-             && target == "https://cortex.example.internal"
+             && target == "https://cortex.example.invalid"
     ));
 }
 ```
@@ -1360,7 +1360,7 @@ Configure the update profile once:
 
 ```bash
 cortex update config server --host nashost --home /mnt/cache/appdata/cortex
-cortex update config clients --hosts devhost,backuphost,edgehost --target https://cortex.example.internal --docker
+cortex update config clients --hosts devhost,backuphost,edgehost --target https://cortex.example.invalid --docker
 ```
 
 The profile lives at `~/.cortex/deployments.toml` by default. A successful

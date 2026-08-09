@@ -233,7 +233,7 @@ logs a `WARN` with the exact bind address and a pointer to set
 
 ## 10. Reverse proxy guidance
 
-Production deployments terminate TLS at SWAG (`syslog.example.internal`) and forward
+Production deployments terminate TLS at SWAG (`syslog.example.invalid`) and forward
 to cortex on its plaintext bind. SWAG MUST:
 
 - Preserve `Host` so `[mcp.auth].public_url` matches.
@@ -250,7 +250,7 @@ to cortex on its plaintext bind. SWAG MUST:
 - Optionally apply a `limit_req` zone keyed by client IP on `/mcp` and
   `/v1/logs` to compensate for the absent app-layer rate limit (§7).
 
-The agent talks `wss://syslog.example.internal/ws/agent`. Loopback `ws://` is only
+The agent talks `wss://syslog.example.invalid/ws/agent`. Loopback `ws://` is only
 permitted when `agent.allow_insecure = true` (refused if bind is
 non-loopback) — see `agent-protocol.md` §2.
 

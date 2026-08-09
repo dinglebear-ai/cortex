@@ -24,7 +24,7 @@ The agent must:
 - **Not** replacing the UDP/TCP syslog listener. Routers, switches, printers, embedded gear, and anything else that can't run the agent continue to land on `:1514` exactly as today.
 - **Not** designing the probe registry contents. This spec only defines the RPC plumbing that carries probe requests/responses.
 - **Not** redesigning storage, FTS5, retention, or the SQL schema for `logs`. Agent rows tag themselves via `source_kind="agent"` and otherwise use the existing path.
-- **Not** TLS termination inside the agent or server in v1. Production deployments terminate `wss://` at SWAG (reverse proxy) on `nashost`; agents speak `wss://syslog.example.internal/ws/agent`. Loopback `ws://` is permitted for dev.
+- **Not** TLS termination inside the agent or server in v1. Production deployments terminate `wss://` at SWAG (reverse proxy) on `nashost`; agents speak `wss://syslog.example.invalid/ws/agent`. Loopback `ws://` is permitted for dev.
 
 ---
 

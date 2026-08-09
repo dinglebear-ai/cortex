@@ -109,7 +109,7 @@ apprise_url = "http://198.51.100.2:8766"
 # The dispatcher will silently no-op if empty (startup validation rejects
 # enabled=true with an empty list — set enabled=false if intentionally skipping).
 # Examples:
-#   "gotify://gotify.example.internal/<token>"
+#   "gotify://gotify.example.invalid/<token>"
 #   "ntfy://ntfy.sh/my-channel"
 #   "tgram://<bot-token>/<chat-id>"
 apprise_urls = []

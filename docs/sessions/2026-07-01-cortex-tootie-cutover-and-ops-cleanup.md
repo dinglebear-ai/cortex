@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # 2026-07-01 Cortex Nashost Cutover and Ops Cleanup
 
 ## Metadata
@@ -33,10 +35,10 @@ Production deployment:
 
 Routing and agents:
 
-- Updated SWAG on edgehost so `cortex.example.internal` upstreams to nashost LAN address `192.0.2.2` instead of devhost `198.51.100.1`.
+- Updated SWAG on edgehost so `cortex.example.invalid` upstreams to nashost LAN address `192.0.2.2` instead of devhost `198.51.100.1`.
 - Ran `nginx -t` and reloaded SWAG after the upstream change.
 - Repointed Linux/WSL agents to production Cortex:
-  - devhost, edgehost, winhost-wsl, and laptophost-wsl now use `CORTEX_HEARTBEAT_TARGET=https://cortex.example.internal` and `CORTEX_SYSLOG_TARGET=192.0.2.2:1514`.
+  - devhost, edgehost, winhost-wsl, and laptophost-wsl now use `CORTEX_HEARTBEAT_TARGET=https://cortex.example.invalid` and `CORTEX_SYSLOG_TARGET=192.0.2.2:1514`.
   - nashost agent sends to `127.0.0.1:1514`.
   - backuphost agent sends to `192.0.2.2:1514`.
 - Updated nashost and backuphost agent containers to `ghcr.io/jmagar/cortex:3.1.3`.
@@ -60,7 +62,7 @@ Beads:
 
 ## Verification Evidence
 
-- `curl -k -fsS https://cortex.example.internal/health` returned `{"status":"ok"}`.
+- `curl -k -fsS https://cortex.example.invalid/health` returned `{"status":"ok"}`.
 - MCP `status` succeeded with `db_ok=true`, TCP and UDP listeners alive, queue utilization `0.00`, and no write failures.
 - Fleet state reached `6/6` hosts with heartbeats ok during the cutover verification.
 - Later fleet state after cleanup showed 6 hosts total, 5 ok, 1 pressure, 0 late, and 0 partial; the remaining pressure was `devhost` swap pressure, not an ingest outage.
@@ -86,7 +88,7 @@ ssh edgehost
 ssh backuphost
 ssh devhost
 
-curl -k -fsS https://cortex.example.internal/health
+curl -k -fsS https://cortex.example.invalid/health
 
 cortex tail -n 25 --json
 cortex analysis errors --since 15m --limit 20 --json

@@ -1456,7 +1456,7 @@ fn inventory_projection_links_service_instance_to_host_storage_compose_and_route
         host: Some("nashost".to_string()),
         image: Some("lscr.io/linuxserver/plex:latest".to_string()),
         ports: vec![PortMapping { host: Some(32400), container: Some(32400), protocol: Some("tcp".to_string()) }],
-        domains: vec!["plex.example.internal".to_string()],
+        domains: vec!["plex.example.invalid".to_string()],
         mounts: Vec::new(),
         trust_level: TrustLevel::Observed,
         provenance: provenance("ssh:nashost", "app_inventory"),

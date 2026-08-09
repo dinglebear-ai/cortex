@@ -46,10 +46,10 @@ fn join_url_normalizes_slashes() {
     );
     assert_eq!(
         join_url(
-            "https://cortex.example.internal",
+            "https://cortex.example.invalid",
             "/v1/agent/binary?os=linux&arch=x86_64"
         ),
-        "https://cortex.example.internal/v1/agent/binary?os=linux&arch=x86_64"
+        "https://cortex.example.invalid/v1/agent/binary?os=linux&arch=x86_64"
     );
 }
 

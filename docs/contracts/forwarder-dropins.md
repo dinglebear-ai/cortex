@@ -34,11 +34,11 @@ Pick the **first** option that fits the host:
 
 | Host type                                                 | Recommended path                                                                                                            |
 | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Linux host where you can install a binary (`nashost`'s peers) | **Direct WSS agent** (§8). Gets you bidirectional control, probes, metrics, durable local buffer.                            |
+| Linux host where you can install a binary (`<CORTEX_HOST>`'s peers) | **Direct WSS agent** (§8). Gets you bidirectional control, probes, metrics, durable local buffer.                            |
 | Linux host with rsyslog already present and no agent      | **rsyslog → `:1514`** (Template A or B in §6).                                                                              |
 | Linux host with syslog-ng instead of rsyslog              | **syslog-ng → `:1514`** (Template D).                                                                                       |
-| WSL2 host (winhost-wsl, laptophost-wsl)                      | **rsyslog → Tailscale IP** (Template E). Requires `[boot] systemd=true` in `/etc/wsl.conf`.                                  |
-| AI transcript hosts (devhost, edgehost, winhost-wsl, laptophost-wsl) | rsyslog `imfile` drop-in tailing `~/.claude/projects/*/*.jsonl`, etc. (`deploy/rsyslog/40-ai-transcripts.conf`). |
+| WSL2 host (<WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>)                      | **rsyslog → Tailscale IP** (Template E). Requires `[boot] systemd=true` in `/etc/wsl.conf`.                                  |
+| AI transcript hosts (<DEV_HOST>, <EDGE_HOST>, <WINDOWS_WSL_HOST>, <LAPTOP_WSL_HOST>) | rsyslog `imfile` drop-in tailing `~/.claude/projects/*/*.jsonl`, etc. (`deploy/rsyslog/40-ai-transcripts.conf`). |
 | OTel-instrumented apps (Claude Code, Codex)               | **OTLP → `POST /v1/logs`** with Bearer token. See `deploy/otel/`.                                                            |
 | Network gear (UniFi, switches, printers, routers)         | **UDP RFC 3164 → `:1514`** only. No agent option. Source IP gating recommended.                                              |
 | Stateful APIs with no log stream (UniFi controller, AdGuard Home) | **server-side poller** (Epic `cortex-awvr`). No host config — see `docs/superpowers/specs/2026-05-16-api-pollers-design.md`. |
@@ -85,8 +85,8 @@ writing or pushing a drop-in by hand.
 
 ## 6. Canonical templates
 
-For each template, `<SERVER>` is the cortex host (`nashost` LAN IP, the
-Tailscale IP `198.51.100.1`, or `syslog.example.internal` if DNS resolves on the
+For each template, `<SERVER>` is the cortex host (`<CORTEX_HOST>` LAN IP, the
+Tailscale IP `<CORTEX_SERVER_IP>`, or `syslog.example.invalid` if DNS resolves on the
 sender). `<PORT>` is `mcp.syslog_port` (default `1514`).
 
 ### Template A — rsyslog TCP forward (preferred)
@@ -178,12 +178,12 @@ loopback — `127.0.0.1:1514` on WSL is not the cortex host. Two viable
 options:
 
 1. **Tailscale (recommended).** Install Tailscale inside WSL, join the
-   tailnet, point at the server's Tailscale IP. Example for nashost:
+   tailnet, point at the server's Tailscale IP. Example for <CORTEX_HOST>:
 
    ```rsyslog
    # /etc/rsyslog.d/99-cortex.conf
    if ($programname == "syslog" or $programname == "rsyslogd") then stop
-   *.* @@198.51.100.1:1514
+   *.* @@<CORTEX_SERVER_IP>:1514
    ```
 
 2. **WSL eth0 → Windows host IP.** Use the host's LAN IP (which WSL CAN
@@ -204,7 +204,7 @@ On Ubuntu/Debian hosts with AppArmor in enforcing mode, the default
 the homelab service paths under `/mnt/appdata/**` or user transcript paths
 under `~/.claude`, `~/.codex`, `~/.gemini`. The local override at
 `deploy/apparmor/usr.sbin.rsyslogd.cortex` extends the profile with
-exactly the paths used by the file-tail drop-ins on edgehost.
+exactly the paths used by the file-tail drop-ins on <EDGE_HOST>.
 
 Install:
 
@@ -217,21 +217,21 @@ sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.rsyslogd
 
 The profile is only needed on hosts that run file-tail drop-ins outside
 `/var/log/**`. Pure network-forwarder hosts don't need it. The file in the
-repo is edgehost-specific; adapt the path list if you're adding a new
+repo is <EDGE_HOST>-specific; adapt the path list if you're adding a new
 file-tail source on another host.
 
 ## 8. Agent enrollment flow (Epic A)
 
 UX for installing the WSS agent on a new host. The agent talks
-`wss://syslog.example.internal/ws/agent` and authenticates with a per-host
+`wss://syslog.example.invalid/ws/agent` and authenticates with a per-host
 long-lived token (BLAKE3-hashed server-side). See
 [`agent-protocol.md`](agent-protocol.md) §3 for the wire-level handshake.
 
-### Step 1 — Server (on `nashost`): issue a one-time enrollment token
+### Step 1 — Server (on `<CORTEX_HOST>`): issue a one-time enrollment token
 
 ```bash
 # Single host
-cortex agent issue --host=devhost
+cortex agent issue --host=<DEV_HOST>
 
 # Output (token is shown ONCE; re-run if lost):
 #   host_id:       2b9a0b3a-7e3c-4d2a-9c0e-9bbf5d3a1f01
@@ -252,7 +252,7 @@ preferred mechanism (cargo install, deb, or direct binary drop into
 ### Step 3 — Target host: enroll with the one-time token
 
 ```bash
-sudo syslog agent enroll <enrollment_token> --server=wss://syslog.example.internal/ws/agent
+sudo syslog agent enroll <enrollment_token> --server=wss://syslog.example.invalid/ws/agent
 ```
 
 The enroll subcommand:
@@ -320,7 +320,7 @@ cortex agent list
 
 # Expected:
 #   host_id                                hostname        state    last_seen
-#   2b9a0b3a-7e3c-4d2a-9c0e-9bbf5d3a1f01   devhost          Active   2026-05-16T19:43:01Z
+#   2b9a0b3a-7e3c-4d2a-9c0e-9bbf5d3a1f01   <DEV_HOST>          Active   2026-05-16T19:43:01Z
 ```
 
 The `Active` state is set when `agent.hello` succeeds and the WebSocket
@@ -408,12 +408,12 @@ under "Infrastructure & Deployment". Snapshot at time of writing:
 
 | Host          | Forwarding path                                                                                          |
 | ------------- | -------------------------------------------------------------------------------------------------------- |
-| `nashost`      | **Server itself.** Hosts the listener, MCP server, and (planned) agent endpoint. No drop-in.              |
-| `devhost`      | rsyslog TCP → `:1514` (Template A) + `deploy/rsyslog/10-imjournal.conf` + AI transcripts drop-in.        |
-| `edgehost`     | rsyslog TCP → `:1514` (Template A) + imjournal + AppArmor override + SWAG, Authelia, AdGuard file tails. |
-| `winhost-wsl`  | rsyslog TCP → `198.51.100.1:1514` (Template E, Tailscale) + imjournal + AI transcripts.                  |
-| `laptophost-wsl`| rsyslog TCP → `198.51.100.1:1514` (Template E, Tailscale) + imjournal + AI transcripts.                  |
-| `BACKUPHOST`       | rsyslog TCP → `:1514` (Template A).                                                                       |
+| `<CORTEX_HOST>`      | **Server itself.** Hosts the listener, MCP server, and (planned) agent endpoint. No drop-in.              |
+| `<DEV_HOST>`      | rsyslog TCP → `:1514` (Template A) + `deploy/rsyslog/10-imjournal.conf` + AI transcripts drop-in.        |
+| `<EDGE_HOST>`     | rsyslog TCP → `:1514` (Template A) + imjournal + AppArmor override + SWAG, Authelia, AdGuard file tails. |
+| `<WINDOWS_WSL_HOST>`  | rsyslog TCP → `<CORTEX_SERVER_IP>:1514` (Template E, Tailscale) + imjournal + AI transcripts.                  |
+| `<LAPTOP_WSL_HOST>`| rsyslog TCP → `<CORTEX_SERVER_IP>:1514` (Template E, Tailscale) + imjournal + AI transcripts.                  |
+| `<BACKUP_HOST>`       | rsyslog TCP → `:1514` (Template A).                                                                       |
 
 When the agent rollout (Epic A) ships, migrate each Linux host above from
 the rsyslog drop-in to the WSS agent. The rsyslog drop-in stays in place for
@@ -429,8 +429,8 @@ fallback during the cutover, then is removed via §10.
 |                                          | (d) `cortex hosts` — does `<host>` appear in the known-hosts list at all?                                |
 |                                          | (e) `cortex silent_hosts` — is it a known host that's gone quiet?                                       |
 | Loop / message storm                     | The self-loop filter from §5 is missing or out of order. Inspect `/etc/rsyslog.d/99-cortex.conf`.   |
-| WSL host can't reach `nashost`            | Confirm Tailscale up: `tailscale status` inside WSL. Use Template E with the Tailscale IP.               |
-| AppArmor blocks file tail on edgehost     | `sudo aa-status` then `sudo dmesg | grep DENIED` — install the override from §7 and reload.              |
+| WSL host can't reach `<CORTEX_HOST>`            | Confirm Tailscale up: `tailscale status` inside WSL. Use Template E with the Tailscale IP.               |
+| AppArmor blocks file tail on <EDGE_HOST>     | `sudo aa-status` then `sudo dmesg | grep DENIED` — install the override from §7 and reload.              |
 | OTLP `/v1/logs` returns 401              | `Authorization: Bearer <CORTEX_TOKEN>` not set or wrong. Check `curl -s http://<server>:3100/health` works without auth, then add the header. |
 | OTLP `/v1/logs` returns 413              | Payload exceeded 4 MiB. Reduce OTel exporter batch size (`OTEL_EXPORTER_OTLP_LOGS_TIMEOUT` / batch size). Note the `Retry-After: 86400` — exporters will back off for a day. |
 | OTLP `/v1/logs` returns 503              | Server ingest channel saturated. Either the listener is offline (check `cortex db status`) or the writer task crashed (check `cortex` container logs). |

@@ -1,3 +1,5 @@
+> **Redaction notice:** Private infrastructure identifiers in this historical record are replaced with stable pseudonyms and non-routable documentation addresses. Commands and observed outcomes describe the original environment; see [the redaction policy](../REDACTION.md).
+
 # Session: Build, Run, and Proxy Debug
 
 **Date:** 2026-03-28
@@ -12,7 +14,7 @@ Built and ran the syslog-mcp binary directly (outside Docker), fixed two bugs:
 1. MCP OAuth discovery returned an empty 404 body causing client JSON parse errors
 2. SWAG nginx proxy pointed to wrong IP (`192.0.2.8`) and wrong port (`8005`) instead of `192.0.2.6:3100`
 
-Both fixes resulted in a working authenticated connection from claude.ai to `https://syslog.example.internal/mcp`.
+Both fixes resulted in a working authenticated connection from claude.ai to `https://syslog.example.invalid/mcp`.
 
 ---
 
@@ -92,8 +94,8 @@ ss -tlnp | grep -E '3100|1514'
 |----------|--------|-------|
 | `/.well-known/oauth-authorization-server` | `404` empty body → client parse error | `404` `{"error":"not_found"}` → client proceeds without auth |
 | Any unknown path | `404` empty body | `404` `{"error":"not_found"}` |
-| `https://syslog.example.internal/mcp` | Proxied to `192.0.2.8:8005` (wrong host/port) | Proxied to `192.0.2.6:3100` (correct) |
-| `https://syslog.example.internal/` | Authelia auth → HTML redirect on 401 | OAuth gateway auth → JSON 401 |
+| `https://syslog.example.invalid/mcp` | Proxied to `192.0.2.8:8005` (wrong host/port) | Proxied to `192.0.2.6:3100` (correct) |
+| `https://syslog.example.invalid/` | Authelia auth → HTML redirect on 401 | OAuth gateway auth → JSON 401 |
 
 ---
 
@@ -104,7 +106,7 @@ ss -tlnp | grep -E '3100|1514'
 | `curl http://localhost:3100/health` | `{"status":"ok",...}` | `{"status":"ok","stats":{"total_logs":213778,...}}` | ✅ |
 | `curl http://localhost:3100/.well-known/oauth-authorization-server` | JSON body | `{"error":"not_found"}` | ✅ |
 | `ss -tlnp \| grep 3100` | `0.0.0.0:3100` | `0.0.0.0:3100` bound | ✅ |
-| SWAG health_check `syslog.example.internal` | `200` | `200` (436ms) | ✅ |
+| SWAG health_check `syslog.example.invalid` | `200` | `200` (436ms) | ✅ |
 | claude.ai `/mcp` reconnect | Connected | User confirmed working | ✅ |
 
 ---

@@ -858,7 +858,7 @@ once:
 
 ```bash
 cortex update config server --host nashost --home /mnt/cache/appdata/cortex
-cortex update config clients --hosts devhost,backuphost,edgehost --target https://cortex.example.internal --docker
+cortex update config clients --hosts devhost,backuphost,edgehost --target https://cortex.example.invalid --docker
 ```
 
 The profile lives at `~/.cortex/deployments.toml` by default. A successful

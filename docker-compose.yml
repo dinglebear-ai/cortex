@@ -52,7 +52,8 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
-      - "devhost:198.51.100.1"
+      # Optional fleet aliases belong in a deployment-local Compose override.
+      # Do not put synthetic documentation addresses in active routing config.
     ulimits:
       nofile:
         soft: 65535
