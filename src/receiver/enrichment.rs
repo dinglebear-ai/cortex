@@ -355,13 +355,9 @@ fn extract_agent_docker_metadata(entry: &mut LogBatchEntry, config: &EnrichmentC
     entry.message = rest.to_string();
     entry.metadata_json = Some(bounded);
     if lifecycle {
-        let host = agent_docker.get("host").and_then(Value::as_str);
-        let container = agent_docker.get("container_name").and_then(Value::as_str);
-        let action = agent_docker.get("event_action").and_then(Value::as_str);
-        if let (Some(host), Some(container), Some(action)) = (host, container, action) {
-            entry.facility = Some("docker".to_string());
-            entry.source_ip = format!("docker-event://{host}/{container}/{action}");
-        }
+        // Keep transport-derived `source_ip` immutable. The asserted Docker
+        // host/container/action remain queryable under metadata_json.docker.
+        entry.facility = Some("docker".to_string());
     }
 }
 

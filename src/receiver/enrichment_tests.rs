@@ -533,7 +533,21 @@ fn agent_docker_lifecycle_metadata_becomes_a_canonical_docker_event() {
     assert_eq!(metadata["docker"]["event_action"], "die");
     assert_eq!(metadata["docker"]["exit_code"], 137);
     assert_eq!(out.facility.as_deref(), Some("docker"));
-    assert_eq!(out.source_ip, "docker-event://tootie/plex/die");
+    assert_eq!(out.source_ip, "10.0.0.1:1234");
+}
+
+#[test]
+fn sender_asserted_lifecycle_identity_cannot_spoof_transport_source_ip() {
+    let cfg = EnrichmentConfig::default();
+    let meta = r#"{"agent_docker":{"host":"trusted-looking-host","container_id":"abc","container_name":"victim","stream":"event","event_action":"oom"}}"#;
+    let msg =
+        format!("[cortex-agent-docker-meta:{meta}] docker container event: oom container=victim");
+    let out = enrich_entry(entry("victim", &msg, "10.0.0.66:1514", "err"), &cfg);
+    assert_eq!(out.source_ip, "10.0.0.66:1514");
+    let metadata: serde_json::Value =
+        serde_json::from_str(out.metadata_json.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["docker"]["host"], "trusted-looking-host");
+    assert_eq!(metadata["docker"]["event_action"], "oom");
 }
 
 #[test]

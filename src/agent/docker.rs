@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bollard::Docker;
 use bollard::models::EventMessage;
 use bollard::query_parameters::{
@@ -13,8 +13,12 @@ use futures_util::StreamExt;
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 
-use super::syslog_sender::{PRI_LOCAL0_INFO, PRI_LOCAL0_WARN, SyslogSender, format_rfc5424};
-use crate::docker_ingest::docker_event_timestamp;
+use super::syslog_sender::{
+    PRI_LOCAL0_INFO, PRI_LOCAL0_WARN, SyslogSender, format_rfc5424, local0_pri,
+};
+use crate::docker_ingest::{
+    docker_event_severity, docker_event_source_action, docker_event_timestamp,
+};
 
 const CONTAINER_POLL_SECS: u64 = 30;
 
@@ -55,6 +59,10 @@ pub async fn run_docker_forwarder(
         run_docker_event_forwarder(&docker, hostname, sender),
     )?;
     Ok(())
+}
+
+fn event_stream_ended() -> Result<()> {
+    bail!("Docker event stream ended unexpectedly")
 }
 
 async fn run_docker_log_forwarder(
@@ -133,16 +141,17 @@ async fn run_docker_event_forwarder(
             sender.send(line).await?;
         }
     }
-    Ok(())
+    event_stream_ended()
 }
 
 fn docker_event_line(hostname: &str, event: &EventMessage) -> Option<String> {
     let action = event.action.as_deref()?;
-    let normalized_action = normalize_event_action(action);
-    if normalized_action.is_empty() || !supported_event_action(action) {
+    let actor = event.actor.as_ref()?;
+    let severity = docker_event_severity(action, actor)?;
+    let normalized_action = docker_event_source_action(action);
+    if normalized_action.is_empty() {
         return None;
     }
-    let actor = event.actor.as_ref()?;
     let container_id = actor.id.as_deref()?;
     let attributes = actor.attributes.as_ref();
     let attr = |key: &str| {
@@ -178,11 +187,13 @@ fn docker_event_line(hostname: &str, event: &EventMessage) -> Option<String> {
     if let Some(exit_code) = exit_code {
         message.push_str(&format!(" exit_code={exit_code}"));
     }
-    let pri = match (normalized_action.as_str(), exit_code) {
-        ("oom", _) => PRI_LOCAL0_WARN,
-        ("die", Some(code)) if code != 0 => PRI_LOCAL0_WARN,
-        _ => PRI_LOCAL0_INFO,
-    };
+    let pri = local0_pri(match severity {
+        "err" => 3,
+        "warning" => 4,
+        "notice" => 5,
+        "info" => 6,
+        _ => return None,
+    });
     let timestamp = docker_event_timestamp(event);
     Some(format_rfc5424(
         pri,
@@ -192,28 +203,6 @@ fn docker_event_line(hostname: &str, event: &EventMessage) -> Option<String> {
         &container_id[..container_id.len().min(12)],
         &message,
     ))
-}
-
-fn supported_event_action(action: &str) -> bool {
-    matches!(
-        action,
-        "create" | "start" | "restart" | "die" | "stop" | "destroy" | "rename" | "oom"
-    ) || action.starts_with("health_status:")
-}
-
-fn normalize_event_action(action: &str) -> String {
-    action
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string()
 }
 
 async fn follow_container(

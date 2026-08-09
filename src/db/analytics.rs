@@ -1091,10 +1091,11 @@ pub fn feed_logs(
     if has_more {
         logs.truncate(limit as usize);
     }
+    let returned_high_water = logs.last().map_or(after_id, |log| log.id);
     let next_after_id = if has_more {
-        logs.last().map_or(after_id, |log| log.id)
+        returned_high_water
     } else {
-        high_water.max(after_id)
+        high_water.max(returned_high_water)
     };
     Ok((logs, next_after_id, has_more))
 }
