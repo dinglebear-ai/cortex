@@ -112,10 +112,11 @@ impl ServerHandler for CortexRmcpServer {
                 ToolErrorClass::InvalidParams => {
                     tracing::warn!(
                         tool = %tool_name,
+                        error = %error,
                         error_class = "invalid_params",
                         "MCP tool execution rejected invalid params"
                     );
-                    Err(ErrorData::invalid_params(error.to_string(), None))
+                    Ok(invalid_params_tool_result(&action, error.to_string()).into())
                 }
                 ToolErrorClass::Retryable => {
                     tracing::warn!(
@@ -523,6 +524,15 @@ fn tool_result_from_json(value: Value) -> Result<CallToolResult, ErrorData> {
     Ok(result)
 }
 
+fn invalid_params_tool_result(action: &str, message: String) -> CallToolResult {
+    CallToolResult::structured_error(serde_json::json!({
+        "kind": "invalid_param",
+        "message": message,
+        "action": action,
+        "retryable": false,
+    }))
+}
+
 /// Client-facing classification of a tool-execution error.
 ///
 /// Derived ONLY from the typed [`ServiceError`] in the anyhow chain — the
@@ -534,7 +544,7 @@ fn tool_result_from_json(value: Value) -> Result<CallToolResult, ErrorData> {
 /// service-layer validation), so no string heuristics are needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolErrorClass {
-    /// Caller-supplied arguments were invalid → JSON-RPC `invalid_params`.
+    /// Caller-supplied arguments were invalid → structured tool-level error.
     InvalidParams,
     /// Transient resource contention (SQLite busy, pool timeout) → the
     /// caller should retry.

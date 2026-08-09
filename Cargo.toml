@@ -183,6 +183,14 @@ test-support = []
 # Release profile for a deployed long-running daemon + the bundled plugin
 # binary (full-review BM4). `panic = "abort"` is deliberately NOT set:
 # run_db recovers DB-task panics via JoinError::is_panic.
+# CI compiles this workspace from scratch constantly (CARGO_INCREMENTAL=0 is
+# required under the kache rustc-wrapper), and full DWARF is a large share of
+# that time. "line-tables-only" keeps file/line in panics and backtraces --
+# what CI output is actually read for -- while skipping the type/variable
+# debuginfo only an interactive debugger uses. Matches labby.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 strip = "symbols"

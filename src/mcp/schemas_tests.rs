@@ -21,6 +21,122 @@ fn tool_definitions_include_expected_public_tools() {
 }
 
 #[test]
+fn exact_action_contracts_are_generated_from_the_action_registry() {
+    let tools = tool_definitions();
+    let schema = &tools[0]["inputSchema"];
+    let root_properties = schema["properties"].as_object().unwrap();
+    let branches = schema["oneOf"].as_array().expect("action contract oneOf");
+
+    let exact_branch = |action: &str| {
+        branches
+            .iter()
+            .find(|branch| branch["properties"]["action"]["const"] == action)
+            .unwrap_or_else(|| panic!("missing exact branch for {action}"))
+    };
+
+    let project_context = exact_branch("project_context");
+    assert_eq!(project_context["additionalProperties"], false);
+    let project_fields = project_context["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        project_fields,
+        ["action", "limit", "project", "tool"].into_iter().collect()
+    );
+    assert_eq!(
+        project_context["required"],
+        serde_json::json!(["action", "project"])
+    );
+    for field in ["project", "tool", "limit"] {
+        assert_eq!(project_context["properties"][field], root_properties[field]);
+    }
+
+    let list_ai_projects = exact_branch("list_ai_projects");
+    assert_eq!(list_ai_projects["additionalProperties"], false);
+    let list_fields = list_ai_projects["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        list_fields,
+        ["action", "since", "tool", "until"].into_iter().collect()
+    );
+    assert_eq!(list_ai_projects["required"], serde_json::json!(["action"]));
+    for field in ["tool", "since", "until"] {
+        assert_eq!(
+            list_ai_projects["properties"][field],
+            root_properties[field]
+        );
+    }
+
+    let fallback = branches
+        .iter()
+        .find(|branch| branch["properties"]["action"]["enum"].is_array())
+        .expect("legacy fallback branch");
+    let legacy_actions = fallback["properties"]["action"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!legacy_actions.contains("project_context"));
+    assert!(!legacy_actions.contains("list_ai_projects"));
+    assert!(legacy_actions.contains("sessions"));
+    assert!(legacy_actions.contains("search_sessions"));
+
+    for action in super::actions::action_names() {
+        let exact_count = branches
+            .iter()
+            .filter(|branch| branch["properties"]["action"]["const"] == action)
+            .count();
+        let fallback_count = usize::from(legacy_actions.contains(action));
+        assert_eq!(
+            exact_count + fallback_count,
+            1,
+            "action {action} must appear in exactly one contract branch"
+        );
+    }
+}
+
+#[test]
+fn exact_action_contracts_accept_only_runtime_request_fields() {
+    use super::actions::ActionInputContract;
+
+    let accepts = |action: &str, fields: &[&str]| {
+        let spec = super::actions::ACTION_SPECS
+            .iter()
+            .find(|spec| spec.name == action)
+            .unwrap();
+        let ActionInputContract::Exact { allowed, required } = spec.input_contract else {
+            panic!("{action} must use an exact contract");
+        };
+        required.iter().all(|field| fields.contains(field))
+            && fields
+                .iter()
+                .all(|field| *field == "action" || allowed.contains(field))
+    };
+
+    assert!(accepts(
+        "project_context",
+        &["action", "project", "tool", "limit"]
+    ));
+    assert!(!accepts("project_context", &["action", "project", "since"]));
+    assert!(!accepts("project_context", &["action", "tool"]));
+
+    assert!(accepts(
+        "list_ai_projects",
+        &["action", "tool", "since", "until"]
+    ));
+    assert!(!accepts("list_ai_projects", &["action", "limit"]));
+    assert!(!accepts("list_ai_projects", &["action", "project", "tool"]));
+}
+
+#[test]
 fn event_actions_advertise_canonical_mcp_time_bounds() {
     let properties = &tool_definitions()[0]["inputSchema"]["properties"];
     assert!(properties.get("since").is_some());
