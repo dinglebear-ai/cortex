@@ -46,12 +46,24 @@ def allowed(path: str, line: str) -> bool:
         "src/agent_deploy_tests.rs",
         "src/heartbeat_agent_tests.rs",
         "src/setup/doctor_tests.rs",
+        "src/setup/doctor_transcript_forward_tests.rs",
         "src/setup/heartbeat_agent_tests.rs",
     }:
         # Test occurrences must be string fixtures or assertions, never an env!
         # assignment in executable workflow/config syntax.
         stripped = line.strip()
         return ('"' + legacy) in stripped or (legacy + '=') in stripped
+    if path == "scripts/test-validate-transcript-forward-env-rename.sh":
+        # This harness deliberately injects forbidden occurrences into an
+        # isolated repository. Only its fixture/assertion lines may name the
+        # legacy key; executable configuration in this repository stays banned.
+        stripped = line.strip()
+        return (
+            ('"' + legacy) in stripped
+            or legacy + "=" in stripped
+            or "deprecated compatibility alias" in stripped
+            or "convenient shorthand" in stripped
+        )
     if path in doc_paths:
         lowered = line.lower()
         return any(word in lowered for word in (

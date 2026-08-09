@@ -470,8 +470,7 @@ fn atomic_write_env_file(path: &Path, expected: &str, out: &str) -> io::Result<(
 
     if std::fs::read_to_string(path)? != expected {
         let _ = std::fs::remove_file(&tmp_path);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "env file changed concurrently; refusing to overwrite it",
         ));
     }
