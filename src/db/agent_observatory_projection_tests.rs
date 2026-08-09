@@ -346,3 +346,58 @@ fn git_snapshot_failure_after_topology_and_commits_rolls_back_all_stages() {
     assert_eq!(table_count(&connection, "git_commits"), 0);
     assert_eq!(table_count(&connection, "repository_observations"), 0);
 }
+
+#[test]
+fn equal_timestamp_a_b_a_replay_converges_for_all_materialized_state() {
+    for variant in ["run", "actor", "evidence"] {
+        let (_dir, pool) = setup();
+        let original = input();
+        write_agent_projection(&pool, &original).unwrap();
+        let mut conflicting = original.clone();
+        match variant {
+            "run" => conflicting.run.metadata_json = r#"{"provider":"other"}"#.to_string(),
+            "actor" => {
+                conflicting.actor.as_mut().unwrap().display_name = Some("Other actor".to_string());
+            }
+            "evidence" => conflicting.worktree_evidence.as_mut().unwrap().confidence = 0.5,
+            _ => unreachable!(),
+        }
+        write_agent_projection(&pool, &conflicting).unwrap();
+        let outbox_before = table_count(&pool.get().unwrap(), "agent_stream_outbox");
+        let replay = write_agent_projection(&pool, &original).unwrap();
+        assert!(!replay.materialized_state_changed, "{variant}");
+        assert!(!replay.event_inserted, "{variant}");
+        assert!(replay.outbox.is_none(), "{variant}");
+        assert_eq!(
+            table_count(&pool.get().unwrap(), "agent_stream_outbox"),
+            outbox_before,
+            "{variant}"
+        );
+        assert_eq!(table_count(&pool.get().unwrap(), "agent_run_events"), 1);
+    }
+}
+
+#[test]
+fn older_different_replay_is_a_true_noop_without_outbox() {
+    let (_dir, pool) = setup();
+    let original = input();
+    write_agent_projection(&pool, &original).unwrap();
+    let mut older = original.clone();
+    older.run.last_activity_at = STARTED_AT.to_string();
+    older.run.status_observed_at = STARTED_AT.to_string();
+    older.run.status = RunStatus::Waiting;
+    older.run.status_reason = "stale".to_string();
+    older.run.metadata_json = r#"{"provider":"stale"}"#.to_string();
+    older.actor.as_mut().unwrap().last_activity_at = Some(STARTED_AT.to_string());
+    older.actor.as_mut().unwrap().display_name = Some("Stale actor".to_string());
+    older.actor.as_mut().unwrap().metadata_json = r#"{"stale":true}"#.to_string();
+    older.worktree_evidence.as_mut().unwrap().last_seen_at = STARTED_AT.to_string();
+    older.worktree_evidence.as_mut().unwrap().confidence = 0.25;
+    older.worktree_evidence.as_mut().unwrap().metadata_json = r#"{"stale":true}"#.to_string();
+    let replay = write_agent_projection(&pool, &older).unwrap();
+    assert!(!replay.materialized_state_changed);
+    assert!(!replay.event_inserted);
+    assert!(replay.outbox.is_none());
+    assert_eq!(replay.run.event_count, 1);
+    assert_projection_counts(&pool, [1, 1, 1, 1, 1]);
+}

@@ -140,7 +140,7 @@ pub fn classify_transcript_log(row: &LogEntry) -> TranscriptLogClassification {
         log_id: row.id,
         timestamp: row.timestamp.clone(),
         received_at: row.received_at.clone(),
-        hostname: hostname.to_string(),
+        hostname: scrub_ai_message(hostname, None),
         tool,
         provider_tool: scrub_ai_message(provider_tool, None),
         project,
@@ -150,7 +150,7 @@ pub fn classify_transcript_log(row: &LogEntry) -> TranscriptLogClassification {
             .process_id
             .as_deref()
             .map(|value| scrub_ai_message(value, None)),
-        severity: row.severity.trim().to_string(),
+        severity: scrub_ai_message(row.severity.trim(), None),
         app_name: row
             .app_name
             .as_deref()

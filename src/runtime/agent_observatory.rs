@@ -46,6 +46,7 @@ pub(super) fn spawn_projector(
                 if token.is_cancelled() { break; }
                 let mut projected = 0usize;
                 let mut healthy = true;
+                let mut oversized_first_rows = 0usize;
                 let log_page = projection_cursor(&pool, "logs")
                     .and_then(|value| {
                         if value.is_empty() {
@@ -60,9 +61,12 @@ pub(super) fn spawn_projector(
                 match log_page {
                     Ok(rows) => {
                         let mut page_bytes = 0usize;
-                        for row in rows {
+                        for (processed, row) in rows.into_iter().enumerate() {
                             page_bytes = page_bytes.saturating_add(row.message.len());
-                            if page_bytes > config.projector_page_bytes { break; }
+                            if page_bytes > config.projector_page_bytes && processed > 0 { break; }
+                            oversized_first_rows += usize::from(
+                                page_bytes > config.projector_page_bytes && processed == 0,
+                            );
                             match (project_transcript_log(&pool, &row), project_command_log(&pool, &row)) {
                                 (Ok(_), Ok(_)) => {
                                     projected += 1;
@@ -100,11 +104,14 @@ pub(super) fn spawn_projector(
                     match page_agent_sources(&pool, kind, &cursor, config.projector_page_rows) {
                         Ok(page) => {
                             let mut page_bytes = 0usize;
-                            for record in &page.records {
+                            for (processed, record) in page.records.iter().enumerate() {
                                 page_bytes = page_bytes.saturating_add(format!("{record:?}").len());
-                                if page_bytes > config.projector_page_bytes {
+                                if page_bytes > config.projector_page_bytes && processed > 0 {
                                     break;
                                 }
+                                oversized_first_rows += usize::from(
+                                    page_bytes > config.projector_page_bytes && processed == 0,
+                                );
                                 match project_agent_source(&pool, record) {
                                     Ok(_) => projected += 1,
                                     Err(error) => {
@@ -138,7 +145,9 @@ pub(super) fn spawn_projector(
                     &pool,
                     "projector",
                     status,
-                    &format!("projected={projected}"),
+                    &format!(
+                        "projected={projected},oversized_first_rows={oversized_first_rows}"
+                    ),
                 ) {
                     tracing::error!(error = %error, "Agent Observatory projector health write failed");
                 }

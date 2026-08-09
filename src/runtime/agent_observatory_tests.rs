@@ -40,6 +40,7 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
     let config = AgentObservatoryConfig {
         enabled: true,
         projector_poll_ms: 10,
+        projector_page_bytes: 1,
         ..AgentObservatoryConfig::default()
     };
     let token = CancellationToken::new();
@@ -62,6 +63,8 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         for source in ["mcp", "hook", "skill", "llm"] {
             assert_eq!(projection_cursor(&pool, source).unwrap(), "");
         }
+        let health = projection_health(&pool, "projector").unwrap().unwrap();
+        assert!(health.contains("oversized_first_rows=1"));
         token.cancel();
         tokio::time::timeout(Duration::from_secs(1), handle)
             .await

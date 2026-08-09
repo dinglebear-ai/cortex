@@ -17,8 +17,12 @@ pub use lookup::{
     AgentProjectionRunMatch, AgentProjectionWorktreeRef, find_active_projection_worktree,
     find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
 };
+#[path = "agent_observatory_projection_refs.rs"]
+mod refs;
 #[path = "agent_observatory_projection_sql.rs"]
 mod sql;
+#[path = "agent_observatory_projection_tie_break.rs"]
+mod tie_break;
 
 use crate::agent_observatory::identity::{actor_key, canonical_tool, event_key, run_key};
 use crate::db::pool::{DbPool, write_lock};

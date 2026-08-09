@@ -6,6 +6,7 @@ use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use std::str::FromStr;
 
+pub(super) use super::refs::{RunRefs, resolve_run_refs, worktree_id};
 use super::types::{
     AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionOutboxRow,
     AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
@@ -155,46 +156,6 @@ pub(super) fn run_id(tx: &Transaction<'_>, key: &str) -> Result<Option<i64>> {
     .context("query run ID")
 }
 
-pub(super) fn required_run_id(tx: &Transaction<'_>, key: &str) -> Result<i64> {
-    run_id(tx, key)?.with_context(|| format!("run not found for key {key}"))
-}
-
-pub(super) fn worktree_id(tx: &Transaction<'_>, key: &str) -> Result<i64> {
-    tx.query_row(
-        "SELECT id FROM repository_worktrees WHERE worktree_key = ?1 AND removed_at IS NULL",
-        [key],
-        |row| row.get(0),
-    )
-    .optional()?
-    .with_context(|| format!("worktree not found for key {key}"))
-}
-
-pub(super) struct RunRefs {
-    pub parent_run_id: Option<i64>,
-    pub previous_run_id: Option<i64>,
-    pub primary_worktree_id: Option<i64>,
-}
-
-pub(super) fn resolve_run_refs(tx: &Transaction<'_>, input: &AgentRunUpsert) -> Result<RunRefs> {
-    Ok(RunRefs {
-        parent_run_id: input
-            .parent_run_key
-            .as_deref()
-            .map(|key| required_run_id(tx, key))
-            .transpose()?,
-        previous_run_id: input
-            .previous_run_key
-            .as_deref()
-            .map(|key| required_run_id(tx, key))
-            .transpose()?,
-        primary_worktree_id: input
-            .primary_worktree_key
-            .as_deref()
-            .map(|key| worktree_id(tx, key))
-            .transpose()?,
-    })
-}
-
 pub(super) fn upsert_run(
     tx: &Transaction<'_>,
     key: &str,
@@ -202,6 +163,14 @@ pub(super) fn upsert_run(
     input: &AgentRunUpsert,
     refs: &RunRefs,
 ) -> Result<(AgentRunRow, bool)> {
+    let select_sql = format!("SELECT {RUN_COLUMNS} FROM agent_runs WHERE run_key = ?1");
+    let existing = tx.query_row(&select_sql, [key], run_row).optional()?;
+    let activity_wins = existing.as_ref().is_none_or(|row| {
+        super::tie_break::run_activity_wins(input, refs.primary_worktree_id, row)
+    });
+    let status_wins = existing
+        .as_ref()
+        .is_none_or(|row| super::tie_break::run_status_wins(input, row));
     tx.execute(
         "INSERT INTO agent_runs
             (run_key, native_session_id, tool, provider_tool, hostname, parent_run_id,
@@ -213,28 +182,28 @@ pub(super) fn upsert_run(
                  ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
          ON CONFLICT(run_key) DO UPDATE SET
              provider_tool=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN COALESCE(excluded.provider_tool, agent_runs.provider_tool)
                  ELSE agent_runs.provider_tool END,
              parent_run_id=COALESCE(agent_runs.parent_run_id, excluded.parent_run_id),
              previous_run_id=COALESCE(agent_runs.previous_run_id, excluded.previous_run_id),
              primary_worktree_id=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN COALESCE(excluded.primary_worktree_id, agent_runs.primary_worktree_id)
                  ELSE agent_runs.primary_worktree_id END,
              transcript_path=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN COALESCE(excluded.transcript_path, agent_runs.transcript_path)
                  ELSE agent_runs.transcript_path END,
              process_id=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN COALESCE(excluded.process_id, agent_runs.process_id)
                  ELSE agent_runs.process_id END,
              status=CASE
-                 WHEN excluded.status_observed_at >= agent_runs.status_observed_at
+                 WHEN ?24
                  THEN excluded.status ELSE agent_runs.status END,
              status_reason=CASE
-                 WHEN excluded.status_observed_at >= agent_runs.status_observed_at
+                 WHEN ?24
                  THEN excluded.status_reason ELSE agent_runs.status_reason END,
              status_observed_at=MAX(agent_runs.status_observed_at, excluded.status_observed_at),
              started_at=MIN(agent_runs.started_at, excluded.started_at),
@@ -244,23 +213,23 @@ pub(super) fn upsert_run(
                  WHEN agent_runs.ended_at IS NULL THEN excluded.ended_at
                  ELSE MAX(agent_runs.ended_at, excluded.ended_at) END,
              primary_branch=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN COALESCE(excluded.primary_branch, agent_runs.primary_branch)
                  ELSE agent_runs.primary_branch END,
              start_head_sha=COALESCE(agent_runs.start_head_sha, excluded.start_head_sha),
              current_head_sha=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN COALESCE(excluded.current_head_sha, agent_runs.current_head_sha)
                  ELSE agent_runs.current_head_sha END,
              projection_version=MAX(agent_runs.projection_version, excluded.projection_version),
              freshness_json=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN excluded.freshness_json ELSE agent_runs.freshness_json END,
              metadata_json=CASE
-                 WHEN excluded.last_activity_at >= agent_runs.last_activity_at
+                 WHEN ?23
                  THEN excluded.metadata_json ELSE agent_runs.metadata_json END,
              updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE (excluded.last_activity_at >= agent_runs.last_activity_at AND (
+         WHERE (?23 AND (
                  agent_runs.provider_tool IS NOT
                      COALESCE(excluded.provider_tool, agent_runs.provider_tool)
               OR agent_runs.primary_worktree_id IS NOT
@@ -275,7 +244,7 @@ pub(super) fn upsert_run(
                      COALESCE(excluded.current_head_sha, agent_runs.current_head_sha)
               OR agent_runs.freshness_json IS NOT excluded.freshness_json
               OR agent_runs.metadata_json IS NOT excluded.metadata_json))
-            OR (excluded.status_observed_at >= agent_runs.status_observed_at AND (
+            OR (?24 AND (
                  agent_runs.status IS NOT excluded.status
               OR agent_runs.status_reason IS NOT excluded.status_reason
               OR agent_runs.status_observed_at IS NOT excluded.status_observed_at))
@@ -283,8 +252,8 @@ pub(super) fn upsert_run(
             OR (agent_runs.previous_run_id IS NULL AND excluded.previous_run_id IS NOT NULL)
             OR agent_runs.started_at > excluded.started_at
             OR agent_runs.last_activity_at < excluded.last_activity_at
-            OR (excluded.ended_at IS NOT NULL
-                AND agent_runs.ended_at IS NOT excluded.ended_at)
+            OR (excluded.ended_at IS NOT NULL AND (
+                agent_runs.ended_at IS NULL OR agent_runs.ended_at < excluded.ended_at))
             OR (agent_runs.start_head_sha IS NULL AND excluded.start_head_sha IS NOT NULL)
             OR agent_runs.projection_version < excluded.projection_version",
         params![
@@ -309,12 +278,13 @@ pub(super) fn upsert_run(
             input.current_head_sha,
             input.projection_version,
             input.freshness_json,
-            input.metadata_json
+            input.metadata_json,
+            activity_wins,
+            status_wins
         ],
     )?;
     let changed = tx.changes() > 0;
-    let sql = format!("SELECT {RUN_COLUMNS} FROM agent_runs WHERE run_key = ?1");
-    let row = tx.query_row(&sql, [key], run_row)?;
+    let row = tx.query_row(&select_sql, [key], run_row)?;
     if row.hostname != input.hostname
         || row.tool != canonical_tool
         || row.native_session_id != input.native_session_id
@@ -330,24 +300,33 @@ pub(super) fn upsert_actor(
     run_id: i64,
     input: &AgentActorUpsert,
 ) -> Result<(AgentActorRow, bool)> {
+    let select_sql = format!("SELECT {ACTOR_COLUMNS} FROM agent_run_actors WHERE actor_key = ?1");
+    let existing = tx.query_row(&select_sql, [key], actor_row).optional()?;
+    let actor_wins = existing
+        .as_ref()
+        .is_none_or(|row| super::tie_break::actor_wins(input, row));
     tx.execute(
         "INSERT INTO agent_run_actors
             (actor_key, run_id, native_actor_id, actor_type, display_name, started_at,
              last_activity_at, ended_at, metadata_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(actor_key) DO UPDATE SET
-             actor_type=CASE WHEN COALESCE(excluded.last_activity_at, excluded.started_at, '') >= COALESCE(agent_run_actors.last_activity_at, agent_run_actors.started_at, '') THEN excluded.actor_type ELSE agent_run_actors.actor_type END,
-             display_name=CASE WHEN COALESCE(excluded.last_activity_at, excluded.started_at, '') >= COALESCE(agent_run_actors.last_activity_at, agent_run_actors.started_at, '') THEN excluded.display_name ELSE agent_run_actors.display_name END,
+             actor_type=CASE WHEN ?10 THEN excluded.actor_type ELSE agent_run_actors.actor_type END,
+             display_name=CASE WHEN ?10 THEN excluded.display_name ELSE agent_run_actors.display_name END,
              started_at=CASE WHEN agent_run_actors.started_at IS NULL THEN excluded.started_at WHEN excluded.started_at IS NULL THEN agent_run_actors.started_at ELSE MIN(agent_run_actors.started_at, excluded.started_at) END,
              last_activity_at=CASE WHEN agent_run_actors.last_activity_at IS NULL THEN excluded.last_activity_at WHEN excluded.last_activity_at IS NULL THEN agent_run_actors.last_activity_at ELSE MAX(agent_run_actors.last_activity_at, excluded.last_activity_at) END,
              ended_at=CASE WHEN agent_run_actors.ended_at IS NULL THEN excluded.ended_at WHEN excluded.ended_at IS NULL THEN agent_run_actors.ended_at ELSE MAX(agent_run_actors.ended_at, excluded.ended_at) END,
-             metadata_json=CASE WHEN COALESCE(excluded.last_activity_at, excluded.started_at, '') >= COALESCE(agent_run_actors.last_activity_at, agent_run_actors.started_at, '') THEN excluded.metadata_json ELSE agent_run_actors.metadata_json END
-         WHERE agent_run_actors.actor_type IS NOT excluded.actor_type
-            OR agent_run_actors.display_name IS NOT excluded.display_name
-            OR agent_run_actors.started_at IS NOT excluded.started_at
-            OR agent_run_actors.last_activity_at IS NOT excluded.last_activity_at
-            OR agent_run_actors.ended_at IS NOT excluded.ended_at
-            OR agent_run_actors.metadata_json IS NOT excluded.metadata_json",
+             metadata_json=CASE WHEN ?10 THEN excluded.metadata_json ELSE agent_run_actors.metadata_json END
+         WHERE (?10 AND (
+                agent_run_actors.actor_type IS NOT excluded.actor_type
+             OR agent_run_actors.display_name IS NOT excluded.display_name
+             OR agent_run_actors.metadata_json IS NOT excluded.metadata_json))
+            OR (excluded.started_at IS NOT NULL AND (
+                agent_run_actors.started_at IS NULL OR agent_run_actors.started_at > excluded.started_at))
+            OR (excluded.last_activity_at IS NOT NULL AND (
+                agent_run_actors.last_activity_at IS NULL OR agent_run_actors.last_activity_at < excluded.last_activity_at))
+            OR (excluded.ended_at IS NOT NULL AND (
+                agent_run_actors.ended_at IS NULL OR agent_run_actors.ended_at < excluded.ended_at))",
         params![
             key,
             run_id,
@@ -357,12 +336,12 @@ pub(super) fn upsert_actor(
             input.started_at,
             input.last_activity_at,
             input.ended_at,
-            input.metadata_json
+            input.metadata_json,
+            actor_wins
         ],
     )?;
     let changed = tx.changes() > 0;
-    let sql = format!("SELECT {ACTOR_COLUMNS} FROM agent_run_actors WHERE actor_key = ?1");
-    let row = tx.query_row(&sql, [key], actor_row)?;
+    let row = tx.query_row(&select_sql, [key], actor_row)?;
     if row.run_id != run_id || row.native_actor_id != input.native_actor_id {
         bail!("actor identity conflict for key {key}");
     }
@@ -376,24 +355,31 @@ pub(super) fn upsert_evidence(
     worktree_id: i64,
     input: &AgentWorktreeEvidenceUpsert,
 ) -> Result<(AgentRunWorktreeEvidenceRow, bool)> {
+    let select_sql =
+        format!("SELECT {EVIDENCE_COLUMNS} FROM agent_run_worktrees WHERE relation_key = ?1");
+    let existing = tx.query_row(&select_sql, [key], evidence_row).optional()?;
+    let evidence_wins = existing
+        .as_ref()
+        .is_none_or(|row| super::tie_break::evidence_wins(input, row));
     tx.execute(
         "INSERT INTO agent_run_worktrees
             (relation_key, run_id, worktree_id, evidence_kind, evidence_source, trust_level,
              confidence, is_primary, first_seen_at, last_seen_at, metadata_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(relation_key) DO UPDATE SET
-             trust_level=CASE WHEN excluded.last_seen_at > agent_run_worktrees.last_seen_at OR (excluded.last_seen_at = agent_run_worktrees.last_seen_at AND CASE excluded.trust_level WHEN 'refuted' THEN 5 WHEN 'verified' THEN 4 WHEN 'correlated' THEN 3 WHEN 'claimed' THEN 2 ELSE 1 END >= CASE agent_run_worktrees.trust_level WHEN 'refuted' THEN 5 WHEN 'verified' THEN 4 WHEN 'correlated' THEN 3 WHEN 'claimed' THEN 2 ELSE 1 END) THEN excluded.trust_level ELSE agent_run_worktrees.trust_level END,
-             confidence=CASE WHEN excluded.last_seen_at >= agent_run_worktrees.last_seen_at THEN excluded.confidence ELSE agent_run_worktrees.confidence END,
-             is_primary=CASE WHEN excluded.last_seen_at >= agent_run_worktrees.last_seen_at THEN excluded.is_primary ELSE agent_run_worktrees.is_primary END,
+             trust_level=CASE WHEN ?12 THEN excluded.trust_level ELSE agent_run_worktrees.trust_level END,
+             confidence=CASE WHEN ?12 THEN excluded.confidence ELSE agent_run_worktrees.confidence END,
+             is_primary=CASE WHEN ?12 THEN excluded.is_primary ELSE agent_run_worktrees.is_primary END,
              first_seen_at=MIN(agent_run_worktrees.first_seen_at, excluded.first_seen_at),
              last_seen_at=MAX(agent_run_worktrees.last_seen_at, excluded.last_seen_at),
-             metadata_json=CASE WHEN excluded.last_seen_at >= agent_run_worktrees.last_seen_at THEN excluded.metadata_json ELSE agent_run_worktrees.metadata_json END
-         WHERE agent_run_worktrees.trust_level IS NOT excluded.trust_level
-            OR agent_run_worktrees.confidence IS NOT excluded.confidence
-            OR agent_run_worktrees.is_primary IS NOT excluded.is_primary
+             metadata_json=CASE WHEN ?12 THEN excluded.metadata_json ELSE agent_run_worktrees.metadata_json END
+         WHERE (?12 AND (
+                agent_run_worktrees.trust_level IS NOT excluded.trust_level
+             OR agent_run_worktrees.confidence IS NOT excluded.confidence
+             OR agent_run_worktrees.is_primary IS NOT excluded.is_primary
+             OR agent_run_worktrees.metadata_json IS NOT excluded.metadata_json))
             OR agent_run_worktrees.first_seen_at > excluded.first_seen_at
-            OR agent_run_worktrees.last_seen_at < excluded.last_seen_at
-            OR agent_run_worktrees.metadata_json IS NOT excluded.metadata_json",
+            OR agent_run_worktrees.last_seen_at < excluded.last_seen_at",
         params![
             key,
             run_id,
@@ -405,12 +391,12 @@ pub(super) fn upsert_evidence(
             input.is_primary,
             input.first_seen_at,
             input.last_seen_at,
-            input.metadata_json
+            input.metadata_json,
+            evidence_wins
         ],
     )?;
     let changed = tx.changes() > 0;
-    let sql = format!("SELECT {EVIDENCE_COLUMNS} FROM agent_run_worktrees WHERE relation_key = ?1");
-    let row = tx.query_row(&sql, [key], evidence_row)?;
+    let row = tx.query_row(&select_sql, [key], evidence_row)?;
     if row.run_id != run_id
         || row.worktree_id != worktree_id
         || row.evidence_kind != input.evidence_kind

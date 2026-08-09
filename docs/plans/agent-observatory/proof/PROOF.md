@@ -448,3 +448,13 @@ GATE: pages are bounded to 1 through 500 rows; malformed cursors fail; unknown e
 GATE: transcript-derived project paths create verified transcript_project_path evidence at 0.95; source actors preserve MCP server/tool, hook name, skill plugin/name, and LLM provider/model identities
 REGRESSION: all 76 Agent Observatory tests passed, including source paging, replay idempotence, VACUUM-stable cursors, provider identity preservation, projection transactions, schema migrations, attribution, lifecycle, command, shell, and transcript paths
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Agent Observatory JSON/SQL/TypeScript/placeholder contracts, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## PR-160 final adversarial remediation
+RED: beads `syslog-mcp-kq015`, `syslog-mcp-f5p26`, `syslog-mcp-de0oi`, and `syslog-mcp-ce3tq`
+RED result: equal-timestamp mutable projections could oscillate, older metadata replay could report a change and emit outbox, hostname provenance was not scrubbed, and an oversized first page row wedged its cursor while reporting healthy.
+GREEN: deterministic total-order freshness tie-breaks, monotonic SQL update predicates, all-field provenance scrubbing, and explicit oversized-first-row consumption with durable health detail.
+GREEN result: A-B-A convergence, older true no-op, secret-negative provenance, and first-row-over-cap cursor/health tests pass alongside legitimate equal-time command and four-source projector workflows.
+REGRESSION: Agent Observatory focused suite, runtime worker suite, private-identifier gates, Clippy with warnings denied, and full nextest.
+REGRESSION result: 86 focused tests passed; full nextest ran 2,930 tests with 2 skipped, one slow, and no failures.
+FILES: `src/db/agent_observatory_projection_sql.rs`, `src/db/agent_observatory_projection_tests.rs`, `src/agent_observatory/classifier.rs`, `src/agent_observatory/classifier_tests.rs`, `src/runtime/agent_observatory.rs`, `src/runtime/agent_observatory_tests.rs`
+NOTES: Equal timestamps are resolved by a stable mutable-state fingerprint, not arrival order. Byte limits allow exactly one oversized first row so cursor progress remains bounded and observable.

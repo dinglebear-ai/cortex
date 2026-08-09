@@ -77,18 +77,27 @@ fn transcript_projection_scrubs_secrets_from_message_metadata_and_provenance() {
         Some(format!(r#"{{"nested":{{"authorization":"{secret}"}}}}"#)),
     );
     row.message = format!("credential {secret}");
+    row.hostname = format!("host-{secret}");
     row.ai_project = Some(format!("/workspace/{secret}"));
     row.ai_transcript_path = Some(format!("/tmp/{secret}.jsonl"));
+    row.process_id = Some(secret.to_string());
+    row.app_name = Some(secret.to_string());
+    row.source_ip = secret.to_string();
     let TranscriptLogClassification::Project(projected) = classify_transcript_log(&row) else {
         panic!("valid transcript row should project");
     };
     let persisted = format!(
-        "{} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {}",
         projected.message,
         projected.metadata_json,
         projected.session_id,
         projected.project.unwrap_or_default(),
         projected.transcript_path,
+        projected.hostname,
+        projected.process_id.unwrap_or_default(),
+        projected.app_name.unwrap_or_default(),
+        projected.source_ip,
+        projected.provider_tool,
     );
     assert!(!persisted.contains(secret));
     assert!(persisted.contains("[REDACTED]"));
