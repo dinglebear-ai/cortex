@@ -84,6 +84,8 @@ fn windows_swap_script_preserves_literal_paths_and_process_arguments() {
     assert!(script.contains("Get-ScheduledTask -TaskName 'CortexHeartbeatAgent'"));
     assert!(script.contains("Start-ScheduledTask -TaskName 'CortexHeartbeatAgent'"));
     assert!(script.contains("task did not become restartable"));
+    assert!(script.contains("task did not enter Running state"));
+    assert!(script.contains("$task.State -ne 'Running'"));
 }
 
 #[test]
