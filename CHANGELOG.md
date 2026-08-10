@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.2](https://github.com/dinglebear-ai/cortex/compare/v3.13.1...v3.13.2) (2026-08-10)
+
+
+### Fixed
+
+* **agent:** verify Windows task restart ([#191](https://github.com/dinglebear-ai/cortex/issues/191)) ([74f6e36](https://github.com/dinglebear-ai/cortex/commit/74f6e36624948959618306304bc232457f4d7fb5))
+
 ## [3.13.1](https://github.com/dinglebear-ai/cortex/compare/v3.13.0...v3.13.1) (2026-08-09)
 
 
