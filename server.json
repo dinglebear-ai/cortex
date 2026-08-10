@@ -25,7 +25,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@dinglebear/cortex",
-      "version": "3.13.1",
+      "version": "3.13.2",
       "runtimeHint": "npx",
       "packageArguments": [
         {
@@ -67,7 +67,7 @@
           "format": "string",
           "isRequired": false,
           "isSecret": false,
-          "placeholder": "v3.13.1"
+          "placeholder": "v3.13.2"
         },
         {
           "name": "CORTEX_RMCP_REPO",
@@ -105,12 +105,12 @@
       "namespace": "ai.dinglebear",
       "dnsDomain": "dinglebear.ai",
       "distribution": {
-        "npm": "@dinglebear/cortex@3.13.1",
+        "npm": "@dinglebear/cortex@3.13.2",
         "nodePackage": "@dinglebear/cortex",
-        "ociImage": "ghcr.io/dinglebear-ai/cortex:v3.13.1"
+        "ociImage": "ghcr.io/dinglebear-ai/cortex:v3.13.2"
       },
       "buildInfo": {
-        "version": "3.13.1",
+        "version": "3.13.2",
         "repository": "https://github.com/dinglebear-ai/cortex"
       }
     }
