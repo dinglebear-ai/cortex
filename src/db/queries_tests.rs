@@ -1418,11 +1418,13 @@ fn search_ai_related_logs_batches_windows_and_caps_per_anchor() {
             windows: vec![
                 AiRelatedWindow {
                     anchor_index: 0,
+                    anchor_time: "2026-01-01T00:00:00Z".into(),
                     window_from: "2026-01-01T00:00:00.000Z".into(),
                     window_to: "2026-01-01T00:01:00.000Z".into(),
                 },
                 AiRelatedWindow {
                     anchor_index: 1,
+                    anchor_time: "2026-01-01T00:10:00Z".into(),
                     window_from: "2026-01-01T00:10:00.000Z".into(),
                     window_to: "2026-01-01T00:11:00.000Z".into(),
                 },
@@ -1438,12 +1440,50 @@ fn search_ai_related_logs_batches_windows_and_caps_per_anchor() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].anchor_index, 0);
     assert_eq!(rows[0].logs.len(), 1);
-    assert_eq!(rows[0].logs[0].message, "deploy warning on host-a");
+    assert_eq!(rows[0].logs[0].message, "deploy failed on host-a");
     assert!(rows[0].truncated);
     assert_eq!(rows[1].anchor_index, 1);
     assert_eq!(rows[1].logs.len(), 1);
     assert_eq!(rows[1].logs[0].message, "deploy failed on host-b");
     assert!(!rows[1].truncated);
+}
+
+#[test]
+fn search_ai_related_logs_prefers_rows_nearest_the_anchor() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            make_entry("2026-01-01T00:05:01Z", "host-a", "info", "near-after"),
+            make_entry("2026-01-01T00:09:59Z", "host-a", "info", "far-after"),
+            make_entry("2026-01-01T00:04:58Z", "host-a", "info", "near-before"),
+        ],
+    )
+    .unwrap();
+
+    let rows = search_ai_related_logs(
+        &pool,
+        &AiRelatedLogsParams {
+            windows: vec![AiRelatedWindow {
+                anchor_index: 0,
+                anchor_time: "2026-01-01T00:05:00Z".into(),
+                window_from: "2026-01-01T00:00:00Z".into(),
+                window_to: "2026-01-01T00:10:00Z".into(),
+            }],
+            severity_in: vec!["info".into()],
+            limit_per_anchor: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let messages: Vec<_> = rows[0]
+        .logs
+        .iter()
+        .map(|row| row.message.as_str())
+        .collect();
+    assert_eq!(messages, vec!["near-after", "near-before"]);
+    assert!(rows[0].truncated);
 }
 
 #[test]

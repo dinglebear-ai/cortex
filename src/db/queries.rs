@@ -1346,14 +1346,16 @@ pub fn search_ai_related_logs(
     // window before applying the per-anchor limit — SQLite cannot push the
     // rank limit into the window scan, so a 10-minute window during a log
     // storm sorted 100K+ rows per anchor (full-review PM1). Each per-anchor
-    // query is `ORDER BY timestamp DESC LIMIT n+1`, served by
-    // idx_logs_timestamp with no ranking or temp b-tree; anchor counts are
-    // small (bounded by the anchor search limit) and the statement is
-    // compiled once via prepare_cached.
+    // query remains bounded to one anchor window and returns only n+1 rows.
+    // Ranking by distance to the anchor makes the result evidentially useful:
+    // a busy window no longer discards the rows nearest the AI action merely
+    // because unrelated traffic arrived near the end of the window. Anchor
+    // counts are small (bounded by the anchor search limit) and the statement
+    // is compiled once via prepare_cached.
     //
-    // Placeholders: FTS path ?1=query ?2=from ?3=to, filters from ?4;
-    // plain path ?1=from ?2=to, filters from ?3.
-    let first_filter_idx = if params.query.is_some() { 4 } else { 3 };
+    // Placeholders: FTS path ?1=query ?2=from ?3=to ?4=anchor, filters from ?5;
+    // plain path ?1=from ?2=to ?3=anchor, filters from ?4.
+    let first_filter_idx = if params.query.is_some() { 5 } else { 4 };
     let mut filter_sql = String::new();
     let mut sql_params = SqlParams::new(first_filter_idx);
     let search_params = SearchParams {
@@ -1392,7 +1394,7 @@ pub fn search_ai_related_logs(
              JOIN logs l ON l.id = logs_fts.rowid
              WHERE logs_fts MATCH ?1
                AND l.timestamp >= ?2 AND l.timestamp <= ?3{filter_sql}
-             ORDER BY l.timestamp DESC, l.id DESC LIMIT {}",
+             ORDER BY ABS(unixepoch(l.timestamp) - unixepoch(?4)), l.timestamp DESC, l.id DESC LIMIT {}",
             limit + 1
         )
     } else {
@@ -1400,7 +1402,7 @@ pub fn search_ai_related_logs(
             "SELECT {FTS_SELECT_COLS}
              FROM logs l
              WHERE l.timestamp >= ?1 AND l.timestamp <= ?2{filter_sql}
-             ORDER BY l.timestamp DESC, l.id DESC LIMIT {}",
+             ORDER BY ABS(unixepoch(l.timestamp) - unixepoch(?3)), l.timestamp DESC, l.id DESC LIMIT {}",
             limit + 1
         )
     };
@@ -1415,6 +1417,7 @@ pub fn search_ai_related_logs(
         }
         bindings.push(rusqlite::types::Value::Text(window.window_from.clone()));
         bindings.push(rusqlite::types::Value::Text(window.window_to.clone()));
+        bindings.push(rusqlite::types::Value::Text(window.anchor_time.clone()));
         bindings.extend(sql_params.bindings.iter().cloned());
 
         let mut logs = Vec::new();
@@ -1769,7 +1772,8 @@ pub fn topic_correlate_inputs(
     let conn = pool.get()?;
     let mut resolved = queries_service_instances::resolve_topic_entities(&conn, terms)?;
     if resolved.is_empty() {
-        return Ok(TopicGraphInputs::default());
+        drop(conn);
+        return topic_correlate_ai_project_fallback(pool, terms, since, until, source_kinds, limit);
     }
 
     // Partition seeds. Only `resolved` (exact/alias) identities drive log
@@ -1979,6 +1983,116 @@ pub fn topic_correlate_inputs(
         discovered_hosts,
         logs,
         graph_walk_truncated,
+    })
+}
+
+fn topic_correlate_ai_project_fallback(
+    pool: &DbPool,
+    terms: &[String],
+    since: Option<&str>,
+    until: Option<&str>,
+    source_kinds: Option<&[SourceKind]>,
+    limit: usize,
+) -> Result<TopicGraphInputs> {
+    let conn = pool.get()?;
+    let predicates = terms
+        .iter()
+        .map(|_| "(lower(ai_project) = ? OR lower(ai_project) LIKE '%/' || ?)")
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let mut sql = format!(
+        "SELECT DISTINCT ai_project FROM logs WHERE ai_project IS NOT NULL AND ({predicates})"
+    );
+    let mut bindings = Vec::with_capacity(terms.len() * 2 + 2);
+    for term in terms {
+        bindings.push(rusqlite::types::Value::Text(term.clone()));
+        bindings.push(rusqlite::types::Value::Text(term.clone()));
+    }
+    if let Some(value) = since {
+        sql.push_str(" AND timestamp >= ?");
+        bindings.push(rusqlite::types::Value::Text(value.to_string()));
+    }
+    if let Some(value) = until {
+        sql.push_str(" AND timestamp <= ?");
+        bindings.push(rusqlite::types::Value::Text(value.to_string()));
+    }
+    sql.push_str(" ORDER BY ai_project LIMIT 32");
+
+    let projects = conn
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(conn);
+
+    let allowed_source_kinds = source_kinds.map(|kinds| {
+        kinds
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<std::collections::HashSet<_>>()
+    });
+    let mut logs = Vec::new();
+    let mut discovered_hosts = Vec::new();
+    let mut resolved = Vec::new();
+    for project in projects {
+        let key = project
+            .rsplit('/')
+            .next()
+            .unwrap_or(&project)
+            .to_ascii_lowercase();
+        resolved.push(ResolvedTopicEntity {
+            entity_type: super::graph::ENTITY_TYPE_AI_PROJECT.to_string(),
+            canonical_key: key,
+            match_kind: "exact",
+            resolver_status: ResolverStatus::Degraded,
+        });
+        let rows = search_logs(
+            pool,
+            &SearchParams {
+                ai_project: Some(project),
+                since: since.map(str::to_string),
+                until: until.map(str::to_string),
+                limit: Some(limit.min(1000) as u32),
+                ..Default::default()
+            },
+        )?;
+        for entry in rows {
+            if let Some(allowed) = &allowed_source_kinds {
+                let source_kind = entry
+                    .metadata_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                    .and_then(|value| value.get("source_kind")?.as_str().map(str::to_string));
+                if !source_kind
+                    .as_deref()
+                    .is_some_and(|kind| allowed.contains(kind))
+                {
+                    continue;
+                }
+            }
+            discovered_hosts.push(entry.hostname.clone());
+            logs.push(GraphRelatedLogEntry {
+                entry,
+                inclusion_reason: "direct_source_identity".to_string(),
+                resolver_status: ResolverStatus::Degraded,
+                fallback_kind: Some("direct_source_identity".to_string()),
+            });
+        }
+    }
+    resolved.sort_by(|a, b| a.canonical_key.cmp(&b.canonical_key));
+    resolved.dedup_by(|a, b| a.canonical_key == b.canonical_key);
+    discovered_hosts.sort();
+    discovered_hosts.dedup();
+    logs.sort_by(|a, b| b.entry.timestamp.cmp(&a.entry.timestamp));
+    logs.dedup_by_key(|row| row.entry.id);
+    logs.truncate(limit);
+
+    Ok(TopicGraphInputs {
+        resolved,
+        discovered_hosts,
+        logs,
+        ..Default::default()
     })
 }
 

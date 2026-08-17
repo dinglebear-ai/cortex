@@ -205,6 +205,7 @@ pub struct AiCorrelateParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiRelatedWindow {
     pub anchor_index: usize,
+    pub anchor_time: String,
     pub window_from: String,
     pub window_to: String,
 }

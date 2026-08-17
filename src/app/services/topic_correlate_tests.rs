@@ -140,6 +140,42 @@ async fn topic_with_no_match_is_empty() {
 }
 
 #[tokio::test]
+async fn topic_resolves_ai_project_without_graph_projection() {
+    let (svc, pool, _dir) = test_service();
+    insert_logs_batch(
+        &pool,
+        &[agent_command_log(
+            "2026-01-01T00:00:00Z",
+            "devhost",
+            "sess-7",
+            "/home/jmagar/workspace/ci-runner-farm",
+        )],
+    )
+    .unwrap();
+
+    let resp = svc
+        .topic_correlate(TopicCorrelateRequest {
+            topic: "ci-runner-farm".into(),
+            since: Some("2026-01-01T00:00:00Z".into()),
+            until: Some("2026-01-01T01:00:00Z".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert!(resp.resolved_entities.iter().any(|entity| {
+        entity.entity_type == "ai_project"
+            && entity.key == "ci-runner-farm"
+            && entity.resolver_status.as_deref() == Some("degraded")
+    }));
+    assert_eq!(resp.timeline.len(), 1);
+    assert_eq!(
+        resp.timeline[0].fallback_kind.as_deref(),
+        Some("direct_source_identity")
+    );
+}
+
+#[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn topic_multi_term_resolves_host_and_project() {
     let _guard = crate::db::graph::GRAPH_TEST_LOCK.lock();

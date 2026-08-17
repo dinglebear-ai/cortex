@@ -162,7 +162,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 "severity_min": {
                     "type": "string",
                     "enum": SEVERITY_LEVELS,
-                    "description": "For action=tail, correlate, correlate_state, ai_correlate, timeline, patterns, similar_incidents, or incident_context: minimum severity to include. Defaults to 'warning' for incident_context and 'info' for correlate_state."
+                    "description": "For action=tail, correlate, correlate_state, ai_correlate, timeline, patterns, similar_incidents, or incident_context: minimum severity to include. Defaults to 'warning' for incident_context and 'info' for correlate_state and ai_correlate."
                 },
                 "app": {
                     "type": "string",

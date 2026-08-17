@@ -280,7 +280,7 @@ impl CortexService {
             .unwrap_or(25)
             .clamp(1, policy.events_per_anchor_cap);
         let anchor_limit = req.limit.unwrap_or(10).clamp(1, 50);
-        let severity_min = req.severity_min.unwrap_or_else(|| "warning".into());
+        let severity_min = req.severity_min.unwrap_or_else(|| "info".into());
         let severity_levels = severity_at_or_above(&severity_min)?;
 
         // Both DB calls share one connection snapshot inside a single spawn_blocking
@@ -331,6 +331,7 @@ impl CortexService {
                         let window_to = rfc3339_z(ref_dt + delta);
                         windows.push(db::AiRelatedWindow {
                             anchor_index,
+                            anchor_time: anchor.timestamp.clone(),
                             window_from: window_from.clone(),
                             window_to: window_to.clone(),
                         });

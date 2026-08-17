@@ -1372,6 +1372,43 @@ async fn correlate_ai_logs_cross_references_non_ai_logs_only() {
 }
 
 #[tokio::test]
+async fn correlate_ai_logs_defaults_to_info_evidence() {
+    let (service, pool, _dir) = test_service();
+    insert_logs_batch(
+        &pool,
+        &[
+            ai_entry("2026-01-01T00:00:00Z", "investigate cargo deny"),
+            entry(
+                "2026-01-01T00:00:30Z",
+                "runner-a",
+                "info",
+                "Cargo Deny succeeded",
+                "10.0.0.1:514",
+            ),
+        ],
+    )
+    .unwrap();
+
+    let response = service
+        .correlate_ai_logs(AiCorrelateRequest {
+            project: Some("/tmp/project".into()),
+            ai_query: Some("cargo".into()),
+            log_query: Some("Cargo Deny".into()),
+            window_minutes: Some(1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.severity_min, "info");
+    assert_eq!(response.total_related_events, 1);
+    assert_eq!(
+        response.anchors[0].related[0].message,
+        "Cargo Deny succeeded"
+    );
+}
+
+#[tokio::test]
 async fn correlate_state_excludes_ai_transcript_rows() {
     let (service, pool, _dir) = test_service();
 
