@@ -173,6 +173,11 @@ async fn topic_resolves_ai_project_without_graph_projection() {
         resp.timeline[0].fallback_kind.as_deref(),
         Some("direct_source_identity")
     );
+    let projection = resp
+        .graph_projection
+        .expect("topic correlation must report graph freshness");
+    assert_eq!(projection.projection_status, "never_built");
+    assert!(projection.source_watermark.is_empty());
 }
 
 #[tokio::test]

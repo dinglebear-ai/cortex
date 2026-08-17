@@ -406,6 +406,16 @@ fn installed_compose_asset_memory_limit_is_configurable_with_2g_default() {
 }
 
 #[test]
+fn installed_compose_asset_keeps_graph_projection_current() {
+    assert!(COMPOSE_ASSET.contains(
+        "CORTEX_GRAPH_REFRESH_INTERVAL_SECS: \"${CORTEX_GRAPH_REFRESH_INTERVAL_SECS:-300}\""
+    ));
+    assert!(COMPOSE_ASSET.contains(
+        "CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED: \"${CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED:-true}\""
+    ));
+}
+
+#[test]
 fn ai_index_timer_script_uses_host_cortex_and_disables_docker_ingest() {
     let script = ai_index_script();
     assert!(script.contains("command -v cortex"));

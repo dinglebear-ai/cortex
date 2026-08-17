@@ -376,6 +376,11 @@ pub struct TopicTimelineEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicCorrelateResponse {
     pub topic: String,
+    /// Current materialized graph state. Callers can distinguish a graph-backed
+    /// result from an explicitly degraded direct-source fallback without
+    /// inferring projection health from an empty entity list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_projection: Option<GraphProjectionStatusResponse>,
     pub resolved_entities: Vec<ResolvedTopicEntity>,
     pub graph_expansion: Vec<TopicExpansionEntity>,
     pub discovered_hosts: Vec<String>,
