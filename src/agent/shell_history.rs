@@ -45,7 +45,7 @@ pub struct ShellHistoryForwardConfig {
 
 impl ShellHistoryForwardConfig {
     pub fn new(target: String, token: Option<String>, checkpoint_path: PathBuf) -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = crate::env::var_os("HOME").map(PathBuf::from);
         let zsh_history_path = home.as_ref().map(|h| h.join(".zsh_history"));
         let atuin_db_path = home
             .as_ref()

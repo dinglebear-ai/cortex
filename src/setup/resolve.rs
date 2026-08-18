@@ -30,14 +30,14 @@ pub(crate) fn cortex_home_dir_from_exe_path(exe: &Path) -> Option<PathBuf> {
 }
 
 pub fn cortex_home_dir() -> io::Result<PathBuf> {
-    if let Ok(value) = std::env::var("CORTEX_HOME") {
+    if let Ok(value) = crate::env::var("CORTEX_HOME") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
             return validate_absolute_home(PathBuf::from(trimmed));
         }
     }
-    let home =
-        std::env::var("HOME").map_err(|_| io::Error::new(ErrorKind::NotFound, "HOME is unset"))?;
+    let home = crate::env::var("HOME")
+        .map_err(|_| io::Error::new(ErrorKind::NotFound, "HOME is unset"))?;
     let home_candidate = PathBuf::from(home).join(".cortex");
     if home_candidate.join(".env").is_file() || home_candidate.is_dir() {
         return validate_absolute_home(home_candidate);
@@ -66,8 +66,8 @@ pub fn default_agent_command_spool_path() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn user_home_dir() -> io::Result<PathBuf> {
-    let home =
-        std::env::var("HOME").map_err(|_| io::Error::new(ErrorKind::NotFound, "HOME is unset"))?;
+    let home = crate::env::var("HOME")
+        .map_err(|_| io::Error::new(ErrorKind::NotFound, "HOME is unset"))?;
     let home = PathBuf::from(home);
     setup_path_value(&home)?;
     Ok(home)
@@ -105,7 +105,7 @@ pub(crate) fn resolve_cortex_binary() -> io::Result<PathBuf> {
         }
     }
     // Walk PATH without spawning a shell — works on Windows and Unix.
-    if let Some(path_var) = std::env::var_os("PATH") {
+    if let Some(path_var) = crate::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_var) {
             let candidate = dir.join(BIN);
             if candidate.is_file() {
@@ -151,7 +151,7 @@ pub(crate) fn validate_executable_path(path: PathBuf) -> io::Result<PathBuf> {
 }
 
 fn allow_debug_binary() -> bool {
-    std::env::var("CORTEX_AI_WATCH_ALLOW_DEBUG_BINARY")
+    crate::env::var("CORTEX_AI_WATCH_ALLOW_DEBUG_BINARY")
         .ok()
         .is_some_and(|value| value.eq_ignore_ascii_case("true"))
 }
@@ -162,7 +162,7 @@ fn looks_like_debug_build_path(path: &Path) -> bool {
 }
 
 pub(crate) fn resolve_ai_watch_db_path(setup_home: &Path, user_home: &Path) -> io::Result<PathBuf> {
-    if let Ok(value) = std::env::var("CORTEX_DB_PATH")
+    if let Ok(value) = crate::env::var("CORTEX_DB_PATH")
         && !value.trim().is_empty()
     {
         return validate_db_path(PathBuf::from(value));

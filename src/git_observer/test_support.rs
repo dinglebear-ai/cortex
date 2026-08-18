@@ -47,7 +47,7 @@ pub(crate) struct GitFixture {
 }
 
 pub(crate) fn git_available() -> bool {
-    Command::new("git")
+    crate::env::command("git")
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
@@ -85,7 +85,7 @@ fn command(
     args: &[&str],
     extra_env: &[(&str, &str)],
 ) -> Result<Output> {
-    let mut process = Command::new("git");
+    let mut process = crate::env::command("git");
     process
         .current_dir(cwd)
         .arg("-c")

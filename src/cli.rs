@@ -41,7 +41,7 @@ mod run;
 pub(crate) use dispatch_command_log::{
     run_shell_agent_index_local, run_shell_agent_index_remote, run_shell_agent_wrap,
 };
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(crate) use run::ENV_USE_HTTP;
 pub(crate) use run::{CliMode, GlobalFlags, run};
 
@@ -53,12 +53,9 @@ mod config_cmd;
 mod config_toml;
 mod coordination;
 mod dispatch_command_log;
-mod format;
 mod heartbeat_agent;
 pub(crate) mod help;
-mod hyperlinks;
 mod output;
-mod panel;
 mod parse;
 mod parse_admin;
 mod parse_command_log;
@@ -69,7 +66,6 @@ mod sessions_watch;
 mod setup;
 mod sparkline;
 mod suggest;
-mod table;
 
 pub(crate) use config_cmd::run_config;
 pub(crate) use heartbeat_agent::run_heartbeat_no_db;
@@ -395,7 +391,6 @@ use setup::{SetupPhase, SetupStatus};
 mod dispatch;
 mod dispatch_db;
 mod dispatch_sessions;
-#[allow(dead_code)]
 mod http_client;
 
 #[cfg(test)]

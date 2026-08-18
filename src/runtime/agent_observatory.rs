@@ -166,7 +166,7 @@ fn expand_root(root: &str) -> PathBuf {
     root.strip_prefix("~/").map_or_else(
         || PathBuf::from(root),
         |suffix| {
-            std::env::var_os("HOME")
+            crate::env::var_os("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/nonexistent"))
                 .join(suffix)

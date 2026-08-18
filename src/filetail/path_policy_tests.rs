@@ -11,22 +11,20 @@ impl EnvGuard {
     fn set(key: &'static str, value: String) -> Self {
         let guard = Self {
             key,
-            value: std::env::var(key).ok(),
+            value: crate::env::var(key).ok(),
         };
-        unsafe {
-            std::env::set_var(key, value);
-        }
+        crate::env::set_test_var(key, value);
         guard
     }
 }
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
-        unsafe {
+        {
             if let Some(value) = &self.value {
-                std::env::set_var(self.key, value);
+                crate::env::set_test_var(self.key, value);
             } else {
-                std::env::remove_var(self.key);
+                crate::env::remove_test_var(self.key);
             }
         }
     }

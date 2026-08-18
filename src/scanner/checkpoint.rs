@@ -496,7 +496,7 @@ fn default_root_statuses() -> (
     TranscriptRootStatus,
     TranscriptRootStatus,
 ) {
-    let home = std::env::var_os("HOME")
+    let home = crate::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(""));
     let claude = home.join(".claude/projects");

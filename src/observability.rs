@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -50,7 +50,6 @@ pub struct RuntimeObservability {
     syslog_tcp_lines_dropped_oversize: AtomicU64,
     syslog_write_channel_full_transitions: AtomicU64,
     syslog_udp_packets_dropped_queue_full: AtomicU64,
-    syslog_tcp_lines_dropped_queue_full: AtomicU64,
     docker_ingest_events_received: AtomicU64,
     docker_ingest_log_entries_received: AtomicU64,
     docker_ingest_parse_errors: AtomicU64,
@@ -70,13 +69,13 @@ pub struct RuntimeObservability {
     writer_logs_retained: AtomicU64,
     writer_logs_discarded: AtomicU64,
     writer_storage_blocked: AtomicBool,
-    last_ingest_at: Mutex<Option<String>>,
-    last_write_at: Mutex<Option<String>>,
-    last_error_at: Mutex<Option<String>>,
-    last_docker_ingest_event_at: Mutex<Option<String>>,
-    last_docker_ingest_log_at: Mutex<Option<String>>,
-    last_docker_ingest_error_at: Mutex<Option<String>>,
-    last_remote_docker_event_stream_error_at: Mutex<Option<String>>,
+    last_ingest_at_ms: AtomicI64,
+    last_write_at_ms: AtomicI64,
+    last_error_at_ms: AtomicI64,
+    last_docker_ingest_event_at_ms: AtomicI64,
+    last_docker_ingest_log_at_ms: AtomicI64,
+    last_docker_ingest_error_at_ms: AtomicI64,
+    last_remote_docker_event_stream_error_at_ms: AtomicI64,
     last_remote_docker_event_stream_error: Mutex<Option<String>>,
     /// Last-tick timestamps for the ~12 background maintenance tasks, keyed
     /// by task name. Surfaced via /health/full so operators can see which
@@ -228,29 +227,18 @@ impl RuntimeObservability {
         self.touch_error();
     }
 
-    pub fn record_tcp_line_dropped_queue_full(&self, queue_depth: usize) {
-        self.syslog_tcp_lines_dropped_queue_full
-            .fetch_add(1, Ordering::Relaxed);
-        self.set_queue_depth(queue_depth);
-        self.touch_error();
-    }
-
     pub fn record_docker_ingest_event(&self) {
         self.docker_ingest_events_received
             .fetch_add(1, Ordering::Relaxed);
-        *self
-            .last_docker_ingest_event_at
-            .lock()
-            .expect("last_docker_ingest_event_at mutex poisoned") = Some(now_iso());
+        self.last_docker_ingest_event_at_ms
+            .store(now_millis(), Ordering::Relaxed);
     }
 
     pub fn record_docker_ingest_log_entry(&self) {
         self.docker_ingest_log_entries_received
             .fetch_add(1, Ordering::Relaxed);
-        *self
-            .last_docker_ingest_log_at
-            .lock()
-            .expect("last_docker_ingest_log_at mutex poisoned") = Some(now_iso());
+        self.last_docker_ingest_log_at_ms
+            .store(now_millis(), Ordering::Relaxed);
         self.touch_ingest();
     }
 
@@ -305,11 +293,8 @@ impl RuntimeObservability {
     pub fn record_remote_docker_event_stream_failure(&self, host: &str, error: &str) {
         self.remote_docker_event_stream_failures
             .fetch_add(1, Ordering::Relaxed);
-        let now = now_iso();
-        *self
-            .last_remote_docker_event_stream_error_at
-            .lock()
-            .expect("last_remote_docker_event_stream_error_at mutex poisoned") = Some(now);
+        self.last_remote_docker_event_stream_error_at_ms
+            .store(now_millis(), Ordering::Relaxed);
         *self
             .last_remote_docker_event_stream_error
             .lock()
@@ -334,10 +319,7 @@ impl RuntimeObservability {
         self.writer_logs_written
             .fetch_add(logs_written as u64, Ordering::Relaxed);
         self.writer_storage_blocked.store(false, Ordering::Relaxed);
-        *self
-            .last_write_at
-            .lock()
-            .expect("last_write_at mutex poisoned") = Some(now_iso());
+        self.last_write_at_ms.store(now_millis(), Ordering::Relaxed);
     }
 
     pub fn record_writer_retained(&self, retained: usize, storage_blocked: bool) {
@@ -392,9 +374,9 @@ impl RuntimeObservability {
             syslog_udp_packets_dropped_queue_full: self
                 .syslog_udp_packets_dropped_queue_full
                 .load(Ordering::Relaxed),
-            syslog_tcp_lines_dropped_queue_full: self
-                .syslog_tcp_lines_dropped_queue_full
-                .load(Ordering::Relaxed),
+            // Retained in the serialized health shape for compatibility. TCP
+            // now awaits channel capacity, so queue-full drops are impossible.
+            syslog_tcp_lines_dropped_queue_full: 0,
             docker_ingest_events_received: self
                 .docker_ingest_events_received
                 .load(Ordering::Relaxed),
@@ -429,41 +411,22 @@ impl RuntimeObservability {
             writer_logs_retained: self.writer_logs_retained.load(Ordering::Relaxed),
             writer_logs_discarded: self.writer_logs_discarded.load(Ordering::Relaxed),
             writer_storage_blocked: self.writer_storage_blocked.load(Ordering::Relaxed),
-            last_ingest_at: self
-                .last_ingest_at
-                .lock()
-                .expect("last_ingest_at mutex poisoned")
-                .clone(),
-            last_write_at: self
-                .last_write_at
-                .lock()
-                .expect("last_write_at mutex poisoned")
-                .clone(),
-            last_error_at: self
-                .last_error_at
-                .lock()
-                .expect("last_error_at mutex poisoned")
-                .clone(),
-            last_docker_ingest_event_at: self
-                .last_docker_ingest_event_at
-                .lock()
-                .expect("last_docker_ingest_event_at mutex poisoned")
-                .clone(),
-            last_docker_ingest_log_at: self
-                .last_docker_ingest_log_at
-                .lock()
-                .expect("last_docker_ingest_log_at mutex poisoned")
-                .clone(),
-            last_docker_ingest_error_at: self
-                .last_docker_ingest_error_at
-                .lock()
-                .expect("last_docker_ingest_error_at mutex poisoned")
-                .clone(),
-            last_remote_docker_event_stream_error_at: self
-                .last_remote_docker_event_stream_error_at
-                .lock()
-                .expect("last_remote_docker_event_stream_error_at mutex poisoned")
-                .clone(),
+            last_ingest_at: millis_to_iso(self.last_ingest_at_ms.load(Ordering::Relaxed)),
+            last_write_at: millis_to_iso(self.last_write_at_ms.load(Ordering::Relaxed)),
+            last_error_at: millis_to_iso(self.last_error_at_ms.load(Ordering::Relaxed)),
+            last_docker_ingest_event_at: millis_to_iso(
+                self.last_docker_ingest_event_at_ms.load(Ordering::Relaxed),
+            ),
+            last_docker_ingest_log_at: millis_to_iso(
+                self.last_docker_ingest_log_at_ms.load(Ordering::Relaxed),
+            ),
+            last_docker_ingest_error_at: millis_to_iso(
+                self.last_docker_ingest_error_at_ms.load(Ordering::Relaxed),
+            ),
+            last_remote_docker_event_stream_error_at: millis_to_iso(
+                self.last_remote_docker_event_stream_error_at_ms
+                    .load(Ordering::Relaxed),
+            ),
             last_remote_docker_event_stream_error: self
                 .last_remote_docker_event_stream_error
                 .lock()
@@ -486,30 +449,35 @@ impl RuntimeObservability {
     }
 
     fn touch_ingest(&self) {
-        *self
-            .last_ingest_at
-            .lock()
-            .expect("last_ingest_at mutex poisoned") = Some(now_iso());
+        self.last_ingest_at_ms
+            .store(now_millis(), Ordering::Relaxed);
     }
 
     fn touch_error(&self) {
-        *self
-            .last_error_at
-            .lock()
-            .expect("last_error_at mutex poisoned") = Some(now_iso());
+        self.last_error_at_ms.store(now_millis(), Ordering::Relaxed);
     }
 
     fn touch_docker_ingest_error(&self) {
-        *self
-            .last_docker_ingest_error_at
-            .lock()
-            .expect("last_docker_ingest_error_at mutex poisoned") = Some(now_iso());
+        self.last_docker_ingest_error_at_ms
+            .store(now_millis(), Ordering::Relaxed);
         self.touch_error();
     }
 }
 
+fn now_millis() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+fn millis_to_iso(millis: i64) -> Option<String> {
+    if millis == 0 {
+        return None;
+    }
+    chrono::DateTime::<Utc>::from_timestamp_millis(millis)
+        .map(|timestamp| timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+}
+
 fn now_iso() -> String {
-    Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+    millis_to_iso(now_millis()).expect("current UTC timestamp is representable")
 }
 
 #[cfg(test)]

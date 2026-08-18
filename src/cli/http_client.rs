@@ -49,7 +49,7 @@
 //!   via `serde_path_to_error` so the error surfaces the failing field path
 //!   plus a 256-byte body preview (eng-review #A23 / #A25).
 
-use std::env;
+use crate::env;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -73,8 +73,8 @@ use cortex::app::{
     DbBackupResult, DbCheckpointRequest, DbCheckpointResult, DbIntegrityJobStarted,
     DbIntegrityRequest, DbIntegrityResult, DbMaintenanceStatus, DbStats, DbVacuumRequest,
     DbVacuumResult, FileTailRequest, FileTailResponse, FilterLogsRequest, FleetStateRequest,
-    FleetStateResponse, GetErrorsRequest, GetErrorsResponse, GetLogRequest, GetLogResponse,
-    GraphAroundRequest, GraphAroundResponse, GraphEntityLookupRequest, GraphEntityLookupResponse,
+    FleetStateResponse, GetErrorsRequest, GetErrorsResponse, GraphAroundRequest,
+    GraphAroundResponse, GraphEntityLookupRequest, GraphEntityLookupResponse,
     GraphEvidenceLookupRequest, GraphEvidenceLookupResponse, GraphExplainRequest,
     GraphExplainResponse, HostStateRequest, HostStateResponse, IncidentContextRequest,
     IncidentContextResponse, IngestRateRequest, IngestRateResponse, ListAiProjectsRequest,
@@ -505,6 +505,7 @@ impl HttpClient {
 
     // ─── REST surface: Wave 0–1 (cortex-0p8r.1) ─────────────────────────
 
+    #[cfg(test)]
     pub async fn version(&self) -> Result<ServerVersion> {
         self.get_json::<(), _>("/api/version", None).await
     }
@@ -769,10 +770,6 @@ impl HttpClient {
 
     pub async fn ingest_rate(&self, req: &IngestRateRequest) -> Result<IngestRateResponse> {
         self.get_json("/api/ingest-rate", Some(req)).await
-    }
-
-    pub async fn get_log(&self, req: &GetLogRequest) -> Result<GetLogResponse> {
-        self.get_json("/api/get", Some(req)).await
     }
 
     pub async fn unaddressed_errors(

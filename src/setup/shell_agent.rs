@@ -1,6 +1,5 @@
 use std::io::{self, ErrorKind};
 use std::path::Path;
-use std::process::Command;
 use std::time::Instant;
 
 use super::firstrun::ensure_private_dir;
@@ -221,7 +220,7 @@ fn agent_command_state_phase(state_dir: &Path, spool_path: &Path) -> SetupPhase 
 fn agent_command_env_phase(wrapper_path: &Path, user_home: &Path) -> SetupPhase {
     let timer = PhaseTimer::start("agent-command-env");
     let expected = wrapper_path.display().to_string();
-    if std::env::var("CLAUDE_CODE_SHELL_PREFIX").ok().as_deref() == Some(expected.as_str()) {
+    if crate::env::var("CLAUDE_CODE_SHELL_PREFIX").ok().as_deref() == Some(expected.as_str()) {
         return timer.finish(
             SetupStatus::Ok,
             "CLAUDE_CODE_SHELL_PREFIX matches the generated wrapper",
@@ -290,7 +289,7 @@ fn resolve_agent_command_cortex_binary_blocking() -> io::Result<std::path::PathB
 }
 
 fn validate_agent_command_binary(path: &Path) -> io::Result<()> {
-    let output = Command::new(path).arg("--version").output()?;
+    let output = crate::env::command(path).arg("--version").output()?;
     if !output.status.success() {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,

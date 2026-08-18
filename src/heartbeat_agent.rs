@@ -136,34 +136,34 @@ pub struct HeartbeatAgentConfig {
 
 impl HeartbeatAgentConfig {
     pub fn from_env(host_id_path: PathBuf) -> Self {
-        let target = std::env::var("CORTEX_HEARTBEAT_TARGET")
+        let target = crate::env::var("CORTEX_HEARTBEAT_TARGET")
             .ok()
-            .or_else(|| std::env::var("CORTEX_URL").ok())
+            .or_else(|| crate::env::var("CORTEX_URL").ok())
             .or_else(|| Some(DEFAULT_TARGET.to_string()));
-        let token = std::env::var("CORTEX_HEARTBEAT_TOKEN")
+        let token = crate::env::var("CORTEX_HEARTBEAT_TOKEN")
             .ok()
-            .or_else(|| std::env::var("CORTEX_TOKEN").ok());
-        let docker = std::env::var("CORTEX_AGENT_DOCKER")
+            .or_else(|| crate::env::var("CORTEX_TOKEN").ok());
+        let docker = crate::env::var("CORTEX_AGENT_DOCKER")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let docker_url = std::env::var("CORTEX_AGENT_DOCKER_URL")
+        let docker_url = crate::env::var("CORTEX_AGENT_DOCKER_URL")
             .unwrap_or_else(|_| DEFAULT_DOCKER_URL.to_string());
-        let journald = std::env::var("CORTEX_AGENT_JOURNALD")
+        let journald = crate::env::var("CORTEX_AGENT_JOURNALD")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let syslog_file = std::env::var("CORTEX_AGENT_SYSLOG_FILE")
+        let syslog_file = crate::env::var("CORTEX_AGENT_SYSLOG_FILE")
             .ok()
             .filter(|v| !v.trim().is_empty())
             .map(PathBuf::from);
-        let file_tails = std::env::var("CORTEX_AGENT_FILE_TAILS")
+        let file_tails = crate::env::var("CORTEX_AGENT_FILE_TAILS")
             .ok()
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
-        let syslog_target = std::env::var("CORTEX_SYSLOG_TARGET").ok();
-        let current_transcript_forward = std::env::var(AI_TRANSCRIPT_FORWARD_ENV).ok();
-        let legacy_transcript_forward = std::env::var(AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok();
+        let syslog_target = crate::env::var("CORTEX_SYSLOG_TARGET").ok();
+        let current_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_ENV).ok();
+        let legacy_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok();
         let transcript_forward = resolve_ai_transcript_forward_env(
             current_transcript_forward.as_deref(),
             legacy_transcript_forward.as_deref(),
@@ -185,37 +185,39 @@ impl HeartbeatAgentConfig {
             }
         }
         let ai_transcripts = transcript_forward.enabled;
-        let ai_transcript_checkpoint_path = std::env::var("CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                crate::setup::cortex_home_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join("ai-transcript-forward-checkpoint.json")
-            });
-        let agent_command_forward = std::env::var("CORTEX_AGENT_COMMAND_FORWARD")
+        let ai_transcript_checkpoint_path =
+            crate::env::var("CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT")
+                .ok()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    crate::setup::cortex_home_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .join("ai-transcript-forward-checkpoint.json")
+                });
+        let agent_command_forward = crate::env::var("CORTEX_AGENT_COMMAND_FORWARD")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let agent_command_spool_path = std::env::var("CORTEX_AGENT_COMMAND_SPOOL")
+        let agent_command_spool_path = crate::env::var("CORTEX_AGENT_COMMAND_SPOOL")
             .ok()
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 crate::setup::default_agent_command_spool_path()
                     .unwrap_or_else(|_| PathBuf::from("agent-command.jsonl"))
             });
-        let shell_history_forward = std::env::var("CORTEX_AGENT_SHELL_HISTORY_FORWARD")
+        let shell_history_forward = crate::env::var("CORTEX_AGENT_SHELL_HISTORY_FORWARD")
             .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let shell_history_checkpoint_path = std::env::var("CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                crate::setup::cortex_home_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join("shell-history-forward-checkpoint.json")
-            });
+        let shell_history_checkpoint_path =
+            crate::env::var("CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT")
+                .ok()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    crate::setup::cortex_home_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .join("shell-history-forward-checkpoint.json")
+                });
         Self {
             target,
             token,
@@ -503,7 +505,7 @@ impl HeartbeatCollector {
                 kernel: kernel_release(),
                 architecture: std::env::consts::ARCH.to_string(),
                 boot_id: boot_id(),
-                timezone: std::env::var("TZ").ok(),
+                timezone: crate::env::var("TZ").ok(),
             },
             sample: HeartbeatSample {
                 sequence,
@@ -840,7 +842,7 @@ impl HeartbeatProbe for LinuxContainerProbe {
 
     fn collect(&self) -> Pin<Box<dyn Future<Output = Result<ProbeOutput>> + Send + '_>> {
         Box::pin(async {
-            match tokio::process::Command::new("docker")
+            match crate::env::tokio_command("docker")
                 .args(["ps", "-a", "--format", "{{.State}}"])
                 .output()
                 .await
@@ -1369,7 +1371,7 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
 
     // Server-coordinated auto-update keeps the agent binary in lockstep with the
     // cortex server it reports to. Opt out with CORTEX_AGENT_AUTO_UPDATE=false.
-    let auto_update = std::env::var("CORTEX_AGENT_AUTO_UPDATE")
+    let auto_update = crate::env::var("CORTEX_AGENT_AUTO_UPDATE")
         .map(|v| !(v.eq_ignore_ascii_case("false") || v == "0"))
         .unwrap_or(true);
     let mut update_confirmed = false;
@@ -1721,7 +1723,7 @@ fn bounded_probe_error(name: &str, error: &anyhow::Error) -> String {
 }
 
 fn hostname() -> String {
-    if let Ok(hostname) = std::env::var("HOSTNAME")
+    if let Ok(hostname) = crate::env::var("HOSTNAME")
         && !hostname.is_empty()
     {
         return hostname;

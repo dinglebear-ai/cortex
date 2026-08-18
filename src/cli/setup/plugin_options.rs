@@ -13,12 +13,15 @@
 //!    remote server's `/health` and return early — no local server setup.
 
 use anyhow::{Result, bail};
+use std::collections::HashMap;
 use std::time::Duration;
+
+use cortex::config::PluginEnvGuard;
 
 /// Outcome of the plugin-option preparation step.
 pub(super) enum HookPrep {
     /// This install is a server: continue to the local check/repair phases.
-    Server,
+    Server(PluginEnvGuard),
     /// This install is a client: connectivity was validated; return early.
     Client,
 }
@@ -31,7 +34,7 @@ pub(super) enum HookPrep {
 pub(super) fn prepare_plugin_hook_env() -> Result<HookPrep> {
     // is_server defaults to "true" — only an explicit non-"true" value takes the
     // client path.
-    let is_server = std::env::var("CLAUDE_PLUGIN_OPTION_IS_SERVER")
+    let is_server = crate::env::var("CLAUDE_PLUGIN_OPTION_IS_SERVER")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "true".to_string());
@@ -43,20 +46,21 @@ pub(super) fn prepare_plugin_hook_env() -> Result<HookPrep> {
         &option_value("CLAUDE_PLUGIN_OPTION_API_TOKEN"),
     )?;
 
-    apply_plugin_options()?;
-    prepare_oauth_env()?;
+    let mut mapped = apply_plugin_options()?;
+    prepare_oauth_env(&mut mapped)?;
 
     if is_server != "true" {
         validate_client();
         return Ok(HookPrep::Client);
     }
 
-    Ok(HookPrep::Server)
+    Ok(HookPrep::Server(PluginEnvGuard::install(mapped)))
 }
 
 /// `CLAUDE_PLUGIN_OPTION_* -> CORTEX_*` env mapping, mirroring the script's
 /// `export_if_set` calls one-for-one and in order.
-fn apply_plugin_options() -> Result<()> {
+fn apply_plugin_options() -> Result<HashMap<String, String>> {
+    let mut mapped = HashMap::new();
     // (target CORTEX env var, source CLAUDE_PLUGIN_OPTION_* var)
     const MAPPINGS: &[(&str, &str)] = &[
         ("CORTEX_TOKEN", "CLAUDE_PLUGIN_OPTION_API_TOKEN"),
@@ -116,23 +120,23 @@ fn apply_plugin_options() -> Result<()> {
     ];
 
     for (env_name, option_name) in MAPPINGS {
-        export_if_set(env_name, option_name)?;
+        export_if_set(&mut mapped, env_name, option_name)?;
     }
-    Ok(())
+    Ok(mapped)
 }
 
 /// Mirror of bash `export_if_set`: read the source option, reject unsafe values
 /// (hard error), and set the target env var only when the value is non-empty.
-fn export_if_set(env_name: &str, option_name: &str) -> Result<()> {
+fn export_if_set(
+    mapped: &mut HashMap<String, String>,
+    env_name: &str,
+    option_name: &str,
+) -> Result<()> {
     let value = option_value(option_name);
     reject_unsafe_value(option_name, &value)?;
-    if value.is_empty() {
-        return Ok(());
+    if !value.is_empty() {
+        mapped.insert(env_name.to_string(), value);
     }
-    // SAFETY (edition 2021): set_var is safe here; this runs early in the
-    // plugin-hook path before any threads read these vars.
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var(env_name, value) };
     Ok(())
 }
 
@@ -148,7 +152,7 @@ fn reject_unsafe_value(name: &str, value: &str) -> Result<()> {
 /// Read an env var, returning "" when unset (matches bash `printenv ... || true`
 /// followed by emptiness checks).
 fn option_value(name: &str) -> String {
-    std::env::var(name).unwrap_or_default()
+    crate::env::var(name).unwrap_or_default()
 }
 
 /// Mirror of bash `strip_trailing_mcp_path`: drop a single trailing `/`, then a
@@ -179,28 +183,36 @@ fn append_csv_unique(csv: &str, value: &str) -> String {
 /// Mirror of bash `prepare_oauth_env`. Runs only when `CORTEX_AUTH_MODE` (the
 /// already-mapped var) is `oauth`. Reads `server_url` from the RAW option
 /// (`CLAUDE_PLUGIN_OPTION_SERVER_URL`), defaulting to `http://localhost:3100`.
-fn prepare_oauth_env() -> Result<()> {
-    let auth_mode = std::env::var("CORTEX_AUTH_MODE").unwrap_or_else(|_| "bearer".to_string());
+fn prepared_value(mapped: &HashMap<String, String>, key: &str) -> Option<String> {
+    mapped
+        .get(key)
+        .cloned()
+        .or_else(|| crate::env::var(key).ok())
+}
+
+fn prepare_oauth_env(mapped: &mut HashMap<String, String>) -> Result<()> {
+    let auth_mode =
+        prepared_value(mapped, "CORTEX_AUTH_MODE").unwrap_or_else(|| "bearer".to_string());
     if auth_mode != "oauth" {
         return Ok(());
     }
 
-    let server_url = std::env::var("CLAUDE_PLUGIN_OPTION_SERVER_URL")
+    let server_url = crate::env::var("CLAUDE_PLUGIN_OPTION_SERVER_URL")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "http://localhost:3100".to_string());
 
-    // Derive CORTEX_PUBLIC_URL when unset and the server is https.
-    let public_unset = std::env::var("CORTEX_PUBLIC_URL")
-        .map(|v| v.is_empty())
-        .unwrap_or(true);
-    if public_unset && server_url.starts_with("https://") {
-        // SAFETY (edition 2021): early single-threaded plugin-hook path.
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("CORTEX_PUBLIC_URL", strip_trailing_mcp_path(&server_url)) };
+    if prepared_value(mapped, "CORTEX_PUBLIC_URL").is_none_or(|value| value.is_empty())
+        && server_url.starts_with("https://")
+    {
+        mapped.insert(
+            "CORTEX_PUBLIC_URL".to_string(),
+            strip_trailing_mcp_path(&server_url),
+        );
     }
 
-    let mut redirects = std::env::var("CORTEX_AUTH_ALLOWED_REDIRECT_URIS").unwrap_or_default();
+    let mut redirects =
+        prepared_value(mapped, "CORTEX_AUTH_ALLOWED_REDIRECT_URIS").unwrap_or_default();
     redirects = append_csv_unique(&redirects, "https://claude.ai/api/mcp/auth_callback");
     redirects = append_csv_unique(&redirects, "https://claudeai.ai/api/mcp/auth_callback");
     if let Some(codex_callback) = codex_oauth_callback_url()
@@ -208,21 +220,15 @@ fn prepare_oauth_env() -> Result<()> {
     {
         redirects = append_csv_unique(&redirects, &codex_callback);
     }
-    // SAFETY (edition 2021): early single-threaded plugin-hook path.
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_AUTH_ALLOWED_REDIRECT_URIS", redirects) };
+    mapped.insert("CORTEX_AUTH_ALLOWED_REDIRECT_URIS".to_string(), redirects);
 
-    let disable_static = std::env::var("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
-        .ok()
+    let disable_static = prepared_value(mapped, "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "false".to_string());
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe {
-        std::env::set_var(
-            "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH",
-            disable_static,
-        )
-    };
+    mapped.insert(
+        "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH".to_string(),
+        disable_static,
+    );
     Ok(())
 }
 
@@ -230,7 +236,7 @@ fn prepare_oauth_env() -> Result<()> {
 /// `~/.codex/config.toml` for the first line whose trimmed key is
 /// `mcp_oauth_callback_url`, returning its quote-stripped value.
 fn codex_oauth_callback_url() -> Option<String> {
-    let home = std::env::var_os("HOME")?;
+    let home = crate::env::var_os("HOME")?;
     let config = std::path::PathBuf::from(home)
         .join(".codex")
         .join("config.toml");
@@ -262,7 +268,7 @@ fn codex_oauth_callback_url() -> Option<String> {
 /// `reqwest` blocking feature isn't enabled. Run the async GET on a dedicated
 /// thread with its own current-thread runtime.
 fn validate_client() {
-    let server_url = std::env::var("CLAUDE_PLUGIN_OPTION_SERVER_URL")
+    let server_url = crate::env::var("CLAUDE_PLUGIN_OPTION_SERVER_URL")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "http://localhost:3100".to_string());

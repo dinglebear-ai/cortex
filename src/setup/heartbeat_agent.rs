@@ -112,29 +112,29 @@ fn write_heartbeat_agent_env(env_path: &Path) -> io::Result<SetupPhase> {
     if let Some(parent) = env_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let target = std::env::var("CORTEX_HEARTBEAT_TARGET")
+    let target = crate::env::var("CORTEX_HEARTBEAT_TARGET")
         .ok()
         .or_else(|| read_setup_env_value("CORTEX_HEARTBEAT_TARGET"))
         .unwrap_or_else(|| heartbeat_agent::DEFAULT_TARGET.to_string());
-    let token = std::env::var("CORTEX_HEARTBEAT_TOKEN")
+    let token = crate::env::var("CORTEX_HEARTBEAT_TOKEN")
         .ok()
         .or_else(|| read_setup_env_value("CORTEX_TOKEN"))
         .or_else(|| read_setup_env_value("CORTEX_HEARTBEAT_TOKEN"));
-    let docker = std::env::var("CORTEX_AGENT_DOCKER")
+    let docker = crate::env::var("CORTEX_AGENT_DOCKER")
         .ok()
         .unwrap_or_else(|| "false".to_string());
-    let journald = std::env::var("CORTEX_AGENT_JOURNALD")
+    let journald = crate::env::var("CORTEX_AGENT_JOURNALD")
         .ok()
         .unwrap_or_else(|| "false".to_string());
-    let docker_url = std::env::var("CORTEX_AGENT_DOCKER_URL")
+    let docker_url = crate::env::var("CORTEX_AGENT_DOCKER_URL")
         .ok()
         .unwrap_or_else(|| heartbeat_agent::DEFAULT_DOCKER_URL.to_string());
-    let rust_log = std::env::var("RUST_LOG")
+    let rust_log = crate::env::var("RUST_LOG")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "warn".to_string());
-    let syslog_file = std::env::var("CORTEX_AGENT_SYSLOG_FILE").ok();
-    let syslog_target = std::env::var("CORTEX_SYSLOG_TARGET").ok();
+    let syslog_file = crate::env::var("CORTEX_AGENT_SYSLOG_FILE").ok();
+    let syslog_target = crate::env::var("CORTEX_SYSLOG_TARGET").ok();
     let mut body = format!(
         "CORTEX_HEARTBEAT_TARGET={}\nRUST_LOG={}\nCORTEX_AGENT_DOCKER={}\nCORTEX_AGENT_DOCKER_URL={}\nCORTEX_AGENT_JOURNALD={}\n",
         shell_safe_value(&target)?,
@@ -161,9 +161,9 @@ fn write_heartbeat_agent_env(env_path: &Path) -> io::Result<SetupPhase> {
             shell_safe_value(&token)?
         ));
     }
-    let transcript_forward = std::env::var(heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV)
+    let transcript_forward = crate::env::var(heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV)
         .ok()
-        .or_else(|| std::env::var(heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok())
+        .or_else(|| crate::env::var(heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok())
         .filter(|value| !value.trim().is_empty());
     if let Some(value) = transcript_forward {
         body.push_str(&format!(
@@ -180,7 +180,7 @@ fn write_heartbeat_agent_env(env_path: &Path) -> io::Result<SetupPhase> {
         ) {
             continue;
         }
-        if let Ok(value) = std::env::var(key)
+        if let Ok(value) = crate::env::var(key)
             && !value.trim().is_empty()
         {
             body.push_str(&format!("{key}={}\n", shell_safe_value(&value)?));
@@ -297,7 +297,7 @@ fn heartbeat_agent_unit(
 
 /// Returns true when systemd --user is available on this host.
 fn has_systemd() -> bool {
-    std::process::Command::new("systemctl")
+    crate::env::command("systemctl")
         .args(["--user", "--no-pager", "status"])
         .output()
         .map(|o| o.status.code() != Some(127))
@@ -319,7 +319,7 @@ fn write_heartbeat_agent_compose(
 
 fn docker_compose_up_phase(compose_dir: &Path) -> SetupPhase {
     let timer = PhaseTimer::start("heartbeat-agent-docker-up");
-    let result = std::process::Command::new("docker")
+    let result = crate::env::command("docker")
         .args(["compose", "up", "-d", "--remove-orphans"])
         .current_dir(compose_dir)
         .output();

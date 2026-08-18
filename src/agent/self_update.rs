@@ -23,7 +23,6 @@
 //! Gated by `CORTEX_AGENT_AUTO_UPDATE` (default on) in the caller.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -420,7 +419,7 @@ pub fn confirm_update_success() {
 }
 
 fn validate_binary(path: &Path, expected_version: &str) -> Result<()> {
-    let output = Command::new(path)
+    let output = crate::env::command(path)
         .arg("--version")
         .output()
         .context("run --version on staged binary")?;
@@ -456,7 +455,7 @@ fn install_and_restart(staged: &Path, exe: &Path, _fallback: Option<&Path>) -> R
     std::fs::rename(staged, exe).with_context(|| format!("swap new binary into {exe:?}"))?;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     // `exec` only returns on failure.
-    let error = Command::new(exe).args(args).exec();
+    let error = crate::env::command(exe).args(args).exec();
     Err(anyhow!("re-exec of {exe:?} failed: {error}"))
 }
 
@@ -537,7 +536,7 @@ fn install_and_restart(staged: &Path, exe: &Path, fallback: Option<&Path>) -> Re
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let script = windows_swap_script(std::process::id(), staged, exe, fallback, &args);
-    Command::new("powershell.exe")
+    crate::env::command("powershell.exe")
         .args([
             "-NoLogo",
             "-NoProfile",

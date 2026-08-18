@@ -142,41 +142,7 @@ pub(crate) fn severity(sev: &str) -> String {
     }
 }
 
-/// `"42 logs"` — both parts colored cyan.
-#[allow(dead_code)]
-pub(crate) fn metric(value: impl std::fmt::Display, label: &str) -> String {
-    format!("{} {}", cyan(&value.to_string()), cyan(label))
-}
-
 /// `"error: <msg>"` on stderr in Aurora rose-red. Gates on stderr's TTY.
 pub(crate) fn report_error(msg: &str) {
     eprintln!("{} {}", ansi_colorize_stderr(ERROR_ANSI, "error:"), msg);
-}
-
-/// `"hint: <msg>"` on stderr in Aurora cyan — companion to report_error.
-#[allow(dead_code)]
-pub(crate) fn report_hint(msg: &str) {
-    eprintln!("{} {}", ansi_colorize_stderr(CYAN_ANSI, "hint:"), msg);
-}
-
-#[allow(dead_code)]
-pub(crate) fn symbol_for_status(status: &str) -> String {
-    match status {
-        "ok" | "completed" => success("✓"),
-        "failed" | "error" => error("✗"),
-        "running" | "processing" => cyan("◐"),
-        "warn" | "warning" => warn("⚠"),
-        _ => cyan("•"),
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn status_text(status: &str) -> String {
-    match status {
-        "ok" | "completed" => success(status),
-        "failed" | "error" => error(status),
-        "running" | "processing" => cyan(status),
-        "warn" | "warning" => warn(status),
-        _ => cyan(status),
-    }
 }

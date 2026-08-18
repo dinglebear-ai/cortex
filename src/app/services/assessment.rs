@@ -119,38 +119,8 @@ impl CortexService {
         let incident_id = spec.incident_id.clone().unwrap_or_default();
         let prompt_preview = spec.prompt.chars().take(500).collect::<String>();
 
-        // `on_delta` is `FnMut` and borrows the caller's stack, so it cannot
-        // cross into the `'static` `run_fn` closure `LlmRunner::run`
-        // requires. Stream deltas through a channel instead: the run_fn
-        // task forwards each parsed delta line, and this function drains
-        // the channel concurrently with awaiting the run.
-        let (delta_tx, mut delta_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let run_fut = self.llm().run(spec, move |prompt| async move {
-            run_gemini_assessment(&prompt, &gemini_config, move |delta: &str| {
-                let _ = delta_tx.send(delta.to_string());
-                Ok(())
-            })
-            .await
-        });
-        tokio::pin!(run_fut);
-
-        let assessment = loop {
-            tokio::select! {
-                biased;
-                Some(delta) = delta_rx.recv() => {
-                    on_delta(&delta).map_err(ServiceError::Internal)?;
-                }
-                result = &mut run_fut => {
-                    // Drain any remaining buffered deltas before returning.
-                    while let Ok(delta) = delta_rx.try_recv() {
-                        on_delta(&delta).map_err(ServiceError::Internal)?;
-                    }
-                    break result;
-                }
-            }
-        }
-        .map_err(|err| ServiceError::Internal(anyhow::anyhow!(err)))?
-        .output;
+        let assessment =
+            super::run_gemini_with_delta(self.llm(), spec, &gemini_config, &mut on_delta).await?;
 
         Ok(AiAssessResponse {
             incident_id,

@@ -4,6 +4,7 @@ use serde_json::json;
 #[test]
 fn normalizes_container_ports_labels_and_domains() {
     let mut out = CollectorOutput::new("docker");
+    let mut network_members = BTreeMap::new();
     normalize_containers(
         "http://docker.test:2375",
         &json!([{
@@ -19,7 +20,9 @@ fn normalizes_container_ports_labels_and_domains() {
             "NetworkSettings": {"Networks": {"net": {}}}
         }]),
         &mut out,
+        &mut network_members,
     );
+    materialize_networks(&mut out, network_members);
     assert_eq!(out.services[0].name, "app");
     assert_eq!(out.services[0].ports[0].host_port, Some(8080));
     assert!(
@@ -34,6 +37,7 @@ fn normalizes_container_ports_labels_and_domains() {
 #[test]
 fn normalizes_shared_docker_network_once_with_members() {
     let mut out = CollectorOutput::new("docker");
+    let mut network_members = BTreeMap::new();
     normalize_containers(
         "http://docker.test:2375",
         &json!([
@@ -49,7 +53,9 @@ fn normalizes_shared_docker_network_once_with_members() {
             }
         ]),
         &mut out,
+        &mut network_members,
     );
+    materialize_networks(&mut out, network_members);
 
     assert_eq!(out.networks.len(), 1);
     assert_eq!(out.networks[0].name, "shared");

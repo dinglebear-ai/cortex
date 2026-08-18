@@ -28,9 +28,6 @@ pub(crate) use docker::{
     systemd_status_from_output,
 };
 #[cfg(test)]
-#[allow(unused_imports)]
-pub(crate) use format::{status_from_target, unresolved_status};
-#[cfg(test)]
 pub(crate) use mutation::{
     DIAG_DOCKER_UNAVAILABLE, DIAG_SYSTEMD_CHECK_FAILED, DIAG_TARGET_UNRESOLVED,
     target_from_container, unresolved_code,

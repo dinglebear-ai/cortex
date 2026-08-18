@@ -12,12 +12,11 @@
 // `SKILL_ASSESSMENT_SKILL_NAME`/`SKILL_ASSESSMENT_SKILL_MD` are consumed
 // only by tests today (the name/markdown are embedded into
 // `SKILL_ASSESSMENT_SYSTEM_PROMPT` via `concat!` rather than referenced
-// separately by production code) — `#[allow(dead_code)]` mirrors the same
-// pattern `crate::assessment::SKILL_NAME`/`SKILL_MD` would need if they
-// weren't already re-exported elsewhere.
-#[allow(dead_code)]
+// separately by production code). Keep these fixtures test-only instead of
+// compiling unused compatibility constants into production.
+#[cfg(test)]
 pub(crate) const SKILL_ASSESSMENT_SKILL_NAME: &str = "skill-improvement-assessment";
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) const SKILL_ASSESSMENT_SKILL_MD: &str =
     include_str!("../plugins/cortex/skills/skill-improvement-assessment/SKILL.md");
 

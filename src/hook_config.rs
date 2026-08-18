@@ -40,7 +40,7 @@ pub struct CollectedHookConfig {
 /// (`$HOME`), so the collector reads the same account cortex ingests
 /// transcripts for.
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
+    crate::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(""))
 }

@@ -93,6 +93,46 @@ async fn refresh_skips_collectors_after_collection_deadline() {
 }
 
 #[tokio::test]
+async fn collection_deadline_preserves_collectors_that_already_finished() {
+    let futures: Vec<CollectorFuture<'_>> = vec![
+        collector_task("fast", Duration::from_secs(1), async {
+            CollectorOutput::new("fast")
+        }),
+        collector_task("slow", Duration::from_secs(1), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            CollectorOutput::new("slow")
+        }),
+    ];
+    let mut warnings = Vec::new();
+    let results = collect_until_deadline(
+        futures,
+        &["fast", "slow"],
+        Duration::from_millis(20),
+        &mut warnings,
+    )
+    .await;
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].0, "fast");
+    assert!(
+        !results[0]
+            .4
+            .errors
+            .iter()
+            .any(|error| error.phase == "collection_timeout")
+    );
+    assert_eq!(results[1].0, "slow");
+    assert!(
+        results[1]
+            .4
+            .errors
+            .iter()
+            .any(|error| error.phase == "collection_timeout")
+    );
+    assert_eq!(warnings.len(), 1);
+}
+
+#[tokio::test]
 async fn collector_deadline_timeout_is_reported_as_skipped() {
     let result = collector_task("slow_collector", Duration::from_millis(1), async {
         tokio::time::sleep(Duration::from_millis(25)).await;

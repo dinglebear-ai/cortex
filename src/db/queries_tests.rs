@@ -2909,7 +2909,7 @@ fn bench_median_ms(runs: usize, mut f: impl FnMut()) -> f64 {
 #[test]
 #[ignore = "performance benchmark; builds millions of rows. Run with --ignored."]
 fn bench_stats_and_sessions() {
-    let rows: usize = std::env::var("CORTEX_BENCH_ROWS")
+    let rows: usize = crate::env::var("CORTEX_BENCH_ROWS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(5_000_000);
@@ -2917,7 +2917,7 @@ fn bench_stats_and_sessions() {
     // Optional persistent DB path so a seeded DB can be reused across runs
     // (seeding 10M rows takes ~13 min). When unset, use a throwaway tempdir.
     let _guard_dir;
-    let (pool, cfg) = if let Ok(path) = std::env::var("CORTEX_BENCH_DB") {
+    let (pool, cfg) = if let Ok(path) = crate::env::var("CORTEX_BENCH_DB") {
         let db_path = std::path::PathBuf::from(&path);
         let fresh = !db_path.exists();
         let cfg = test_storage_config(db_path);

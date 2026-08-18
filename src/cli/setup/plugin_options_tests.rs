@@ -12,16 +12,16 @@ impl EnvGuard {
     fn new(names: &[&'static str]) -> Self {
         let values = names
             .iter()
-            .map(|name| (*name, std::env::var(name).ok()))
+            .map(|name| (*name, crate::env::var(name).ok()))
             .collect();
         for name in names {
-            unsafe { std::env::remove_var(name) };
+            crate::env::remove_test_var(name);
         }
         Self { values }
     }
 
     fn set(&self, name: &'static str, value: &str) {
-        unsafe { std::env::set_var(name, value) };
+        crate::env::set_test_var(name, value);
     }
 }
 
@@ -29,8 +29,8 @@ impl Drop for EnvGuard {
     fn drop(&mut self) {
         for (name, value) in self.values.drain(..) {
             match value {
-                Some(value) => unsafe { std::env::set_var(name, value) },
-                None => unsafe { std::env::remove_var(name) },
+                Some(value) => crate::env::set_test_var(name, value),
+                None => crate::env::remove_test_var(name),
             }
         }
     }
@@ -103,19 +103,31 @@ fn prepare_plugin_hook_env_maps_server_options_without_client_probe() {
     env.set("CLAUDE_PLUGIN_OPTION_NO_AUTH", "1");
 
     let prep = prepare_plugin_hook_env().unwrap();
+    let _guard = match prep {
+        HookPrep::Server(guard) => guard,
+        HookPrep::Client => panic!("expected server plugin preparation"),
+    };
 
-    assert!(matches!(prep, HookPrep::Server));
-    assert_eq!(std::env::var("CORTEX_TOKEN").unwrap(), "token-123");
     assert_eq!(
-        std::env::var("CORTEX_SERVER_URL").unwrap(),
-        "https://cortex.example/mcp"
+        cortex::config::config_env_var("CORTEX_TOKEN").as_deref(),
+        Some("token-123")
     );
-    assert_eq!(std::env::var("CORTEX_PORT").unwrap(), "43100");
     assert_eq!(
-        std::env::var("CORTEX_DOCKER_INGEST_ENABLED").unwrap(),
-        "false"
+        cortex::config::config_env_var("CORTEX_SERVER_URL").as_deref(),
+        Some("https://cortex.example/mcp")
     );
-    assert_eq!(std::env::var("NO_AUTH").unwrap(), "1");
+    assert_eq!(
+        cortex::config::config_env_var("CORTEX_PORT").as_deref(),
+        Some("43100")
+    );
+    assert_eq!(
+        cortex::config::config_env_var("CORTEX_DOCKER_INGEST_ENABLED").as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        cortex::config::config_env_var("NO_AUTH").as_deref(),
+        Some("1")
+    );
 }
 
 #[test]
@@ -149,14 +161,15 @@ fn prepare_oauth_env_derives_public_url_and_redirects_once() {
         "https://claude.ai/api/mcp/auth_callback",
     );
 
-    prepare_oauth_env().unwrap();
-    prepare_oauth_env().unwrap();
+    let mut mapped = HashMap::new();
+    prepare_oauth_env(&mut mapped).unwrap();
+    prepare_oauth_env(&mut mapped).unwrap();
 
     assert_eq!(
-        std::env::var("CORTEX_PUBLIC_URL").unwrap(),
-        "https://cortex.example"
+        mapped.get("CORTEX_PUBLIC_URL").map(String::as_str),
+        Some("https://cortex.example")
     );
-    let redirects = std::env::var("CORTEX_AUTH_ALLOWED_REDIRECT_URIS").unwrap();
+    let redirects = mapped.get("CORTEX_AUTH_ALLOWED_REDIRECT_URIS").unwrap();
     assert_eq!(
         redirects
             .matches("https://claude.ai/api/mcp/auth_callback")
@@ -166,8 +179,10 @@ fn prepare_oauth_env_derives_public_url_and_redirects_once() {
     assert!(redirects.contains("https://claudeai.ai/api/mcp/auth_callback"));
     assert!(redirects.contains("http://127.0.0.1:1455/callback"));
     assert_eq!(
-        std::env::var("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH").unwrap(),
-        "false"
+        mapped
+            .get("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
+            .map(String::as_str),
+        Some("false")
     );
 }
 
@@ -188,5 +203,5 @@ fn prepare_plugin_hook_env_rejects_unsafe_api_token_before_mapping() {
     };
 
     assert!(err.contains("CLAUDE_PLUGIN_OPTION_API_TOKEN"));
-    assert!(std::env::var("CORTEX_TOKEN").is_err());
+    assert!(crate::env::var("CORTEX_TOKEN").is_err());
 }

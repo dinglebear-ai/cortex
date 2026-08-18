@@ -9,6 +9,22 @@ const PARSE_ERROR_MAX_BYTES: usize = 512;
 /// Apply a parser's output to the entry. Caller passes the parser's namespace
 /// key so the metadata fields land under the canonical owner.
 pub fn merge_output(entry: &mut LogBatchEntry, namespace: &'static str, out: ParserOutput) {
+    let mut root: serde_json::Map<String, Value> = entry
+        .metadata_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+    merge_output_with_metadata(entry, namespace, out, &mut root);
+}
+
+/// Merge using metadata that the dispatcher has already parsed. This keeps the
+/// ingest hot path to one metadata parse and one serialization per parser run.
+pub(crate) fn merge_output_with_metadata(
+    entry: &mut LogBatchEntry,
+    namespace: &'static str,
+    out: ParserOutput,
+    root: &mut serde_json::Map<String, Value>,
+) {
     if let Some(v) = out.http_status {
         entry.http_status = Some(v);
     }
@@ -25,30 +41,14 @@ pub fn merge_output(entry: &mut LogBatchEntry, namespace: &'static str, out: Par
         entry.severity = s.to_string();
     }
 
-    merge_metadata(entry, namespace, out.metadata);
-}
-
-fn merge_metadata(
-    entry: &mut LogBatchEntry,
-    namespace: &'static str,
-    parser_fields: serde_json::Map<String, Value>,
-) {
-    let mut root: serde_json::Map<String, Value> = match &entry.metadata_json {
-        Some(s) => serde_json::from_str(s).unwrap_or_else(|_| serde_json::Map::new()),
-        None => serde_json::Map::new(),
-    };
-
-    if !parser_fields.is_empty() {
-        root.insert(namespace.to_string(), Value::Object(parser_fields));
+    if !out.metadata.is_empty() {
+        root.insert(namespace.to_string(), Value::Object(out.metadata));
     }
-
-    // Parser provenance.
     root.insert(
         "parser".to_string(),
         json!({"name": namespace, "version": 1}),
     );
-
-    entry.metadata_json = Some(Value::Object(root).to_string());
+    entry.metadata_json = Some(Value::Object(std::mem::take(root)).to_string());
 }
 
 /// Record a parser failure on the entry. Format: "{parser_name}: {error}",

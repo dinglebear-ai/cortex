@@ -2,10 +2,13 @@
 
 use super::{RepositoryObservationKind, RepositoryObservationRow};
 use crate::agent_observatory::identity::event_key;
+#[cfg(test)]
 use crate::db::pool::{DbPool, write_lock};
 use anyhow::{Context, Result, bail};
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
 use rusqlite::types::Type;
-use rusqlite::{OptionalExtension, Row, Transaction, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, Row, Transaction, params};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -194,6 +197,7 @@ fn state_is_unchanged(
         && latest.payload_json == input.payload_json
 }
 
+#[cfg(test)]
 pub fn record_repository_observations_if_changed(
     pool: &DbPool,
     repository_key: &str,
@@ -281,6 +285,7 @@ pub(super) fn record_repository_observations_if_changed_tx(
     Ok(inserted)
 }
 
+#[cfg(test)]
 pub fn list_repository_observations(
     pool: &DbPool,
     repository_id: i64,

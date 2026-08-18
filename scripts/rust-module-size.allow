@@ -1,15 +1,12 @@
 src/agent_deploy.rs
 src/api.rs
 src/app/llm_runner.rs
-src/app/services/ai.rs
 src/app/services/graph.rs
 src/cli/dispatch_sessions.rs
 src/cli/help.rs
 src/cli/http_client.rs
-src/cli/parse_ai.rs
 src/cli/parse_logs.rs
 src/command_log.rs
-src/compose/compose/mutation.rs
 src/compose/mutation.rs
 src/config.rs
 src/db/analytics.rs
@@ -30,5 +27,4 @@ src/receiver/writer.rs
 src/runtime.rs
 src/scanner.rs
 src/scanner/checkpoint.rs
-src/setup/firstrun.rs
 xtask/src/version.rs

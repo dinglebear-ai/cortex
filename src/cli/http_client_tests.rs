@@ -887,7 +887,7 @@ async fn mcp_read_surfaces_and_skill_incident_id_round_trip_over_http() {
 
 // ─── Env var guard ──────────────────────────────────────────────────────────
 //
-// `std::env::set_var` is data-racy across threads. We serialise via the
+// `crate::env::set_test_var` is data-racy across threads. We serialise via the
 // `#[serial]` macro from `serial_test` (already a dev-dep). The guard
 // restores the prior value on drop so tests don't leak state.
 
@@ -898,15 +898,13 @@ struct EnvVarGuard {
 
 impl EnvVarGuard {
     fn set(name: &'static str, value: &str) -> Self {
-        let previous = std::env::var(name).ok();
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(name, value) };
+        let previous = crate::env::var(name).ok();
+        crate::env::set_test_var(name, value);
         Self { name, previous }
     }
     fn unset(name: &'static str) -> Self {
-        let previous = std::env::var(name).ok();
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(name) };
+        let previous = crate::env::var(name).ok();
+        crate::env::remove_test_var(name);
         Self { name, previous }
     }
 }
@@ -914,10 +912,8 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         match &self.previous {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            Some(v) => unsafe { std::env::set_var(self.name, v) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            None => unsafe { std::env::remove_var(self.name) },
+            Some(v) => crate::env::set_test_var(self.name, v),
+            None => crate::env::remove_test_var(self.name),
         }
     }
 }

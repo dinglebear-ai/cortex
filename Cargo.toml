@@ -23,10 +23,10 @@ invalid_rust_codeblocks = "deny"
 bare_urls = "warn"
 unescaped_backticks = "warn"
 redundant_explicit_links = "warn"
+missing_crate_level_docs = "deny"
 
 [workspace.lints.rust]
 missing_docs = "allow"
-missing_crate_level_docs = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
@@ -139,12 +139,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI output
-comfy-table = "7"
-supports-hyperlinks = "3"
 
 # Utils
 anyhow = "1"
-lru = "0.16"
+lru = "0.18.2"
+ipnet = "2.12"
 tempfile = "3"
 regex = "1"
 sha2 = "0.10"

@@ -122,7 +122,7 @@ async fn run_refresh(pool: &Arc<DbPool>, maintenance_limiter: &Arc<Semaphore>) {
 }
 
 fn refresh_interval_secs() -> u64 {
-    std::env::var("CORTEX_GRAPH_REFRESH_INTERVAL_SECS")
+    crate::env::var("CORTEX_GRAPH_REFRESH_INTERVAL_SECS")
         .ok()
         .as_deref()
         .map(str::trim)

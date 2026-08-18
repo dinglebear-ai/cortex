@@ -78,12 +78,12 @@ fn enabled_git_worker_records_progress_and_shuts_down() {
     let (directory, pool) = pool();
     let repository = directory.path().join("repo");
     std::fs::create_dir(&repository).unwrap();
-    std::process::Command::new("git")
+    crate::env::command("git")
         .args(["init", "-q"])
         .current_dir(&repository)
         .status()
         .unwrap();
-    std::process::Command::new("git")
+    crate::env::command("git")
         .args([
             "-c",
             "user.name=Test",

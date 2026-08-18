@@ -5,7 +5,6 @@ fn kernel_row(message: &str, hostname: &str) -> LogRow {
         app_name: Some("kernel".to_string()),
         message: message.to_string(),
         hostname: hostname.to_string(),
-        severity: "crit".to_string(),
         metadata_json: None,
         timestamp: "2026-01-01T00:00:00.000Z".to_string(),
     }
@@ -22,7 +21,6 @@ fn container_die_row(hostname: &str, exit_code: &str) -> LogRow {
         app_name: Some("dockerd".to_string()),
         message: format!("Container nginx died with exit code {exit_code}"),
         hostname: hostname.to_string(),
-        severity: "warning".to_string(),
         metadata_json: Some(meta),
         timestamp: "2026-01-01T00:00:00.000Z".to_string(),
     }
@@ -39,7 +37,6 @@ fn container_die_row_numeric(hostname: &str, exit_code: i64) -> LogRow {
         app_name: Some("dockerd".to_string()),
         message: format!("Container nginx died with exit code {exit_code}"),
         hostname: hostname.to_string(),
-        severity: "warning".to_string(),
         metadata_json: Some(meta),
         timestamp: "2026-01-01T00:00:00.000Z".to_string(),
     }
@@ -50,7 +47,6 @@ fn fail2ban_row(hostname: &str, msg: &str) -> LogRow {
         app_name: Some("fail2ban".to_string()),
         message: msg.to_string(),
         hostname: hostname.to_string(),
-        severity: "notice".to_string(),
         metadata_json: None,
         timestamp: "2026-01-01T00:00:00.000Z".to_string(),
     }
@@ -61,7 +57,6 @@ fn authelia_row(hostname: &str) -> LogRow {
         app_name: Some("authelia".to_string()),
         message: "second_factor authentication failed for user".to_string(),
         hostname: hostname.to_string(),
-        severity: "warning".to_string(),
         metadata_json: None,
         timestamp: "2026-01-01T00:00:00.000Z".to_string(),
     }
@@ -86,7 +81,6 @@ fn oom_kill_wrong_app_name() {
         app_name: Some("systemd".to_string()),
         message: "Out of memory: Killed process 1234 (nginx)".to_string(),
         hostname: "server1".to_string(),
-        severity: "crit".to_string(),
         metadata_json: None,
         timestamp: "2026-01-01T00:00:00.000Z".to_string(),
     }];
@@ -150,7 +144,6 @@ fn authelia_mfa_fail_matches() {
             app_name: Some("authelia".to_string()),
             message: "successful login".to_string(),
             hostname: "authhost".to_string(),
-            severity: "info".to_string(),
             metadata_json: None,
             timestamp: "2026-01-01T00:00:00.000Z".to_string(),
         },
@@ -167,7 +160,6 @@ fn authelia_mfa_successful_second_factor_does_not_match() {
         app_name: Some("authelia".to_string()),
         message: "second_factor authentication successful for user".to_string(),
         hostname: "authhost".to_string(),
-        severity: "info".to_string(),
         metadata_json: None,
         timestamp: "2026-01-01T00:00:00.000Z".to_string(),
     }];
@@ -252,18 +244,19 @@ fn disk_fill_zero_thresholds_do_not_fire() {
 }
 
 #[test]
-fn ingest_queue_pressure_fires_on_drops() {
-    let result = evaluate_ingest_queue_pressure("devhost", 1, 2, 3, 99, 100, "[]");
+fn ingest_queue_pressure_fires_on_pressure_or_udp_drops() {
+    let result = evaluate_ingest_queue_pressure("devhost", 1, 2, 99, 100, "[]");
 
     let params = result.expect("queue pressure should fire");
     assert_eq!(params.rule_id, "ingest_queue_pressure");
     assert_eq!(params.severity, "warning");
-    assert!(params.body.contains("TCP drops"));
+    assert!(params.body.contains("UDP drops"));
+    assert!(!params.body.contains("TCP drops"));
 }
 
 #[test]
 fn ingest_queue_pressure_ok_does_not_fire() {
-    let result = evaluate_ingest_queue_pressure("devhost", 0, 0, 0, 0, 100, "[]");
+    let result = evaluate_ingest_queue_pressure("devhost", 0, 0, 0, 100, "[]");
     assert!(result.is_none());
 }
 

@@ -14,9 +14,9 @@
 // `MCP_ASSESSMENT_SYSTEM_PROMPT` via `concat!` rather than referenced
 // separately by production code) — mirrors
 // `crate::skill_assessment::SKILL_ASSESSMENT_SKILL_NAME`/`_SKILL_MD`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) const MCP_ASSESSMENT_SKILL_NAME: &str = "mcp-friction-assessment";
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) const MCP_ASSESSMENT_SKILL_MD: &str =
     include_str!("../plugins/cortex/skills/mcp-friction-assessment/SKILL.md");
 

@@ -10,8 +10,8 @@ fn write_file(dir: &std::path::Path, rel: &str, contents: &str) {
 }
 
 /// Runs `body` with `$HOME` temporarily pointed at a fresh temp dir, then
-/// restores the previous value. Serialized via `#[serial]` at each call site
-/// (env vars are process-global) — see the two test functions below.
+/// restores the previous test-overlay value. `#[serial]` remains at each call
+/// site to prevent same-key semantic interference between tests.
 ///
 /// Restoration happens via an RAII guard (not a post-call statement) so a
 /// panic inside `body` still restores `$HOME` instead of leaking the temp
@@ -20,20 +20,18 @@ fn with_temp_home<T>(body: impl FnOnce(&std::path::Path) -> T) -> T {
     struct HomeGuard(Option<std::ffi::OsString>);
     impl Drop for HomeGuard {
         fn drop(&mut self) {
-            unsafe {
+            {
                 match &self.0 {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
+                    Some(v) => crate::env::set_test_var("HOME", v),
+                    None => crate::env::remove_test_var("HOME"),
                 }
             }
         }
     }
 
     let dir = tempfile::tempdir().unwrap();
-    let _guard = HomeGuard(std::env::var_os("HOME"));
-    unsafe {
-        std::env::set_var("HOME", dir.path());
-    }
+    let _guard = HomeGuard(crate::env::var_os("HOME"));
+    crate::env::set_test_var("HOME", dir.path());
     body(dir.path())
 }
 

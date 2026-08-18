@@ -92,7 +92,7 @@ pub(crate) fn install_self() -> Result<std::path::PathBuf> {
     let name = exe
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("cannot determine binary name from {}", exe.display()))?;
-    let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+    let home = crate::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
     let bin_dir = std::path::PathBuf::from(home).join(".local").join("bin");
     std::fs::create_dir_all(&bin_dir)?;
     let dest = bin_dir.join(name);
@@ -109,7 +109,7 @@ pub(crate) fn install_self() -> Result<std::path::PathBuf> {
     std::fs::rename(&tmp, &dest).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })?;
-    let on_path = std::env::var_os("PATH")
+    let on_path = crate::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).any(|d| d == bin_dir))
         .unwrap_or(false);
     if !on_path {
@@ -127,9 +127,10 @@ fn run_plugin_hook(args: PluginHookArgs) -> Result<()> {
     // the phases below observe the mapped CORTEX_PORT / NO_AUTH / token vars.
     // For client installs (IS_SERVER != "true"), this validates connectivity and
     // we return early without running the local server check+repair.
-    if let HookPrep::Client = prepare_plugin_hook_env()? {
-        return Ok(());
-    }
+    let _plugin_env_guard = match prepare_plugin_hook_env()? {
+        HookPrep::Client => return Ok(()),
+        HookPrep::Server(guard) => guard,
+    };
 
     // Keep the user's terminal copy in ~/.local/bin fresh each session.
     if let Err(e) = install_self() {
@@ -216,9 +217,9 @@ fn setup_report(mode: SetupMode) -> Result<SetupReport> {
         }
     });
     phases.push(
-        if std::env::var("CORTEX_TOKEN").is_ok()
-            || std::env::var("CORTEX_API_TOKEN").is_ok()
-            || std::env::var("NO_AUTH").ok().as_deref() == Some("true")
+        if cortex::config::config_env_var("CORTEX_TOKEN").is_some()
+            || cortex::config::config_env_var("CORTEX_API_TOKEN").is_some()
+            || cortex::config::config_env_var("NO_AUTH").as_deref() == Some("true")
         {
             SetupPhase {
                 name: "auth",
@@ -284,10 +285,10 @@ pub(crate) fn read_env_value(path: &std::path::Path, key: &str) -> Option<String
 }
 
 pub(crate) fn setup_data_dir() -> PathBuf {
-    std::env::var_os("CORTEX_DATA_DIR")
-        .or_else(|| std::env::var_os("CLAUDE_PLUGIN_DATA"))
+    crate::env::var_os("CORTEX_DATA_DIR")
+        .or_else(|| crate::env::var_os("CLAUDE_PLUGIN_DATA"))
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cortex")))
+        .or_else(|| crate::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cortex")))
         .unwrap_or_else(|| PathBuf::from(".cortex"))
 }
 
@@ -312,8 +313,7 @@ fn mcp_port_phase() -> SetupPhase {
 }
 
 fn setup_port(env_name: &str, default: u16) -> u16 {
-    std::env::var(env_name)
-        .ok()
+    cortex::config::config_env_var(env_name)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
@@ -322,7 +322,7 @@ fn setup_port(env_name: &str, default: u16) -> u16 {
 /// In Check mode: reports whether the timer is enabled.
 /// In Repair mode: installs and enables the timer if not already active.
 fn systemd_backup_phase(mode: SetupMode) -> SetupPhase {
-    let home = match std::env::var_os("HOME") {
+    let home = match crate::env::var_os("HOME") {
         Some(h) => h,
         None => {
             return SetupPhase {
@@ -381,11 +381,11 @@ fn systemd_backup_phase(mode: SetupMode) -> SetupPhase {
         }
 
         // Reload systemd and enable the timer
-        let reload_result = std::process::Command::new("systemctl")
+        let reload_result = crate::env::command("systemctl")
             .args(["--user", "daemon-reload"])
             .output();
 
-        let enable_result = std::process::Command::new("systemctl")
+        let enable_result = crate::env::command("systemctl")
             .args(["--user", "enable", "--now", "cortex-backup.timer"])
             .output();
 
@@ -425,7 +425,7 @@ fn systemd_backup_phase(mode: SetupMode) -> SetupPhase {
         }
     } else {
         // In Check mode, just report whether the timer is enabled
-        let is_active = std::process::Command::new("systemctl")
+        let is_active = crate::env::command("systemctl")
             .args(["--user", "is-enabled", "cortex-backup.timer"])
             .output();
 

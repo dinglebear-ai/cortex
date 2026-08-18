@@ -19,16 +19,16 @@ use super::*;
 fn command_log_hostname_ignores_the_hostname_env_var() {
     const SENTINEL: &str = "cortex-hostname-sentinel.invalid";
 
-    let previous = std::env::var("HOSTNAME").ok();
-    // SAFETY: edition 2024 requires unsafe for env mutation; `#[serial]` keeps
-    // this off any other thread reading the environment concurrently.
-    unsafe { std::env::set_var("HOSTNAME", SENTINEL) };
+    let previous = crate::env::var("HOSTNAME").ok();
+    // The test overlay avoids mutating libc's process environment. `#[serial]`
+    // still prevents same-key semantic interference with neighboring tests.
+    crate::env::set_test_var("HOSTNAME", SENTINEL);
 
     let resolved = hostname();
 
     match previous {
-        Some(value) => unsafe { std::env::set_var("HOSTNAME", value) },
-        None => unsafe { std::env::remove_var("HOSTNAME") },
+        Some(value) => crate::env::set_test_var("HOSTNAME", value),
+        None => crate::env::remove_test_var("HOSTNAME"),
     }
 
     if resolved == "localhost" {
@@ -157,12 +157,10 @@ fn wrapper_executes_multi_arg_commands_without_shell_reparse() {
     )
     .unwrap();
     std::fs::set_permissions(&fake_shell, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let previous_shell = std::env::var_os("SHELL");
-    let previous_out = std::env::var_os("CORTEX_TEST_ARG_OUT");
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("SHELL", &fake_shell) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_TEST_ARG_OUT", &arg_out) };
+    let previous_shell = crate::env::var_os("SHELL");
+    let previous_out = crate::env::var_os("CORTEX_TEST_ARG_OUT");
+    crate::env::set_test_var("SHELL", &fake_shell);
+    crate::env::set_test_var("CORTEX_TEST_ARG_OUT", &arg_out);
 
     let exit_code = run_agent_command_wrapper(
         &spool,
@@ -178,16 +176,12 @@ fn wrapper_executes_multi_arg_commands_without_shell_reparse() {
     .unwrap();
 
     match previous_shell {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(value) => unsafe { std::env::set_var("SHELL", value) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("SHELL") },
+        Some(value) => crate::env::set_test_var("SHELL", value),
+        None => crate::env::remove_test_var("SHELL"),
     }
     match previous_out {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(value) => unsafe { std::env::set_var("CORTEX_TEST_ARG_OUT", value) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("CORTEX_TEST_ARG_OUT") },
+        Some(value) => crate::env::set_test_var("CORTEX_TEST_ARG_OUT", value),
+        None => crate::env::remove_test_var("CORTEX_TEST_ARG_OUT"),
     }
     assert_eq!(exit_code, 0);
     assert_eq!(
@@ -719,23 +713,43 @@ async fn forward_agent_command_spool_preserves_records_appended_during_slow_post
                 .set_body_string(
                     r#"{"scanned":0,"imported":1,"skipped":0,"skipped_duplicates":0,"errors":0}"#,
                 )
-                .set_delay(std::time::Duration::from_millis(300)),
+                .set_delay(std::time::Duration::from_secs(1)),
         )
         .expect(1)
         .mount(&server)
         .await;
 
+    let forward_path = spool_path.clone();
     let server_uri = server.uri();
-    let forward = forward_agent_command_spool(&spool_path, &server_uri, Some("secret"));
+    let forward = tokio::spawn(async move {
+        forward_agent_command_spool(&forward_path, &server_uri, Some("secret")).await
+    });
 
-    // While the POST above is still in flight (thanks to the 300ms mock
-    // delay), append a second record through the same locking helper a
-    // concurrent `ingest shell agent wrap` invocation would use. If the fix
-    // regressed (lock held across the whole POST), this `flock(LOCK_EX)`
-    // would block until the forward's `File` drops at ~300ms; with the fix,
-    // the initial lock was already released well before this point (the
-    // 50ms delay below is generous margin), so this should return almost
-    // immediately.
+    // Do not guess when the forward future has reached the network with an
+    // arbitrary sleep. Wait until Wiremock has actually observed the POST,
+    // then verify the delayed response is still in flight before appending.
+    // This makes the lock regression deterministic even under a heavily loaded
+    // parallel test runner.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let requests = server.received_requests().await.expect("received requests");
+            if !requests.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("forward POST should reach the mock server");
+    assert!(
+        !forward.is_finished(),
+        "request observation must happen while the delayed response is still in flight"
+    );
+
+    // Append a second record through the same locking helper a concurrent
+    // `ingest shell agent wrap` invocation would use. If the fix regressed
+    // (lock held across the POST), this `flock(LOCK_EX)` would block until the
+    // delayed response completes; with the fix it returns promptly.
     let append_path = spool_path.clone();
     let second_record = AgentCommandSpoolRecord {
         started_at: "2026-07-06T00:00:02Z".to_string(),
@@ -754,19 +768,17 @@ async fn forward_agent_command_spool_preserves_records_appended_during_slow_post
         content_scrubbed: true,
     };
     let appended = tokio::task::spawn_blocking(move || {
-        std::thread::sleep(std::time::Duration::from_millis(50));
         let start = std::time::Instant::now();
         append_spool_record(&append_path, &second_record).unwrap();
         start.elapsed()
     });
 
-    let (result, append_elapsed) = tokio::join!(forward, appended);
-    let result = result.unwrap();
-    let append_elapsed = append_elapsed.unwrap();
+    let append_elapsed = appended.await.unwrap();
+    let result = forward.await.unwrap().unwrap();
 
     assert_eq!(result.imported, 1, "the first record was forwarded");
     assert!(
-        append_elapsed < std::time::Duration::from_millis(250),
+        append_elapsed < std::time::Duration::from_millis(500),
         "a real flock(LOCK_EX)-taking append while the POST is in flight must not block on \
          the (already-released) forwarding lock, took {append_elapsed:?}"
     );
@@ -931,18 +943,15 @@ fn wrapper_preserves_command_exit_when_spool_append_fails() {
     )
     .unwrap();
     std::fs::set_permissions(&fake_shell, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let previous_shell = std::env::var_os("SHELL");
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("SHELL", &fake_shell) };
+    let previous_shell = crate::env::var_os("SHELL");
+    crate::env::set_test_var("SHELL", &fake_shell);
 
     let exit_code =
         run_agent_command_wrapper(dir.path(), &["true".to_string()]).expect("wrapper runs command");
 
     match previous_shell {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(value) => unsafe { std::env::set_var("SHELL", value) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("SHELL") },
+        Some(value) => crate::env::set_test_var("SHELL", value),
+        None => crate::env::remove_test_var("SHELL"),
     }
     assert_eq!(exit_code, 0);
 }

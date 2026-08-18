@@ -27,19 +27,17 @@ impl EnvGuard {
         Self {
             saved: keys
                 .iter()
-                .map(|key| (*key, std::env::var(key).ok()))
+                .map(|key| (*key, crate::env::var(key).ok()))
                 .collect(),
         }
     }
 
     fn set(&self, key: &str, value: &str) {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(key, value) };
+        crate::env::set_test_var(key, value);
     }
 
     fn remove(&self, key: &str) {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(key) };
+        crate::env::remove_test_var(key);
     }
 }
 
@@ -47,10 +45,8 @@ impl Drop for EnvGuard {
     fn drop(&mut self) {
         for (key, value) in self.saved.drain(..) {
             match value {
-                // TODO: Audit that the environment access only happens in single-threaded code.
-                Some(value) => unsafe { std::env::set_var(key, value) },
-                // TODO: Audit that the environment access only happens in single-threaded code.
-                None => unsafe { std::env::remove_var(key) },
+                Some(value) => crate::env::set_test_var(key, value),
+                None => crate::env::remove_test_var(key),
             }
         }
     }

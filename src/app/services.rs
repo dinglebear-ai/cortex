@@ -66,6 +66,25 @@ use crate::db::{self, Bucket, ContextRef, DbPool, SearchParams, TimelineGroupBy}
 use crate::filetail::{FileTailRegistry, FileTailStatus};
 use crate::scanner;
 
+async fn run_gemini_with_delta<F>(
+    runner: &crate::app::llm_runner::LlmRunner,
+    spec: crate::app::llm_runner::LlmInvocationSpec,
+    gemini_config: &GeminiAssessConfig,
+    on_delta: &mut F,
+) -> ServiceResult<String>
+where
+    F: FnMut(&str) -> anyhow::Result<()> + Send,
+{
+    let gemini_config = gemini_config.clone();
+    runner
+        .run(spec, move |prompt| async move {
+            run_gemini_assessment(&prompt, &gemini_config, |delta| on_delta(delta)).await
+        })
+        .await
+        .map(|outcome| outcome.output)
+        .map_err(|error| ServiceError::Internal(anyhow::anyhow!(error)))
+}
+
 mod ai;
 mod ai_indexing;
 mod analytics;

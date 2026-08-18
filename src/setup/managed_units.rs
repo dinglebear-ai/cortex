@@ -74,7 +74,7 @@ pub(crate) fn rewrite_stale_managed_unit_commands(systemd_dir: &Path) -> io::Res
 
 pub(crate) fn cleanup_legacy_systemd() -> SetupPhase {
     let timer = PhaseTimer::start("legacy-systemd");
-    let home = match std::env::var("HOME") {
+    let home = match crate::env::var("HOME") {
         Ok(home) => PathBuf::from(home),
         Err(_) => {
             return timer.finish(SetupStatus::Skipped, "HOME unset");

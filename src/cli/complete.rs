@@ -293,11 +293,11 @@ fn query_distinct(column: &str) -> Result<Vec<String>> {
 }
 
 fn db_path() -> String {
-    std::env::var("CORTEX_DB_PATH").unwrap_or_else(|_| "data/cortex.db".to_string())
+    crate::env::var("CORTEX_DB_PATH").unwrap_or_else(|_| "data/cortex.db".to_string())
 }
 
 fn cache_path(kind: &str) -> Option<std::path::PathBuf> {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+    let dir = crate::env::var_os("XDG_RUNTIME_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("cortex-complete");

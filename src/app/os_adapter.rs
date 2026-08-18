@@ -84,7 +84,7 @@ impl OsAdapter for SystemOsAdapter {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ServiceResult<String>> + Send + 'a>>
     {
         Box::pin(async move {
-            let mut command = Command::new(program);
+            let mut command = crate::env::tokio_command(program);
             command.args(args).kill_on_drop(true);
             apply_dbus_env(&mut command);
 
@@ -121,7 +121,7 @@ impl OsAdapter for SystemOsAdapter {
         Box<dyn std::future::Future<Output = ServiceResult<std::process::Output>> + Send + 'a>,
     > {
         Box::pin(async move {
-            let mut command = Command::new(program);
+            let mut command = crate::env::tokio_command(program);
             command.args(args).kill_on_drop(true);
             apply_dbus_env(&mut command);
 
@@ -148,7 +148,7 @@ impl OsAdapter for SystemOsAdapter {
 /// process environment. `XDG_RUNTIME_DIR` is always set when the bus address
 /// is inferred — it is not independently guarded.
 fn apply_dbus_env(command: &mut Command) {
-    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none()
+    if crate::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none()
         && let Some((runtime_dir, bus_address)) = inferred_user_bus_env()
     {
         command

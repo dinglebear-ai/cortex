@@ -5,7 +5,9 @@ pub const ENTITY_TYPE_LOGICAL_SERVICE: &str = "logical_service";
 pub const ENTITY_TYPE_SERVICE_INSTANCE: &str = "service_instance";
 pub const REL_INSTANCE_OF: &str = "instance_of";
 pub const REASON_RESOLVER_INSTANCE_OF: &str = "resolver_instance_of";
+#[cfg(test)]
 pub const REASON_RESOLVER_SERVICE_INSTANCE: &str = "resolver_service_instance";
+#[cfg(test)]
 pub const REASON_RESOLVER_RAW_APP_LABEL: &str = "resolver_raw_app_label";
 pub const GRAPH_PROJECTION_CONTRACT_KEY: &str = "graph_projection_contract";
 pub const GRAPH_PROJECTION_CONTRACT_V2: &str = "entity_resolution_v2";

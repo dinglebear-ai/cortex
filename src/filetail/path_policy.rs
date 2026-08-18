@@ -72,7 +72,7 @@ fn canonical_allowed_file_tail_roots() -> Vec<PathBuf> {
 
 #[cfg(not(test))]
 fn allowed_file_tail_roots() -> Vec<PathBuf> {
-    std::env::var("CORTEX_FILE_TAIL_ALLOWED_ROOTS")
+    crate::env::var("CORTEX_FILE_TAIL_ALLOWED_ROOTS")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(|value| {
@@ -91,7 +91,7 @@ fn allowed_file_tail_roots() -> Vec<PathBuf> {
 
 #[cfg(test)]
 fn allowed_file_tail_roots() -> Vec<PathBuf> {
-    let mut roots: Vec<_> = std::env::var("CORTEX_FILE_TAIL_ALLOWED_ROOTS")
+    let mut roots: Vec<_> = crate::env::var("CORTEX_FILE_TAIL_ALLOWED_ROOTS")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(|value| {

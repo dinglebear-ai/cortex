@@ -1,9 +1,12 @@
 //! Transactional exact Git commit persistence.
 
 use super::GitCommitRow;
+#[cfg(test)]
 use crate::db::pool::{DbPool, write_lock};
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -147,6 +150,7 @@ fn commit_by_sha(conn: &Connection, repository_id: i64, sha: &str) -> Result<Opt
         .context("query Git commit by SHA")
 }
 
+#[cfg(test)]
 pub fn reconcile_git_commits(
     pool: &DbPool,
     repository_key: &str,
@@ -265,6 +269,7 @@ pub(super) fn reconcile_git_commits_tx(
     Ok(rows)
 }
 
+#[cfg(test)]
 pub fn upsert_git_commits(
     pool: &DbPool,
     repository_key: &str,
@@ -274,6 +279,7 @@ pub fn upsert_git_commits(
     reconcile_git_commits(pool, repository_key, commits, &[], observed_at)
 }
 
+#[cfg(test)]
 pub fn get_git_commit(
     pool: &DbPool,
     repository_id: i64,
@@ -289,6 +295,7 @@ pub fn get_git_commit(
     commit_by_sha(&conn, repository_id, sha)
 }
 
+#[cfg(test)]
 pub fn list_git_commits(pool: &DbPool, repository_id: i64) -> Result<Vec<GitCommitRow>> {
     if repository_id <= 0 {
         bail!("repository_id must be positive");

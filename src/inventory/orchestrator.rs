@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::inventory::collectors::CollectorOutput;
@@ -163,28 +165,13 @@ pub async fn refresh_inventory_with_inventory(
         ),
     ];
 
-    let results = if config.collection_deadline.is_zero() {
-        drop(futures);
-        collection_timeout_results(
-            COLLECTOR_NAMES,
-            config.collection_deadline.as_millis(),
-            &mut all_warnings,
-        )
-    } else {
-        match tokio::time::timeout(
-            config.collection_deadline,
-            futures_util::future::join_all(futures),
-        )
-        .await
-        {
-            Ok(results) => results,
-            Err(_) => collection_timeout_results(
-                COLLECTOR_NAMES,
-                config.collection_deadline.as_millis(),
-                &mut all_warnings,
-            ),
-        }
-    };
+    let results = collect_until_deadline(
+        futures,
+        &COLLECTOR_NAMES,
+        config.collection_deadline,
+        &mut all_warnings,
+    )
+    .await;
 
     for result in results {
         run_collector(
@@ -249,6 +236,58 @@ pub async fn refresh_inventory_with_inventory(
             .collect(),
     };
     Ok(InventoryRefreshOutcome { report, inventory })
+}
+
+async fn collect_until_deadline<'a>(
+    futures: Vec<CollectorFuture<'a>>,
+    collector_names: &[&'static str],
+    deadline: std::time::Duration,
+    warnings: &mut Vec<String>,
+) -> Vec<NamedOutput> {
+    if deadline.is_zero() {
+        drop(futures);
+        return collection_timeout_results(
+            collector_names.iter().copied(),
+            deadline.as_millis(),
+            warnings,
+        );
+    }
+
+    let mut pending: HashSet<&'static str> = collector_names.iter().copied().collect();
+    let mut running: FuturesUnordered<CollectorFuture<'a>> = futures.into_iter().collect();
+    let mut results = Vec::with_capacity(collector_names.len());
+    let sleep = tokio::time::sleep(deadline);
+    tokio::pin!(sleep);
+
+    loop {
+        tokio::select! {
+            _ = &mut sleep => break,
+            result = running.next() => {
+                let Some(result) = result else { break; };
+                pending.remove(result.0);
+                results.push(result);
+            }
+        }
+    }
+
+    if !pending.is_empty() {
+        results.extend(collection_timeout_results(
+            pending,
+            deadline.as_millis(),
+            warnings,
+        ));
+    }
+
+    // Preserve the historical collector order even though completion is now
+    // incremental. Stable report ordering makes diffs and operator tooling
+    // deterministic.
+    results.sort_by_key(|result| {
+        collector_names
+            .iter()
+            .position(|name| *name == result.0)
+            .unwrap_or(usize::MAX)
+    });
+    results
 }
 
 fn collector_task<'a, F>(

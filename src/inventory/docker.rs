@@ -1,7 +1,8 @@
 use chrono::Utc;
+use futures_util::{StreamExt, stream};
 use reqwest::header::HeaderMap;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::inventory::collectors::CollectorOutput;
@@ -9,6 +10,8 @@ use crate::inventory::http::HttpProbe;
 use crate::inventory::schema::{
     InventoryService, MountRef, NetworkSegment, PortMapping, Provenance, TrustLevel,
 };
+
+const MAX_CONCURRENT_HOST_PROBES: usize = 8;
 
 pub async fn collect(hosts: &[String], timeout: Duration) -> CollectorOutput {
     let mut out = CollectorOutput::new("docker");
@@ -23,16 +26,21 @@ pub async fn collect(hosts: &[String], timeout: Duration) -> CollectorOutput {
         out.warn("http", "failed to initialize Docker HTTP client");
         return out;
     };
-    for host in hosts {
-        match http
-            .get_json(
-                &format!("{}/containers/json?all=1", host.trim_end_matches('/')),
-                HeaderMap::new(),
-            )
-            .await
-        {
+    let mut network_members: BTreeMap<String, (BTreeSet<String>, Provenance)> = BTreeMap::new();
+    let mut responses = stream::iter(hosts.iter().cloned().enumerate())
+        .map(|(index, host)| {
+            let endpoint = format!("{}/containers/json?all=1", host.trim_end_matches('/'));
+            let http = &http;
+            async move { (index, http.get_json(&endpoint, HeaderMap::new()).await) }
+        })
+        .buffer_unordered(MAX_CONCURRENT_HOST_PROBES)
+        .collect::<Vec<_>>()
+        .await;
+    responses.sort_by_key(|(index, _)| *index);
+    for (host, (_, response)) in hosts.iter().zip(responses) {
+        match response {
             Ok(response) if response.status < 400 => {
-                normalize_containers(host, &response.body, &mut out)
+                normalize_containers(host, &response.body, &mut out, &mut network_members)
             }
             Ok(response) => out.warn(
                 "containers",
@@ -41,10 +49,33 @@ pub async fn collect(hosts: &[String], timeout: Duration) -> CollectorOutput {
             Err(error) => out.warn("containers", format!("Docker {host} unavailable: {error}")),
         }
     }
+    materialize_networks(&mut out, network_members);
     out
 }
 
-fn normalize_containers(host: &str, body: &Value, out: &mut CollectorOutput) {
+fn materialize_networks(
+    out: &mut CollectorOutput,
+    network_members: BTreeMap<String, (BTreeSet<String>, Provenance)>,
+) {
+    out.networks.extend(
+        network_members
+            .into_iter()
+            .map(|(name, (members, provenance))| NetworkSegment {
+                name,
+                kind: "docker".to_string(),
+                members: members.into_iter().collect(),
+                provenance,
+                details: Default::default(),
+            }),
+    );
+}
+
+fn normalize_containers(
+    host: &str,
+    body: &Value,
+    out: &mut CollectorOutput,
+    network_members: &mut BTreeMap<String, (BTreeSet<String>, Provenance)>,
+) {
     let Some(items) = body.as_array() else {
         out.warn(
             "containers",
@@ -71,23 +102,11 @@ fn normalize_containers(host: &str, body: &Value, out: &mut CollectorOutput) {
             .map(|map| map.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
         for network in &networks {
-            if let Some(existing) = out
-                .networks
-                .iter_mut()
-                .find(|segment| segment.name == *network && segment.kind == "docker")
-            {
-                if !existing.members.contains(&name) {
-                    existing.members.push(name.clone());
-                }
-            } else {
-                out.networks.push(NetworkSegment {
-                    name: network.clone(),
-                    kind: "docker".to_string(),
-                    members: vec![name.clone()],
-                    provenance: provenance(host),
-                    details: Default::default(),
-                });
-            }
+            network_members
+                .entry(network.clone())
+                .or_insert_with(|| (BTreeSet::new(), provenance(host)))
+                .0
+                .insert(name.clone());
         }
         out.services.push(InventoryService {
             id: format!("docker:{host}:{id}"),

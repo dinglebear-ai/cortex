@@ -4,9 +4,8 @@
 mod types;
 pub(super) use types::AgentProjectionWriteFault;
 pub use types::{
-    AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionOutboxRow,
-    AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert,
-    AgentWorktreeEvidenceUpsert,
+    AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionWriteInput,
+    AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
 };
 
 #[path = "agent_observatory_projection_counters.rs"]
@@ -14,7 +13,7 @@ mod counters;
 #[path = "agent_observatory_projection_lookup.rs"]
 mod lookup;
 pub use lookup::{
-    AgentProjectionRunMatch, AgentProjectionWorktreeRef, find_active_projection_worktree,
+    AgentProjectionRunMatch, find_active_projection_worktree,
     find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
 };
 #[path = "agent_observatory_projection_refs.rs"]

@@ -308,11 +308,7 @@ pub(super) async fn flush_batch(
 }
 
 fn insert_envelopes_batch(pool: &DbPool, envelopes: &[IngestEnvelope]) -> anyhow::Result<usize> {
-    let entries = envelopes
-        .iter()
-        .map(|envelope| envelope.entry.clone())
-        .collect::<Vec<_>>();
-    db::insert_logs_batch(pool, &entries)
+    db::insert_logs_batch_borrowed(pool, envelopes)
 }
 
 #[derive(Default)]

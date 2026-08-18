@@ -255,7 +255,7 @@ async fn debounce_watch_events(rx: &mut mpsc::Receiver<()>) {
 }
 
 fn inventory_refresh_interval_secs() -> u64 {
-    std::env::var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS")
+    crate::env::var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS")
         .ok()
         .as_deref()
         .and_then(parse_inventory_refresh_interval_secs)
@@ -267,7 +267,7 @@ fn parse_inventory_refresh_interval_secs(value: &str) -> Option<u64> {
 }
 
 fn inventory_watch_enabled() -> bool {
-    std::env::var("CORTEX_INVENTORY_WATCH_ENABLED")
+    crate::env::var("CORTEX_INVENTORY_WATCH_ENABLED")
         .ok()
         .as_deref()
         .map(|value| {
@@ -280,7 +280,7 @@ fn inventory_watch_enabled() -> bool {
 }
 
 fn inventory_graph_projection_enabled() -> bool {
-    std::env::var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED")
+    crate::env::var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED")
         .ok()
         .as_deref()
         .map(|value| {

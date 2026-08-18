@@ -32,9 +32,6 @@ impl NotifyType {
 #[derive(Debug, Clone)]
 pub struct NotifyResponse {
     pub status_code: u16,
-    /// True when all urls succeeded (200/207); 424 is treated as permanent failure.
-    #[allow(dead_code)]
-    pub success: bool,
 }
 
 /// Errors that can occur when notifying via Apprise.
@@ -83,7 +80,7 @@ impl AppriseClient {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -136,7 +133,6 @@ impl AppriseClient {
             // 204 = No Content: nothing was sent (no targets / empty body) — permanent failure
             200 | 201 | 202 | 207 => Ok(NotifyResponse {
                 status_code: status,
-                success: true,
             }),
             429 | 500..=599 => {
                 // Transient — safe to retry

@@ -12,7 +12,7 @@ fn write_executable(path: &std::path::Path, body: &str) {
 
 fn path_with_prepended(dir: &std::path::Path) -> std::ffi::OsString {
     let mut paths = vec![dir.to_path_buf()];
-    if let Some(existing) = std::env::var_os("PATH") {
+    if let Some(existing) = crate::env::var_os("PATH") {
         paths.extend(std::env::split_paths(&existing));
     }
     std::env::join_paths(paths).unwrap()
@@ -25,10 +25,8 @@ struct EnvGuard {
 
 impl EnvGuard {
     fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let previous = std::env::var_os(name);
-        unsafe {
-            std::env::set_var(name, value);
-        }
+        let previous = crate::env::var_os(name);
+        crate::env::set_test_var(name, value);
         Self { name, previous }
     }
 }
@@ -36,12 +34,12 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         match &self.previous {
-            Some(value) => unsafe {
-                std::env::set_var(self.name, value);
-            },
-            None => unsafe {
-                std::env::remove_var(self.name);
-            },
+            Some(value) => {
+                crate::env::set_test_var(self.name, value);
+            }
+            None => {
+                crate::env::remove_test_var(self.name);
+            }
         }
     }
 }

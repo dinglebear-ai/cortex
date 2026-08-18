@@ -4,5 +4,4 @@ pub mod apprise;
 pub mod digest;
 pub mod dispatcher;
 pub mod evaluator;
-pub mod queue;
 pub mod rules;

@@ -1,7 +1,6 @@
 use std::io;
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::process::Command;
 
 use super::{SetupPhase, SetupStatus};
 
@@ -71,11 +70,11 @@ pub(crate) fn systemctl_user_state(command: &str, unit: &str) -> Option<String> 
 }
 
 pub(crate) fn run_systemctl_user(args: &[&str]) -> io::Result<std::process::Output> {
-    let output = Command::new("systemctl")
+    let output = crate::env::command("systemctl")
         .arg("--user")
         .args(args)
         .output()?;
-    if output.status.success() || std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+    if output.status.success() || crate::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
         return Ok(output);
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -85,7 +84,7 @@ pub(crate) fn run_systemctl_user(args: &[&str]) -> io::Result<std::process::Outp
     let Some((runtime_dir, bus_address)) = inferred_user_bus_env() else {
         return Ok(output);
     };
-    Command::new("systemctl")
+    crate::env::command("systemctl")
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
         .arg("--user")

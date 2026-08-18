@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -502,6 +502,11 @@ pub async fn forward_agent_command_spool(
 ) -> Result<CommandLogImportResult> {
     validate_spool_path_for_read(path)?;
 
+    let url = agent_command_forward_url(target)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("failed to build agent-command forwarding reqwest::Client")?;
     let mut total = CommandLogImportResult::default();
     loop {
         let (parsed, chunk_bytes, reached_eof) = {
@@ -526,12 +531,7 @@ pub async fn forward_agent_command_spool(
             continue;
         }
 
-        let url = agent_command_forward_url(target)?;
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .context("failed to build agent-command forwarding reqwest::Client")?;
-        let mut request = client.post(url).json(&parsed.records);
+        let mut request = client.post(&url).json(&parsed.records);
         if let Some(token) = token {
             request = request.bearer_auth(token);
         }
@@ -724,16 +724,16 @@ pub fn run_agent_command_wrapper(spool_path: &Path, command_args: &[String]) -> 
         exit_status: status.code(),
         command: scrub_command(&command),
         cwd,
-        agent: std::env::var("CORTEX_AGENT_COMMAND_AGENT")
+        agent: crate::env::var("CORTEX_AGENT_COMMAND_AGENT")
             .unwrap_or_else(|_| "claude-code".to_string()),
-        command_surface: std::env::var("CORTEX_AGENT_COMMAND_SURFACE").ok(),
+        command_surface: crate::env::var("CORTEX_AGENT_COMMAND_SURFACE").ok(),
         hostname: hostname(),
         user: username(),
         pid: std::process::id(),
-        session_id: std::env::var("CLAUDE_CODE_SESSION_ID")
+        session_id: crate::env::var("CLAUDE_CODE_SESSION_ID")
             .ok()
-            .or_else(|| std::env::var("CLAUDE_SESSION_ID").ok())
-            .or_else(|| std::env::var("CORTEX_AGENT_COMMAND_SESSION").ok()),
+            .or_else(|| crate::env::var("CLAUDE_SESSION_ID").ok())
+            .or_else(|| crate::env::var("CORTEX_AGENT_COMMAND_SESSION").ok()),
         schema_version: 1,
         content_scrubbed: true,
     };
@@ -773,7 +773,7 @@ fn command_args_to_shell_command(command_args: &[String]) -> String {
 }
 
 fn should_run_agent_command_unwrapped(command_args: &[String]) -> bool {
-    std::env::var("CORTEX_AGENT_COMMAND_WRAPPER")
+    crate::env::var("CORTEX_AGENT_COMMAND_WRAPPER")
         .ok()
         .as_deref()
         == Some("1")
@@ -845,7 +845,7 @@ fn command_status(command_args: &[String], fallback_shell_command: &str) -> Resu
     let (program, args) = command_args
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("internal error: command_status called with empty args"))?;
-    Command::new(program)
+    crate::env::command(program)
         .args(args)
         .env("CORTEX_AGENT_COMMAND_WRAPPER", "1")
         .env_remove("CLAUDE_CODE_SHELL_PREFIX")
@@ -854,8 +854,8 @@ fn command_status(command_args: &[String], fallback_shell_command: &str) -> Resu
 }
 
 fn shell_command_status(command: &str) -> Result<ExitStatus> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    Command::new(shell)
+    let shell = crate::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    crate::env::command(shell)
         // The wrapper must not load a login profile. Apart from making a
         // non-interactive command depend on unrelated user configuration,
         // login profiles on persistent CI runners can contain stale absolute
@@ -1143,17 +1143,17 @@ fn atuin_history_state_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn command_log_state_dir(path: &Path) -> Result<PathBuf> {
-    if let Some(value) = std::env::var_os("CORTEX_COMMAND_LOG_STATE_DIR") {
+    if let Some(value) = crate::env::var_os("CORTEX_COMMAND_LOG_STATE_DIR") {
         let state_dir = PathBuf::from(value);
         ensure_private_parent(&state_dir.join(".keep"))?;
         return Ok(state_dir);
     }
-    if let Some(value) = std::env::var_os("XDG_STATE_HOME") {
+    if let Some(value) = crate::env::var_os("XDG_STATE_HOME") {
         let state_dir = PathBuf::from(value).join("cortex");
         ensure_private_parent(&state_dir.join(".keep"))?;
         return Ok(state_dir);
     }
-    if let Some(value) = std::env::var_os("HOME") {
+    if let Some(value) = crate::env::var_os("HOME") {
         let state_dir = PathBuf::from(value).join(".local/state/cortex");
         ensure_private_parent(&state_dir.join(".keep"))?;
         return Ok(state_dir);
@@ -1408,9 +1408,9 @@ fn hostname() -> String {
 }
 
 fn username() -> Option<String> {
-    std::env::var("USER")
+    crate::env::var("USER")
         .ok()
-        .or_else(|| std::env::var("LOGNAME").ok())
+        .or_else(|| crate::env::var("LOGNAME").ok())
         .filter(|value| !value.trim().is_empty())
 }
 

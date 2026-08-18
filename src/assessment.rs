@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 
 const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-flash-lite-preview";
 const STDERR_TAIL_LIMIT: usize = 4096;
@@ -249,7 +249,7 @@ fn spawn_gemini_child(
     gemini_home: &TempDir,
     cwd: &Path,
 ) -> Result<Child> {
-    let mut command = Command::new(&spec.program);
+    let mut command = crate::env::tokio_command(&spec.program);
     command
         .args(&spec.args)
         .current_dir(cwd)
@@ -395,7 +395,7 @@ fn env_or_default(var_name: &str, default_program: &str) -> String {
 }
 
 fn non_empty_env(var_name: &str) -> Option<String> {
-    std::env::var(var_name)
+    crate::env::var(var_name)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

@@ -1,6 +1,5 @@
 use std::io;
 use std::path::Path;
-use std::process::Command;
 use std::time::Instant;
 
 use super::debug_wrapper::{check_debug_compose_content_phase, check_debug_wrapper_content_phase};
@@ -100,7 +99,7 @@ fn runtime_current_phase(repo_path: &Path) -> SetupPhase {
     if !script.exists() {
         return timer.finish(SetupStatus::Error, format!("missing {}", script.display()));
     }
-    match Command::new("bash")
+    match crate::env::command("bash")
         .arg(script)
         .arg("--allow-local-image")
         .current_dir(repo_path)

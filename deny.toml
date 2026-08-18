@@ -16,13 +16,13 @@ yanked = "deny"
 # Known advisories we've reviewed and accepted:
 ignore = [
   # RUSTSEC-2023-0071 — Marvin Attack (RSA timing side-channel) in the `rsa` crate.
-  # Pulled in transitively: lab-auth → jsonwebtoken → rsa v0.9.10 / v0.10.0-rc.18.
-  # Owner: cortex maintainer. Review cadence: every release; next review no later
-  # than 2026-07-31 or when lab-auth/jsonwebtoken releases a hardened path.
-  # No upstream fix exists yet (as of 2026-05). The RSA keys are used for JWT
-  # signing/verification only (short-lived tokens, not long-term data encryption)
-  # and the server is not on the PKCS#1 v1.5 decrypt path that is vulnerable.
-  # REMOVE when lab-auth migrates to a hardened rsa path or a fix ships upstream.
+  # Two lab-auth paths: jsonwebtoken -> rsa v0.9.10, plus direct rsa v0.10.0-rc.18.
+  # Owner: cortex maintainer. Re-reviewed 2026-08-18: cargo audit still reports
+  # no fixed release for either version. Review every release; next review no later
+  # than 2026-11-30 or when lab-auth/jsonwebtoken offers a hardened path. The
+  # pinned source uses RSA for JWT signing/verification and signing-key management;
+  # Cortex/lab-auth has no RSA ciphertext-decryption path. REMOVE when lab-auth
+  # migrates to a hardened RSA path or a fix ships upstream.
   { id = "RUSTSEC-2023-0071", reason = "no fix available; JWT-only usage via lab-auth; not on PKCS#1 v1.5 decrypt path" },
 ]
 

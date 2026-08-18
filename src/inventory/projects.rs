@@ -1,4 +1,5 @@
 use chrono::Utc;
+use futures_util::{StreamExt, stream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use crate::inventory::schema::{ProjectRepo, Provenance};
 
 const MAX_REPOS: usize = 120;
 const MAX_DEPTH: usize = 3;
+const MAX_CONCURRENT_REPOS: usize = 8;
 
 pub async fn collect(roots: &[PathBuf], timeout: Duration) -> CollectorOutput {
     let mut out = CollectorOutput::new("projects");
@@ -26,12 +28,22 @@ pub async fn collect(roots: &[PathBuf], timeout: Duration) -> CollectorOutput {
             break;
         }
     }
-    for repo in repos.into_iter().take(MAX_REPOS) {
-        match repo_summary(&repo, timeout).await {
+    let inspected = stream::iter(repos.into_iter().take(MAX_REPOS))
+        .map(|repo| async move {
+            let summary = repo_summary(&repo, timeout).await;
+            (repo, summary)
+        })
+        .buffer_unordered(MAX_CONCURRENT_REPOS)
+        .collect::<Vec<_>>()
+        .await;
+    for (repo, summary) in inspected {
+        match summary {
             Some(summary) => out.projects.push(summary),
             None => out.warn("git", format!("failed to inspect repo {}", repo.display())),
         }
     }
+    out.projects
+        .sort_by(|left, right| left.path.cmp(&right.path));
     out
 }
 
@@ -62,13 +74,16 @@ fn discover_repos(path: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 
 async fn repo_summary(path: &Path, timeout: Duration) -> Option<ProjectRepo> {
     let path_str = path.to_str()?;
-    let branch = git(path_str, &["branch", "--show-current"], timeout).await;
-    let head = git(path_str, &["rev-parse", "--short", "HEAD"], timeout).await;
-    let status = git(path_str, &["status", "--porcelain=v1", "--branch"], timeout).await?;
+    let (branch, head, status, worktrees) = tokio::join!(
+        git(path_str, &["branch", "--show-current"], timeout),
+        git(path_str, &["rev-parse", "--short", "HEAD"], timeout),
+        git(path_str, &["status", "--porcelain=v1", "--branch"], timeout),
+        git(path_str, &["worktree", "list", "--porcelain"], timeout),
+    );
+    let status = status?;
     let dirty = status.lines().any(|line| !line.starts_with("##"));
     let (ahead, behind) = parse_ahead_behind(&status);
-    let worktrees = git(path_str, &["worktree", "list", "--porcelain"], timeout)
-        .await
+    let worktrees = worktrees
         .map(|body| {
             body.lines()
                 .filter_map(|line| line.strip_prefix("worktree "))

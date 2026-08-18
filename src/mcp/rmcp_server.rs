@@ -443,7 +443,7 @@ fn parse_widget_embed(raw: Option<&str>) -> bool {
 fn widget_embed_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED
-        .get_or_init(|| parse_widget_embed(std::env::var("CORTEX_WIDGET_EMBED").ok().as_deref()))
+        .get_or_init(|| parse_widget_embed(crate::env::var("CORTEX_WIDGET_EMBED").ok().as_deref()))
 }
 
 /// The query widget as an embedded resource content block, annotated
