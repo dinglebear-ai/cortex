@@ -470,3 +470,13 @@ REGRESSION: Agent Observatory focused suite, runtime worker suite, private-ident
 REGRESSION result: 86 focused tests passed; full nextest ran 2,930 tests with 2 skipped, one slow, and no failures.
 FILES: `src/db/agent_observatory_projection_sql.rs`, `src/db/agent_observatory_projection_tests.rs`, `src/agent_observatory/classifier.rs`, `src/agent_observatory/classifier_tests.rs`, `src/runtime/agent_observatory.rs`, `src/runtime/agent_observatory_tests.rs`
 NOTES: Equal timestamps are resolved by a stable mutable-state fingerprint, not arrival order. Byte limits allow exactly one oversized first row so cursor progress remains bounded and observable.
+
+## AO-040 Add resumable backfill and exact Git commit attribution
+commit/worktree SHA: dcd69957 (task started)
+RED: no durable resumable backfill/job progress, no run-to-commit persistence, and no post-reconcile exact commit attribution path; legacy HEAD observations also lacked enough transition detail to repair multi-commit history deterministically
+RED result: new backfill and attribution fixtures initially had no engine/DB surfaces; early integration runs exposed live-cursor fixture setup and canonical provider-field mismatches before the intended invariants could be proven
+GREEN: added one-snapshot fixed high-water capture, independent per-source maintenance-job cursors, bounded resumable pages that never mutate live projector cursors, exact new/displaced SHA persistence on HEAD observations, legacy commit-graph range reconstruction, and scorer-backed run-to-commit relations with provenance
+GREEN result: interrupt/reopen/resume matched uninterrupted materialized state; post-high-water live rows stayed owned by the live projector; two exact Git commits linked at verified 0.98 command-cwd confidence, replay remained idempotent, relation deletion was repaired by backfill, and rewind preserved historical links
+FIX: adversarial review added repository-consistency validation for worktree/commit relations, prevented future run/evidence activity from retroactively activating stale historical runs, made high-water capture one SQLite read snapshot, fixed the runtime health/cursor assertion race, and split DB types into ownership sidecars instead of weakening the 500-line production-module gate
+REGRESSION: final harness ran 102 Agent Observatory tests, 63 Git observer tests, and 10 projection DB tests with 0 failures; focused attribution ran 4/4, backfill 3/3, runtime health 1/1, and real-Git attribution/backfill repair 1/1
+GATE: workspace Clippy passed with -D warnings; cargo fmt --all -- --check, git diff --check, full 500-line Rust production-module gate, Agent Observatory golden contracts, and Cargo.toml/Cargo.lock no-diff gate passed

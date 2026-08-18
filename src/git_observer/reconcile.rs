@@ -1,11 +1,14 @@
 //! One-repository Git reconciliation.
 
+#[path = "reconcile_attribution.rs"]
+mod attribution;
 #[path = "reconcile_commits.rs"]
 mod commit_import;
 #[path = "reconcile_lifecycle.rs"]
 mod lifecycle;
 #[path = "reconcile_support.rs"]
 mod support;
+use attribution::attribute_commit_transitions;
 use commit_import::{
     ObservedCommitTransition, collect_commit_changes, commit_upserts, transitions,
 };
@@ -370,6 +373,8 @@ fn observations(
                         "fast_forward": transition.kind.is_fast_forward(),
                         "head_sha": transition.new_sha.as_str(),
                         "new_commit_count": transition.new_commit_count,
+                        "new_commit_shas": transition.new_shas,
+                        "displaced_commit_shas": transition.displaced_shas,
                         "old_head_sha": transition.old_sha.as_str(),
                         "transition_kind": transition.kind.as_str(),
                     })
@@ -457,6 +462,7 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
             Ok(inputs)
         },
     )?;
+    attribute_commit_transitions(pool, &commit_collection.transitions, &result);
     Ok(RepositoryReconcileReport {
         topology: Some(result.topology),
         imported_commits: result.commits,

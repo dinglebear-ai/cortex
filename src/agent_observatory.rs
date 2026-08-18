@@ -1,7 +1,9 @@
 //! Agent Observatory domain constants and coordination entry points.
 
 pub mod attribution;
+pub mod backfill;
 pub mod classifier;
+pub mod git_attribution;
 pub mod identity;
 pub mod lifecycle;
 pub mod projector;

@@ -168,6 +168,32 @@ pub fn project_transcript_log(
     project_transcript_log_inner(pool, row, None)
 }
 
+pub(crate) fn project_log_row(pool: &DbPool, row: &LogEntry) -> Result<bool> {
+    let transcript_projects = matches!(
+        classify_transcript_log(row),
+        TranscriptLogClassification::Project(_)
+    );
+    let command_projects = matches!(
+        classify_command_log(row),
+        CommandLogClassification::Project(_)
+    );
+    match (transcript_projects, command_projects) {
+        (true, true) => anyhow::bail!(
+            "log row {} matches both transcript and command projection contracts",
+            row.id
+        ),
+        (true, false) => {
+            project_transcript_log(pool, row)?;
+            Ok(true)
+        }
+        (false, true) => {
+            project_command_log(pool, row)?;
+            Ok(true)
+        }
+        (false, false) => Ok(false),
+    }
+}
+
 pub(crate) fn project_log_row_with_cursor(pool: &DbPool, row: &LogEntry) -> Result<()> {
     let transcript_projects = matches!(
         classify_transcript_log(row),

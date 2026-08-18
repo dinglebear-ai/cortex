@@ -48,6 +48,8 @@ pub(super) struct ObservedCommitTransition {
     pub old_sha: String,
     pub new_sha: String,
     pub kind: CommitTransitionKind,
+    pub new_shas: Vec<String>,
+    pub displaced_shas: Vec<String>,
     pub new_commit_count: usize,
     pub displaced_commit_count: usize,
 }
@@ -423,6 +425,8 @@ pub(super) async fn collect_commit_changes<R: GitCommandRunner>(
             kind,
             new_commit_count: new_shas.len(),
             displaced_commit_count: displaced_shas.len(),
+            new_shas,
+            displaced_shas,
         });
     }
     Ok(collection)

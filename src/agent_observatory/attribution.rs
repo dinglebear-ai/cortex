@@ -37,6 +37,20 @@ impl AttributionKind {
         }
     }
 
+    pub fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "hook_cwd" => Some(Self::HookCwd),
+            "otlp_session_path" => Some(Self::OtlpSessionPath),
+            "agent_command_cwd" => Some(Self::AgentCommandCwd),
+            "transcript_project_path" => Some(Self::TranscriptProjectPath),
+            "lifecycle_host_process" => Some(Self::LifecycleHostProcess),
+            "atuin_cwd_window" => Some(Self::AtuinCwdWindow),
+            "unique_active_host_cwd" => Some(Self::UniqueActiveHostCwd),
+            "timestamp_proximity" => Some(Self::TimestampProximity),
+            _ => None,
+        }
+    }
+
     const fn maximum_confidence(self) -> f64 {
         match self {
             Self::TimestampProximity => 0.50,

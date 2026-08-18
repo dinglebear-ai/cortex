@@ -78,8 +78,19 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         ] {
             assert_eq!(projection_cursor(&pool, source).unwrap(), "");
         }
-        let health = projection_health(&pool, "projector").unwrap().unwrap();
-        assert!(health.contains("oversized_first_rows=1"));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if projection_health(&pool, "projector")
+                    .unwrap()
+                    .is_some_and(|health| health.contains("oversized_first_rows=1"))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
         token.cancel();
         tokio::time::timeout(Duration::from_secs(1), handle)
             .await

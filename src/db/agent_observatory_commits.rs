@@ -1,6 +1,6 @@
 //! Transactional exact Git commit persistence.
 
-use super::GitCommitRow;
+use super::{GitCommitRow, RepositoryObservationRow, RepositoryReconcileResult};
 #[cfg(test)]
 use crate::db::pool::{DbPool, write_lock};
 use anyhow::{Context, Result, bail};
@@ -14,6 +14,13 @@ const COMMIT_COLUMNS: &str =
     "id, repository_id, sha, parent_shas_json, author_name, author_email_hash,
      authored_at, committed_at, subject, changed_files, insertions, deletions,
      changed_paths_json, first_observed_at, last_observed_at, reachable, metadata_json";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GitRepositoryReconcileResult {
+    pub topology: RepositoryReconcileResult,
+    pub commits: Vec<GitCommitRow>,
+    pub observations: Vec<RepositoryObservationRow>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitCommitReachabilityUpdate {
