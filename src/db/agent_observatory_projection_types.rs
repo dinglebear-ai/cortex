@@ -129,5 +129,7 @@ pub struct AgentProjectionWriteResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentProjectionWriteFault {
-    AfterEventInsert,
+    EventInsert,
+    CursorAdvance,
+    Commit,
 }

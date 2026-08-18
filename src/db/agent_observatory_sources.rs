@@ -129,7 +129,10 @@ impl AgentSourceRecord {
             Self::Hook(row) => row.cursor_id.to_string(),
             Self::Skill(row) => row.cursor_id.to_string(),
             Self::Llm(row) => serde_json::to_string(&LlmCursor {
-                started_at: row.started_at.clone(),
+                ready_at: row
+                    .finished_at
+                    .clone()
+                    .unwrap_or_else(|| row.started_at.clone()),
                 id: row.id.clone(),
             })
             .expect("LLM cursor serialization cannot fail"),
@@ -146,7 +149,8 @@ pub struct AgentSourcePage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LlmCursor {
-    started_at: String,
+    #[serde(alias = "started_at")]
+    ready_at: String,
     id: String,
 }
 
@@ -175,7 +179,7 @@ fn llm_cursor(cursor: &str) -> Result<Option<LlmCursor>> {
         return Ok(None);
     }
     let cursor: LlmCursor = serde_json::from_str(cursor).context("invalid LLM source cursor")?;
-    if cursor.id.is_empty() || chrono::DateTime::parse_from_rfc3339(&cursor.started_at).is_err() {
+    if cursor.id.is_empty() || chrono::DateTime::parse_from_rfc3339(&cursor.ready_at).is_err() {
         bail!("invalid LLM source cursor fields");
     }
     Ok(Some(cursor))
@@ -292,21 +296,28 @@ fn llm_page(
     after: Option<&LlmCursor>,
     limit: i64,
 ) -> Result<Vec<AgentSourceRecord>> {
-    let mut stmt = conn.prepare(
+    let mut sql = String::from(
         "SELECT id, started_at, finished_at, duration_ms, caller_surface, action,
                 provider, model, program, incident_id, ai_tool, ai_project, ai_session_id,
                 evidence_counts_json, prompt_bytes, output_bytes, status, error, metadata_json
            FROM llm_invocations
-          WHERE ?1 IS NULL
-             OR started_at > ?1
-             OR (started_at = ?1 AND id > ?2)
-          ORDER BY started_at, id
-          LIMIT ?3",
-    )?;
-    let after_started_at = after.map(|cursor| cursor.started_at.as_str());
-    let after_id = after.map(|cursor| cursor.id.as_str());
+          WHERE finished_at IS NOT NULL",
+    );
+    let mut bindings = Vec::<rusqlite::types::Value>::new();
+    if let Some(after) = after {
+        sql.push_str(" AND (finished_at, id) > (?1, ?2)");
+        bindings.push(rusqlite::types::Value::Text(after.ready_at.clone()));
+        bindings.push(rusqlite::types::Value::Text(after.id.clone()));
+    }
+    let limit_parameter = bindings.len() + 1;
+    sql.push_str(&format!(
+        " ORDER BY finished_at, id LIMIT ?{limit_parameter}"
+    ));
+    bindings.push(rusqlite::types::Value::Integer(limit));
+
+    let mut stmt = conn.prepare(&sql)?;
     Ok(stmt
-        .query_map(params![after_started_at, after_id, limit], |row| {
+        .query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
             Ok(AgentSourceRecord::Llm(AgentLlmSourceRow {
                 id: row.get(0)?,
                 started_at: row.get(1)?,

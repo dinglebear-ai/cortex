@@ -7,6 +7,8 @@ use rusqlite::{Error as SqliteError, ErrorCode, Transaction, params};
 use super::models::LogBatchEntry;
 use super::pool::DbPool;
 
+pub(crate) const TRANSIENT_SQLITE_RETRY_DELAYS_MS: &[u64] = &[25, 100, 250];
+
 /// Batch insert for higher throughput.
 ///
 /// Keep the public API concrete so callers can pass `&[]` without type
@@ -20,14 +22,15 @@ pub(crate) fn insert_logs_batch_borrowed<T>(pool: &DbPool, entries: &[T]) -> Res
 where
     T: Borrow<LogBatchEntry>,
 {
-    const RETRY_DELAYS_MS: &[u64] = &[25, 100, 250];
-
     let mut attempt = 0usize;
     loop {
         match insert_logs_batch_once(pool, entries) {
             Ok(inserted) => return Ok(inserted),
-            Err(err) if is_transient_sqlite_lock(&err) && attempt < RETRY_DELAYS_MS.len() => {
-                let delay_ms = RETRY_DELAYS_MS[attempt];
+            Err(err)
+                if is_transient_sqlite_lock(&err)
+                    && attempt < TRANSIENT_SQLITE_RETRY_DELAYS_MS.len() =>
+            {
+                let delay_ms = TRANSIENT_SQLITE_RETRY_DELAYS_MS[attempt];
                 tracing::warn!(
                     error = %err,
                     attempt = attempt + 1,
@@ -52,6 +55,9 @@ where
     let tx = conn.transaction()?;
     insert_logs_batch_in_tx_with_ids(&tx, entries, None)?;
     tx.commit()?;
+    if !entries.is_empty() {
+        super::agent_observatory::notify_projection_work();
+    }
     tracing::debug!(
         entry_count = entries.len(),
         "Committed batch insert transaction"
@@ -159,7 +165,7 @@ where
     Ok(())
 }
 
-fn is_transient_sqlite_lock(err: &anyhow::Error) -> bool {
+pub(crate) fn is_transient_sqlite_lock(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         matches!(
             cause.downcast_ref::<SqliteError>(),

@@ -975,8 +975,8 @@ fn migration_44_applies_from_schema_43_and_is_idempotent() {
         })
         .unwrap();
     assert_eq!(
-        max_version, 47,
-        "schema 43 should upgrade to schema 47 (applying 44, 45, 46, 47)"
+        max_version, 48,
+        "schema 43 should upgrade to schema 48 (applying 44 through 48)"
     );
     let marker_count: i64 = conn
         .query_row(
@@ -1474,7 +1474,7 @@ fn init_pool_creates_agent_observatory_actor_and_worktree_evidence_schema() {
 }
 
 #[test]
-fn schema_43_fixture_upgrades_to_47_and_preserves_legacy_rows() {
+fn schema_43_fixture_upgrades_to_48_and_preserves_legacy_rows() {
     const FIXTURE: &str = include_str!("../../tests/fixtures/schema-43.sql");
     assert!(!FIXTURE.contains("jmagar"));
     assert!(!FIXTURE.contains("/home/"));
@@ -1500,7 +1500,7 @@ fn schema_43_fixture_upgrades_to_47_and_preserves_legacy_rows() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, 47);
+    assert_eq!(version, 48);
 
     let legacy_log: (String, String, String) = conn
         .query_row(
@@ -4464,15 +4464,15 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
     let pool_45 = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
     let conn_45 = pool_45.get().unwrap();
 
-    // Verify we're now at schema 47 (45 + 46 + 47 are applied automatically)
+    // Verify we're now at schema 48 (45 through 48 are applied automatically)
     let schema_version_final: i64 = conn_45
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })
         .unwrap();
     assert_eq!(
-        schema_version_final, 47,
-        "should upgrade from schema 44 to schema 47 (applying 45, 46, 47)"
+        schema_version_final, 48,
+        "should upgrade from schema 44 to schema 48 (applying 45 through 48)"
     );
 
     // Verify all migration 45 tables now exist
@@ -4509,7 +4509,7 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
     drop(conn_45);
     drop(pool_45);
 
-    // Verify idempotency: reopening should keep schema at 45 and not reapply migration
+    // Verify idempotency: reopening should keep the latest schema and not reapply migrations
     let pool_again = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
     let conn_again = pool_again.get().unwrap();
 
@@ -4519,8 +4519,8 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
         })
         .unwrap();
     assert_eq!(
-        schema_version_again, 47,
-        "should remain at schema 47 after migrations 45, 46, 47"
+        schema_version_again, 48,
+        "should remain at schema 48 after migrations 45 through 48"
     );
 
     let cursor_count_again: i64 = conn_again
@@ -4572,7 +4572,7 @@ fn migration_45_fresh_database_applies_transactionally() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema_version, 47, "fresh database should be at schema 47");
+    assert_eq!(schema_version, 48, "fresh database should be at schema 48");
 
     // Verify all migration 45 tables still exist (additive migrations preserve them)
     let tables: Vec<String> = conn
@@ -4856,6 +4856,84 @@ fn migration_46_creates_otel_spans_table_and_indexes() {
         )
         .unwrap();
     assert_eq!(marker_count, 1, "migration 46 must be idempotent");
+}
+
+#[test]
+fn migration_48_preserves_legacy_projector_cursors_and_adds_llm_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("migration-48.db");
+    let pool = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
+    let conn = pool.get().unwrap();
+
+    for (name, cursor) in [
+        ("mcp", "101"),
+        ("hook", "102"),
+        ("skill", "103"),
+        (
+            "llm",
+            r#"{"started_at":"2026-08-05T12:00:00.000Z","id":"llm-old"}"#,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO agent_projection_cursors (cursor_type, source_name, cursor_value)
+             VALUES ('source', ?1, ?2)",
+            rusqlite::params![name, cursor],
+        )
+        .unwrap();
+    }
+    conn.execute("DELETE FROM schema_migrations WHERE version = 48", [])
+        .unwrap();
+    drop(conn);
+    drop(pool);
+
+    let reopened = init_pool(&StorageConfig::for_test(db_path)).unwrap();
+    let conn = reopened.get().unwrap();
+    for (name, expected) in [
+        ("mcp_events", "101"),
+        ("hook_events", "102"),
+        ("skill_events", "103"),
+        (
+            "llm_invocations",
+            r#"{"started_at":"2026-08-05T12:00:00.000Z","id":"llm-old"}"#,
+        ),
+    ] {
+        let cursor: String = conn
+            .query_row(
+                "SELECT cursor_value FROM agent_projection_cursors
+                 WHERE cursor_type = 'source' AND source_name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cursor, expected);
+    }
+    let legacy_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_projection_cursors
+             WHERE cursor_type = 'source' AND source_name IN ('mcp', 'hook', 'skill', 'llm')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_count, 0);
+
+    let llm_index: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'idx_llm_invocations_finished_id'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(llm_index, 1);
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 48",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
 }
 
 // AO-015: migration 47 OTLP metric-point table contract.

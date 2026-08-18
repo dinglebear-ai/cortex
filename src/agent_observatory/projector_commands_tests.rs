@@ -1,9 +1,12 @@
-use super::{CommandProjectionOutcome, CommandProjectionSkipReason, project_command_log};
+use super::{
+    CommandProjectionOutcome, CommandProjectionSkipReason, project_command_log,
+    project_command_log_with_cursor,
+};
 use crate::agent_observatory::identity::{event_key, run_key};
 use crate::config::StorageConfig;
 use crate::db::agent_observatory::{
     AgentEventKind, EvidenceTrustLevel, RepositoryUpsert, RepositoryWorktreeUpsert,
-    reconcile_repository,
+    projection_cursor, reconcile_repository,
 };
 use crate::db::{LogEntry, init_pool};
 
@@ -122,6 +125,23 @@ fn atuin() -> LogEntry {
             .to_string(),
         ),
     }
+}
+
+#[test]
+fn cursor_aware_command_skip_consumes_the_source_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("command-skip.db"))).unwrap();
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "");
+
+    let outcome = project_command_log_with_cursor(&pool, &agent_command(), "logs", "301").unwrap();
+    assert_eq!(
+        outcome,
+        CommandProjectionOutcome::Skipped(super::CommandProjectionDiagnostic {
+            log_id: 301,
+            reason: CommandProjectionSkipReason::NoMatchingWorktree,
+        })
+    );
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "301");
 }
 
 #[test]

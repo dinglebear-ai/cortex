@@ -8,9 +8,9 @@ pub mod projector;
 
 /// Schema version reached after all planned Agent Observatory migrations.
 ///
-/// This is intentionally separate from `db::KNOWN_SCHEMA_VERSION` until
-/// migrations 44 through 47 are implemented and verified.
-pub const AGENT_OBSERVATORY_SCHEMA_VERSION: i64 = 47;
+/// This is intentionally separate from `db::KNOWN_SCHEMA_VERSION` so the
+/// Observatory contract keeps an explicit schema revision.
+pub const AGENT_OBSERVATORY_SCHEMA_VERSION: i64 = 48;
 
 /// Version of the durable Agent Observatory projection contract.
 pub const AGENT_OBSERVATORY_PROJECTION_VERSION: u32 = 1;

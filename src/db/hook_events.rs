@@ -81,6 +81,9 @@ pub fn insert_hook_events(pool: &DbPool, events: &[HookEventInsert]) -> Result<u
     let tx = conn.transaction()?;
     let inserted = insert_hook_events_in_tx(&tx, events)?;
     tx.commit()?;
+    if inserted > 0 {
+        super::agent_observatory::notify_projection_work();
+    }
     Ok(inserted)
 }
 

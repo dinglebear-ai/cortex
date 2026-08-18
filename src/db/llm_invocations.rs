@@ -69,7 +69,7 @@ pub fn finish_llm_invocation(
     duration_ms: i64,
     output_bytes: Option<i64>,
 ) -> rusqlite::Result<()> {
-    conn.execute(
+    let changed = conn.execute(
         "UPDATE llm_invocations
          SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
              duration_ms = ?2,
@@ -79,6 +79,9 @@ pub fn finish_llm_invocation(
          WHERE id = ?1",
         params![id, duration_ms, status, error, output_bytes],
     )?;
+    if changed > 0 {
+        super::agent_observatory::notify_projection_work();
+    }
     Ok(())
 }
 

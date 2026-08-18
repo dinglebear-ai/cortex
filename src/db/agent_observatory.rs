@@ -1,6 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::OnceLock;
+use tokio::sync::broadcast;
 
 #[path = "agent_observatory_commits.rs"]
 mod commits;
@@ -23,6 +25,7 @@ pub use projection::{
     find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
     write_agent_projection,
 };
+pub(crate) use projection::{projection_event_has_summary, write_agent_projection_with_cursor};
 
 #[path = "agent_observatory_observations.rs"]
 mod observations;
@@ -43,8 +46,55 @@ use crate::db::pool::{DbPool, write_lock};
 use anyhow::{Context, Result};
 use rusqlite::TransactionBehavior;
 
+fn projection_wake_sender() -> &'static broadcast::Sender<()> {
+    static PROJECTION_WAKE: OnceLock<broadcast::Sender<()>> = OnceLock::new();
+    PROJECTION_WAKE.get_or_init(|| {
+        let (sender, _) = broadcast::channel(16);
+        sender
+    })
+}
+
+pub(crate) fn projection_wake_receiver() -> broadcast::Receiver<()> {
+    projection_wake_sender().subscribe()
+}
+
+pub(crate) fn notify_projection_work() {
+    let _ = projection_wake_sender().send(());
+}
+
+pub(crate) fn advance_projection_cursor_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    source_name: &str,
+    cursor: &str,
+) -> Result<()> {
+    let changed = tx.execute(
+        "UPDATE agent_projection_cursors
+            SET cursor_value = ?2,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE cursor_type = 'source' AND source_name = ?1",
+        rusqlite::params![source_name, cursor],
+    )?;
+    anyhow::ensure!(changed == 1, "projection cursor is not initialized");
+    Ok(())
+}
+
 pub(crate) fn projection_cursor(pool: &DbPool, source_name: &str) -> Result<String> {
+    use rusqlite::OptionalExtension;
+
     let connection = pool.get().context("acquire database connection")?;
+    if let Some(cursor) = connection
+        .query_row(
+            "SELECT cursor_value FROM agent_projection_cursors
+              WHERE cursor_type = 'source' AND source_name = ?1",
+            [source_name],
+            |row| row.get(0),
+        )
+        .optional()?
+    {
+        return Ok(cursor);
+    }
+
+    let _write_guard = write_lock();
     connection.execute(
         "INSERT OR IGNORE INTO agent_projection_cursors
              (cursor_type, source_name, cursor_value) VALUES ('source', ?1, '')",
@@ -64,15 +114,10 @@ pub(crate) fn advance_projection_cursor(
     cursor: &str,
 ) -> Result<()> {
     let _write_guard = write_lock();
-    let connection = pool.get().context("acquire database connection")?;
-    let changed = connection.execute(
-        "UPDATE agent_projection_cursors
-            SET cursor_value = ?2,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-          WHERE cursor_type = 'source' AND source_name = ?1",
-        rusqlite::params![source_name, cursor],
-    )?;
-    anyhow::ensure!(changed == 1, "projection cursor is not initialized");
+    let mut connection = pool.get().context("acquire database connection")?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    advance_projection_cursor_in_tx(&tx, source_name, cursor)?;
+    tx.commit()?;
     Ok(())
 }
 

@@ -228,7 +228,7 @@ Phase gates: G2 Projection and G3 Git.
 ```bash
 cargo test agent_observatory --lib
 cargo test git_observer --lib
-cargo test --test agent_observatory_projection
+cargo test db::agent_observatory::projection --lib
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```

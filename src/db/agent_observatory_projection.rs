@@ -187,9 +187,30 @@ fn outbox_key(input: &AgentProjectionWriteInput) -> Result<String> {
     Ok(format!("v1:projection_outbox:{:x}", Sha256::digest(bytes)))
 }
 
+pub(crate) fn projection_event_has_summary(
+    pool: &DbPool,
+    source_kind: &str,
+    source_id: &str,
+    projection_variant: &str,
+    summary: &str,
+) -> Result<bool> {
+    let key = event_key(source_kind, source_id, projection_variant)?;
+    let connection = pool.get().context("acquire database connection")?;
+    let exists: i64 = connection.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM agent_run_events
+              WHERE event_key = ?1 AND summary = ?2
+         )",
+        rusqlite::params![key, summary],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
 fn write_inner(
     pool: &DbPool,
     input: &AgentProjectionWriteInput,
+    cursor: Option<(&str, &str)>,
     fault: Option<AgentProjectionWriteFault>,
 ) -> Result<AgentProjectionWriteResult> {
     validate_input(input)?;
@@ -256,7 +277,7 @@ fn write_inner(
         &input.event,
     )?;
 
-    if fault == Some(AgentProjectionWriteFault::AfterEventInsert) {
+    if fault == Some(AgentProjectionWriteFault::EventInsert) {
         bail!("injected failure after event insert");
     }
 
@@ -275,7 +296,16 @@ fn write_inner(
     } else {
         None
     };
+    if let Some((source_name, cursor)) = cursor {
+        super::advance_projection_cursor_in_tx(&tx, source_name, cursor)?;
+    }
+    if fault == Some(AgentProjectionWriteFault::CursorAdvance) {
+        bail!("injected failure after cursor advance");
+    }
     tx.commit()?;
+    if fault == Some(AgentProjectionWriteFault::Commit) {
+        bail!("injected failure after commit");
+    }
 
     Ok(AgentProjectionWriteResult {
         run,
@@ -292,7 +322,16 @@ pub fn write_agent_projection(
     pool: &DbPool,
     input: &AgentProjectionWriteInput,
 ) -> Result<AgentProjectionWriteResult> {
-    write_inner(pool, input, None)
+    write_inner(pool, input, None, None)
+}
+
+pub(crate) fn write_agent_projection_with_cursor(
+    pool: &DbPool,
+    input: &AgentProjectionWriteInput,
+    source_name: &str,
+    cursor: &str,
+) -> Result<AgentProjectionWriteResult> {
+    write_inner(pool, input, Some((source_name, cursor)), None)
 }
 
 #[cfg(test)]
@@ -301,7 +340,18 @@ pub(super) fn write_agent_projection_with_fault(
     input: &AgentProjectionWriteInput,
     fault: AgentProjectionWriteFault,
 ) -> Result<AgentProjectionWriteResult> {
-    write_inner(pool, input, Some(fault))
+    write_inner(pool, input, None, Some(fault))
+}
+
+#[cfg(test)]
+pub(super) fn write_agent_projection_with_cursor_and_fault(
+    pool: &DbPool,
+    input: &AgentProjectionWriteInput,
+    source_name: &str,
+    cursor: &str,
+    fault: AgentProjectionWriteFault,
+) -> Result<AgentProjectionWriteResult> {
+    write_inner(pool, input, Some((source_name, cursor)), Some(fault))
 }
 
 #[cfg(test)]

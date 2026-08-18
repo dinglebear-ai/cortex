@@ -185,7 +185,7 @@ cargo build --release
 
 Required final evidence:
 
-- schema 47 fresh/upgrade/idempotent/integrity
+- schema 48 fresh/upgrade/idempotent/integrity
 - projection and backfill no loss/duplicates
 - exact Git topology and commits under all fixtures
 - OTLP logs/traces/metrics provider fixtures and partial/auth/cap behavior

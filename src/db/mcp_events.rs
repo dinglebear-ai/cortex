@@ -152,6 +152,9 @@ pub fn insert_mcp_events(pool: &DbPool, events: &[McpEventInsert]) -> Result<usi
     let tx = conn.transaction()?;
     let inserted = insert_mcp_events_in_tx(&tx, events)?;
     tx.commit()?;
+    if inserted > 0 {
+        super::agent_observatory::notify_projection_work();
+    }
     Ok(inserted)
 }
 

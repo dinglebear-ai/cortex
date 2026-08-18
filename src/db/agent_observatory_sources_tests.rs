@@ -158,6 +158,96 @@ fn pages_all_projection_sources_in_cursor_order_with_hard_limits() {
 }
 
 #[test]
+fn llm_cursor_tracks_terminal_time_and_cannot_skip_late_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("llm-cursor.db"))).unwrap();
+    let conn = pool.get().unwrap();
+
+    conn.execute(
+        "INSERT INTO llm_invocations
+            (id, started_at, caller_surface, action, provider, status)
+         VALUES (?1, ?2, 'cli', 'older', 'openai', 'running')",
+        params!["llm-older", "2026-08-05T12:00:00.000Z"],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO llm_invocations
+            (id, started_at, finished_at, caller_surface, action, provider, status)
+         VALUES (?1, ?2, ?3, 'cli', 'newer', 'openai', 'success')",
+        params![
+            "llm-newer",
+            "2026-08-05T12:01:00.000Z",
+            "2026-08-05T12:02:00.000Z"
+        ],
+    )
+    .unwrap();
+    let plan: Vec<String> = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM llm_invocations
+              WHERE finished_at IS NOT NULL
+                AND (finished_at, id) > (?1, ?2)
+              ORDER BY finished_at, id LIMIT ?3",
+        )
+        .unwrap()
+        .query_map(params!["2026-08-05T12:00:00.000Z", "", 500], |row| {
+            row.get(3)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|detail| detail.contains("idx_llm_invocations_finished_id")),
+        "terminal LLM cursor query must use migration 48 index: {plan:?}"
+    );
+    drop(conn);
+
+    let first = page_agent_sources(&pool, AgentSourceKind::Llm, "", 500).unwrap();
+    assert_eq!(first.records.len(), 1);
+    assert!(matches!(
+        &first.records[0],
+        AgentSourceRecord::Llm(row) if row.id == "llm-newer"
+    ));
+    let first_cursor: serde_json::Value = serde_json::from_str(&first.next_cursor).unwrap();
+    assert_eq!(first_cursor["ready_at"], "2026-08-05T12:02:00.000Z");
+
+    let conn = pool.get().unwrap();
+    conn.execute(
+        "UPDATE llm_invocations
+            SET finished_at = ?2, status = 'success'
+          WHERE id = ?1",
+        params!["llm-older", "2026-08-05T12:03:00.000Z"],
+    )
+    .unwrap();
+    drop(conn);
+
+    let second = page_agent_sources(&pool, AgentSourceKind::Llm, &first.next_cursor, 500).unwrap();
+    assert_eq!(second.records.len(), 1);
+    assert!(matches!(
+        &second.records[0],
+        AgentSourceRecord::Llm(row) if row.id == "llm-older"
+    ));
+    let second_cursor: serde_json::Value = serde_json::from_str(&second.next_cursor).unwrap();
+    assert_eq!(second_cursor["ready_at"], "2026-08-05T12:03:00.000Z");
+
+    let empty = page_agent_sources(&pool, AgentSourceKind::Llm, &second.next_cursor, 500).unwrap();
+    assert!(empty.records.is_empty());
+}
+
+#[test]
+fn old_llm_started_at_cursor_json_remains_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(
+        dir.path().join("llm-legacy-cursor.db"),
+    ))
+    .unwrap();
+    let legacy = r#"{"started_at":"2026-08-05T12:00:00.000Z","id":"llm-old"}"#;
+    let page = page_agent_sources(&pool, AgentSourceKind::Llm, legacy, 1).unwrap();
+    assert!(page.records.is_empty());
+}
+
+#[test]
 fn source_page_rejects_zero_and_over_limit_pages() {
     let dir = tempfile::tempdir().unwrap();
     let pool = init_pool(&StorageConfig::for_test(dir.path().join("limits.db"))).unwrap();

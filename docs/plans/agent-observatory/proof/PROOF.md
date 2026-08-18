@@ -449,6 +449,18 @@ GATE: transcript-derived project paths create verified transcript_project_path e
 REGRESSION: all 76 Agent Observatory tests passed, including source paging, replay idempotence, VACUUM-stable cursors, provider identity preservation, projection transactions, schema migrations, attribution, lifecycle, command, shell, and transcript paths
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Agent Observatory JSON/SQL/TypeScript/placeholder contracts, and Cargo.toml/Cargo.lock no-diff gate passed
 
+## AO-039 Implement transactional source cursors and projector loop
+commit/worktree SHA: 0ebb3d2b (task started)
+RED: crash/replay, wakeup, bounded-page, retry-health, late LLM completion, and cursor migration tests exercised the projector before source materialization and durable cursor advancement were one atomic operation
+RED result: source skips could leave cursors pinned, projector retries did not distinguish retry-safe SQLite lock failures, LLM started-at paging could skip an invocation that completed late, and steady-state cursor reads performed a hidden SQLite write
+GREEN: source projection and cursor advancement now commit in the same transaction; committed ingest wakes the projector with poll fallback; retry-safe SQLite busy/locked failures reuse Cortex's bounded 25/100/250 ms backoff while persistent faults fall back to the configured poll interval
+GREEN result: terminal LLM rows page by finished_at plus durable invocation ID; migration 48 adds the supporting partial index and preserves legacy source cursor names; legacy running LLM events are consumed without weakening immutable collision detection for final events
+FIX: existing projection-cursor reads are read-only after one-time initialization, removing an INSERT OR IGNORE from every projector/status read and eliminating unnecessary global SQLite write-lock pressure
+GATE: source pages remain bounded to 1..=500 rows and the runtime enforces the configured byte cap, cancellation leaves durable cursors consistent, non-retryable failures do not advance cursors, and committed log ingestion wakes before the long fallback poll
+REGRESSION: definitive Agent Observatory focused binary ran 95 tests with 0 failures; projection DB suite ran 10 tests with 0 failures; Git observer suite ran 62 tests with 0 failures; migration-48 upgrade regression passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --all -- --check, git diff --check, production Rust 500-line module-size gate, Agent Observatory golden contracts, and Cargo.toml/Cargo.lock no-diff gate passed
+NOTES: schema head is now 48. The old schema-47 plan references were updated where they described the current/final schema; historical RED/GREEN proof entries remain historical.
+
 ## PR-160 final adversarial remediation
 RED: beads `syslog-mcp-kq015`, `syslog-mcp-f5p26`, `syslog-mcp-de0oi`, and `syslog-mcp-ce3tq`
 RED result: equal-timestamp mutable projections could oscillate, older metadata replay could report a change and emit outbox, hostname provenance was not scrubbed, and an oversized first page row wedged its cursor while reporting healthy.

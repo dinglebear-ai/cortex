@@ -1,15 +1,15 @@
 //! Bounded, cancellable Agent Observatory projector and Git reconcile workers.
 
 use crate::agent_observatory::projector::{
-    project_agent_source, project_command_log, project_transcript_log,
+    project_agent_source_with_cursor, project_log_row_with_cursor,
 };
 use crate::config::AgentObservatoryConfig;
-use crate::db::DbPool;
 use crate::db::agent_observatory::{
     AgentSourceKind, advance_projection_cursor, page_agent_sources, projection_cursor,
-    record_projection_health,
+    projection_wake_receiver, record_projection_health,
 };
 use crate::db::page_agent_projection_logs;
+use crate::db::{DbPool, TRANSIENT_SQLITE_RETRY_DELAYS_MS, is_transient_sqlite_lock};
 use crate::git_observer::discovery::{DiscoveryOptions, discover_repositories};
 use crate::git_observer::reconcile::{ReconcileOptions, reconcile_one_repository};
 use crate::scanner::local_hostname;
@@ -27,12 +27,14 @@ const SOURCE_KINDS: [AgentSourceKind; 4] = [
 ];
 
 fn source_name(kind: AgentSourceKind) -> &'static str {
-    match kind {
-        AgentSourceKind::Mcp => "mcp",
-        AgentSourceKind::Hook => "hook",
-        AgentSourceKind::Skill => "skill",
-        AgentSourceKind::Llm => "llm",
-    }
+    kind.as_str()
+}
+
+fn projector_retry_delay_ms(attempt: usize) -> u64 {
+    let index = attempt
+        .saturating_sub(1)
+        .min(TRANSIENT_SQLITE_RETRY_DELAYS_MS.len() - 1);
+    TRANSIENT_SQLITE_RETRY_DELAYS_MS[index]
 }
 
 pub(super) fn spawn_projector(
@@ -41,11 +43,15 @@ pub(super) fn spawn_projector(
     config: AgentObservatoryConfig,
 ) -> Option<JoinHandle<()>> {
     config.enabled.then(|| {
+        let mut wake = projection_wake_receiver();
         tokio::spawn(async move {
+            let mut consecutive_retry_safe_failures = 0usize;
             loop {
                 if token.is_cancelled() { break; }
                 let mut projected = 0usize;
                 let mut healthy = true;
+                let mut had_error = false;
+                let mut retry_safe_errors_only = true;
                 let mut oversized_first_rows = 0usize;
                 let log_page = projection_cursor(&pool, "logs")
                     .and_then(|value| {
@@ -67,18 +73,13 @@ pub(super) fn spawn_projector(
                             oversized_first_rows += usize::from(
                                 page_bytes > config.projector_page_bytes && processed == 0,
                             );
-                            match (project_transcript_log(&pool, &row), project_command_log(&pool, &row)) {
-                                (Ok(_), Ok(_)) => {
-                                    projected += 1;
-                                    if let Err(error) = advance_projection_cursor(&pool, "logs", &row.id.to_string()) {
-                                        healthy = false;
-                                        tracing::error!(error = %error, "Agent Observatory log cursor advance failed");
-                                        break;
-                                    }
-                                }
-                                (transcript, command) => {
+                            match project_log_row_with_cursor(&pool, &row) {
+                                Ok(()) => projected += 1,
+                                Err(error) => {
                                     healthy = false;
-                                    tracing::error!(transcript_error = ?transcript.err(), command_error = ?command.err(),
+                                    had_error = true;
+                                    retry_safe_errors_only &= is_transient_sqlite_lock(&error);
+                                    tracing::error!(error = %error,
                                         "Agent Observatory log projection failed");
                                     break;
                                 }
@@ -87,6 +88,8 @@ pub(super) fn spawn_projector(
                     }
                     Err(error) => {
                         healthy = false;
+                        had_error = true;
+                        retry_safe_errors_only &= is_transient_sqlite_lock(&error);
                         tracing::error!(error = %error, "Agent Observatory log page failed");
                     }
                 }
@@ -96,6 +99,8 @@ pub(super) fn spawn_projector(
                         Ok(cursor) => cursor,
                         Err(error) => {
                             healthy = false;
+                            had_error = true;
+                            retry_safe_errors_only &= is_transient_sqlite_lock(&error);
                             tracing::error!(source_kind = ?kind, error = %error,
                                 "Agent Observatory source cursor load failed");
                             continue;
@@ -112,10 +117,18 @@ pub(super) fn spawn_projector(
                                 oversized_first_rows += usize::from(
                                     page_bytes > config.projector_page_bytes && processed == 0,
                                 );
-                                match project_agent_source(&pool, record) {
+                                let next_cursor = record.next_cursor();
+                                match project_agent_source_with_cursor(
+                                    &pool,
+                                    record,
+                                    name,
+                                    &next_cursor,
+                                ) {
                                     Ok(_) => projected += 1,
                                     Err(error) => {
                                         healthy = false;
+                                        had_error = true;
+                                        retry_safe_errors_only &= is_transient_sqlite_lock(&error);
                                         tracing::error!(
                                         source_kind = ?kind,
                                         error = %error,
@@ -124,38 +137,53 @@ pub(super) fn spawn_projector(
                                         break;
                                     }
                                 }
-                                let next_cursor = record.next_cursor();
-                                if let Err(error) = advance_projection_cursor(&pool, name, &next_cursor) {
-                                    healthy = false;
-                                    tracing::error!(source_kind = ?kind, error = %error,
-                                        "Agent Observatory source cursor advance failed");
-                                    break;
-                                }
                             }
                         }
                         Err(error) => {
                             healthy = false;
+                            had_error = true;
+                            retry_safe_errors_only &= is_transient_sqlite_lock(&error);
                             tracing::error!(source_kind = ?kind, error = %error,
                                 "Agent Observatory source page failed");
                         }
                     }
                 }
+                let retry_safe_failure = had_error && retry_safe_errors_only;
+                let retry_delay_ms = if retry_safe_failure {
+                    consecutive_retry_safe_failures =
+                        consecutive_retry_safe_failures.saturating_add(1);
+                    Some(projector_retry_delay_ms(consecutive_retry_safe_failures))
+                } else {
+                    consecutive_retry_safe_failures = 0;
+                    None
+                };
                 let status = if healthy { "ok" } else { "error" };
                 if let Err(error) = record_projection_health(
                     &pool,
                     "projector",
                     status,
                     &format!(
-                        "projected={projected},oversized_first_rows={oversized_first_rows}"
+                        "projected={projected},oversized_first_rows={oversized_first_rows},retry_safe={retry_safe_failure},retry_delay_ms={}",
+                        retry_delay_ms.unwrap_or(0)
                     ),
                 ) {
                     tracing::error!(error = %error, "Agent Observatory projector health write failed");
                 }
                 tracing::debug!(projected, "Agent Observatory projector cycle completed");
-                tokio::select! {
-                    biased;
-                    () = token.cancelled() => break,
-                    () = tokio::time::sleep(Duration::from_millis(config.projector_poll_ms)) => {}
+                if healthy {
+                    tokio::select! {
+                        biased;
+                        () = token.cancelled() => break,
+                        _ = wake.recv() => {},
+                        () = tokio::time::sleep(Duration::from_millis(config.projector_poll_ms)) => {}
+                    }
+                } else {
+                    let delay_ms = retry_delay_ms.unwrap_or(config.projector_poll_ms);
+                    tokio::select! {
+                        biased;
+                        () = token.cancelled() => break,
+                        () = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
+                    }
                 }
             }
         })

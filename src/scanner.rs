@@ -1026,6 +1026,9 @@ fn flush_chunk(
         checkpoint::update_source_metadata_in_tx(&tx, source_id, file_metadata)?;
     }
     tx.commit()?;
+    if !claimed_batch.is_empty() {
+        crate::db::agent_observatory::notify_projection_work();
+    }
     result.ingested += claimed_batch.len();
     result.skipped_dupes += skipped_dupes;
     if completion_metadata.is_some() {
