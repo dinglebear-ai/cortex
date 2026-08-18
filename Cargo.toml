@@ -27,6 +27,12 @@ missing_crate_level_docs = "deny"
 
 [workspace.lints.rust]
 missing_docs = "allow"
+# fleet-contract@fleet-2026-07-31 still requires this legacy lint key. Keep the
+# real Rustdoc lint above and suppress only the compiler diagnostic emitted for
+# carrying this compatibility alias. Remove both lines when the fleet contract
+# accepts workspace.lints.rustdoc.missing_crate_level_docs.
+missing_crate_level_docs = "deny"
+renamed_and_removed_lints = "allow"
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
