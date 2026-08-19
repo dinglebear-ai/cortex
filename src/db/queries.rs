@@ -30,8 +30,8 @@ use super::models::{
     AiRelatedLogsForAnchor, AiRelatedLogsParams, AiSessionEntry, AiToolInventoryEntry, DbStats,
     ErrorSummaryEntry, GraphRelatedLogEntry, IncidentEvidence, ListAiProjectsParams,
     ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult, LogEntry,
-    SearchAiSessionsParams, SearchAiSessionsResult, SearchParams, SearchedAiSessionEntry,
-    SessionGraphInputs, TopicGraphInputs,
+    ResolvedTopicEntity, SearchAiSessionsParams, SearchAiSessionsResult, SearchParams,
+    SearchedAiSessionEntry, SessionGraphInputs, TopicGraphInputs,
 };
 use super::pool::DbPool;
 use super::queries_service_instances;
