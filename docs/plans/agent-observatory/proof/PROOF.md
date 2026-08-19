@@ -508,3 +508,21 @@ FIX: adversarial review made nested-array truncation explicit, deterministic att
 PROOF: 6 focused privacy tests and 12 trace tests passed; ordered multi-event/link fixtures preserved exact fields/order, producer and Cortex truncation diagnostics were exact, invalid links/caps rejected safely, path/content opt-ins behaved as configured, and structural-secret negative fixtures proved no planted bearer-token values survived
 REGRESSION: complete OTLP library filter ran 68 tests with 0 failures on the definitive locked harness
 GATE: locked workspace Clippy passed with `-D warnings`; canonical workspace rustfmt, full 500-line production Rust module-size gate, Agent Observatory golden contracts, `git diff --check`, and no Cargo.toml/Cargo.lock drift from AO-042 all passed
+
+## AO-044 Persist trace spans idempotently
+commit/worktree SHA: dce43df4 (checkpoint committed)
+RED: normalized spans had no durable write path, so repeat exports could not prove idempotency or distinguish duplicates from malformed records
+GREEN: added one-transaction `otel_spans` batch persistence with `ON CONFLICT(trace_id, span_id) DO NOTHING`, shared bounded transient-lock retry, write serialization, and explicit accepted/duplicate/rejected accounting
+FIX: direct DB-bypass validation rejects malformed/all-zero IDs, invalid timing, nonexistent run IDs, oversized flattened fields or metadata, and wrong JSON shapes per row without poisoning valid neighbors; the performance cleanup remains intact with no resurrected `OtelSpanRow` scaffold or blanket dead-code allowance
+PROOF: focused locked `db::otlp_traces::tests` passed 5/5 covering empty no-op, repeat-export idempotency, same-batch duplicates, malformed-neighbor isolation, and metadata/flattened-field bounds
+GATE: pre-commit `diff_check`, `env_guard`, 500-line production module-size, and rustfmt hooks passed
+
+## AO-045 Mount functional /v1/traces
+commit/worktree SHA: AO-045 checkpoint (this commit)
+RED: authenticated `/v1/traces` still returned the deferred 404 and had no protobuf decode, bounded request handling, persistence, or OTLP partial-success response
+GREEN: mounted an authenticated protobuf trace endpoint with an 8 MiB route-specific body cap, blocking decode/persistence offloaded through `spawn_blocking`, a 5,000-span request cap, AO-043 privacy-aware normalization, AO-044 idempotent persistence, and encoded `ExportTraceServiceResponse` output
+PARTIAL: malformed individual spans, over-cap spans, configured storage-budget refusal, and direct-storage validation failures are counted as rejected without poisoning valid neighbors; duplicate exports remain successful and do not inflate rejection counts
+STRUCTURE: extracted trace HTTP handling to a focused sidecar so `src/otlp.rs` is 293 lines and `src/otlp/trace_http.rs` is 234 lines, leaving runway for metrics without approaching the 500-line production module gate
+PROOF: definitive locked handler suite passed 13/13 covering valid 200/protobuf, missing and invalid bearer 401, malformed protobuf 400, unsupported media 415, trace 8 MiB and preserved logs 4 MiB body-limit 413 plus Retry-After, invalid-span partial success, 5,000-span cap, storage-budget partial success, and duplicate idempotency
+REGRESSION: definitive locked full OTLP library sweep passed 82/82, including all 5 AO-044 persistence tests plus existing auth/log/normalization/privacy/trace/runtime coverage
+GATE: locked production `cargo check` passed without warnings; canonical rustfmt, `git diff --check`, and full 500-line production Rust module-size gate passed; pre-push Clippy remains the push-time gate

@@ -56,6 +56,7 @@ pub struct OtelTraceBatchResult {
 }
 
 impl OtelTraceBatchResult {
+    #[cfg(test)]
     pub const fn total(self) -> usize {
         self.accepted + self.duplicates + self.rejected
     }

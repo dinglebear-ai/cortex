@@ -344,6 +344,11 @@ impl RuntimeCore {
             self.config.mcp.api_token.0.clone(),
             Arc::clone(&self.otlp_counters),
             self.auth_policy.clone(),
+        )
+        .with_trace_ingest(
+            Arc::clone(&self.pool),
+            Arc::clone(&self.storage_state),
+            self.config.agent_observatory.privacy.clone(),
         );
         otlp::router(state)
     }
