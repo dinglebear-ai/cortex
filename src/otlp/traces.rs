@@ -15,15 +15,24 @@ use opentelemetry_proto::tonic::{
 use serde_json::json;
 use thiserror::Error;
 
+use crate::config::AgentObservatoryPrivacyConfig;
 use crate::db::otlp_traces::OtelSpanInput;
 
-use super::normalization::{
-    MAX_RESOURCE_ATTRIBUTES, MAX_SIGNAL_ATTRIBUTES, bounded_attributes, normalize_attributes,
-};
+use super::normalization::{MAX_RESOURCE_ATTRIBUTES, MAX_SIGNAL_ATTRIBUTES, normalize_attributes};
+use super::privacy::{private_attributes, private_text};
+
+#[path = "traces_payload.rs"]
+mod payload;
+use payload::{serialize_events, serialize_links};
 
 const MAX_SPAN_NAME_CHARS: usize = 1024;
 const MAX_STATUS_MESSAGE_CHARS: usize = 4096;
+const MAX_HOSTNAME_CHARS: usize = 255;
 const MAX_SERVICE_NAME_CHARS: usize = 512;
+const MAX_SERVICE_VERSION_CHARS: usize = 512;
+const MAX_SCOPE_NAME_CHARS: usize = 512;
+const MAX_SCOPE_VERSION_CHARS: usize = 512;
+const MAX_TRACE_STATE_CHARS: usize = 512;
 const MAX_METADATA_JSON_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -123,10 +132,10 @@ fn entity_refs(resource: Option<&Resource>) -> serde_json::Value {
             .iter()
             .map(|entity| {
                 json!({
-                    "schema_url": entity.schema_url,
-                    "type": entity.r#type,
-                    "id_keys": entity.id_keys,
-                    "description_keys": entity.description_keys,
+                    "schema_url": private_text(&entity.schema_url),
+                    "type": private_text(&entity.r#type),
+                    "id_keys": entity.id_keys.iter().map(|key| private_text(key)).collect::<Vec<_>>(),
+                    "description_keys": entity.description_keys.iter().map(|key| private_text(key)).collect::<Vec<_>>(),
                 })
             })
             .collect::<Vec<_>>()
@@ -138,12 +147,18 @@ fn resource_scope_json(
     resource_schema_url: &str,
     scope: Option<&InstrumentationScope>,
     scope_schema_url: &str,
-    resource_attributes: &serde_json::Value,
+    privacy: &AgentObservatoryPrivacyConfig,
 ) -> Result<String, TraceNormalizeError> {
+    let resource_attributes = resource.map_or_else(
+        || json!({}),
+        |resource| private_attributes(&resource.attributes, MAX_RESOURCE_ATTRIBUTES, privacy),
+    );
     let scope_attributes = scope.map_or_else(
         || json!({}),
-        |scope| bounded_attributes(&scope.attributes, MAX_RESOURCE_ATTRIBUTES),
+        |scope| private_attributes(&scope.attributes, MAX_RESOURCE_ATTRIBUTES, privacy),
     );
+    let resource_schema_url = private_text(resource_schema_url);
+    let scope_schema_url = private_text(scope_schema_url);
     encode_json(
         json!({
             "resource": {
@@ -154,8 +169,8 @@ fn resource_scope_json(
             },
             "scope": {
                 "schema_url": scope_schema_url,
-                "name": scope.map(|scope| scope.name.as_str()),
-                "version": scope.map(|scope| scope.version.as_str()),
+                "name": scope.map(|scope| private_text(&scope.name)),
+                "version": scope.map(|scope| private_text(&scope.version)),
                 "attributes": scope_attributes,
                 "dropped_attributes_count": scope.map_or(0, |scope| scope.dropped_attributes_count),
             }
@@ -164,13 +179,35 @@ fn resource_scope_json(
     )
 }
 
-/// Normalize one OTLP protobuf span into the DB input shape used by migration 46.
+/// Normalize one OTLP protobuf span with the default Agent Observatory privacy policy.
 pub(crate) fn normalize_span(
     resource: Option<&Resource>,
     resource_schema_url: &str,
     scope: Option<&InstrumentationScope>,
     scope_schema_url: &str,
     span: &Span,
+    received_at: &str,
+) -> Result<OtelSpanInput, TraceNormalizeError> {
+    normalize_span_with_privacy(
+        resource,
+        resource_schema_url,
+        scope,
+        scope_schema_url,
+        span,
+        &AgentObservatoryPrivacyConfig::default(),
+        received_at,
+    )
+}
+
+/// Normalize one OTLP protobuf span into the migration-46 DB input shape while
+/// applying the runtime Agent Observatory privacy policy.
+pub(crate) fn normalize_span_with_privacy(
+    resource: Option<&Resource>,
+    resource_schema_url: &str,
+    scope: Option<&InstrumentationScope>,
+    scope_schema_url: &str,
+    span: &Span,
+    privacy: &AgentObservatoryPrivacyConfig,
     received_at: &str,
 ) -> Result<OtelSpanInput, TraceNormalizeError> {
     let trace_id = hex_id(&span.trace_id, 16, "trace_id")?;
@@ -209,13 +246,26 @@ pub(crate) fn normalize_span(
     chrono::DateTime::parse_from_rfc3339(received_at)
         .map_err(|_| TraceNormalizeError::InvalidReceivedAt)?;
     check_chars(&span.name, MAX_SPAN_NAME_CHARS, "span_name")?;
+    check_chars(&span.trace_state, MAX_TRACE_STATE_CHARS, "trace_state")?;
 
     let normalized = normalize_attributes(
         resource.map_or(&[], |resource| resource.attributes.as_slice()),
         &span.attributes,
     );
+    check_chars(&normalized.host_name, MAX_HOSTNAME_CHARS, "hostname")?;
     if let Some(service_name) = normalized.service_name.as_deref() {
         check_chars(service_name, MAX_SERVICE_NAME_CHARS, "service_name")?;
+    }
+    if let Some(service_version) = normalized.service_version.as_deref() {
+        check_chars(
+            service_version,
+            MAX_SERVICE_VERSION_CHARS,
+            "service_version",
+        )?;
+    }
+    if let Some(scope) = scope {
+        check_chars(&scope.name, MAX_SCOPE_NAME_CHARS, "scope_name")?;
+        check_chars(&scope.version, MAX_SCOPE_VERSION_CHARS, "scope_version")?;
     }
 
     let status_code = span
@@ -235,41 +285,62 @@ pub(crate) fn normalize_span(
         resource_schema_url,
         scope,
         scope_schema_url,
-        &normalized.resource_attributes,
+        privacy,
     )?;
-    let attributes_json = encode_json(normalized.signal_attributes, "attributes")?;
+    let attributes_json = encode_json(
+        private_attributes(&span.attributes, MAX_SIGNAL_ATTRIBUTES, privacy),
+        "attributes",
+    )?;
+    let events_json = serialize_events(span, privacy)?;
+    let links_json = serialize_links(span, privacy)?;
+    let trace_state = optional_text(&span.trace_state).map(|value| private_text(&value));
+    let span_name = private_text(&span.name);
+    let status_message = status_message.map(|value| private_text(&value));
+    let hostname = private_text(&normalized.host_name);
+    let service_name = normalized.service_name.map(|value| private_text(&value));
+    let service_version = normalized.service_version.map(|value| private_text(&value));
+    let scope_name = scope
+        .and_then(|scope| optional_text(&scope.name))
+        .map(|value| private_text(&value));
+    let scope_version = scope
+        .and_then(|scope| optional_text(&scope.version))
+        .map(|value| private_text(&value));
+    let ai_tool = normalized.ai_tool.map(|value| private_text(&value));
+    let ai_project = privacy
+        .include_paths
+        .then_some(normalized.ai_project)
+        .flatten()
+        .map(|value| private_text(&value));
+    let ai_session_id = normalized.ai_session_id.map(|value| private_text(&value));
 
     Ok(OtelSpanInput {
         trace_id,
         span_id,
         parent_span_id,
-        trace_state: optional_text(&span.trace_state),
+        trace_state,
         flags: i64::from(span.flags),
-        span_name: span.name.clone(),
+        span_name,
         span_kind: i64::from(span.kind),
         start_time_unix_nano: start,
         end_time_unix_nano: end,
         duration_nano: duration,
         status_code,
         status_message,
-        hostname: normalized.host_name,
-        service_name: normalized.service_name,
-        service_version: normalized.service_version,
-        scope_name: scope.and_then(|scope| optional_text(&scope.name)),
-        scope_version: scope.and_then(|scope| optional_text(&scope.version)),
-        ai_tool: normalized.ai_tool,
-        ai_project: normalized.ai_project,
-        ai_session_id: normalized.ai_session_id,
+        hostname,
+        service_name,
+        service_version,
+        scope_name,
+        scope_version,
+        ai_tool,
+        ai_project,
+        ai_session_id,
         run_id: None,
         resource_json,
         attributes_json,
-        events_json: "[]".to_string(),
-        links_json: "[]".to_string(),
+        events_json,
+        links_json,
         received_at: received_at.to_string(),
-        // AO-043 applies the configurable prompt/tool/user/path privacy filter.
-        // Until then, arbitrary OTLP attributes are preserved (apart from generic
-        // secret-key redaction), so claiming full content scrubbing would be false.
-        content_scrubbed: false,
+        content_scrubbed: true,
     })
 }
 

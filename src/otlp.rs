@@ -36,6 +36,7 @@ use crate::ingest::IngestTx;
 mod auth;
 mod entries;
 mod normalization;
+mod privacy;
 mod traces;
 
 use auth::{

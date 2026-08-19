@@ -117,10 +117,14 @@ fn valid_span_normalizes_exact_ids_times_status_provider_and_resource_scope_cont
     assert_eq!(input.ai_project.as_deref(), Some("/span/project"));
     assert_eq!(input.ai_session_id.as_deref(), Some("span-session"));
     assert_eq!(input.run_id, None);
-    assert_eq!(input.events_json, "[]");
-    assert_eq!(input.links_json, "[]");
+    let events: serde_json::Value = serde_json::from_str(&input.events_json).unwrap();
+    assert_eq!(events[0]["_cortex_diagnostics"]["producer_dropped"], 4);
+    assert_eq!(events[0]["_cortex_diagnostics"]["cortex_omitted"], 0);
+    let links: serde_json::Value = serde_json::from_str(&input.links_json).unwrap();
+    assert_eq!(links[0]["_cortex_diagnostics"]["producer_dropped"], 5);
+    assert_eq!(links[0]["_cortex_diagnostics"]["cortex_omitted"], 0);
     assert_eq!(input.received_at, RECEIVED_AT);
-    assert!(!input.content_scrubbed);
+    assert!(input.content_scrubbed);
 
     let attributes: serde_json::Value = serde_json::from_str(&input.attributes_json).unwrap();
     assert_eq!(attributes["custom.span"], "kept");
@@ -337,4 +341,287 @@ fn field_received_at_and_serialized_metadata_limits_are_enforced() {
             ..
         }
     ));
+}
+
+#[test]
+fn events_and_links_preserve_order_fields_dropped_counts_and_default_privacy() {
+    let resource = resource();
+    let mut span = span_fixture();
+    span.events = vec![
+        span::Event {
+            time_unix_nano: 10,
+            name: "first".to_string(),
+            attributes: vec![
+                kv("custom.event", "one"),
+                kv("gen_ai.input.messages", "private prompt"),
+            ],
+            dropped_attributes_count: 1,
+        },
+        span::Event {
+            time_unix_nano: 20,
+            name: "second".to_string(),
+            attributes: vec![kv("custom.event", "two")],
+            dropped_attributes_count: 2,
+        },
+    ];
+    span.dropped_events_count = 3;
+    span.links = vec![
+        span::Link {
+            trace_id: vec![0x44; 16],
+            span_id: vec![0x55; 8],
+            trace_state: "vendor=one".to_string(),
+            attributes: vec![
+                kv("custom.link", "alpha"),
+                kv("gen_ai.tool.call.result", "private result"),
+            ],
+            dropped_attributes_count: 4,
+            flags: 0x101,
+        },
+        span::Link {
+            trace_id: vec![0x66; 16],
+            span_id: vec![0x77; 8],
+            trace_state: "vendor=two".to_string(),
+            attributes: vec![kv("custom.link", "beta")],
+            dropped_attributes_count: 5,
+            flags: 0x201,
+        },
+    ];
+    span.dropped_links_count = 6;
+
+    let input = normalize_span(Some(&resource), "", None, "", &span, RECEIVED_AT).unwrap();
+    assert!(input.content_scrubbed);
+
+    let events: serde_json::Value = serde_json::from_str(&input.events_json).unwrap();
+    assert_eq!(events.as_array().unwrap().len(), 3);
+    assert_eq!(events[0]["time_unix_nano"], 10);
+    assert_eq!(events[0]["name"], "first");
+    assert_eq!(events[0]["attributes"]["custom.event"], "one");
+    assert_eq!(
+        events[0]["attributes"]["gen_ai.input.messages"],
+        "[REDACTED]"
+    );
+    assert_eq!(events[0]["dropped_attributes_count"], 1);
+    assert_eq!(events[1]["name"], "second");
+    assert_eq!(events[1]["attributes"]["custom.event"], "two");
+    assert_eq!(events[1]["dropped_attributes_count"], 2);
+    assert_eq!(events[2]["_cortex_diagnostics"]["producer_dropped"], 3);
+    assert_eq!(events[2]["_cortex_diagnostics"]["cortex_omitted"], 0);
+
+    let links: serde_json::Value = serde_json::from_str(&input.links_json).unwrap();
+    assert_eq!(links.as_array().unwrap().len(), 3);
+    assert_eq!(links[0]["trace_id"], "44".repeat(16));
+    assert_eq!(links[0]["span_id"], "55".repeat(8));
+    assert_eq!(links[0]["trace_state"], "vendor=one");
+    assert_eq!(links[0]["attributes"]["custom.link"], "alpha");
+    assert_eq!(
+        links[0]["attributes"]["gen_ai.tool.call.result"],
+        "[REDACTED]"
+    );
+    assert_eq!(links[0]["dropped_attributes_count"], 4);
+    assert_eq!(links[0]["flags"], 0x101);
+    assert_eq!(links[1]["trace_id"], "66".repeat(16));
+    assert_eq!(links[1]["span_id"], "77".repeat(8));
+    assert_eq!(links[1]["attributes"]["custom.link"], "beta");
+    assert_eq!(links[2]["_cortex_diagnostics"]["producer_dropped"], 6);
+}
+
+#[test]
+fn explicit_trace_privacy_policy_controls_content_paths_and_identity() {
+    let resource = resource();
+    let mut span = span_fixture();
+    span.attributes.extend([
+        kv("gen_ai.input.messages", "visible prompt"),
+        kv("gen_ai.tool.call.arguments", "visible tool args"),
+        kv("user.id", "alice"),
+        kv("user.email", "alice@example.invalid"),
+        kv("process.command_line", "echo visible"),
+    ]);
+    span.dropped_events_count = 0;
+    span.dropped_links_count = 0;
+    let privacy = AgentObservatoryPrivacyConfig {
+        include_prompt_content: true,
+        include_tool_content: true,
+        include_command_content: false,
+        include_paths: false,
+        include_user_identity: true,
+        hash_email: false,
+    };
+
+    let input =
+        normalize_span_with_privacy(Some(&resource), "", None, "", &span, &privacy, RECEIVED_AT)
+            .unwrap();
+    assert!(input.content_scrubbed);
+    assert_eq!(input.ai_project, None);
+    let attrs: serde_json::Value = serde_json::from_str(&input.attributes_json).unwrap();
+    assert_eq!(attrs["gen_ai.input.messages"], "visible prompt");
+    assert_eq!(attrs["gen_ai.tool.call.arguments"], "visible tool args");
+    assert_eq!(attrs["user.id"], "alice");
+    assert_eq!(attrs["user.email"], "alice@example.invalid");
+    assert_eq!(attrs["process.command_line"], "[REDACTED]");
+    assert_eq!(attrs["codebase.root_path"], "[REDACTED]");
+    let resource_json: serde_json::Value = serde_json::from_str(&input.resource_json).unwrap();
+    assert_eq!(
+        resource_json["resource"]["attributes"]["project.path"],
+        "[REDACTED]"
+    );
+}
+
+#[test]
+fn structural_trace_strings_are_secret_scrubbed_before_content_scrubbed_is_true() {
+    let mut resource = resource();
+    resource.entity_refs[0].schema_url = "Authorization: Bearer entity-schema-secret".to_string();
+    let mut scope = scope();
+    scope.name = "scope Authorization: Bearer scope-name-secret".to_string();
+    let mut span = span_fixture();
+    span.name = "span Authorization: Bearer span-name-secret".to_string();
+    span.trace_state = "vendor=value Authorization: Bearer trace-state-secret".to_string();
+    span.status = Some(Status {
+        message: "failure Authorization: Bearer status-secret".to_string(),
+        code: status::StatusCode::Error as i32,
+    });
+    span.events = vec![span::Event {
+        time_unix_nano: 1,
+        name: "event Authorization: Bearer event-name-secret".to_string(),
+        attributes: vec![],
+        dropped_attributes_count: 0,
+    }];
+    span.dropped_events_count = 0;
+    span.links = vec![span::Link {
+        trace_id: vec![0x44; 16],
+        span_id: vec![0x55; 8],
+        trace_state: "vendor=link Authorization: Bearer link-state-secret".to_string(),
+        attributes: vec![],
+        dropped_attributes_count: 0,
+        flags: 1,
+    }];
+    span.dropped_links_count = 0;
+
+    let input = normalize_span(
+        Some(&resource),
+        "Authorization: Bearer resource-schema-secret",
+        Some(&scope),
+        "Authorization: Bearer scope-schema-secret",
+        &span,
+        RECEIVED_AT,
+    )
+    .unwrap();
+    assert!(input.content_scrubbed);
+    let persisted = format!(
+        "{} {:?} {:?} {:?} {} {} {}",
+        input.span_name,
+        input.trace_state,
+        input.status_message,
+        input.scope_name,
+        input.resource_json,
+        input.events_json,
+        input.links_json,
+    );
+    assert!(persisted.contains("[REDACTED]"));
+    for secret in [
+        "entity-schema-secret",
+        "scope-name-secret",
+        "span-name-secret",
+        "trace-state-secret",
+        "status-secret",
+        "event-name-secret",
+        "link-state-secret",
+        "resource-schema-secret",
+        "scope-schema-secret",
+    ] {
+        assert!(!persisted.contains(secret), "leaked {secret}: {persisted}");
+    }
+}
+
+#[test]
+fn event_and_link_attribute_caps_and_invalid_link_ids_reject_the_span() {
+    let resource = resource();
+    let mut span = span_fixture();
+    span.dropped_events_count = 0;
+    span.dropped_links_count = 0;
+    span.events = vec![span::Event {
+        time_unix_nano: 1,
+        name: "oversized".to_string(),
+        attributes: (0..=MAX_SIGNAL_ATTRIBUTES)
+            .map(|index| kv(&format!("event.{index}"), "value"))
+            .collect(),
+        dropped_attributes_count: 0,
+    }];
+    assert!(matches!(
+        normalize_span(Some(&resource), "", None, "", &span, RECEIVED_AT).unwrap_err(),
+        TraceNormalizeError::AttributeLimit { field: "event", .. }
+    ));
+
+    let mut span = span_fixture();
+    span.dropped_events_count = 0;
+    span.dropped_links_count = 0;
+    span.links = vec![span::Link {
+        trace_id: vec![0; 16],
+        span_id: vec![1; 8],
+        trace_state: String::new(),
+        attributes: vec![],
+        dropped_attributes_count: 0,
+        flags: 0,
+    }];
+    assert!(matches!(
+        normalize_span(Some(&resource), "", None, "", &span, RECEIVED_AT).unwrap_err(),
+        TraceNormalizeError::InvalidId {
+            field: "link.trace_id",
+            ..
+        }
+    ));
+
+    span.links[0].trace_id = vec![1; 16];
+    span.links[0].span_id = vec![0; 8];
+    assert!(matches!(
+        normalize_span(Some(&resource), "", None, "", &span, RECEIVED_AT).unwrap_err(),
+        TraceNormalizeError::InvalidId {
+            field: "link.span_id",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn event_and_link_arrays_truncate_at_byte_cap_with_explicit_diagnostics() {
+    let resource = resource();
+    let payload = "x".repeat(2048);
+    let mut span = span_fixture();
+    span.dropped_events_count = 0;
+    span.dropped_links_count = 0;
+    span.events = (0..180)
+        .map(|index| span::Event {
+            time_unix_nano: index,
+            name: format!("event-{index:03}"),
+            attributes: vec![kv("custom.payload", &payload)],
+            dropped_attributes_count: 0,
+        })
+        .collect();
+    span.links = (0..180)
+        .map(|index| span::Link {
+            trace_id: vec![0x44; 16],
+            span_id: vec![(index % 250 + 1) as u8; 8],
+            trace_state: String::new(),
+            attributes: vec![kv("custom.payload", &payload)],
+            dropped_attributes_count: 0,
+            flags: 1,
+        })
+        .collect();
+
+    let input = normalize_span(Some(&resource), "", None, "", &span, RECEIVED_AT).unwrap();
+    assert!(input.events_json.len() <= MAX_METADATA_JSON_BYTES);
+    assert!(input.links_json.len() <= MAX_METADATA_JSON_BYTES);
+
+    let events: serde_json::Value = serde_json::from_str(&input.events_json).unwrap();
+    let event_items = events.as_array().unwrap();
+    assert_eq!(event_items[0]["name"], "event-000");
+    let event_diag = &event_items.last().unwrap()["_cortex_diagnostics"];
+    assert!(event_diag["cortex_omitted"].as_u64().unwrap() > 0);
+    assert_eq!(event_diag["reason"], "max_serialized_bytes");
+
+    let links: serde_json::Value = serde_json::from_str(&input.links_json).unwrap();
+    let link_items = links.as_array().unwrap();
+    assert_eq!(link_items[0]["trace_id"], "44".repeat(16));
+    let link_diag = &link_items.last().unwrap()["_cortex_diagnostics"];
+    assert!(link_diag["cortex_omitted"].as_u64().unwrap() > 0);
+    assert_eq!(link_diag["reason"], "max_serialized_bytes");
 }

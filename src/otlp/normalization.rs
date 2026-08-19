@@ -177,10 +177,6 @@ fn collect_attrs(kvs: &[KeyValue]) -> BTreeMap<&str, &AnyValue> {
         .collect()
 }
 
-pub(crate) fn bounded_attributes(kvs: &[KeyValue], max_fields: usize) -> serde_json::Value {
-    attrs_to_json(&collect_attrs(kvs), max_fields)
-}
-
 pub(super) fn attr_key(kv: &KeyValue) -> Option<&str> {
     if kv.key_strindex != 0 {
         warn_key_strindex_rate_limited(kv.key_strindex);
