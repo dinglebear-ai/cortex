@@ -107,6 +107,70 @@ async fn unaddressed_errors_pages_past_filtered_warning_noise() {
 }
 
 #[tokio::test]
+async fn unaddressed_errors_hides_non_current_normalizer_versions() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("unaddressed-version.db"));
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let current_version = crate::app::error_detection::NORMALIZER_VERSION;
+    {
+        let conn = pool.get().unwrap();
+        crate::db::error_signatures::upsert_signature(
+            &conn,
+            crate::db::error_signatures::UpsertSignatureParams {
+                hash: "active-version",
+                normalizer_version: current_version,
+                template: "active disk error",
+                sample_message: "active disk error",
+                sample_hostname: "devhost",
+                sample_app_name: Some("kernel"),
+                severity: "err",
+                first_seen_at: "2026-01-01T00:00:00.000Z",
+                last_seen_at: "2026-01-01T00:00:00.000Z",
+                delta: 1,
+            },
+        )
+        .unwrap();
+        crate::db::error_signatures::upsert_signature(
+            &conn,
+            crate::db::error_signatures::UpsertSignatureParams {
+                hash: "foreign-version",
+                normalizer_version: current_version + 1,
+                template: "newer foreign-version error",
+                sample_message: "newer foreign-version error",
+                sample_hostname: "devhost",
+                sample_app_name: Some("kernel"),
+                severity: "err",
+                first_seen_at: "2026-01-02T00:00:00.000Z",
+                last_seen_at: "2026-01-02T00:00:00.000Z",
+                delta: 1,
+            },
+        )
+        .unwrap();
+    }
+
+    let svc = crate::app::CortexService::new(Arc::clone(&pool), storage);
+    let resp = svc
+        .unaddressed_errors(crate::app::models::UnaddressedErrorsRequest {
+            limit: Some(10),
+            include_acknowledged: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(resp.signatures.len(), 1);
+    assert_eq!(resp.signatures[0].signature_hash, "active-version");
+    let conn = pool.get().unwrap();
+    let foreign_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM error_signatures WHERE signature_hash = 'foreign-version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(foreign_rows, 1, "historical versions stay durable");
+}
+
+#[tokio::test]
 async fn unaddressed_errors_reports_truncation_when_scan_cap_hit() {
     let dir = tempfile::tempdir().unwrap();
     let storage = StorageConfig::for_test(dir.path().join("unaddressed-truncate.db"));

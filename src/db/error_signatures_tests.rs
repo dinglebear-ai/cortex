@@ -132,6 +132,12 @@ fn read_unaddressed_filters_acknowledged_and_sums_recent_windows() {
 
         insert_sig(&conn, "acked", 1, &older);
         insert_window(&conn, "acked", 1, &older, &newer, 7).unwrap();
+
+        // Historical/foreign normalizer versions remain durable for audit, but
+        // must not surface in the actionable list because ack/unack only targets
+        // the active normalizer version.
+        insert_sig(&conn, "other-version", 2, &newer);
+        insert_window(&conn, "other-version", 2, &older, &newer, 11).unwrap();
         update_ack_projection(
             &conn,
             "acked",
@@ -142,13 +148,13 @@ fn read_unaddressed_filters_acknowledged_and_sums_recent_windows() {
         .unwrap();
     }
 
-    let unaddressed = read_unaddressed_page(&pool, 10, 0, false).unwrap();
+    let unaddressed = read_unaddressed_page(&pool, 1, 10, 0, false).unwrap();
     assert_eq!(unaddressed.len(), 1);
     assert_eq!(unaddressed[0].signature_hash, "unacked");
     assert_eq!(unaddressed[0].count_last_1h, 4);
     assert!(unaddressed[0].acknowledged_at.is_none());
 
-    let with_acknowledged = read_unaddressed_page(&pool, 10, 0, true).unwrap();
+    let with_acknowledged = read_unaddressed_page(&pool, 1, 10, 0, true).unwrap();
     assert_eq!(
         with_acknowledged
             .iter()
@@ -189,7 +195,6 @@ fn read_signature_by_hash_returns_none_for_missing_or_wrong_version() {
         .unwrap()
         .unwrap();
     assert_eq!(row.signature_hash, "look-me-up");
-    assert_eq!(row.normalizer_version, 3);
     assert_eq!(row.count_last_1h, 6);
 }
 

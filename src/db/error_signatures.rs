@@ -168,8 +168,6 @@ pub(crate) fn update_ack_projection(
 #[derive(Debug)]
 pub(crate) struct SignatureRow {
     pub signature_hash: String,
-    #[allow(dead_code)]
-    pub normalizer_version: i64,
     pub template: String,
     pub sample_message: String,
     pub sample_hostname: String,
@@ -183,9 +181,14 @@ pub(crate) struct SignatureRow {
 }
 
 /// Return a page of unacknowledged (or all, if `include_acknowledged`)
-/// signatures ordered by `last_seen_at DESC`.
+/// signatures for one normalizer version, ordered by `last_seen_at DESC`.
+///
+/// The operator API identifies signatures by hash only, while ack/unack targets
+/// the active normalizer version. Filtering here keeps historical version rows
+/// durable without exposing entries the current API cannot act on.
 pub(crate) fn read_unaddressed_page(
     pool: &DbPool,
+    normalizer_version: i64,
     limit: i64,
     offset: i64,
     include_acknowledged: bool,
@@ -205,7 +208,6 @@ pub(crate) fn read_unaddressed_page(
     let sql = format!(
         "SELECT
              s.signature_hash,
-             s.normalizer_version,
              s.template,
              s.sample_message,
              s.sample_hostname,
@@ -220,31 +222,33 @@ pub(crate) fn read_unaddressed_page(
          LEFT JOIN (
              SELECT signature_hash, normalizer_version, SUM(count_in_window) AS total_1h
              FROM error_signature_windows
-             WHERE window_end >= ?1
+             WHERE window_end >= ?1 AND normalizer_version = ?2
              GROUP BY signature_hash, normalizer_version
          ) w USING (signature_hash, normalizer_version)
-         WHERE 1=1 {filter_clause}
+         WHERE s.normalizer_version = ?2 {filter_clause}
          ORDER BY s.last_seen_at DESC
-         LIMIT ?2 OFFSET ?3"
+         LIMIT ?3 OFFSET ?4"
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![cutoff_1h, limit, offset.max(0)], |row| {
-        Ok(SignatureRow {
-            signature_hash: row.get(0)?,
-            normalizer_version: row.get(1)?,
-            template: row.get(2)?,
-            sample_message: row.get(3)?,
-            sample_hostname: row.get(4)?,
-            sample_app_name: row.get(5)?,
-            severity: row.get(6)?,
-            first_seen_at: row.get(7)?,
-            last_seen_at: row.get(8)?,
-            total_count: row.get(9)?,
-            count_last_1h: row.get(10)?,
-            acknowledged_at: row.get(11)?,
-        })
-    })?;
+    let rows = stmt.query_map(
+        params![cutoff_1h, normalizer_version, limit, offset.max(0)],
+        |row| {
+            Ok(SignatureRow {
+                signature_hash: row.get(0)?,
+                template: row.get(1)?,
+                sample_message: row.get(2)?,
+                sample_hostname: row.get(3)?,
+                sample_app_name: row.get(4)?,
+                severity: row.get(5)?,
+                first_seen_at: row.get(6)?,
+                last_seen_at: row.get(7)?,
+                total_count: row.get(8)?,
+                count_last_1h: row.get(9)?,
+                acknowledged_at: row.get(10)?,
+            })
+        },
+    )?;
 
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
@@ -274,7 +278,6 @@ pub(crate) fn read_signature_by_hash(
     let mut stmt = conn.prepare(
         "SELECT
              s.signature_hash,
-             s.normalizer_version,
              s.template,
              s.sample_message,
              s.sample_hostname,
@@ -301,17 +304,16 @@ pub(crate) fn read_signature_by_hash(
         |row| {
             Ok(SignatureRow {
                 signature_hash: row.get(0)?,
-                normalizer_version: row.get(1)?,
-                template: row.get(2)?,
-                sample_message: row.get(3)?,
-                sample_hostname: row.get(4)?,
-                sample_app_name: row.get(5)?,
-                severity: row.get(6)?,
-                first_seen_at: row.get(7)?,
-                last_seen_at: row.get(8)?,
-                total_count: row.get(9)?,
-                count_last_1h: row.get(10)?,
-                acknowledged_at: row.get(11)?,
+                template: row.get(1)?,
+                sample_message: row.get(2)?,
+                sample_hostname: row.get(3)?,
+                sample_app_name: row.get(4)?,
+                severity: row.get(5)?,
+                first_seen_at: row.get(6)?,
+                last_seen_at: row.get(7)?,
+                total_count: row.get(8)?,
+                count_last_1h: row.get(9)?,
+                acknowledged_at: row.get(10)?,
             })
         },
     )?;

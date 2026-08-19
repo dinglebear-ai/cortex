@@ -63,6 +63,7 @@ impl CortexService {
                 let this_page = page_size.min(remaining_scan);
                 let rows = crate::db::error_signatures::read_unaddressed_page(
                     pool,
+                    crate::app::error_detection::NORMALIZER_VERSION,
                     this_page as i64,
                     offset,
                     include_acked,
