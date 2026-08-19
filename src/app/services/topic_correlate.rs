@@ -82,12 +82,13 @@ impl CortexService {
         }
 
         let topic = req.topic.clone();
-        let (inputs, summaries) = self
+        let (inputs, summaries, graph_projection) = self
             .run_db(
                 "topic_correlate",
                 move |pool| -> anyhow::Result<(
                     db::TopicGraphInputs,
                     Vec<db::HeartbeatWindowSummary>,
+                    db::graph::GraphProjectionStatus,
                 )> {
                     let inputs = db::topic_correlate_inputs(
                         pool,
@@ -107,18 +108,26 @@ impl CortexService {
                         }
                         _ => Vec::new(),
                     };
-                    Ok((inputs, summaries))
+                    let graph_projection = db::graph::graph_projection_status(pool)?;
+                    Ok((inputs, summaries, graph_projection))
                 },
             )
             .await?;
 
-        Ok(build_topic_response(topic, inputs, summaries, limit))
+        Ok(build_topic_response(
+            topic,
+            inputs,
+            summaries,
+            graph_projection,
+            limit,
+        ))
     }
 }
 
 fn empty_topic_response(topic: String) -> TopicCorrelateResponse {
     TopicCorrelateResponse {
         topic,
+        graph_projection: None,
         resolved_entities: Vec::new(),
         graph_expansion: Vec::new(),
         discovered_hosts: Vec::new(),
@@ -151,6 +160,7 @@ fn build_topic_response(
     topic: String,
     inputs: db::TopicGraphInputs,
     summaries: Vec<db::HeartbeatWindowSummary>,
+    graph_projection: db::graph::GraphProjectionStatus,
     limit: usize,
 ) -> TopicCorrelateResponse {
     let truncated = inputs.logs.len() >= limit;
@@ -210,6 +220,9 @@ fn build_topic_response(
 
     TopicCorrelateResponse {
         topic,
+        graph_projection: Some(super::graph_support::graph_projection_status_response(
+            graph_projection,
+        )),
         resolved_entities,
         graph_expansion,
         discovered_hosts: inputs.discovered_hosts,

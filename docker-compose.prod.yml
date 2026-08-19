@@ -36,6 +36,10 @@ services:
         required: false
     environment:
       CORTEX_HOME: /cortex-home
+      # Keep the rebuildable investigation graph synchronized with authoritative
+      # logs and inventory. Operators may tune or explicitly disable either path.
+      CORTEX_GRAPH_REFRESH_INTERVAL_SECS: "${CORTEX_GRAPH_REFRESH_INTERVAL_SECS:-300}"
+      CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED: "${CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED:-true}"
       # Accept the Host header used by the Labby gateway when it proxies this
       # service over the docker network (parity with docker-compose.yml).
       CORTEX_ALLOWED_HOSTS: "cortex,cortex:3100"
