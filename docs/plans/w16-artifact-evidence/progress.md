@@ -12,7 +12,7 @@ Updated: 2026-08-19
 - Branch: codex/w16-cortex-artifact-evidence-20260819
 - Original lane base: origin/main 0ebb3d2bb6c220147dd4ee27f9efb162f3e88ba9 (v3.13.2)
 - Current base after docs-only rebase: origin/main ecbd33b8383313c84c5e71a97c06f3a4175e0c6c (#196 merged)
-- Draft PR: pending immediate creation after the validated C1-C3 code checkpoint is pushed
+- Draft PR: #198, feat: add W16 artifact evidence foundation
 
 ## Active-lane inventory
 
@@ -57,11 +57,11 @@ The local Cortex main ref is not a safe base because it currently points at grap
 - [x] C0 docs committed and pushed as 509d6a14
 - [x] C1 typed evidence domain implemented
 - [x] C2 durable append/idempotency slice implemented
-- [x] C3 query/common service implemented
+- [x] C3 query/common service implemented in f3b91d1c
 - [ ] C4 REST/MCP projections
 - [x] Adversarial review complete for the C1-C3 slice
 - [x] Relevant repository gates green for the C1-C3 slice
-- [ ] Draft PR opened and current
+- [x] Draft PR #198 opened and current through f3b91d1c
 
 ## Tests / gates
 
@@ -85,4 +85,4 @@ Adversarial review fixed two replay issues before checkpointing: cross-process c
 
 ## Next action
 
-Commit and push the validated C1-C3 slice, open the draft PR immediately, then add thin REST/MCP projections through CortexService.
+Implement C4 thin REST/MCP projections through CortexService, add transport contract tests, then rerun focused/full gates and update draft PR #198.
