@@ -6,14 +6,17 @@ use tokio::sync::broadcast;
 
 #[path = "agent_observatory_commits.rs"]
 mod commits;
-pub use commits::{GitCommitReachabilityUpdate, GitCommitUpsert, GitRepositoryReconcileResult};
+pub use commits::{
+    GitCommitReachabilityUpdate, GitCommitUpsert, GitRepositoryReconcileResult, list_git_commits,
+};
 #[cfg(test)]
-pub use commits::{get_git_commit, list_git_commits};
+pub use commits::{get_git_commit, reconcile_git_commits};
 #[path = "agent_observatory_run_commits.rs"]
 mod run_commits;
+#[cfg(test)]
+pub use run_commits::list_agent_run_commits;
 pub use run_commits::{
-    AgentCommitAttributionEvidence, AgentRunCommitRow, AgentRunCommitUpsert,
-    commit_attribution_evidence, git_commit_by_repository_sha, list_agent_run_commits,
+    AgentRunCommitUpsert, commit_attribution_evidence, git_commit_by_repository_sha,
     upsert_agent_run_commit,
 };
 #[path = "agent_observatory_sources.rs"]
@@ -162,28 +165,6 @@ pub(crate) fn projection_health(pool: &DbPool, worker: &str) -> Result<Option<St
             |row| row.get(0),
         )
         .optional()?)
-}
-
-/// Atomically publishes one Git observer snapshot. Readers can never observe a
-/// commit import without its matching topology and observation rows.
-pub fn reconcile_git_repository_snapshot(
-    pool: &DbPool,
-    repository: &RepositoryUpsert,
-    worktrees: &[RepositoryWorktreeUpsert],
-    commits: &[GitCommitUpsert],
-    reachability: &[GitCommitReachabilityUpdate],
-    observations: &[RepositoryObservationInput],
-    observed_at: &str,
-) -> Result<GitRepositoryReconcileResult> {
-    reconcile_git_repository_snapshot_with(
-        pool,
-        repository,
-        worktrees,
-        commits,
-        reachability,
-        observed_at,
-        |_| Ok(observations.to_vec()),
-    )
 }
 
 pub fn reconcile_git_repository_snapshot_with<F>(

@@ -1,8 +1,9 @@
 //! Transactional exact Git commit persistence.
 
 use super::{GitCommitRow, RepositoryObservationRow, RepositoryReconcileResult};
+use crate::db::pool::DbPool;
 #[cfg(test)]
-use crate::db::pool::{DbPool, write_lock};
+use crate::db::pool::write_lock;
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use rusqlite::TransactionBehavior;
@@ -302,7 +303,6 @@ pub fn get_git_commit(
     commit_by_sha(&conn, repository_id, sha)
 }
 
-#[cfg(test)]
 pub fn list_git_commits(pool: &DbPool, repository_id: i64) -> Result<Vec<GitCommitRow>> {
     if repository_id <= 0 {
         bail!("repository_id must be positive");

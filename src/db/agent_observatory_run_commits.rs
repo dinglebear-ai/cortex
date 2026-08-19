@@ -177,6 +177,7 @@ pub fn upsert_agent_run_commit(
     Ok(relation)
 }
 
+#[cfg(test)]
 pub fn list_agent_run_commits(pool: &DbPool, run_id: i64) -> Result<Vec<AgentRunCommitRow>> {
     if run_id <= 0 {
         bail!("run_id must be positive");
