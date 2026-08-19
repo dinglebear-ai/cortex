@@ -168,8 +168,6 @@ pub(crate) fn update_ack_projection(
 #[derive(Debug)]
 pub(crate) struct SignatureRow {
     pub signature_hash: String,
-    #[allow(dead_code)]
-    pub normalizer_version: i64,
     pub template: String,
     pub sample_message: String,
     pub sample_hostname: String,
@@ -205,7 +203,6 @@ pub(crate) fn read_unaddressed_page(
     let sql = format!(
         "SELECT
              s.signature_hash,
-             s.normalizer_version,
              s.template,
              s.sample_message,
              s.sample_hostname,
@@ -232,17 +229,16 @@ pub(crate) fn read_unaddressed_page(
     let rows = stmt.query_map(params![cutoff_1h, limit, offset.max(0)], |row| {
         Ok(SignatureRow {
             signature_hash: row.get(0)?,
-            normalizer_version: row.get(1)?,
-            template: row.get(2)?,
-            sample_message: row.get(3)?,
-            sample_hostname: row.get(4)?,
-            sample_app_name: row.get(5)?,
-            severity: row.get(6)?,
-            first_seen_at: row.get(7)?,
-            last_seen_at: row.get(8)?,
-            total_count: row.get(9)?,
-            count_last_1h: row.get(10)?,
-            acknowledged_at: row.get(11)?,
+            template: row.get(1)?,
+            sample_message: row.get(2)?,
+            sample_hostname: row.get(3)?,
+            sample_app_name: row.get(4)?,
+            severity: row.get(5)?,
+            first_seen_at: row.get(6)?,
+            last_seen_at: row.get(7)?,
+            total_count: row.get(8)?,
+            count_last_1h: row.get(9)?,
+            acknowledged_at: row.get(10)?,
         })
     })?;
 
@@ -274,7 +270,6 @@ pub(crate) fn read_signature_by_hash(
     let mut stmt = conn.prepare(
         "SELECT
              s.signature_hash,
-             s.normalizer_version,
              s.template,
              s.sample_message,
              s.sample_hostname,
@@ -301,17 +296,16 @@ pub(crate) fn read_signature_by_hash(
         |row| {
             Ok(SignatureRow {
                 signature_hash: row.get(0)?,
-                normalizer_version: row.get(1)?,
-                template: row.get(2)?,
-                sample_message: row.get(3)?,
-                sample_hostname: row.get(4)?,
-                sample_app_name: row.get(5)?,
-                severity: row.get(6)?,
-                first_seen_at: row.get(7)?,
-                last_seen_at: row.get(8)?,
-                total_count: row.get(9)?,
-                count_last_1h: row.get(10)?,
-                acknowledged_at: row.get(11)?,
+                template: row.get(1)?,
+                sample_message: row.get(2)?,
+                sample_hostname: row.get(3)?,
+                sample_app_name: row.get(4)?,
+                severity: row.get(5)?,
+                first_seen_at: row.get(6)?,
+                last_seen_at: row.get(7)?,
+                total_count: row.get(8)?,
+                count_last_1h: row.get(9)?,
+                acknowledged_at: row.get(10)?,
             })
         },
     )?;

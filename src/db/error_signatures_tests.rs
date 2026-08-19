@@ -189,7 +189,6 @@ fn read_signature_by_hash_returns_none_for_missing_or_wrong_version() {
         .unwrap()
         .unwrap();
     assert_eq!(row.signature_hash, "look-me-up");
-    assert_eq!(row.normalizer_version, 3);
     assert_eq!(row.count_last_1h, 6);
 }
 
