@@ -25,6 +25,7 @@ mod mcp_incident_evidence;
 mod mcp_incidents;
 mod models;
 pub(crate) mod notifications;
+pub mod otlp_traces;
 mod pool;
 mod queries;
 pub(crate) use queries::page_agent_projection_logs;
