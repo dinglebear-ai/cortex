@@ -78,7 +78,9 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         ] {
             assert_eq!(projection_cursor(&pool, source).unwrap(), "");
         }
-        tokio::time::timeout(Duration::from_secs(2), async {
+        // Parallel DB tests share Cortex's process-wide SQLite write lock; under
+        // suite load health persistence can legitimately queue behind other writers.
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if projection_health(&pool, "projector")
                     .unwrap()
