@@ -11,8 +11,9 @@ Updated: 2026-08-19
 - Worktree: /home/jmagar/workspace/cortex/.worktrees/w16-cortex-artifact-evidence-20260819
 - Branch: codex/w16-cortex-artifact-evidence-20260819
 - Original lane base: origin/main 0ebb3d2bb6c220147dd4ee27f9efb162f3e88ba9 (v3.13.2)
-- Current branch base: origin/main ecbd33b8383313c84c5e71a97c06f3a4175e0c6c (#196 merged)
-- Current integration target: origin/main 74eaa151dc5b (#193 and #195 merged); rebase immediately after the dirty C4 checkpoint is committed/pushed
+- Current branch base: origin/main 74eaa151dc5b1282def8c3a6a43db6e46b50c929 (#193 and #195 merged)
+- Coordination target: origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 (#199 merged); rebase after this tracker checkpoint
+- Prior post-C4 integration rebase onto 74eaa151 completed cleanly with zero conflicts
 - Draft PR: #198, feat: add W16 artifact evidence foundation
 
 ## Active-lane inventory
@@ -57,18 +58,18 @@ The local Cortex main ref is not a safe base because it currently points at grap
 - [x] Contract drafted
 - [x] Implementation plan drafted
 - [x] Progress tracker drafted
-- [x] C0 docs committed and pushed as 509d6a14
+- [x] C0 docs committed as 87ef80a6 after rebase
 - [x] C1 typed evidence domain implemented
 - [x] C2 durable append/idempotency slice implemented
-- [x] C3 query/common service implemented in f3b91d1c
-- [x] C4 REST/MCP/CLI projections implemented; checkpoint commit pending
+- [x] C3 query/common service implemented in 3c68df2f after rebase
+- [x] C4 REST/MCP/CLI projections implemented in b1c30578 after rebase
 - [x] Adversarial review complete for C1-C4
 - [x] Focused C4 format/module/clippy/transport/catalog/docs gates green
 - [x] Draft PR #198 opened; update after C4 checkpoint and post-rebase validation
 
 ## Tests / gates
 
-C0 documentation checkpoint 509d6a14 is pushed to origin.
+C0 documentation checkpoint is 87ef80a6 after the clean rebase. Pre-rebase history was pushed before integration; the branch will be force-with-lease updated after post-rebase validation.
 
 Validated C1-C3 evidence slice gates:
 
@@ -94,12 +95,15 @@ Validated C4 focused gates on the final pre-rebase source:
 
 C4 adversarial fixes: REST admin authorization now precedes body read/parse, REST wire bodies are capped at 32 KiB and require JSON media types, rejected caller filter/reference values are never emitted raw in audit logs, and canonical log rows use the synthetic cortex-artifact-evidence hostname so producer services do not pollute homelab host inventory.
 
+Coordination pre-rebase rerun on committed C4 source b1c30578: `cargo test --lib artifact_evidence -- --nocapture` PASS, 22 passed / 0 failed / 2317 filtered. This rerun covers the artifact-evidence domain, DB/service, REST, MCP schema/actions and transport tests; broader catalog/help/HTTP/full gates will be rerun after the 64098b3f rebase.
+
 ## Blockers / dependencies
 
 - PR #195 has landed migration 48. The durable first slice remains migration-free; a measured dedicated projection/index follow-up may start at migration 49+.
 - No Agent Observatory abstraction dependency is required for the current design.
-- origin/main advanced to 74eaa151 with #193/#195 while C4 was dirty; checkpoint first, then rebase the clean branch.
+- Clean rebase onto origin/main 74eaa151 completed with zero conflicts; W16 still does not touch Agent Observatory hot ingest/cursor files.
+- PR #199 has now advanced origin/main to 64098b3fa4471837aec82a6063cc625f02a61f78. OTLP PR #200/worktree is explicitly out of scope and must remain untouched.
 
 ## Next action
 
-Commit and push C4, update draft PR #198, rebase the clean branch onto origin/main 74eaa151, resolve only genuine integration conflicts, then rerun focused and full repository gates on the rebased result.
+Commit this coordination tracker checkpoint, rebase the clean W16 branch onto exact origin/main 64098b3fa4471837aec82a6063cc625f02a61f78, then rerun Public Identity + Tests first, MCP integration, clippy -D warnings, fmt, cargo-deny, repository contract and full relevant gates. Force-with-lease push #198 only after the rebased result is validated.
