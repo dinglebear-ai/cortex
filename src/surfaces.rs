@@ -23,6 +23,7 @@ pub enum SurfaceDomain {
     Hosts,
     Sessions,
     Graph,
+    Evidence,
     Analysis,
     Correlate,
     State,
@@ -178,6 +179,7 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
     cli!("tail", Search, Canonical, Read),
     cli!("hosts", Hosts, Canonical, Read),
     cli!("apps", Search, Canonical, Read),
+    cli!("artifactevents", Evidence, Canonical, Read),
     cli!("sessions", Sessions, Canonical, Read),
     // LLM assessment spawns Gemini CLI on the local host via LlmRunner —
     // local-only by design (see PR 4 of GH #94's safety invariants).
@@ -314,6 +316,8 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
         Read
     ),
     mcp!("graph", Graph, Canonical, Read),
+    mcp!("artifact_evidence", Evidence, Canonical, Read),
+    mcp!("artifact_evidence_record", Evidence, Canonical, Admin),
     mcp!("skill_events", Sessions, Canonical, Read),
     mcp!("skill_incidents", Sessions, Canonical, Read),
     mcp!("skill_investigate", Sessions, Canonical, Read),
@@ -372,6 +376,7 @@ pub fn is_cli_mode_command(name: &str) -> bool {
             | "config"
             | "timeline"
             | "apps"
+            | "artifactevents"
             | "entity"
             | "graph"
             | "completions"

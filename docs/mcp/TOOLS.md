@@ -59,6 +59,8 @@ cortex exposes one MCP tool named `cortex`. The required
 | `similar_incidents` | FTS5 cluster search — find historical incidents similar to a query |
 | `incident_context` | Full context bundle for a known time window — logs + AI sessions |
 | `graph` | Resolve graph entities, neighborhoods, evidence-backed explanations, and evidence proof rows |
+| `artifact_evidence` | Query bounded source-attributed artifact ecosystem evidence |
+| `artifact_evidence_record` | Append one bounded source-attributed artifact ecosystem evidence event (admin) |
 | `skill_events` | List extracted AI skill-invocation events |
 | `skill_incidents` | Groups negative-signal transcript hits following a skill invocation into scored incident candidates |
 | `skill_investigate` | Expands skill-usage incidents into deterministic evidence bundles, skill-first |
@@ -303,6 +305,22 @@ Target override arguments such as `project_dir`, `compose_file`, `project_name`,
 Run strict deployment-health checks for the canonical cortex Compose deployment. It returns the same redacted diagnostic shape as `compose_status` when healthy, and returns a tool error when Docker/Compose ownership or runtime checks are not ready for lifecycle work. Compose lifecycle mutations are CLI-only.
 
 Required argument: `action = "compose_doctor"`
+
+## cortex artifact_evidence
+
+Query the durable W16 artifact-evidence stream. This is evidence/history, not an artifact registry or authority lookup. Artifact IDs, revisions, content digests, correlation/request ids, targets, and producer identity are treated as opaque observed dimensions.
+
+Required argument: `action = "artifact_evidence"`
+
+Optional arguments: `eventKind`, `artifactId`, `revisionId`, `contentDigest`, `correlationId`, `requestId`, `targetId`, `sourceSystem`, `since`/`from`, `until`/`to`, `limit` (max 500).
+
+## cortex artifact_evidence_record
+
+Append one `dinglebear.cortex-artifact-evidence/v1` observation through Cortex's canonical durable log transaction path. Requires `cortex:admin`. Exact replay is idempotent by `(sourceSystem, sourceIssuer, eventId)`; conflicting reuse fails closed. Metadata is bounded/redacted and secret-bearing keys, secret-like references, raw request/result/tool/artifact bodies, malformed timestamps, and malformed SHA-256 digests are rejected. Caller-supplied license/trust/policy/share/lease/deployment fields remain source-attributed evidence only.
+
+Required arguments: `action = "artifact_evidence_record"`, `schemaVersion`, `eventId`, `eventKind`, `sourceSystem`, `sourceIssuer`, `observedAt`, plus at least one of `artifactId`, `revisionId`, `contentDigest`, or `provenanceRef`.
+
+Optional bounded evidence dimensions: `requestId`, `correlationId`, `causationId`, `targetId`, `targetKind`, `loadoutId`, `shareGrantId`, `capabilityLeaseId`, `deploymentPlanId`, `runtimeId`, `pluginId`, `operationRef`, `outcome`, `metadata`.
 
 ## cortex skill_incidents
 

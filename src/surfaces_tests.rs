@@ -32,6 +32,7 @@ const CURRENT_API_ROUTES: &[&str] = &[
     "/api/anomalies",
     "/api/compare",
     "/api/apps",
+    "/api/artifact-evidence",
     "/api/similar-incidents",
     "/api/incident-context",
     "/api/graph/entity",

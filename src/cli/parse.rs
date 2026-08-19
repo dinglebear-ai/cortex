@@ -37,6 +37,7 @@ pub(crate) const TOP_LEVEL_COMMANDS: &[&str] = &[
     "config",
     "timeline",
     "apps",
+    "artifactevents",
     "completions",
 ];
 
@@ -67,6 +68,7 @@ pub(crate) fn parse_command(args: Vec<String>) -> Result<CliCommand> {
         "entity" => commands::graph::parse_entity(rest),
         "graph" => commands::graph::parse_graph(rest),
         "apps" => commands::apps::parse_apps(rest),
+        "artifactevents" => commands::artifact_evidence::parse_artifact_evidence(rest),
         "__complete" => Ok(CliCommand::Complete(rest.to_vec())),
         "completions" => Ok(CliCommand::Completions(rest.to_vec())),
         _ if cortex::surfaces::removed_cli_surface(command).is_some() => {

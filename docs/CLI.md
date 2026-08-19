@@ -1321,6 +1321,7 @@ models.
 | `cortex state fleet` | `cortex` with `action="fleet_state"` |
 | `cortex correlate state` | `cortex` with `action="correlate_state"` |
 | `cortex apps` | `cortex` with `action="apps"` |
+| `cortex artifactevents` | `cortex` with `action="artifact_evidence"` |
 | `cortex hosts sources` | `cortex` with `action="source_ips"` |
 | `cortex timeline` | `cortex` with `action="timeline"` |
 | `cortex analysis patterns` | `cortex` with `action="patterns"` |

@@ -174,6 +174,200 @@ async fn stats_route_requires_bearer_token() {
     assert!(value.get("total_logs").is_some());
 }
 
+fn artifact_evidence_body(event_id: &str, artifact_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": "dinglebear.cortex-artifact-evidence/v1",
+        "eventId": event_id,
+        "eventKind": "runtime_call",
+        "sourceSystem": "labby",
+        "sourceIssuer": "gateway:personal/jake",
+        "observedAt": "2026-08-19T12:00:00-04:00",
+        "artifactId": artifact_id,
+        "revisionId": "revision-rest-1",
+        "contentDigest": format!("sha256:{}", "a".repeat(64)),
+        "requestId": "req-rest-1",
+        "correlationId": "corr-rest-1",
+        "targetId": "target-dookie",
+        "operationRef": "mcp:tools/call",
+        "outcome": "success",
+        "metadata": {
+            "durationMs": 21,
+            "resultBytes": 84,
+            "message": "result sk-super-secret"
+        }
+    })
+}
+
+#[tokio::test]
+async fn artifact_evidence_rest_admin_write_and_read_query_share_service_contract() {
+    let (state, _pool, _dir) = test_state_with_admin(Some("secret".into()), "admin-secret");
+    let app = test_router(state);
+    let body = artifact_evidence_body("evt-rest-1", "artifact-rest-1");
+
+    // Admin authorization is checked before artifact-envelope parsing. Even a
+    // body that cannot deserialize as ArtifactEvidenceInput must return the
+    // admin denial rather than a parser error when the admin token is absent.
+    let (status, value) = post_json(
+        app.clone(),
+        "/api/artifact-evidence",
+        serde_json::json!({"requestBody": "not an evidence envelope"}),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(
+        value["error"],
+        "X-Cortex-Admin-Token required for admin API actions"
+    );
+
+    let (status, value) = post_json(
+        app.clone(),
+        "/api/artifact-evidence",
+        body.clone(),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(
+        value["error"],
+        "X-Cortex-Admin-Token required for admin API actions"
+    );
+
+    let (status, recorded) = post_json_with_admin(
+        app.clone(),
+        "/api/artifact-evidence",
+        body,
+        Some("secret"),
+        Some("admin-secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "response: {recorded}");
+    assert_eq!(recorded["inserted"], true);
+    assert!(recorded["cortexLogId"].as_i64().unwrap() > 0);
+    assert_eq!(recorded["event"]["observedAt"], "2026-08-19T16:00:00.000Z");
+    assert_eq!(
+        recorded["event"]["metadata"]["message"],
+        "result [REDACTED]"
+    );
+
+    let (status, queried) = get_json(
+        app,
+        "/api/artifact-evidence?artifactId=artifact-rest-1&correlationId=corr-rest-1",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "response: {queried}");
+    assert_eq!(queried["events"].as_array().unwrap().len(), 1);
+    assert_eq!(queried["events"][0]["eventId"], "evt-rest-1");
+    assert_eq!(queried["events"][0]["artifactId"], "artifact-rest-1");
+    assert_eq!(queried["truncated"], false);
+
+    let oversized = serde_json::json!({
+        "padding": "x".repeat(crate::artifact_evidence::MAX_EVIDENCE_WIRE_BYTES + 1)
+    });
+    let (status, oversized_response) = post_json_with_admin(
+        test_router(test_state_with_admin(Some("secret".into()), "admin-secret").0),
+        "/api/artifact-evidence",
+        oversized,
+        Some("secret"),
+        Some("admin-secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        oversized_response["error"],
+        "artifact_evidence_body_too_large"
+    );
+}
+
+#[tokio::test]
+async fn artifact_evidence_rest_requires_json_content_type_after_admin_auth() {
+    let (state, _pool, _dir) = test_state_with_admin(Some("secret".into()), "admin-secret");
+    let app = test_router(state);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/artifact-evidence")
+        .header("Authorization", "Bearer secret")
+        .header("X-Cortex-Admin-Token", "admin-secret")
+        .body(axum::body::Body::from(
+            artifact_evidence_body("evt-rest-content-type", "artifact-rest-ct").to_string(),
+        ))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "artifact_evidence_requires_json");
+}
+
+#[tokio::test]
+async fn artifact_evidence_rest_replay_conflict_and_malformed_metadata_fail_closed() {
+    let (state, _pool, _dir) = test_state_with_admin(Some("secret".into()), "admin-secret");
+    let app = test_router(state);
+    let body = artifact_evidence_body("evt-rest-replay", "artifact-rest-1");
+
+    let (status, first) = post_json_with_admin(
+        app.clone(),
+        "/api/artifact-evidence",
+        body.clone(),
+        Some("secret"),
+        Some("admin-secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "response: {first}");
+    let first_id = first["cortexLogId"].as_i64().unwrap();
+
+    let (status, replay) = post_json_with_admin(
+        app.clone(),
+        "/api/artifact-evidence",
+        body.clone(),
+        Some("secret"),
+        Some("admin-secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "response: {replay}");
+    assert_eq!(replay["inserted"], false);
+    assert_eq!(replay["cortexLogId"], first_id);
+
+    let mut conflict = body.clone();
+    conflict["targetId"] = serde_json::json!("target-steamy");
+    let (status, conflict_response) = post_json_with_admin(
+        app.clone(),
+        "/api/artifact-evidence",
+        conflict,
+        Some("secret"),
+        Some("admin-secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert_eq!(conflict_response["error"], "constraint_violation");
+    assert_eq!(
+        conflict_response["detail"],
+        "artifact_evidence_event_id_conflict"
+    );
+
+    let mut malformed = artifact_evidence_body("evt-rest-bad", "artifact-rest-2");
+    malformed["metadata"] = serde_json::json!({"requestBody": "raw tool payload"});
+    let (status, malformed_response) = post_json_with_admin(
+        app,
+        "/api/artifact-evidence",
+        malformed,
+        Some("secret"),
+        Some("admin-secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        malformed_response["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("forbidden")),
+        "response: {malformed_response}"
+    );
+}
+
 #[tokio::test]
 async fn file_tails_route_adds_and_lists_sources() {
     let (mut state, _pool, dir) = test_state(Some("secret".into()));

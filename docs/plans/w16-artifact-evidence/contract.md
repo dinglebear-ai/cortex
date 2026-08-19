@@ -89,6 +89,7 @@ Optional outcome is one of success, failure, denied, cancelled, pending, or unkn
 
 First-slice hard limits:
 
+- REST wire body before parsing: 32 KiB
 - envelope after safe canonicalization: 16 KiB
 - opaque ID/reference: 256 bytes
 - source system: 64 bytes
@@ -115,7 +116,7 @@ Each accepted event is projected to one canonical logs row:
 
 - app_name = artifact-evidence
 - timestamp = observedAt normalized to UTC RFC3339
-- hostname = sourceSystem
+- hostname = cortex-artifact-evidence (explicit synthetic owner required by the canonical log schema; producer systems must not pollute host inventory)
 - source_ip = artifact-evidence://<sourceSystem>/<sourceIssuer>
 - event_action = eventKind
 - metadata_json = canonical safe v1 envelope
@@ -132,7 +133,7 @@ eventId is scoped to its source namespace. The idempotency key is the tuple (sou
 - same source tuple and eventId with different canonical evidence: fail with conflict and do not mutate the existing event;
 - the same eventId from a different sourceSystem/sourceIssuer is a distinct observation.
 
-The first slice enforces this under the existing process-wide DB write lock. A later indexed projection may make the uniqueness check O(log n) without changing semantics.
+The first slice takes the existing process-wide DB write lock and starts an SQLite IMMEDIATE transaction before the replay lookup, closing the check-then-insert race across multiple Cortex processes sharing one database. A later indexed projection may make the uniqueness check O(log n) without changing semantics.
 
 ## Query contract
 

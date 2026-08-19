@@ -79,15 +79,15 @@ use cortex::app::{
     GraphExplainResponse, HostStateRequest, HostStateResponse, IncidentContextRequest,
     IncidentContextResponse, IngestRateRequest, IngestRateResponse, ListAiProjectsRequest,
     ListAiProjectsResponse, ListAiToolsRequest, ListAiToolsResponse, ListAppsRequest,
-    ListAppsResponse, ListHostsResponse, ListMcpEventsRequest, ListMcpEventsResponse,
-    ListSessionsRequest, ListSessionsResponse, ListSkillEventsRequest, ListSkillEventsResponse,
-    ListSourceIpsRequest, ListSourceIpsResponse, MaintenanceJobStatus, PatternsRequest,
-    PatternsResponse, ProjectContextRequest, ProjectContextResponse, SearchLogsRequest,
-    SearchLogsResponse, SearchSessionsRequest, SearchSessionsResponse, SilentHostsRequest,
-    SilentHostsResponse, SimilarIncidentsRequest, SimilarIncidentsResponse, TailLogsRequest,
-    TimelineRequest, TimelineResponse, TopicCorrelateRequest, TopicCorrelateResponse,
-    UnackErrorRequest, UnackErrorResponse, UnaddressedErrorsRequest, UnaddressedErrorsResponse,
-    UsageBlocksRequest, UsageBlocksResponse,
+    ListAppsResponse, ListArtifactEvidenceRequest, ListArtifactEvidenceResponse, ListHostsResponse,
+    ListMcpEventsRequest, ListMcpEventsResponse, ListSessionsRequest, ListSessionsResponse,
+    ListSkillEventsRequest, ListSkillEventsResponse, ListSourceIpsRequest, ListSourceIpsResponse,
+    MaintenanceJobStatus, PatternsRequest, PatternsResponse, ProjectContextRequest,
+    ProjectContextResponse, SearchLogsRequest, SearchLogsResponse, SearchSessionsRequest,
+    SearchSessionsResponse, SilentHostsRequest, SilentHostsResponse, SimilarIncidentsRequest,
+    SimilarIncidentsResponse, TailLogsRequest, TimelineRequest, TimelineResponse,
+    TopicCorrelateRequest, TopicCorrelateResponse, UnackErrorRequest, UnackErrorResponse,
+    UnaddressedErrorsRequest, UnaddressedErrorsResponse, UsageBlocksRequest, UsageBlocksResponse,
 };
 use cortex::scanner::{CheckpointEntry, ParseErrorEntry, PruneCheckpointsResult};
 
@@ -540,6 +540,13 @@ impl HttpClient {
 
     pub async fn sessions(&self, req: &ListSessionsRequest) -> Result<ListSessionsResponse> {
         self.get_json("/api/sessions", Some(req)).await
+    }
+
+    pub async fn artifact_evidence(
+        &self,
+        req: &ListArtifactEvidenceRequest,
+    ) -> Result<ListArtifactEvidenceResponse> {
+        self.get_json("/api/artifact-evidence", Some(req)).await
     }
 
     // ─── REST surface: bead 0p8r.2 (AI session queries) ─────────────────────

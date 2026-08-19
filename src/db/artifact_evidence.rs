@@ -6,7 +6,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::artifact_evidence::{
-    ARTIFACT_EVIDENCE_APP_NAME, ArtifactEvidenceKind, NormalizedArtifactEvidence,
+    ARTIFACT_EVIDENCE_APP_NAME, ARTIFACT_EVIDENCE_SYNTHETIC_HOST, ArtifactEvidenceKind,
+    NormalizedArtifactEvidence,
 };
 
 use super::{DbPool, LogBatchEntry, insert_logs_batch_in_tx, write_lock};
@@ -108,7 +109,11 @@ pub fn record_artifact_evidence(
     let summary = event.summary();
     let entry = LogBatchEntry {
         timestamp: event.observed_at.clone(),
-        hostname: event.source_system.clone(),
+        // The canonical logs schema requires a hostname and updates host inventory.
+        // Artifact evidence producers are systems/services, not necessarily hosts, so
+        // keep them in sourceSystem/sourceIssuer and use one explicit synthetic host
+        // rather than polluting homelab host inventory with labby/depot/axon/phoenix.
+        hostname: ARTIFACT_EVIDENCE_SYNTHETIC_HOST.to_string(),
         facility: None,
         severity: "info".to_string(),
         app_name: Some(ARTIFACT_EVIDENCE_APP_NAME.to_string()),

@@ -38,13 +38,14 @@ use crate::app::{
     FilterLogsRequest, FleetStateRequest, GetErrorsRequest, GetLogRequest, GraphAroundRequest,
     GraphEntityLookupRequest, GraphEvidenceLookupRequest, GraphExplainRequest, HostStateRequest,
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
-    ListAppsRequest, ListHookEventsRequest, ListMcpEventsRequest, ListSessionsRequest,
-    ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
+    ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListMcpEventsRequest,
+    ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
     NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, RequestActor,
     SearchLogsRequest, SearchSessionsRequest, ServiceError, SilentHostsRequest,
     SimilarIncidentsRequest, TailLogsRequest, TimelineRequest, TopicCorrelateRequest,
     UnackErrorRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
 };
+use crate::artifact_evidence::{ArtifactEvidenceInput, MAX_EVIDENCE_WIRE_BYTES};
 use crate::config::{ApiConfig, NotificationsConfig};
 use crate::mcp::{AuthPolicy, build_auth_layer};
 
@@ -271,6 +272,10 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/graph/around", get(graph_around))
         .route("/api/graph/explain", get(graph_explain))
         .route("/api/graph/evidence", get(graph_evidence))
+        .route(
+            "/api/artifact-evidence",
+            get(artifact_evidence).post(record_artifact_evidence),
+        )
         .route("/api/sessions/incidents", get(ai_incidents))
         .route("/api/sessions/investigate", get(ai_investigate))
         .route("/api/sessions/llm-invocations", get(ai_llm_invocations))
@@ -895,6 +900,88 @@ async fn ai_hooks(
         "read: hook_events queried"
     );
     respond(state.service.list_hook_events(req).await)
+}
+
+async fn artifact_evidence(
+    State(state): State<ApiState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(req): Query<ListArtifactEvidenceRequest>,
+) -> impl IntoResponse {
+    tracing::info!(
+        caller_ip = %peer.ip(),
+        event_kind = ?req.event_kind,
+        artifact_id_filter = req.artifact_id.is_some(),
+        revision_id_filter = req.revision_id.is_some(),
+        content_digest_filter = req.content_digest.is_some(),
+        correlation_id_filter = req.correlation_id.is_some(),
+        request_id_filter = req.request_id.is_some(),
+        target_id_filter = req.target_id.is_some(),
+        source_system_filter = req.source_system.is_some(),
+        "read: artifact_evidence queried"
+    );
+    respond(state.service.list_artifact_evidence(req).await)
+}
+
+async fn record_artifact_evidence(
+    State(state): State<ApiState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    // Authorize the admin mutation before reading or parsing caller-controlled
+    // evidence bytes. This keeps malformed bodies from becoming an admin-token
+    // oracle and avoids buffering an unbounded request before the admin check.
+    if let Some(resp) = require_api_admin_token(&state, request.headers()) {
+        return resp;
+    }
+    let content_type_ok = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .is_some_and(|media_type| {
+            media_type == "application/json"
+                || (media_type.starts_with("application/") && media_type.ends_with("+json"))
+        });
+    if !content_type_ok {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(json!({"error": "artifact_evidence_requires_json"})),
+        )
+            .into_response();
+    }
+    let body = match axum::body::to_bytes(request.into_body(), MAX_EVIDENCE_WIRE_BYTES).await {
+        Ok(body) => body,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"error": "artifact_evidence_body_too_large"})),
+            )
+                .into_response();
+        }
+    };
+    let input: ArtifactEvidenceInput = match serde_json::from_slice(&body) {
+        Ok(input) => input,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_artifact_evidence_body"})),
+            )
+                .into_response();
+        }
+    };
+    tracing::warn!(
+        caller_ip = %peer.ip(),
+        event_kind = input.event_kind.as_str(),
+        "admin: artifact_evidence record invoked"
+    );
+    respond(state.service.record_artifact_evidence(input).await)
 }
 
 #[derive(Debug, Deserialize)]

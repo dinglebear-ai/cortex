@@ -48,6 +48,13 @@ to them by default.
 | GET | `/api/stats` | read | (none) | `DbStats { total_logs, total_hosts, oldest_log?, newest_log?, logical_db_size_mb, physical_db_size_mb, free_disk_mb?, max_db_size_mb, min_free_disk_mb, write_blocked, phantom_fts_rows? }` | 200, 401, 503, 500 | Y | Hot path; no PRAGMA per request. `phantom_fts_rows` is `null` by default — its `COUNT(*) FROM logs_fts` scan is skipped to stay fast on large DBs; computed only via the opt-in diagnostic path. |
 | GET | `/api/version` | read | (none) | `VersionInfo { version, git_sha?, schema_version }` | 200, 401 | Y | **Cached at startup** — never touches SQLite per request (eng-review #A3). Returns 404 if older server lacks the route (see Versioning policy). |
 
+### Artifact ecosystem evidence (2) — W16
+
+| Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/artifact-evidence` | read | query: `eventKind?`, `artifactId?`, `revisionId?`, `contentDigest?`, `correlationId?`, `requestId?`, `targetId?`, `sourceSystem?`, `from?`/`since?`, `to?`/`until?`, `limit?` (1..500) | `ListArtifactEvidenceResponse { events, truncated }` | 200, 400, 401, 503, 500 | Y | Bounded source-attributed observations from the shared Cortex evidence path. Exact artifact/revision/digest/correlation/target filters are opaque evidence dimensions, not authority lookups. CLI: `cortex artifactevents`; MCP: `artifact_evidence` (`cortex:read`). |
+| POST | `/api/artifact-evidence` | **admin** | body: `ArtifactEvidenceInput` (`schemaVersion=dinglebear.cortex-artifact-evidence/v1`, source + observed-at, closed event kind, at least one artifact/revision/digest/provenance subject, optional bounded refs/metadata; wire body max 32 KiB) | `RecordArtifactEvidenceResponse { cortexLogId, inserted, event }` | 200, 400, 401, **403**, **409**, **413**, **415**, 503, 500 | replay-safe | Requires normal bearer auth plus `X-Cortex-Admin-Token`. Persists through the canonical `logs` transaction path. Replay key is `(sourceSystem, sourceIssuer, eventId)`; exact replay returns `inserted=false`, conflicting reuse returns 409. Secret-bearing keys, secret-like references, raw request/result/tool/artifact bodies, malformed digests/timestamps, and oversized metadata fail closed. Cortex records license/trust/policy/share/lease/deployment fields only as source-attributed evidence. MCP write action: `artifact_evidence_record` (`cortex:admin`). |
+
 ### AI session queries (14) — bead `.2`
 
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |

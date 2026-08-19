@@ -134,6 +134,48 @@ fn exact_action_contracts_accept_only_runtime_request_fields() {
     ));
     assert!(!accepts("list_ai_projects", &["action", "limit"]));
     assert!(!accepts("list_ai_projects", &["action", "project", "tool"]));
+
+    assert!(accepts(
+        "artifact_evidence",
+        &[
+            "action",
+            "artifactId",
+            "correlationId",
+            "since",
+            "until",
+            "limit"
+        ]
+    ));
+    assert!(!accepts(
+        "artifact_evidence",
+        &["action", "artifactId", "metadata"]
+    ));
+
+    assert!(accepts(
+        "artifact_evidence_record",
+        &[
+            "action",
+            "schemaVersion",
+            "eventId",
+            "eventKind",
+            "sourceSystem",
+            "sourceIssuer",
+            "observedAt",
+            "artifactId",
+        ]
+    ));
+    assert!(!accepts(
+        "artifact_evidence_record",
+        &[
+            "action",
+            "schemaVersion",
+            "eventId",
+            "eventKind",
+            "sourceSystem",
+            "sourceIssuer",
+            "artifactId",
+        ]
+    ));
 }
 
 #[test]

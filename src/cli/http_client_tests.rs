@@ -557,6 +557,47 @@ async fn version_endpoint_round_trip() {
     assert!(v.git_sha.is_none());
 }
 
+#[tokio::test]
+async fn artifact_evidence_query_round_trips_shared_request_shape() {
+    use cortex::app::ListArtifactEvidenceRequest;
+    use cortex::artifact_evidence::ArtifactEvidenceKind;
+
+    let (server, client) = start_mock_with_client().await;
+    Mock::given(method("GET"))
+        .and(path("/api/artifact-evidence"))
+        .and(query_param("eventKind", "runtime_call"))
+        .and(query_param("artifactId", "artifact-cli-1"))
+        .and(query_param("correlationId", "corr-cli-1"))
+        .and(query_param("sourceSystem", "labby"))
+        .and(query_param("from", "2026-08-19T15:00:00.000Z"))
+        .and(query_param("to", "2026-08-19T17:00:00.000Z"))
+        .and(query_param("limit", "25"))
+        .and(header("authorization", "Bearer test-value"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"events": [], "truncated": false})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let response = client
+        .artifact_evidence(&ListArtifactEvidenceRequest {
+            event_kind: Some(ArtifactEvidenceKind::RuntimeCall),
+            artifact_id: Some("artifact-cli-1".into()),
+            correlation_id: Some("corr-cli-1".into()),
+            source_system: Some("labby".into()),
+            from: Some("2026-08-19T15:00:00.000Z".into()),
+            to: Some("2026-08-19T17:00:00.000Z".into()),
+            limit: Some(25),
+            ..Default::default()
+        })
+        .await
+        .expect("artifact evidence query");
+    assert!(response.events.is_empty());
+    assert!(!response.truncated);
+}
+
 // ─── bead 0p8r.15: AbuseSearchRequest round-trip ────────────────────────────
 
 /// Bead 0p8r.15: the CLI serializes an `AbuseSearchRequest` with multiple

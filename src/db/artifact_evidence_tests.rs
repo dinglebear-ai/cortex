@@ -62,7 +62,7 @@ fn append_uses_canonical_logs_path_and_returns_log_id() {
         )
         .unwrap();
     assert_eq!(stored.0, "2026-08-19T12:00:00.000Z");
-    assert_eq!(stored.1, "labby");
+    assert_eq!(stored.1, ARTIFACT_EVIDENCE_SYNTHETIC_HOST);
     assert_eq!(stored.2, ARTIFACT_EVIDENCE_APP_NAME);
     assert_eq!(stored.3, "artifact_evidence installed artifact-123");
     assert_eq!(stored.4, stored.3);

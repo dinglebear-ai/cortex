@@ -26,8 +26,8 @@ pub(crate) use sessions::{
     SessionsSkillsListArgs, SessionsWatchArgs,
 };
 pub(crate) use surface::{
-    AnomaliesArgs, AppsArgs, ClockSkewArgs, CompareArgs, CorrelateStateArgs, FleetStateArgs,
-    HostStateArgs, SilentHostsArgs, TopicCorrelateArgs,
+    AnomaliesArgs, AppsArgs, ArtifactEvidenceArgs, ClockSkewArgs, CompareArgs, CorrelateStateArgs,
+    FleetStateArgs, HostStateArgs, SilentHostsArgs, TopicCorrelateArgs,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +56,7 @@ pub(crate) enum CliCommand {
     Anomalies(AnomaliesArgs),
     Compare(CompareArgs),
     Apps(AppsArgs),
+    ArtifactEvidence(ArtifactEvidenceArgs),
     CorrelateState(CorrelateStateArgs),
     TopicCorrelate(TopicCorrelateArgs),
     Entity(EntityArgs),

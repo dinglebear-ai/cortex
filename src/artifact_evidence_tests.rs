@@ -211,4 +211,15 @@ fn event_kind_strings_are_stable_contract_values() {
         ArtifactEvidenceKind::DeploymentRolledBack.as_str(),
         "deployment_rolled_back"
     );
+    assert_eq!(
+        "deployment_rolled_back"
+            .parse::<ArtifactEvidenceKind>()
+            .unwrap(),
+        ArtifactEvidenceKind::DeploymentRolledBack
+    );
+    assert!(
+        "publication_authorized"
+            .parse::<ArtifactEvidenceKind>()
+            .is_err()
+    );
 }

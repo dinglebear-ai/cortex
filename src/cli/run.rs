@@ -47,6 +47,7 @@ pub(crate) async fn run(mode: CliMode, command: CliCommand) -> Result<()> {
     // else (ai/db/compose/setup) still flows through the Local-only path.
     match command {
         CliCommand::Search(args) => dispatch::run_search(&mode, args).await,
+        CliCommand::ArtifactEvidence(args) => dispatch::run_artifact_evidence(&mode, args).await,
         CliCommand::Filter(args) => dispatch::run_filter(&mode, args).await,
         CliCommand::Tail(args) => dispatch::run_tail(&mode, args).await,
         CliCommand::Errors(args) => dispatch::run_errors(&mode, args).await,

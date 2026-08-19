@@ -14,7 +14,9 @@ use crate::assessment::{looks_secretish, redact_json_value_strings};
 
 pub const ARTIFACT_EVIDENCE_SCHEMA_V1: &str = "dinglebear.cortex-artifact-evidence/v1";
 pub const ARTIFACT_EVIDENCE_APP_NAME: &str = "artifact-evidence";
+pub const ARTIFACT_EVIDENCE_SYNTHETIC_HOST: &str = "cortex-artifact-evidence";
 pub const MAX_EVIDENCE_BYTES: usize = 16 * 1024;
+pub const MAX_EVIDENCE_WIRE_BYTES: usize = 32 * 1024;
 pub const MAX_METADATA_BYTES: usize = 8 * 1024;
 pub const MAX_REF_BYTES: usize = 256;
 pub const MAX_SOURCE_SYSTEM_BYTES: usize = 64;
@@ -63,6 +65,43 @@ pub enum ArtifactEvidenceKind {
 }
 
 impl ArtifactEvidenceKind {
+    pub const ALL: &[Self] = &[
+        Self::DiscoveryObserved,
+        Self::IntakeObserved,
+        Self::Imported,
+        Self::Installed,
+        Self::Uninstalled,
+        Self::Updated,
+        Self::Forked,
+        Self::Followed,
+        Self::AddedToGateway,
+        Self::LoadoutBound,
+        Self::GatewayLifecycle,
+        Self::RuntimeLifecycle,
+        Self::RuntimeCall,
+        Self::DeploymentPlanned,
+        Self::DeploymentStaged,
+        Self::DeploymentVerified,
+        Self::DeploymentFailed,
+        Self::DeploymentRolledBack,
+        Self::TargetLifecycle,
+        Self::PhoenixPluginLifecycle,
+        Self::ApprovalRecorded,
+        Self::CapabilityLeaseIssued,
+        Self::CapabilityLeaseUsed,
+        Self::CapabilityLeaseRevoked,
+        Self::ShareGrantCreated,
+        Self::ShareGrantUsed,
+        Self::ShareGrantRevoked,
+        Self::SecurityFinding,
+        Self::LicenseFinding,
+        Self::TrustFinding,
+        Self::QuarantineFinding,
+        Self::Failed,
+        Self::Retried,
+        Self::Cancelled,
+    ];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DiscoveryObserved => "discovery_observed",
@@ -103,6 +142,18 @@ impl ArtifactEvidenceKind {
     }
 }
 
+impl std::str::FromStr for ArtifactEvidenceKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.as_str() == value)
+            .ok_or_else(|| format!("unsupported artifact evidence kind: {value}"))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactEvidenceOutcome {
@@ -112,6 +163,28 @@ pub enum ArtifactEvidenceOutcome {
     Cancelled,
     Pending,
     Unknown,
+}
+
+impl ArtifactEvidenceOutcome {
+    pub const ALL: &[Self] = &[
+        Self::Success,
+        Self::Failure,
+        Self::Denied,
+        Self::Cancelled,
+        Self::Pending,
+        Self::Unknown,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Denied => "denied",
+            Self::Cancelled => "cancelled",
+            Self::Pending => "pending",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 use super::*;
 use crate::artifact_evidence::{ArtifactEvidenceInput, ArtifactEvidenceKind};
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListArtifactEvidenceRequest {
     pub event_kind: Option<ArtifactEvidenceKind>,
@@ -37,7 +37,7 @@ impl From<db::ArtifactEvidenceAppendResult> for RecordArtifactEvidenceResponse {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactEvidenceEntry {
     pub cortex_log_id: i64,
@@ -54,7 +54,7 @@ impl From<db::ArtifactEvidenceEntry> for ArtifactEvidenceEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListArtifactEvidenceResponse {
     pub events: Vec<ArtifactEvidenceEntry>,
