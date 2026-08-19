@@ -1490,6 +1490,14 @@ fn schema_43_fixture_upgrades_to_48_and_preserves_legacy_rows() {
             })
             .unwrap();
         assert_eq!(version, 43);
+        let llm_table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'llm_invocations'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(llm_table, 1, "schema-43 fixture must include migration 37");
     }
 
     let config = test_storage_config(db_path);
