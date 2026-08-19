@@ -4,6 +4,7 @@ mod agent_observatory_models_tests;
 
 pub mod agent_observatory;
 mod analytics;
+mod artifact_evidence;
 pub mod entity_resolution;
 pub(crate) mod error_signatures;
 pub mod graph;
@@ -46,6 +47,11 @@ pub use analytics::{
     list_source_ips, silent_hosts, summarize_range, timeline,
 };
 pub(crate) use analytics::{cluster_pattern_rows, fetch_pattern_rows};
+pub use artifact_evidence::{
+    ArtifactEvidenceAppendResult, ArtifactEvidenceEntry, ArtifactEvidenceParams,
+    ArtifactEvidenceStoreError, ListArtifactEvidenceResult, list_artifact_evidence,
+    record_artifact_evidence,
+};
 #[cfg(test)]
 pub use graph::{
     ENTITY_TYPES, EVIDENCE_SOURCE_KINDS, REASON_CODES, RELATIONSHIP_TYPES, TRUST_LEVELS,

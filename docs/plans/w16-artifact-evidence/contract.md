@@ -125,11 +125,12 @@ The append uses Cortex's existing write lock, SQLite transaction, and insert_log
 
 ## Idempotency and collision semantics
 
-eventId is unique within the artifact-evidence facet by semantic contract.
+eventId is scoped to its source namespace. The idempotency key is the tuple (sourceSystem, sourceIssuer, eventId), so independent producers do not collide when they use similar local identifiers.
 
-- first append: insert and return inserted=true plus Cortex log id;
-- exact replay: return existing log id and inserted=false;
-- same eventId with different canonical evidence: fail with conflict and do not mutate the existing event.
+- first append for a source tuple: insert and return inserted=true plus Cortex log id;
+- exact replay from the same source tuple: return existing log id and inserted=false;
+- same source tuple and eventId with different canonical evidence: fail with conflict and do not mutate the existing event;
+- the same eventId from a different sourceSystem/sourceIssuer is a distinct observation.
 
 The first slice enforces this under the existing process-wide DB write lock. A later indexed projection may make the uniqueness check O(log n) without changing semantics.
 

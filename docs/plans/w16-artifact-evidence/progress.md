@@ -12,7 +12,7 @@ Updated: 2026-08-19
 - Branch: codex/w16-cortex-artifact-evidence-20260819
 - Original lane base: origin/main 0ebb3d2bb6c220147dd4ee27f9efb162f3e88ba9 (v3.13.2)
 - Current base after docs-only rebase: origin/main ecbd33b8383313c84c5e71a97c06f3a4175e0c6c (#196 merged)
-- Draft PR: not opened yet; open at the first tested reusable evidence slice
+- Draft PR: pending immediate creation after the validated C1-C3 code checkpoint is pushed
 
 ## Active-lane inventory
 
@@ -42,7 +42,8 @@ The local Cortex main ref is not a safe base because it currently points at grap
 5. event_action is the indexed first-slice event-kind projection; other bounded dimensions use structured metadata queries until a measured migration 49+ optimization is warranted.
 6. Caller authority/policy/license/trust fields are source-attributed observations only.
 7. Raw artifact/tool/request/result bodies are out of contract; metadata is bounded and secret-safe.
-8. eventId supplies replay/idempotency identity. Exact replay is a no-op; conflicting reuse fails closed.
+8. Replay/idempotency identity is scoped by (sourceSystem, sourceIssuer, eventId). Exact replay is a no-op; conflicting reuse within the same source fails closed, while unrelated producers may reuse local IDs.
+9. Artifact evidence starts an IMMEDIATE SQLite transaction before the replay lookup, closing the check-then-insert race across multiple Cortex processes sharing a DB.
 
 ## Checkpoints
 
@@ -53,18 +54,29 @@ The local Cortex main ref is not a safe base because it currently points at grap
 - [x] Contract drafted
 - [x] Implementation plan drafted
 - [x] Progress tracker drafted
-- [ ] C0 docs committed and pushed
-- [ ] C1 typed evidence domain
-- [ ] C2 durable append/idempotency slice
-- [ ] C3 query/common service
+- [x] C0 docs committed and pushed as 509d6a14
+- [x] C1 typed evidence domain implemented
+- [x] C2 durable append/idempotency slice implemented
+- [x] C3 query/common service implemented
 - [ ] C4 REST/MCP projections
-- [ ] Adversarial review complete
-- [ ] Relevant repository gates green
+- [x] Adversarial review complete for the C1-C3 slice
+- [x] Relevant repository gates green for the C1-C3 slice
 - [ ] Draft PR opened and current
 
 ## Tests / gates
 
-No code has been changed yet. C0 documentation checkpoint pending git diff validation.
+C0 documentation checkpoint 509d6a14 is pushed to origin.
+
+Validated C1-C3 evidence slice gates:
+
+- cargo fmt -- --check: PASS
+- git diff --check: PASS
+- cargo clippy --all-targets -- -D warnings: PASS
+- focused artifact-evidence tests: PASS, 16 passed / 0 failed / 2317 filtered
+- env -u CORTEX_API_TOKEN -u NO_AUTH cargo nextest run --locked: PASS, 2918 passed / 0 failed / 2 skipped in 279.178s
+- cargo test --doc --locked: PASS, 0 doctests / 0 failures
+
+Adversarial review fixed two replay issues before checkpointing: cross-process check-then-insert races are closed with an IMMEDIATE SQLite transaction, and eventId idempotency is scoped by sourceSystem + sourceIssuer rather than assuming globally unique producer IDs. Expanded metadata tests cover object/list cardinality, nesting, string bounds, total serialized bytes, secret/raw-body keys, and malformed shapes.
 
 ## Blockers / dependencies
 
@@ -73,4 +85,4 @@ No code has been changed yet. C0 documentation checkpoint pending git diff valid
 
 ## Next action
 
-Validate and push C0, then implement the typed evidence domain and focused safety tests.
+Commit and push the validated C1-C3 slice, open the draft PR immediately, then add thin REST/MCP projections through CortexService.

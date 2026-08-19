@@ -29,7 +29,7 @@ The first slice reuses the canonical Cortex log/evidence/query path rather than 
 4. Canonicalize the safe envelope and append it through the existing SQLite logs transaction path with app_name = artifact-evidence.
 5. Use the existing indexed event_action column for event-kind projection.
 6. Query exact artifact/revision/digest/correlation/target/source dimensions from the bounded structured metadata, with limit + 1 truncation semantics.
-7. Provide idempotent append by caller-supplied eventId: identical replay returns the original log row; same ID with different canonical evidence fails closed as a conflict.
+7. Provide source-scoped idempotent append by (sourceSystem, sourceIssuer, eventId): identical replay returns the original log row; conflicting reuse within the same source fails closed, while unrelated producers may reuse local IDs.
 8. Expose ingest/query through the common CortexService; REST and MCP projections call that shared layer rather than duplicating logic.
 
 ## Why no migration in the first slice
