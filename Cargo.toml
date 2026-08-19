@@ -171,6 +171,7 @@ serde_path_to_error = "0.1"
 opentelemetry-proto = { version = "0.32", default-features = false, features = [
   "gen-tonic-messages",
   "logs",
+  "metrics",
   "trace",
 ] }
 prost = "0.14"

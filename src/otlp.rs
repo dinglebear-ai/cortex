@@ -40,6 +40,8 @@ use crate::ingest::IngestTx;
 
 mod auth;
 mod entries;
+mod metrics;
+mod metrics_payload;
 mod normalization;
 mod privacy;
 mod trace_http;
