@@ -542,3 +542,52 @@ fn build_entries_ignores_oversized_ai_project_and_session_id() {
     assert_eq!(entries[0].ai_project, None);
     assert_eq!(entries[0].ai_session_id, None);
 }
+
+#[test]
+fn build_entries_preserves_legacy_128_field_log_attribute_cap() {
+    let peer = "127.0.0.1:1".parse().unwrap();
+    let attributes = (0..200)
+        .map(|index| kv(&format!("custom.{index:03}"), av_string("value")))
+        .collect::<Vec<_>>();
+    let req = ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: vec![kv("host.name", av_string("nashost"))],
+                dropped_attributes_count: 0,
+                entity_refs: vec![],
+            }),
+            scope_logs: vec![ScopeLogs {
+                scope: None,
+                log_records: vec![LogRecord {
+                    time_unix_nano: 0,
+                    observed_time_unix_nano: 0,
+                    severity_number: 9,
+                    severity_text: String::new(),
+                    body: Some(av_string("msg")),
+                    attributes,
+                    dropped_attributes_count: 0,
+                    flags: 0,
+                    trace_id: vec![],
+                    span_id: vec![],
+                    event_name: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+
+    let entries = build_entries(&req, peer);
+    let metadata: serde_json::Value =
+        serde_json::from_str(entries[0].metadata_json.as_deref().unwrap()).unwrap();
+    let attributes = metadata["log_attributes"].as_object().unwrap();
+    assert_eq!(
+        attributes.len(),
+        crate::ingest_metadata::MAX_METADATA_OBJECT_FIELDS
+    );
+    assert!(
+        attributes["_omitted_fields"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+}

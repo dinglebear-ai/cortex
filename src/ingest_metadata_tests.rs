@@ -44,6 +44,21 @@ fn caps_object_field_count() {
 }
 
 #[test]
+fn custom_object_field_limit_is_honored() {
+    let attrs = (0..5)
+        .map(|idx| (format!("key-{idx}"), Value::String("value".into())))
+        .collect::<Vec<_>>();
+    let value = attrs_to_metadata_object_with_limit(
+        attrs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone())),
+        3,
+    );
+
+    assert_eq!(value["_omitted_fields"], 2);
+}
+
+#[test]
 fn bounded_metadata_remains_valid_json_when_payload_is_too_large() {
     let value = serde_json::json!({
         "source_type": "otlp",

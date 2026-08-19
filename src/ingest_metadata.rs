@@ -35,14 +35,22 @@ pub(crate) fn try_bounded_metadata_json(value: Value) -> Option<String> {
     (encoded.len() <= MAX_METADATA_JSON_BYTES).then_some(encoded)
 }
 
+#[cfg(test)]
 pub(crate) fn attrs_to_metadata_object<'a, I>(attrs: I) -> Value
+where
+    I: IntoIterator<Item = (&'a str, Value)>,
+{
+    attrs_to_metadata_object_with_limit(attrs, MAX_METADATA_OBJECT_FIELDS)
+}
+
+pub(crate) fn attrs_to_metadata_object_with_limit<'a, I>(attrs: I, max_fields: usize) -> Value
 where
     I: IntoIterator<Item = (&'a str, Value)>,
 {
     let mut object = Map::new();
     let mut omitted = 0usize;
     for (key, value) in attrs {
-        if object.len() >= MAX_METADATA_OBJECT_FIELDS {
+        if object.len() >= max_fields {
             omitted += 1;
             continue;
         }

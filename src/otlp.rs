@@ -35,6 +35,7 @@ use crate::ingest::IngestTx;
 
 mod auth;
 mod entries;
+mod normalization;
 
 use auth::{
     is_authorized, otlp_auth_policy_label, should_warn_unauthorized, unauthorized,
