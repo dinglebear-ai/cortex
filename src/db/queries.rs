@@ -21,19 +21,17 @@ use crate::enrich::parser::SourceKind;
 
 use super::entity_resolution::{
     FALLBACK_EXPLICIT_DEGRADED_HOST_CONTEXT, INCLUSION_GRAPH_RELATED, INCLUSION_HOST_CONTEXT,
-    INCLUSION_SERVICE_INSTANCE, ResolverStatus,
+    ResolverStatus,
 };
 use super::maintenance::{exceeds_trigger, get_storage_metrics};
-#[cfg(test)]
-use super::models::HostEntry;
 use super::models::{
     AbuseIncident, AiAbuseMatch, AiAbuseParams, AiAbuseResult, AiCorrelateParams, AiIncidentParams,
     AiIncidentResult, AiInvestigateParams, AiInvestigateResult, AiProjectInventoryEntry,
     AiRelatedLogsForAnchor, AiRelatedLogsParams, AiSessionEntry, AiToolInventoryEntry, DbStats,
     ErrorSummaryEntry, GraphRelatedLogEntry, IncidentEvidence, ListAiProjectsParams,
     ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult, LogEntry,
-    ResolvedTopicEntity, SearchAiSessionsParams, SearchAiSessionsResult, SearchParams,
-    SearchedAiSessionEntry, SessionGraphInputs, TopicGraphInputs,
+    SearchAiSessionsParams, SearchAiSessionsResult, SearchParams, SearchedAiSessionEntry,
+    SessionGraphInputs, TopicGraphInputs,
 };
 use super::pool::DbPool;
 use super::queries_service_instances;

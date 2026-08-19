@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 
 use crate::inventory::limits::MAX_COMMAND_OUTPUT_BYTES;
 use crate::inventory::redaction::redact_error;
@@ -52,7 +51,7 @@ pub async fn run_command_bytes_capped(
     max_output_bytes: usize,
 ) -> Result<CommandOutputBytes> {
     let start = Instant::now();
-    let mut child = Command::new(program)
+    let mut child = crate::env::tokio_command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -224,7 +224,9 @@ fn parse_cron_hour_minute(cron: &str) -> (u32, u32) {
 /// Wakes every 60s and fires when the local clock matches the cron
 /// hour:minute, at most once per calendar day.
 ///
-/// TODO: Quiet hours not implemented. Add a quiet_hours table when
+/// Quiet hours are intentionally unsupported today. Config loading rejects
+/// `[notifications.quiet_hours]` explicitly so operators cannot mistake this
+/// planned policy for active behavior. Add the table only when
 /// chrono-tz is available.
 pub(crate) fn spawn_digest(
     pool: Arc<DbPool>,

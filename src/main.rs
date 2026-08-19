@@ -1,5 +1,7 @@
 use anyhow::Result;
+
 use axum::Router;
+pub(crate) use cortex::env;
 use cortex::{api, doctor, logging, mcp, runtime::RuntimeCore, web_app};
 use rmcp::{ServiceExt, transport::stdio};
 use tracing::info;

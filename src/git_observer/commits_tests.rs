@@ -45,7 +45,7 @@ fn configure(command: &mut Command, home: &Path, xdg: &Path) {
 }
 
 fn git(cwd: &Path, home: &Path, xdg: &Path, args: &[OsString], timestamp: Option<&str>) -> Vec<u8> {
-    let mut command = Command::new("git");
+    let mut command = crate::env::command("git");
     configure(&mut command, home, xdg);
     command
         .current_dir(cwd)

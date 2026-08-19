@@ -72,23 +72,23 @@ MCP `error.data` MAY include the underlying JSON-RPC code in `agent_rpc_code` fo
 | Action | Epic | Description | Breaking-change policy |
 |---|---|---|---|
 | `agent_status` | D (probe registry) | Per-host agent connection state, capabilities, schedule, last probe ts | Additive only |
-| `alerts_ack` | E (digest+notifications) | Acknowledge or snooze an active alert by rule_id / fingerprint | Additive only |
-| `alerts_active` | E | List all currently unacked alerts | Additive only |
+| `alerts_ack` | E (digest+notifications) | **Planned, not dispatched:** acknowledge or snooze an active alert | Additive only |
+| `alerts_active` | E | **Planned, not dispatched:** list currently unacked alerts | Additive only |
 | `ask_history` | F (RAG incidents) | NL question over incident corpus + AI sessions, with LLM synthesis | Additive only |
-| `digest_preview` | E | Render the morning digest markdown without delivering | Additive only |
+| `digest_preview` | E | **Planned, not dispatched:** render digest markdown without delivering | Additive only |
 | `disk_blackholes` | D | Bounded sizing of high-churn build-cache paths | Additive only |
 | `disk_usage` | D | Per-mountpoint capacity and inode usage (df-equivalent) | Additive only |
 | `dns_status` | D | Per-resolver latency + failure tracking | Additive only |
 | `mem_top` | D | Top-N processes by RSS | Additive only |
 | `network_neigh` | D | ARP / neighbor table with collision detection | Additive only |
-| `rules_fire_history` | E | Per-rule fire history (rule_id, fingerprint, when, log excerpt) | Additive only |
-| `rules_list` | E | List configured alert rules with their last-fired stats | Additive only |
+| `rules_fire_history` | E | **Planned, not dispatched:** per-rule fire history | Additive only |
+| `rules_list` | E | **Planned, not dispatched:** list configured alert rules | Additive only |
 | `service_health` | D | Combined systemd-failed + docker-health view | Additive only |
 | `mark_incident_resolved` | F | Tag an incident as resolved with optional session_id + notes; triggers re-embed | Additive only |
 | `similar_incidents` | F | Rank past incidents structurally similar to a seed (log/window/text) | Additive only |
 | `suggest_fix` | F | Surface resolution narrative from past resolved priors | Additive only |
 
-16 new actions total.
+16 actions are specified by this historical cross-epic contract. Five Epic E notification actions (`alerts_ack`, `alerts_active`, `digest_preview`, `rules_fire_history`, `rules_list`) remain planned and are not present in the current MCP dispatch surface.
 
 ## 3. Common Schemas
 
@@ -233,6 +233,8 @@ Response:
 
 ### alerts_ack
 
+> **Planned, not implemented:** retained as a design contract; current Cortex does not dispatch this MCP action.
+
 **Source:** epic E, `2026-05-16-digest-notifications-design.md` §9, §12.
 
 **Purpose:** Acknowledge an active alert (`ack_at = now`) or snooze it (`snooze_until = now + duration`) without permanently clearing. Stops `repeat_until_ack` push escalation. References `alert_state.{rule_id, fingerprint}`.
@@ -285,6 +287,8 @@ Response:
 ---
 
 ### alerts_active
+
+> **Planned, not implemented:** retained as a design contract; current Cortex does not dispatch this MCP action.
 
 **Source:** epic E §12.
 
@@ -439,6 +443,8 @@ Response:
 ---
 
 ### digest_preview
+
+> **Planned, not implemented:** retained as a design contract; current Cortex does not dispatch this MCP action.
 
 **Source:** epic E §10, §12.
 
@@ -937,6 +943,8 @@ Response:
 
 ### rules_fire_history
 
+> **Planned, not implemented:** retained as a design contract; current Cortex does not dispatch this MCP action.
+
 **Source:** epic E §12.
 
 **Purpose:** Per-rule fire history with log excerpts. Useful for "why did this rule fire so much last night?"
@@ -1005,6 +1013,8 @@ Response:
 ---
 
 ### rules_list
+
+> **Planned, not implemented:** retained as a design contract; current Cortex does not dispatch this MCP action.
 
 **Source:** epic E §12.
 
@@ -1555,10 +1565,10 @@ No API change. `correlate` transparently benefits from epic B's new structured c
 ## 7. Cross-Contract Dependencies
 
 - `disk_usage`, `disk_blackholes`, `mem_top`, `service_health`, `dns_status`, `network_neigh`, `agent_status` consume `ProbeOutput::*` variants from `docs/contracts/probe-trait.rs`.
-- `alerts_active`, `alerts_ack`, `rules_list`, `rules_fire_history` consume the `alert_state` table defined in `docs/contracts/db-additions.sql`.
+- **Planned, not currently dispatched:** `alerts_active`, `alerts_ack`, `rules_list`, and `rules_fire_history` were specified against the `alert_state` design in `docs/contracts/db-additions.sql`, but current Cortex does not expose these MCP actions or parse operator-defined notification rules.
 - `similar_incidents`, `ask_history`, `suggest_fix` consume the `incidents` table and the `IncidentCard` template defined in `docs/contracts/incident-card.md` and `docs/contracts/db-additions.sql`.
 - `search`'s four new filters consume the `http_status`, `auth_outcome`, `dns_blocked`, `event_action` columns defined by epic B migration 10 (`docs/superpowers/specs/2026-05-16-enrichment-framework-design.md` §5).
 - `status.pollers` block consumes the `poller_checkpoints` table defined in epic C §4.
 - `status.agents` block consumes the `agents` table defined in epic A §9.
 - See `docs/contracts/cli-surface.md` for the CLI equivalents that wrap these actions.
-- See `docs/contracts/notification-rules.schema.json` for the validation contract on the TOML rules that feed `rules_list` and `alerts_active`.
+- `docs/contracts/notification-rules.schema.json` is a **planned/unimplemented** rule-design schema. It is not a validation contract for current runtime configuration.

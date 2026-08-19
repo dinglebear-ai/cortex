@@ -1,6 +1,5 @@
 use std::io::{self, ErrorKind};
 use std::path::Path;
-use std::process::Command;
 use std::time::Instant;
 
 use super::firstrun::{ensure_private_dir, parse_env};
@@ -359,7 +358,7 @@ pub(crate) fn run_ai_watch_initial_index_phase(cortex_bin: &Path, env_path: &Pat
             );
         }
     };
-    let mut command = Command::new(cortex_bin);
+    let mut command = crate::env::command(cortex_bin);
     command.args(["sessions", "index", "--json"]);
     for (key, value) in env {
         command.env(key, value);

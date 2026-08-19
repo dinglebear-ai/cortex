@@ -1048,7 +1048,6 @@ impl RuntimeCore {
         let handle = tokio::spawn(async move {
             let mut last_full_transitions = 0u64;
             let mut last_udp_queue_drops = 0u64;
-            let mut last_tcp_queue_drops = 0u64;
             let mut interval = background_interval(tokio::time::Duration::from_secs(
                 storage_config.cleanup_interval_secs,
             ));
@@ -1139,7 +1138,7 @@ impl RuntimeCore {
                                 .saturating_mul(1024 * 1024);
                             let urls_json = serde_json::to_string(&notifications_cfg.apprise_urls)
                                 .unwrap_or_else(|_| "[]".to_string());
-                            let hostname = std::env::var("HOSTNAME")
+                            let hostname = crate::env::var("HOSTNAME")
                                 .unwrap_or_else(|_| "localhost".to_string());
                             if let Some(params) = crate::notifications::rules::evaluate_disk_fill(
                                 &hostname,
@@ -1182,23 +1181,18 @@ impl RuntimeCore {
                             let udp_drops_delta = snapshot
                                 .syslog_udp_packets_dropped_queue_full
                                 .saturating_sub(last_udp_queue_drops);
-                            let tcp_drops_delta = snapshot
-                                .syslog_tcp_lines_dropped_queue_full
-                                .saturating_sub(last_tcp_queue_drops);
                             last_full_transitions = snapshot.syslog_write_channel_full_transitions;
                             last_udp_queue_drops = snapshot.syslog_udp_packets_dropped_queue_full;
-                            last_tcp_queue_drops = snapshot.syslog_tcp_lines_dropped_queue_full;
 
                             let urls_json = serde_json::to_string(&notifications_cfg.apprise_urls)
                                 .unwrap_or_else(|_| "[]".to_string());
-                            let hostname = std::env::var("HOSTNAME")
+                            let hostname = crate::env::var("HOSTNAME")
                                 .unwrap_or_else(|_| "localhost".to_string());
                             if let Some(params) =
                                 crate::notifications::rules::evaluate_ingest_queue_pressure(
                                     &hostname,
                                     full_transitions_delta,
                                     udp_drops_delta,
-                                    tcp_drops_delta,
                                     snapshot.ingest_queue_depth,
                                     snapshot.ingest_queue_capacity,
                                     &urls_json,

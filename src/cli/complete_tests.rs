@@ -1,8 +1,8 @@
 use super::*;
 use std::sync::{Mutex, OnceLock};
 
-/// Serializes tests that mutate the process-global `CORTEX_DB_PATH` so parallel
-/// execution can't race on it.
+/// Serializes tests that share the `CORTEX_DB_PATH` test-overlay key so parallel
+/// execution cannot interfere semantically.
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -325,18 +325,16 @@ fn dynamic_value_degrades_to_ok_without_db() {
     struct RestoreDbPath(Option<std::ffi::OsString>);
     impl Drop for RestoreDbPath {
         fn drop(&mut self) {
-            unsafe {
+            {
                 match self.0.take() {
-                    Some(v) => std::env::set_var("CORTEX_DB_PATH", v),
-                    None => std::env::remove_var("CORTEX_DB_PATH"),
+                    Some(v) => crate::env::set_test_var("CORTEX_DB_PATH", v),
+                    None => crate::env::remove_test_var("CORTEX_DB_PATH"),
                 }
             }
         }
     }
-    let _restore = RestoreDbPath(std::env::var_os("CORTEX_DB_PATH"));
-    unsafe {
-        std::env::set_var("CORTEX_DB_PATH", "/nonexistent/cortex-complete-test.db");
-    }
+    let _restore = RestoreDbPath(crate::env::var_os("CORTEX_DB_PATH"));
+    crate::env::set_test_var("CORTEX_DB_PATH", "/nonexistent/cortex-complete-test.db");
     let out = complete(&["value".into(), "--host".into()]);
     assert!(out.is_ok(), "dynamic completion must not error: {out:?}");
 }

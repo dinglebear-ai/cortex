@@ -233,11 +233,11 @@ pub async fn run_agent_streams(config: AgentStreamsConfig) -> Result<()> {
 
     if config.shell_history_forward {
         let forward_config = shell_history::ShellHistoryForwardConfig {
-            zsh_history_path: std::env::var_os("HOME")
+            zsh_history_path: crate::env::var_os("HOME")
                 .map(PathBuf::from)
                 .map(|h| h.join(".zsh_history"))
                 .filter(|p| p.exists()),
-            atuin_db_path: std::env::var_os("HOME")
+            atuin_db_path: crate::env::var_os("HOME")
                 .map(PathBuf::from)
                 .map(|h| h.join(".local/share/atuin/history.db"))
                 .filter(|p| p.exists()),

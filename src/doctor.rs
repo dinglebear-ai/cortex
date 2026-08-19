@@ -420,7 +420,7 @@ fn collect_compose_section() -> DoctorSection {
                 ),
             ));
             let expected_volume =
-                std::env::var("CORTEX_VOLUME_NAME").unwrap_or_else(|_| "cortex-data".to_string());
+                crate::env::var("CORTEX_VOLUME_NAME").unwrap_or_else(|_| "cortex-data".to_string());
             match status.data_mounts.iter().find(|m| m.target == "/data") {
                 Some(m) if m.kind == "bind" => {
                     let src = m
@@ -1027,7 +1027,7 @@ pub fn ai_watcher_process_start_time() -> Option<String> {
     if let Some(usec) = systemctl_unix_timestamp(SERVICE) {
         return Some(usec);
     }
-    let output = std::process::Command::new("systemctl")
+    let output = crate::env::command("systemctl")
         .arg("--user")
         .args(["show", "-p", "ExecMainStartTimestamp", "--value", SERVICE])
         .output()
@@ -1043,7 +1043,7 @@ pub fn ai_watcher_process_start_time() -> Option<String> {
 /// "watcher running but start-time parsing failed" — the latter is a
 /// diagnostic the operator needs to see.
 fn ai_watcher_is_active() -> bool {
-    let Ok(output) = std::process::Command::new("systemctl")
+    let Ok(output) = crate::env::command("systemctl")
         .arg("--user")
         .args(["is-active", "cortex-sessions-watch.service"])
         .output()
@@ -1054,7 +1054,7 @@ fn ai_watcher_is_active() -> bool {
 }
 
 fn systemctl_unix_timestamp(service: &str) -> Option<String> {
-    let output = std::process::Command::new("systemctl")
+    let output = crate::env::command("systemctl")
         .arg("--user")
         .args([
             "show",
@@ -1217,7 +1217,7 @@ fn runtime_current_status() -> (Option<bool>, Option<String>) {
             Some("scripts/check-runtime-current.sh not found".into()),
         );
     };
-    match std::process::Command::new("bash").arg(script).output() {
+    match crate::env::command("bash").arg(script).output() {
         Ok(output) if output.status.success() => (Some(true), None),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1232,7 +1232,7 @@ fn runtime_current_status() -> (Option<bool>, Option<String>) {
 }
 
 fn runtime_current_script_path() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("CORTEX_RUNTIME_CHECK_SCRIPT")
+    if let Some(path) = crate::env::var_os("CORTEX_RUNTIME_CHECK_SCRIPT")
         .map(std::path::PathBuf::from)
         .filter(|path| path.exists())
     {
@@ -1254,7 +1254,7 @@ fn runtime_current_script_path() -> Option<std::path::PathBuf> {
 }
 
 fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
-    std::process::Command::new(command)
+    crate::env::command(command)
         .args(args)
         .output()
         .ok()

@@ -1,11 +1,9 @@
 //! Tests for color policy resolution.
 //!
-//! These mutate process-global state (the `COLOR_OVERRIDE` atomic and env
-//! vars). nextest isolates each test in its own process, but under
-//! `cargo test --lib` (one process, parallel threads — the pre-push path) they
-//! would race each other and any other env-reading test, so they are
-//! `#[serial]`. Each test installs its own override and clears env up front, so
-//! serialized execution is deterministic.
+//! These mutate shared test state (the `COLOR_OVERRIDE` atomic and Cortex's
+//! in-memory environment overlay), so they remain `#[serial]` for deterministic
+//! semantics under both nextest and `cargo test --lib`. No process environment
+//! mutation is performed.
 
 use super::*;
 use serial_test::serial;
@@ -14,7 +12,7 @@ use serial_test::serial;
 /// baseline regardless of the ambient shell.
 fn clear_color_env() {
     for var in ["NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"] {
-        unsafe { env::remove_var(var) };
+        env::remove_test_var(var);
     }
 }
 
@@ -30,7 +28,7 @@ fn override_always_wins_over_non_tty() {
 #[serial]
 fn override_never_wins_over_tty_and_force() {
     install_color_choice(ColorChoice::Never);
-    unsafe { env::set_var("FORCE_COLOR", "1") };
+    env::set_test_var("FORCE_COLOR", "1");
     assert!(
         !resolve(true),
         "Never must suppress color even on a TTY with FORCE_COLOR set"
@@ -51,7 +49,7 @@ fn auto_follows_tty_when_no_env() {
 fn auto_no_color_env_suppresses_even_on_tty() {
     clear_color_env();
     install_color_choice(ColorChoice::Auto);
-    unsafe { env::set_var("NO_COLOR", "1") };
+    env::set_test_var("NO_COLOR", "1");
     assert!(!resolve(true), "NO_COLOR must suppress color on a TTY");
 }
 
@@ -60,7 +58,7 @@ fn auto_no_color_env_suppresses_even_on_tty() {
 fn auto_force_color_enables_on_non_tty() {
     clear_color_env();
     install_color_choice(ColorChoice::Auto);
-    unsafe { env::set_var("FORCE_COLOR", "1") };
+    env::set_test_var("FORCE_COLOR", "1");
     assert!(resolve(false), "FORCE_COLOR must enable color on a non-TTY");
 }
 
@@ -69,9 +67,7 @@ fn auto_force_color_enables_on_non_tty() {
 fn no_color_beats_force_color() {
     clear_color_env();
     install_color_choice(ColorChoice::Auto);
-    unsafe {
-        env::set_var("NO_COLOR", "1");
-        env::set_var("FORCE_COLOR", "1");
-    }
+    env::set_test_var("NO_COLOR", "1");
+    env::set_test_var("FORCE_COLOR", "1");
     assert!(!resolve(true), "NO_COLOR takes precedence over FORCE_COLOR");
 }

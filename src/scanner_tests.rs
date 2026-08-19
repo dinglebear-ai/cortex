@@ -606,7 +606,7 @@ fn index_roots_ignores_claude_sessions_index_metadata() {
 #[serial]
 fn index_roots_rejects_broad_home_root_and_repo_paths() {
     let (pool, _dir) = test_pool();
-    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
+    let home = std::path::PathBuf::from(crate::env::var("HOME").unwrap());
     let repo = std::env::current_dir().unwrap();
 
     for path in [std::path::Path::new("/"), home.as_path(), repo.as_path()] {
@@ -1295,9 +1295,8 @@ struct HomeOverride(Option<std::ffi::OsString>);
 
 impl HomeOverride {
     fn set(path: &std::path::Path) -> Self {
-        let previous = std::env::var_os("HOME");
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("HOME", path) };
+        let previous = crate::env::var_os("HOME");
+        crate::env::set_test_var("HOME", path);
         Self(previous)
     }
 }
@@ -1305,11 +1304,9 @@ impl HomeOverride {
 impl Drop for HomeOverride {
     fn drop(&mut self) {
         if let Some(home) = &self.0 {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::set_var("HOME", home) };
+            crate::env::set_test_var("HOME", home);
         } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::remove_var("HOME") };
+            crate::env::remove_test_var("HOME");
         }
     }
 }

@@ -405,7 +405,7 @@ impl GlobalFlags {
 /// (case-insensitive). Any other value — including empty string, `0`, `false`,
 /// or typos — is treated as unset.
 fn env_opts_into_http() -> bool {
-    match std::env::var(ENV_USE_HTTP) {
+    match crate::env::var(ENV_USE_HTTP) {
         Ok(v) => {
             let v = v.trim();
             v.eq_ignore_ascii_case("1") || v.eq_ignore_ascii_case("true")

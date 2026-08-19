@@ -12,8 +12,6 @@ pub struct LogRow {
     pub app_name: Option<String>,
     pub message: String,
     pub hostname: String,
-    #[allow(dead_code)]
-    pub severity: String,
     pub metadata_json: Option<String>,
     pub timestamp: String,
 }
@@ -216,18 +214,18 @@ pub fn evaluate_disk_fill(
 
 /// Evaluate ingest queue pressure from runtime counters.
 ///
-/// Fires when queue-full transitions or queue-full drops have increased since
-/// the previous evaluation cycle.
+/// Fires when queue-full transitions or UDP queue-full drops have increased
+/// since the previous evaluation cycle. TCP uses awaited backpressure and does
+/// not drop lines when the ingest queue is full.
 pub fn evaluate_ingest_queue_pressure(
     hostname: &str,
     full_transitions_delta: u64,
     udp_drops_delta: u64,
-    tcp_drops_delta: u64,
     queue_depth: usize,
     queue_capacity: usize,
     apprise_urls_json: &str,
 ) -> Option<OutboxInsertParams> {
-    if full_transitions_delta == 0 && udp_drops_delta == 0 && tcp_drops_delta == 0 {
+    if full_transitions_delta == 0 && udp_drops_delta == 0 {
         return None;
     }
 
@@ -238,7 +236,6 @@ pub fn evaluate_ingest_queue_pressure(
         "cortex observed queue pressure on **{hostname}** since the last check:\n\n\
          - queue-full transitions: `{full_transitions_delta}`\n\
          - UDP drops from full queue: `{udp_drops_delta}`\n\
-         - TCP drops from full queue: `{tcp_drops_delta}`\n\
          - current queue depth: `{queue_depth}/{queue_capacity}`"
     ));
 

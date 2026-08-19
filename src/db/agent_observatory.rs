@@ -1,46 +1,43 @@
-#![allow(dead_code)]
-
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 
 #[path = "agent_observatory_commits.rs"]
 mod commits;
-pub use commits::{
-    GitCommitReachabilityUpdate, GitCommitUpsert, get_git_commit, list_git_commits,
-    reconcile_git_commits, upsert_git_commits,
-};
+pub use commits::{GitCommitReachabilityUpdate, GitCommitUpsert};
+#[cfg(test)]
+pub use commits::{get_git_commit, list_git_commits};
 #[path = "agent_observatory_sources.rs"]
 mod sources;
 pub use sources::{
     AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow, AgentSkillSourceRow, AgentSourceKind,
-    AgentSourcePage, AgentSourceRecord, page_agent_sources,
+    AgentSourceRecord, page_agent_sources,
 };
 
 #[path = "agent_observatory_projection.rs"]
 mod projection;
 pub use projection::{
-    AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionOutboxRow,
-    AgentProjectionRunMatch, AgentProjectionWorktreeRef, AgentProjectionWriteInput,
-    AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
-    find_active_projection_worktree, find_unique_overlapping_projection_run,
-    find_unique_projection_run_by_session, write_agent_projection,
+    AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionRunMatch,
+    AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert,
+    AgentWorktreeEvidenceUpsert, find_active_projection_worktree,
+    find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
+    write_agent_projection,
 };
 
 #[path = "agent_observatory_observations.rs"]
 mod observations;
-pub use observations::{
-    RepositoryObservationInput, list_repository_observations,
-    record_repository_observations_if_changed,
-};
+pub use observations::RepositoryObservationInput;
+#[cfg(test)]
+pub use observations::list_repository_observations;
 
 #[path = "agent_observatory_queries.rs"]
 mod queries;
 pub use queries::{
     RepositoryReconcileResult, RepositoryUpsert, RepositoryWorktreeUpsert, get_repository_by_key,
-    get_worktree_by_key, list_repository_worktrees, mark_repository_removed, mark_worktree_removed,
-    reconcile_repository,
+    list_repository_worktrees,
 };
+#[cfg(test)]
+pub use queries::{get_worktree_by_key, reconcile_repository};
 
 use crate::db::pool::{DbPool, write_lock};
 use anyhow::{Context, Result};
@@ -101,6 +98,7 @@ pub(crate) fn record_projection_health(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn projection_health(pool: &DbPool, worker: &str) -> Result<Option<String>> {
     use rusqlite::OptionalExtension;
     let connection = pool.get().context("acquire database connection")?;
@@ -119,28 +117,6 @@ pub struct GitRepositoryReconcileResult {
     pub topology: RepositoryReconcileResult,
     pub commits: Vec<GitCommitRow>,
     pub observations: Vec<RepositoryObservationRow>,
-}
-
-/// Atomically publishes one Git observer snapshot. Readers can never observe a
-/// commit import without its matching topology and observation rows.
-pub fn reconcile_git_repository_snapshot(
-    pool: &DbPool,
-    repository: &RepositoryUpsert,
-    worktrees: &[RepositoryWorktreeUpsert],
-    commits: &[GitCommitUpsert],
-    reachability: &[GitCommitReachabilityUpdate],
-    observations: &[RepositoryObservationInput],
-    observed_at: &str,
-) -> Result<GitRepositoryReconcileResult> {
-    reconcile_git_repository_snapshot_with(
-        pool,
-        repository,
-        worktrees,
-        commits,
-        reachability,
-        observed_at,
-        |_| Ok(observations.to_vec()),
-    )
 }
 
 pub fn reconcile_git_repository_snapshot_with<F>(
@@ -221,6 +197,7 @@ macro_rules! string_enum {
         pub enum $name { $($variant),+ }
 
         impl $name {
+            #[cfg(test)]
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
             pub const fn as_str(self) -> &'static str {
                 match self { $(Self::$variant => $value),+ }
@@ -452,44 +429,4 @@ pub struct AgentRunWorktreeEvidenceRow {
     pub first_seen_at: String,
     pub last_seen_at: String,
     pub metadata_json: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentRunCommitEvidenceRow {
-    pub id: i64,
-    pub relation_key: String,
-    pub run_id: i64,
-    pub commit_id: i64,
-    pub worktree_id: Option<i64>,
-    pub evidence_kind: String,
-    pub evidence_source: String,
-    pub trust_level: EvidenceTrustLevel,
-    pub confidence: f64,
-    pub observed_at: String,
-    pub metadata_json: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProjectionCursorRow {
-    pub source_name: String,
-    pub last_source_id: i64,
-    pub source_max_id: i64,
-    pub projection_version: i64,
-    pub last_success_at: Option<String>,
-    pub last_error_at: Option<String>,
-    pub last_error: Option<String>,
-    pub retry_count: i64,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StreamOutboxRow {
-    pub id: i64,
-    pub event_name: StreamEventName,
-    pub entity_type: String,
-    pub entity_key: String,
-    pub run_id: Option<i64>,
-    pub payload_json: String,
-    pub created_at: String,
-    pub expires_at: String,
 }

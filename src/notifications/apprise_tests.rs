@@ -54,8 +54,7 @@ async fn mock_server_200() {
     let result = client
         .notify(&["test://".to_string()], "Test", "Body", NotifyType::Info)
         .await;
-    assert!(result.is_ok());
-    assert!(result.unwrap().success);
+    assert_eq!(result.unwrap().status_code, 200);
 }
 
 #[tokio::test]
@@ -69,8 +68,12 @@ async fn mock_server_207_partial_success() {
             NotifyType::Warning,
         )
         .await;
-    assert!(result.is_ok(), "207 should be treated as success");
-    assert!(result.unwrap().success);
+    assert_eq!(
+        result
+            .expect("207 should be treated as success")
+            .status_code,
+        207
+    );
 }
 
 #[tokio::test]

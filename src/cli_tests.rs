@@ -11,10 +11,8 @@ struct EnvGuard {
 
 impl EnvGuard {
     fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let previous = std::env::var_os(name);
-        unsafe {
-            std::env::set_var(name, value);
-        }
+        let previous = crate::env::var_os(name);
+        crate::env::set_test_var(name, value);
         Self { name, previous }
     }
 }
@@ -22,12 +20,12 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         match &self.previous {
-            Some(value) => unsafe {
-                std::env::set_var(self.name, value);
-            },
-            None => unsafe {
-                std::env::remove_var(self.name);
-            },
+            Some(value) => {
+                crate::env::set_test_var(self.name, value);
+            }
+            None => {
+                crate::env::remove_test_var(self.name);
+            }
         }
     }
 }
@@ -917,8 +915,8 @@ fn ai_watch_coordination_skipped_when_unit_missing() {
     // CORTEX_AI_WATCH_UNIT override forces the phase to query a unit that
     // cannot exist. On any reasonable test host this returns a LoadState
     // of not-found (Skipped per doctor spec) OR systemctl probe failure
-    // (Warn). EnvVarGuard restores process-global state on panic so this
-    // test cannot leak CORTEX_AI_WATCH_UNIT into peers.
+    // (Warn). EnvVarGuard restores the in-memory test overlay on panic so
+    // this test cannot leak CORTEX_AI_WATCH_UNIT into peers.
     let _g = EnvVarGuard::set(
         "CORTEX_AI_WATCH_UNIT",
         "cortex-sessions-watch-test-missing-9f3e.service",
@@ -978,9 +976,9 @@ fn parse_setup_check_and_repair() {
 
 // ─── GlobalFlags / CliMode (bead 0p8r.6) ────────────────────────────────────
 //
-// Env-touching tests use `#[serial]` (matching `http_client_tests`) because
-// `CORTEX_USE_HTTP` and `CORTEX_API_TOKEN` are process-global and would race
-// otherwise.
+// Env-touching tests use `#[serial]` (matching `http_client_tests`) so tests
+// that intentionally share the same overlay keys cannot interfere semantically.
+// The overlay itself never mutates the process environment.
 
 use serial_test::serial;
 
@@ -996,15 +994,13 @@ struct EnvVarGuard {
 
 impl EnvVarGuard {
     fn set(name: &'static str, value: &str) -> Self {
-        let previous = std::env::var(name).ok();
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(name, value) };
+        let previous = crate::env::var(name).ok();
+        crate::env::set_test_var(name, value);
         Self { name, previous }
     }
     fn unset(name: &'static str) -> Self {
-        let previous = std::env::var(name).ok();
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(name) };
+        let previous = crate::env::var(name).ok();
+        crate::env::remove_test_var(name);
         Self { name, previous }
     }
 }
@@ -1012,10 +1008,8 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         match &self.previous {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            Some(v) => unsafe { std::env::set_var(self.name, v) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            None => unsafe { std::env::remove_var(self.name) },
+            Some(v) => crate::env::set_test_var(self.name, v),
+            None => crate::env::remove_test_var(self.name),
         }
     }
 }

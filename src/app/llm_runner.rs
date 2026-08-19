@@ -247,8 +247,8 @@ impl LlmRunner {
         run_fn: F,
     ) -> Result<LlmInvocationOutcome, LlmRunnerError>
     where
-        F: FnOnce(String) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = anyhow::Result<String>> + Send + 'static,
+        F: FnOnce(String) -> Fut + Send,
+        Fut: std::future::Future<Output = anyhow::Result<String>> + Send,
     {
         let action = spec.action.clone();
         let prompt_bytes = spec.prompt.len();
@@ -665,7 +665,7 @@ fn build_metadata_json(extra: &serde_json::Value) -> String {
 }
 
 fn hostname_best_effort() -> String {
-    std::env::var("HOSTNAME")
+    crate::env::var("HOSTNAME")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "unknown".to_string())

@@ -159,15 +159,15 @@ pub(crate) fn smoke_watch_target(
 }
 
 pub(crate) fn systemctl_user_output(args: &[&str]) -> Result<String> {
-    let mut command = std::process::Command::new("systemctl");
+    let mut command = crate::env::command("systemctl");
     command.arg("--user").args(args);
     let output = command.output()?;
     let output =
-        if output.status.success() || std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+        if output.status.success() || crate::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
             output
         } else if systemctl_needs_user_bus_fallback(&output) {
             if let Some((runtime_dir, bus_address)) = inferred_user_bus_env() {
-                std::process::Command::new("systemctl")
+                crate::env::command("systemctl")
                     .env("XDG_RUNTIME_DIR", runtime_dir)
                     .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
                     .arg("--user")

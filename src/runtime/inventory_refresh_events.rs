@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -119,7 +118,7 @@ pub(super) async fn run_remote_docker_events_once(
         return Ok(());
     };
     let args = remote_docker_events_ssh_args(ssh_context, host)?;
-    let mut child = Command::new("ssh")
+    let mut child = crate::env::tokio_command("ssh")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -242,7 +241,7 @@ where
 }
 
 pub(super) fn remote_docker_events_enabled() -> bool {
-    std::env::var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS")
+    crate::env::var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS")
         .ok()
         .as_deref()
         .map(|value| {

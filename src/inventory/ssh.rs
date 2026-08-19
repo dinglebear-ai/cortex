@@ -320,11 +320,11 @@ fn retry_jitter(host: &str, initial: Duration, attempt: usize) -> Duration {
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name).map(PathBuf::from)
+    crate::env::var_os(name).map(PathBuf::from)
 }
 
 fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name)
+    crate::env::var(name)
         .ok()
         .as_deref()
         .map(str::trim)
@@ -332,7 +332,7 @@ fn env_usize(name: &str) -> Option<usize> {
 }
 
 fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name)
+    crate::env::var(name)
         .ok()
         .as_deref()
         .map(str::trim)
@@ -340,7 +340,7 @@ fn env_u64(name: &str) -> Option<u64> {
 }
 
 fn env_bool(name: &str) -> Option<bool> {
-    std::env::var(name).ok().map(|value| {
+    crate::env::var(name).ok().map(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes"

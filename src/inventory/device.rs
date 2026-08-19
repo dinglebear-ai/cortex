@@ -13,14 +13,21 @@ use crate::inventory::schema::{
 pub async fn collect(timeout: Duration) -> CollectorOutput {
     let mut out = CollectorOutput::new("device");
     let now = Utc::now().to_rfc3339();
-    let hostname = command_stdout("hostname", &[], timeout)
-        .await
-        .unwrap_or_else(|| "localhost".into());
-    let os = command_stdout("uname", &["-srvmo"], timeout).await;
     let memory = parse_meminfo();
-    let ips = collect_ips(timeout, &mut out).await;
-    let listeners = collect_listeners(timeout, &mut out).await;
-    let storage = collect_storage(timeout, &mut out).await;
+    let mut ips_out = CollectorOutput::new("device");
+    let mut listeners_out = CollectorOutput::new("device");
+    let mut storage_out = CollectorOutput::new("device");
+    let (hostname, os, ips, listeners, storage) = tokio::join!(
+        command_stdout("hostname", &[], timeout),
+        command_stdout("uname", &["-srvmo"], timeout),
+        collect_ips(timeout, &mut ips_out),
+        collect_listeners(timeout, &mut listeners_out),
+        collect_storage(timeout, &mut storage_out),
+    );
+    let hostname = hostname.unwrap_or_else(|| "localhost".into());
+    merge_diagnostics(&mut out, ips_out);
+    merge_diagnostics(&mut out, listeners_out);
+    merge_diagnostics(&mut out, storage_out);
 
     out.nodes.push(InventoryNode {
         id: format!("host:{hostname}"),
@@ -38,6 +45,11 @@ pub async fn collect(timeout: Duration) -> CollectorOutput {
     });
     out.storage.extend(storage);
     out
+}
+
+fn merge_diagnostics(out: &mut CollectorOutput, mut diagnostic: CollectorOutput) {
+    out.warnings.append(&mut diagnostic.warnings);
+    out.errors.append(&mut diagnostic.errors);
 }
 
 async fn command_stdout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {

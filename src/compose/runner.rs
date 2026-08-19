@@ -9,14 +9,14 @@ pub struct ProcessRunner;
 
 impl CommandRunner for ProcessRunner {
     fn run(&self, invocation: &ComposeInvocation) -> Result<CommandOutput> {
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use std::sync::{Arc, Mutex};
         use std::thread;
 
         #[cfg(unix)]
         use std::os::unix::process::CommandExt;
 
-        let mut command = Command::new(&invocation.program);
+        let mut command = crate::env::command(&invocation.program);
         command.args(&invocation.args);
         for (key, value) in &invocation.env {
             command.env(key, value);

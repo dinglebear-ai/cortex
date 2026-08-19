@@ -11,7 +11,7 @@
 //! read it via [`resolve`]. A single `--color=never` then mutes every surface,
 //! including tracing.
 
-use std::env;
+use crate::env;
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicU8, Ordering};
 

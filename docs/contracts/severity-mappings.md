@@ -16,7 +16,7 @@ updated: 2026-07-30
 > matcher, every MCP filter that mentions "severity_min", and every alert
 > tier classifier. Supersedes implicit conversions in
 > `docs/superpowers/specs/2026-05-16-digest-notifications-design.md` §4 / §7,
-> `docs/contracts/mcp-actions.md::alerts_active`, and `notification-rules.schema.json::severity_min`.
+> the planned `docs/contracts/mcp-actions.md::alerts_active` contract, and the planned `notification-rules.schema.json::severity_min` field.
 > Changing this requires updating all dependents.
 
 ---
@@ -88,54 +88,43 @@ enrichment-framework spec §13 open question 2) requires:
 **`auth_outcome` does NOT map onto severity.** A `success` event is
 typically `info`, a `failure` is `notice` or `warning`, a `denied` is
 `warning`, and a `challenge` is `info` — but these are conventions of
-the parsing source, not a normative mapping. Rule writers who care
-about both filter on both: `field_eq = { auth_outcome = "failure" }` and
-`severity_min = "warn"` (both as top-level rule properties).
+the parsing source, not a normative mapping. In the planned operator-defined rule design, authors who care about both would filter on both: `field_eq = { auth_outcome = "failure" }` and `severity_min = "warn"`. Current built-in evaluators do not consume that configurable rule syntax.
 
 ---
 
-## 3. Alert tiers (3 values)
+## 3. Planned alert tiers (3 values)
 
-A UX-oriented classification used by the notification system. Source:
-`docs/contracts/notification-rules.schema.json::$defs.severityTier`
-(line 43–46).
+This UX-oriented classification belongs to the **planned operator-defined rule/digest design**. Current Cortex notifications use built-in evaluators and persist concrete severity strings such as `critical`, `warning`, `notice`, and `info`; they do not parse the configurable tier field below. The forward-looking tier vocabulary remains defined by `docs/contracts/notification-rules.schema.json::$defs.severityTier`.
 
 | Tier | Push behaviour | Dedup behaviour | Quiet hours? | Repeat? |
 |---|---|---|---|---|
-| `info` | **Never pushed** as a standalone alert. Surfaces in the morning digest only (digest spec §10). | n/a | n/a | n/a |
-| `warn` | Single push on first match. | Identical fingerprint suppressed for `dedup_window` (default 1800 s). | **Suppressed** during quiet hours (queued into the next digest, NOT released afterward, per digest spec §8). | No. |
-| `critical` | First push immediately. | First fire pushes; re-fires within `dedup_window` (default 600 s) are coalesced into `fire_count` (digest spec §6, §7). | **Bypasses** quiet hours. Per-rule `deliver.quiet_hours_override.respect = false` lets `warn` rules also bypass. | Yes — every `repeat_seconds` (default 1800 s) until acked via the `alerts_ack` MCP action (digest spec §9 / `mcp-actions.md::alerts_ack`). |
+| `info` | Planned: **never pushed** as a standalone alert; surfaces in the tiered digest design. | n/a | n/a | n/a |
+| `warn` | Planned: single push on first match. | Planned: identical fingerprint suppressed for `dedup_window` (default 1800 s). | **Not implemented.** The design proposes suppression into the next digest, but current Cortex has no quiet-hours runtime policy and rejects `[notifications.quiet_hours]` config. | Planned: no repeat. |
+| `critical` | Planned: first push immediately. | Planned: first fire pushes; re-fires within `dedup_window` (default 600 s) are coalesced into `fire_count` (digest spec §6, §7). | **Not implemented.** The design proposes bypassing quiet hours, including per-rule overrides, but no current runtime quiet-hours behavior exists. | Planned: repeat every `repeat_seconds` (default 1800 s) until acked via the unimplemented `alerts_ack` MCP action. |
 
-**Where this vocabulary is used:**
+**Where this planned vocabulary is specified:**
 
-- `notification-rules.schema.json` top-level `severity` field (rule
-  severity tier, line 23–27).
-- `notification-rules.schema.json::matchClause.severity_min` (rule
-  matcher; line 69–73).
-- `alert_state.severity` column (digest spec §6).
-- `mcp-actions.md::alerts_active` request parameter `severity_min`
-  (mcp-actions.md line 267, line 305) — filters returned alerts.
-- Apprise `type` mapping: `info → info`, `warn → warning`, `critical
-  → failure` (digest spec §3).
+- `notification-rules.schema.json` top-level `severity` field and `matchClause.severity_min`.
+- The planned `alert_state.severity` design in the digest specification.
+- The unimplemented `mcp-actions.md::alerts_active` request parameter `severity_min`.
+- The planned Apprise `type` mapping: `info → info`, `warn → warning`, `critical → failure`.
+
+Current built-in notification evaluators persist concrete severity strings directly and do not depend on this configurable alert-tier contract.
 
 **Closed set.** Adding a 4th tier (e.g. `panic`) is a **major** version
-bump: every notification rule, every quiet-hours rule, every digest
-template would need an update. Don't.
+bump: every notification rule and digest template would need an update. The
+planned quiet-hours policy would also need to adopt the new tier before it can
+ship. Don't.
 
 ---
 
-## 4. Normative `syslog_severity → alert_tier` mapping function
+## 4. Planned normative `syslog_severity → alert_tier` mapping function
 
-This is the canonical mapping. Implementations:
+This is the canonical mapping for the planned operator-defined rule/digest contract. Current built-in evaluators use concrete severity strings directly. Intended future consumers are:
 
-- The notification rule evaluator, when a rule has `severity_min` in
-  its match clause (notification-rules.schema.json line 69).
-- The `alerts_active` MCP action, when called with `severity_min` in
-  its request (mcp-actions.md line 267).
-- The alert classifier, when assigning a tier to an alert based on the
-  triggering log row's `severity` if the rule has no explicit
-  `severity` field (the rule's top-level `severity` field is the
-  preferred path; this mapping is the fallback).
+- the planned rule evaluator when a rule has `severity_min`;
+- the unimplemented `alerts_active` MCP action when called with `severity_min`;
+- the planned alert classifier when deriving a tier from a triggering row.
 
 | Syslog severity (in) | Alert tier (out) |
 |---|---|
@@ -158,18 +147,18 @@ This is the canonical mapping. Implementations:
   the underlying syslog severity is preserved in the row for
   forensics.
 - `crit` / `alert` / `emerg` are "things that demand action right
-  now." All bypass quiet hours, all repeat until acked.
+  now." They repeat until acked. The planned quiet-hours design would let
+  critical alerts bypass suppression, but quiet-hours runtime behavior is not
+  implemented today.
 
 This mapping is **one-way**. Going backwards (tier → severity) is
 ambiguous and not defined.
 
 ---
 
-## 5. `severity_min` interpretation rules
+## 5. Planned `severity_min` interpretation rules
 
-When a rule or MCP filter has `severity_min = <tier>`, the predicate
-matches every row whose mapped tier is `>= <tier>` in tier order
-`info < warn < critical`.
+In the planned rule/MCP design, `severity_min = <tier>` matches every row whose mapped tier is `>= <tier>` in tier order `info < warn < critical`. Current Cortex does not expose this configurable filter on notification rules or `alerts_active`.
 
 | `severity_min` value | Matches rows where mapped tier is | Equivalent SQL predicate |
 |---|---|---|
@@ -177,8 +166,7 @@ matches every row whose mapped tier is `>= <tier>` in tier order
 | `warn` | `warn` or `critical` | `severity IN ('warning','err','crit','alert','emerg')` |
 | `critical` | `critical` only | `severity IN ('crit','alert','emerg')` |
 
-**SQL fragment** for the `severity_min = 'warn'` case used in
-`alerts_active` and rule evaluation:
+**Planned SQL fragment** for the `severity_min = 'warn'` case proposed for `alerts_active` and configurable rule evaluation:
 
 ```sql
 -- Where :severity_min is one of 'info', 'warn', 'critical':
@@ -277,9 +265,9 @@ SHOULD reject PRs that introduce them.
    things. The DB schema enforces this — `auth_outcome` is its own
    column added by enrichment migration 10.
 
-5. **Don't expose syslog severities in alert-targeted UIs.** The
-   morning digest, the apprise push, the `alerts_active` MCP response
-   — all of these speak alert tiers. The forensic search surface
+5. **Don't expose syslog severities in planned alert-tier UIs.** The
+   planned tiered digest/push/`alerts_active` surfaces speak alert tiers.
+   The current built-in notification paths use their existing concrete severity strings. The forensic search surface
    (`cortex search`, `cortex errors`) speaks syslog severities. Keep
    the two surfaces consistent within themselves.
 
@@ -296,7 +284,7 @@ SHOULD reject PRs that introduce them.
 |---|---|
 | `notification-rules.schema.json::severityTier` enum | §3 (the canonical 3-tier definition). |
 | `notification-rules.schema.json::matchClause.severity_min` | §4, §5 (mapping + interpretation + SQL fragment). |
-| `mcp-actions.md::alerts_active` request `severity_min` | §5 — same predicate as rule matchers. |
+| Planned `mcp-actions.md::alerts_active` request `severity_min` | §5 — same planned predicate as rule matchers. |
 | `mcp-actions.md` error code list mentions `agent_offline` / `rate_limited` / etc. (line 36) | Out of scope (those are MCP error codes, not severity vocabularies). |
 | `digest-notifications-design.md` §3 apprise `type` mapping | §3 tier table covers it. |
 | `digest-notifications-design.md` §7 severity tiers table | §3 — same definitions. |
@@ -315,7 +303,7 @@ SHOULD reject PRs that introduce them.
 | File | Required change |
 |---|---|
 | `docs/contracts/notification-rules.schema.json` line 71 (`severity_min` description) | Add: "Maps to the underlying syslog severity per docs/contracts/severity-mappings.md §4." |
-| `docs/contracts/mcp-actions.md::alerts_active` (line 267 / 305) | Cross-link to severity-mappings.md §5 for the `severity_min` predicate semantics. |
+| Planned `docs/contracts/mcp-actions.md::alerts_active` | Cross-link to severity-mappings.md §5 for the proposed `severity_min` predicate semantics when the action lands. |
 | `docs/superpowers/specs/2026-05-16-digest-notifications-design.md` §7 (Severity Tiers table) | Cross-link to severity-mappings.md §3, §4 — the spec table's `info`/`warn`/`critical` definitions are repeated here. |
 | `docs/superpowers/specs/2026-05-16-enrichment-framework-design.md` §7.3 (Authelia `auth_outcome`) | Cross-link to severity-mappings.md §2 — the four-value enum is normative here. |
 | `docs/contracts/parser-trait.rs::AuthOutcome` doc comment | Add: "See docs/contracts/severity-mappings.md §2 for value semantics and sample log lines." |

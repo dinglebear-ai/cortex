@@ -51,9 +51,8 @@ struct EnvGuard {
 
 impl EnvGuard {
     fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let old = std::env::var_os(name);
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(name, value) };
+        let old = crate::env::var_os(name);
+        crate::env::set_test_var(name, value);
         Self { name, old }
     }
 }
@@ -61,10 +60,8 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         match &self.old {
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            Some(value) => unsafe { std::env::set_var(self.name, value) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            None => unsafe { std::env::remove_var(self.name) },
+            Some(value) => crate::env::set_test_var(self.name, value),
+            None => crate::env::remove_test_var(self.name),
         }
     }
 }

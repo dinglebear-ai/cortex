@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
 
 use super::sessions_watch::systemctl_user_output;
 use super::setup::{SetupPhase, SetupStatus, read_env_value, setup_data_dir};
@@ -64,7 +63,7 @@ pub(crate) fn run_coordination_phases() -> Vec<SetupPhase> {
 }
 
 fn docker_inspect_data_mount(container: &str) -> Result<ContainerMountInfo, String> {
-    let output = Command::new("docker")
+    let output = crate::env::command("docker")
         .args([
             "inspect",
             "--format",
@@ -217,9 +216,10 @@ pub(crate) fn data_mount_phase_cached(
     cache: &mut DoctorCache,
 ) -> SetupPhase {
     let name = "data-mount";
-    let container = std::env::var("CORTEX_CONTAINER_NAME").unwrap_or_else(|_| "cortex".to_string());
+    let container =
+        crate::env::var("CORTEX_CONTAINER_NAME").unwrap_or_else(|_| "cortex".to_string());
 
-    let expected_dir = std::env::var("CORTEX_DATA_VOLUME")
+    let expected_dir = crate::env::var("CORTEX_DATA_VOLUME")
         .ok()
         .or_else(|| read_env_value(env_path, "CORTEX_DATA_VOLUME"))
         .map(PathBuf::from)
@@ -333,9 +333,10 @@ pub(crate) fn sessions_watch_coordination_phase(
     cache: &mut DoctorCache,
 ) -> SetupPhase {
     let name = "sessions-watch-coord";
-    let unit = std::env::var("CORTEX_AI_WATCH_UNIT")
+    let unit = crate::env::var("CORTEX_AI_WATCH_UNIT")
         .unwrap_or_else(|_| "cortex-sessions-watch.service".to_string());
-    let container = std::env::var("CORTEX_CONTAINER_NAME").unwrap_or_else(|_| "cortex".to_string());
+    let container =
+        crate::env::var("CORTEX_CONTAINER_NAME").unwrap_or_else(|_| "cortex".to_string());
 
     let env = match cache.systemctl_env(&unit) {
         Ok(env) => env,

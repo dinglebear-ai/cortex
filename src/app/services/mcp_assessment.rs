@@ -13,7 +13,7 @@ use crate::app::llm_runner::{LlmCallerSurface, LlmEvidenceCounts, LlmInvocationS
 use crate::app::models::{
     AiMcpInvestigateRequest, McpAssessRequest, McpAssessResponse, McpAssessResult,
 };
-use crate::assessment::{GeminiAssessConfig, run_gemini_assessment};
+use crate::assessment::GeminiAssessConfig;
 use crate::mcp_assessment::build_mcp_assessment_prompt;
 
 impl CortexService {
@@ -100,8 +100,8 @@ impl CortexService {
     }
 
     /// Runs one guarded Gemini assessment for a single `McpIncidentEvidence`
-    /// bundle via `LlmRunner::run`, following the same FnMut-to-'static
-    /// closure channel-bridging idiom as `run_one_skill_assessment`.
+    /// bundle via `LlmRunner::run`, forwarding deltas directly through the
+    /// borrowed callback without an intermediate allocation or channel.
     async fn run_one_mcp_assessment<F>(
         &self,
         evidence: &McpIncidentEvidence,
@@ -116,60 +116,32 @@ impl CortexService {
         let prompt = build_mcp_assessment_prompt(&evidence_json);
         let prompt_preview: String = prompt.chars().take(500).collect();
 
-        let (delta_tx, mut delta_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let gemini_config_owned = gemini_config.clone();
-        let prompt_owned = prompt.clone();
-        let run_fut = self.llm().run(
-            LlmInvocationSpec {
-                caller_surface: LlmCallerSurface::Cli, // MCP assessment is CLI-only (safety invariant)
-                action: "mcp_assess".to_string(),
-                incident_id: Some(evidence.incident.incident_id.clone()),
-                ai_tool: Some(evidence.incident.tool.clone()),
-                ai_project: Some(evidence.incident.project.clone()),
-                ai_session_id: Some(evidence.incident.session_id.clone()),
-                evidence_counts: LlmEvidenceCounts {
-                    total_incidents: 1,
-                    evidence_bundle_count: 1,
-                    total_anchors: evidence.signal_anchors.len(),
-                    truncated: evidence.signal_anchors_truncated
-                        || evidence.transcript_before_truncated
-                        || evidence.transcript_after_truncated,
-                },
-                prompt: prompt_owned.clone(),
-                provider: "gemini-cli".to_string(),
-                model: gemini_config_owned.model.clone(),
-                program: gemini_config_owned.program.clone(),
-                extra_metadata: serde_json::json!({
-                    "mcp_server": evidence.incident.mcp_server,
-                    "mcp_tool": evidence.incident.mcp_tool,
-                }),
+        let spec = LlmInvocationSpec {
+            caller_surface: LlmCallerSurface::Cli, // MCP assessment is CLI-only (safety invariant)
+            action: "mcp_assess".to_string(),
+            incident_id: Some(evidence.incident.incident_id.clone()),
+            ai_tool: Some(evidence.incident.tool.clone()),
+            ai_project: Some(evidence.incident.project.clone()),
+            ai_session_id: Some(evidence.incident.session_id.clone()),
+            evidence_counts: LlmEvidenceCounts {
+                total_incidents: 1,
+                evidence_bundle_count: 1,
+                total_anchors: evidence.signal_anchors.len(),
+                truncated: evidence.signal_anchors_truncated
+                    || evidence.transcript_before_truncated
+                    || evidence.transcript_after_truncated,
             },
-            move |prompt| async move {
-                run_gemini_assessment(&prompt, &gemini_config_owned, move |delta: &str| {
-                    let _ = delta_tx.send(delta.to_string());
-                    Ok(())
-                })
-                .await
-            },
-        );
-        tokio::pin!(run_fut);
-
-        let output = loop {
-            tokio::select! {
-                biased;
-                Some(delta) = delta_rx.recv() => {
-                    on_delta(&delta).map_err(ServiceError::Internal)?;
-                }
-                result = &mut run_fut => {
-                    while let Ok(delta) = delta_rx.try_recv() {
-                        on_delta(&delta).map_err(ServiceError::Internal)?;
-                    }
-                    break result;
-                }
-            }
-        }
-        .map_err(|err| ServiceError::Internal(anyhow::anyhow!(err)))?
-        .output;
+            prompt,
+            provider: "gemini-cli".to_string(),
+            model: gemini_config.model.clone(),
+            program: gemini_config.program.clone(),
+            extra_metadata: serde_json::json!({
+                "mcp_server": evidence.incident.mcp_server,
+                "mcp_tool": evidence.incident.mcp_tool,
+            }),
+        };
+        let output =
+            super::run_gemini_with_delta(self.llm(), spec, gemini_config, on_delta).await?;
 
         Ok(McpAssessResult {
             incident_id: evidence.incident.incident_id.clone(),

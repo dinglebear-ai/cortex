@@ -1,7 +1,5 @@
 //! One-repository Git reconciliation.
 
-#![allow(dead_code)]
-
 #[path = "reconcile_commits.rs"]
 mod commit_import;
 #[path = "reconcile_lifecycle.rs"]

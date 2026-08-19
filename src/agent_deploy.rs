@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -139,7 +138,7 @@ fn probe_one(host: &str) -> HostProbe {
                   || echo 'cortex:absent'; \
                   systemctl --user is-active cortex-heartbeat-agent.service 2>/dev/null \
                   || echo 'inactive'";
-    let out = Command::new("ssh")
+    let out = crate::env::command("ssh")
         .args([
             "-o",
             &format!("ConnectTimeout={PROBE_TIMEOUT_SECS}"),
@@ -267,7 +266,7 @@ pub fn find_local_binary() -> Option<PathBuf> {
 }
 
 fn which_cortex() -> Option<PathBuf> {
-    let out = Command::new("which").arg("cortex").output().ok()?;
+    let out = crate::env::command("which").arg("cortex").output().ok()?;
     if out.status.success() {
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !path.is_empty() {
@@ -311,7 +310,7 @@ fn is_unraid(host: &str) -> bool {
     if validate_ssh_host(host).is_err() {
         return false;
     }
-    let out = Command::new("ssh")
+    let out = crate::env::command("ssh")
         .args([
             "-o",
             &format!("ConnectTimeout={PROBE_TIMEOUT_SECS}"),
@@ -469,7 +468,7 @@ fn run_deploy_unraid(
 }
 
 fn deploy_syslog_target(heartbeat_target: Option<&str>) -> Option<String> {
-    std::env::var("CORTEX_SYSLOG_TARGET")
+    crate::env::var("CORTEX_SYSLOG_TARGET")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
@@ -724,7 +723,7 @@ fn preserved_custom_mount_flags(inspect_mounts: &str) -> Vec<String> {
 /// ssh invocation itself succeeds and returns empty output.
 fn ssh_capture(host: &str, cmd: &str) -> io::Result<String> {
     validate_ssh_host(host)?;
-    let out = Command::new("ssh")
+    let out = crate::env::command("ssh")
         .args([
             "-o",
             "BatchMode=yes",
@@ -755,7 +754,7 @@ fn read_optional_remote_file(host: &str, remote_path_expr: &str) -> io::Result<S
 
 fn ssh_run(host: &str, cmd: &str) -> io::Result<()> {
     validate_ssh_host(host)?;
-    let status = Command::new("ssh")
+    let status = crate::env::command("ssh")
         .args([
             "-o",
             "BatchMode=yes",
@@ -780,7 +779,7 @@ fn ssh_run(host: &str, cmd: &str) -> io::Result<()> {
 fn scp_file(local: &Path, host: &str, remote_path: &str) -> io::Result<()> {
     validate_ssh_host(host)?;
     let dest = format!("{host}:{remote_path}");
-    let status = Command::new("scp")
+    let status = crate::env::command("scp")
         .args([
             "-o",
             "BatchMode=yes",
@@ -903,7 +902,7 @@ fn skip_shell_word(input: &str, start: usize) -> usize {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    crate::env::var_os("HOME").map(PathBuf::from)
 }
 
 fn shell_quote(s: &str) -> String {

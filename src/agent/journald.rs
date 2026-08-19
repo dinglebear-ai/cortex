@@ -3,7 +3,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
 use super::syslog_sender::{SyslogSender, format_rfc5424, local0_pri};
 
@@ -11,7 +10,7 @@ use super::syslog_sender::{SyslogSender, format_rfc5424, local0_pri};
 /// RFC 5424 syslog to the given sender.  Unix-only.
 #[cfg(unix)]
 pub async fn run_journald_forwarder(hostname: &str, sender: Arc<SyslogSender>) -> Result<()> {
-    let mut child = Command::new("journalctl")
+    let mut child = crate::env::tokio_command("journalctl")
         .args(["-f", "-o", "json", "--no-pager"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

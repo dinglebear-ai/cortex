@@ -35,11 +35,7 @@ pub struct OutboxRow {
     pub title: String,
     pub body: String,
     pub apprise_urls_json: String,
-    #[allow(dead_code)]
-    pub next_attempt_at: String,
     pub attempt_count: i64,
-    #[allow(dead_code)]
-    pub status: String,
 }
 
 /// A row from `notification_firings`.
@@ -90,7 +86,7 @@ pub fn outbox_claim_pending(
 ) -> rusqlite::Result<Vec<OutboxRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, dedup_key, rule_id, severity, hostname, title, body,
-                apprise_urls_json, next_attempt_at, attempt_count, status
+                apprise_urls_json, attempt_count
          FROM notifications_outbox
          WHERE status = 'pending'
            AND next_attempt_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -108,9 +104,7 @@ pub fn outbox_claim_pending(
                 title: row.get(5)?,
                 body: row.get(6)?,
                 apprise_urls_json: row.get(7)?,
-                next_attempt_at: row.get(8)?,
-                attempt_count: row.get(9)?,
-                status: row.get(10)?,
+                attempt_count: row.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Derived investigation graph schema vocabulary.
 //!
 //! The graph is a rebuildable projection over authoritative source tables
@@ -91,10 +89,12 @@ pub const REL_AUTHENTICATED_AS: &str = "authenticated_as";
 /// A user or device accessed a domain/service/host (AdGuard DNS, shell use).
 pub const REL_ACCESSED: &str = "accessed";
 /// A device communicates with a peer (UniFi flow data). Vocabulary-reserved.
+#[cfg(test)]
 pub const REL_COMMUNICATES_WITH: &str = "communicates_with";
 /// A service instance is a deployment of a logical service (resolver-owned).
 pub const REL_INSTANCE_OF: &str = crate::db::entity_resolution::vocab::REL_INSTANCE_OF;
 
+#[cfg(test)]
 pub const RELATIONSHIP_TYPES: &[&str] = &[
     REL_OBSERVED_AS,
     REL_RUNS_ON,
@@ -126,6 +126,7 @@ pub const TRUST_CORRELATED: &str = "correlated";
 /// must not be resurrected by rebuild. Set by manual override only.
 pub const TRUST_REFUTED: &str = "refuted";
 
+#[cfg(test)]
 pub const TRUST_LEVELS: &[&str] = &[
     TRUST_VERIFIED,
     TRUST_CLAIMED,
@@ -139,6 +140,7 @@ pub const TRUST_LEVELS: &[&str] = &[
 /// the flat vocabulary a queryable hierarchy — prefix matching (`source:docker:*`)
 /// and family-level weighting — without changing the stored v1 string values.
 /// The v2 strings are the planned migration target (see the contract).
+#[cfg(test)]
 pub fn reason_code_namespace(reason_code: &str) -> &'static str {
     match reason_code {
         REASON_SYSLOG_CLAIMED_HOSTNAME => "source:syslog:claimed_hostname",
@@ -171,6 +173,7 @@ pub fn reason_code_namespace(reason_code: &str) -> &'static str {
 
 /// The hierarchical family of a reason code (the leading `source` / `derivation`
 /// segment of its v2 namespace), for family-level weighting and filtering.
+#[cfg(test)]
 pub fn reason_code_family(reason_code: &str) -> &'static str {
     reason_code_namespace(reason_code)
         .split(':')
@@ -180,11 +183,13 @@ pub fn reason_code_family(reason_code: &str) -> &'static str {
 
 pub const SOURCE_KIND_LOG: &str = "log";
 pub const SOURCE_KIND_HEARTBEAT: &str = "heartbeat";
+#[cfg(test)]
 pub const SOURCE_KIND_AI_SESSION_ROLLUP: &str = "ai_session_rollup";
 pub const SOURCE_KIND_SOURCE_INVENTORY: &str = "source_inventory";
 pub const SOURCE_KIND_APP_INVENTORY: &str = "app_inventory";
 pub const SOURCE_KIND_ERROR_SIGNATURE: &str = "error_signature";
 
+#[cfg(test)]
 pub const EVIDENCE_SOURCE_KINDS: &[&str] = &[
     SOURCE_KIND_LOG,
     SOURCE_KIND_HEARTBEAT,
@@ -201,6 +206,7 @@ pub const REASON_DOCKER_SERVICE_LABEL: &str = "docker_service_label";
 pub const REASON_AI_SESSION_PROJECT: &str = "ai_session_project";
 pub const REASON_HEARTBEAT_HOST_STATE: &str = "heartbeat_host_state";
 pub const REASON_ERROR_SIGNATURE_MATCH: &str = "error_signature_match";
+#[cfg(test)]
 pub const REASON_INVENTORY_NODE: &str = "inventory_node";
 pub const REASON_INVENTORY_SERVICE: &str = "inventory_service";
 pub const REASON_COMPOSE_CONFIG: &str = "compose_config";
@@ -232,15 +238,18 @@ pub const REASON_RESOLVER_INSTANCE_OF: &str =
 /// Resolver projected a `service_instance` from structured evidence.
 /// **Vocabulary-reserved:** registered in the schema/reason registry but not
 /// emitted by any projection path today — only `resolver_instance_of` is.
+#[cfg(test)]
 pub const REASON_RESOLVER_SERVICE_INSTANCE: &str =
     crate::db::entity_resolution::vocab::REASON_RESOLVER_SERVICE_INSTANCE;
 /// Resolver linked a raw observed app label to a host (never a self-upgrade
 /// to logical-service identity). **Vocabulary-reserved:** registered in the
 /// schema/reason registry but not emitted by any projection path today —
 /// only `resolver_instance_of` is.
+#[cfg(test)]
 pub const REASON_RESOLVER_RAW_APP_LABEL: &str =
     crate::db::entity_resolution::vocab::REASON_RESOLVER_RAW_APP_LABEL;
 
+#[cfg(test)]
 pub const REASON_CODES: &[&str] = &[
     REASON_SYSLOG_CLAIMED_HOSTNAME,
     REASON_LOG_APP_NAME,
@@ -268,36 +277,26 @@ pub const REASON_CODES: &[&str] = &[
     REASON_RESOLVER_RAW_APP_LABEL,
 ];
 
-pub const PROJECTION_STATUS_NEVER_BUILT: &str = "never_built";
-pub const PROJECTION_STATUS_BUILDING: &str = "building";
-pub const PROJECTION_STATUS_READY: &str = "ready";
-pub const PROJECTION_STATUS_STALE: &str = "stale";
-pub const PROJECTION_STATUS_FAILED: &str = "failed";
-
-pub const PROJECTION_STATUSES: &[&str] = &[
-    PROJECTION_STATUS_NEVER_BUILT,
-    PROJECTION_STATUS_BUILDING,
-    PROJECTION_STATUS_READY,
-    PROJECTION_STATUS_STALE,
-    PROJECTION_STATUS_FAILED,
-];
-
 pub fn is_known_entity_type(value: &str) -> bool {
     ENTITY_TYPES.contains(&value)
 }
 
+#[cfg(test)]
 pub fn is_known_relationship_type(value: &str) -> bool {
     RELATIONSHIP_TYPES.contains(&value)
 }
 
+#[cfg(test)]
 pub fn is_known_reason_code(value: &str) -> bool {
     REASON_CODES.contains(&value)
 }
 
+#[cfg(test)]
 pub fn is_known_trust_level(value: &str) -> bool {
     TRUST_LEVELS.contains(&value)
 }
 
+#[cfg(test)]
 pub fn is_known_evidence_source_kind(value: &str) -> bool {
     EVIDENCE_SOURCE_KINDS.contains(&value)
 }

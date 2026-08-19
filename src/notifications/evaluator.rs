@@ -134,7 +134,7 @@ pub(crate) async fn run_evaluation_cycle(
             // all). MAX(received_at) is an O(1) reverse index probe.
             if cfg.evaluators.ingest_silence {
                 let newest_row_age_secs = newest_row_age_secs(&conn)?;
-                let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| {
+                let hostname = crate::env::var("HOSTNAME").unwrap_or_else(|_| {
                     tracing::warn!("HOSTNAME env var not set; using 'localhost' for notification dedup keys — multi-host deployments may suppress alerts");
                     "localhost".to_string()
                 });
@@ -302,7 +302,7 @@ fn fetch_recent_logs(
     offset: u64,
 ) -> rusqlite::Result<Vec<LogRow>> {
     let mut stmt = conn.prepare(
-        "SELECT app_name, message, hostname, severity, metadata_json, timestamp
+        "SELECT app_name, message, hostname, metadata_json, timestamp
          FROM logs
          WHERE received_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', printf('-%d seconds', ?1))
          ORDER BY received_at DESC
@@ -316,9 +316,8 @@ fn fetch_recent_logs(
                     app_name: row.get(0)?,
                     message: row.get(1)?,
                     hostname: row.get(2)?,
-                    severity: row.get(3)?,
-                    metadata_json: row.get(4)?,
-                    timestamp: row.get(5)?,
+                    metadata_json: row.get(3)?,
+                    timestamp: row.get(4)?,
                 })
             },
         )?

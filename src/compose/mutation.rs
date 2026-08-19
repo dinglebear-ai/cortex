@@ -506,7 +506,7 @@ fn expected_data_mount(target: &ResolvedComposeTarget) -> ExpectedDataMount {
 }
 
 fn env_or_compose_file_value(target: &ResolvedComposeTarget, key: &str) -> Option<String> {
-    if let Ok(value) = std::env::var(key) {
+    if let Ok(value) = crate::env::var(key) {
         return Some(value);
     }
     target
@@ -566,7 +566,7 @@ fn normalize_path(path: impl AsRef<Path>) -> PathBuf {
 }
 
 fn compose_env_file(project_dir: &Path) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("CORTEX_ENV_FILE") {
+    if let Ok(path) = crate::env::var("CORTEX_ENV_FILE") {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Some(path);

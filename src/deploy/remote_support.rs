@@ -1,5 +1,5 @@
 use std::io::{self, Write as _};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::setup::{PhaseTimer, SetupPhase, SetupStatus};
 
@@ -23,7 +23,7 @@ impl RemoteRunner for SshRemoteRunner {
         )
         .ssh_args(host, "sh -s")
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-        let mut child = Command::new("ssh")
+        let mut child = crate::env::command("ssh")
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

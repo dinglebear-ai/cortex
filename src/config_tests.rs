@@ -4,13 +4,10 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn cortex_token_sets_api_token() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_TOKEN", "test-token") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_API_TOKEN") };
+    crate::env::set_test_var("CORTEX_TOKEN", "test-token");
+    crate::env::remove_test_var("CORTEX_API_TOKEN");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_TOKEN") };
+    crate::env::remove_test_var("CORTEX_TOKEN");
 
     let cfg = result.expect("Config::load() should succeed");
     assert_eq!(cfg.mcp.api_token, Some("test-token".into()));
@@ -22,17 +19,12 @@ fn api_token_env_sets_api_token_not_mcp_token() {
     // cortex v1.0.0: the pre-v1 `SYSLOG_MCP_API_TOKEN` deprecated MCP-token alias was
     // dropped. Its post-rename name `CORTEX_API_TOKEN` now belongs exclusively to the
     // API/OTLP token (`config.api.api_token`) and must NOT set the MCP static token.
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_TOKEN") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_API_TOKEN", "api-token") };
+    crate::env::remove_test_var("CORTEX_TOKEN");
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_API_TOKEN", "api-token");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_API_TOKEN") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
+    crate::env::remove_test_var("CORTEX_API_TOKEN");
+    crate::env::remove_test_var("CORTEX_HOST");
 
     let cfg = result.expect("Config::load() should succeed");
     assert_eq!(cfg.api.api_token, Some("api-token".into()));
@@ -42,11 +34,11 @@ fn api_token_env_sets_api_token_not_mcp_token() {
 #[test]
 #[serial]
 fn api_admin_token_env_sets_admin_token() {
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    unsafe { std::env::set_var("CORTEX_API_ADMIN_TOKEN", "api-admin-token") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_API_ADMIN_TOKEN", "api-admin-token");
     let result = Config::load();
-    unsafe { std::env::remove_var("CORTEX_API_ADMIN_TOKEN") };
-    unsafe { std::env::remove_var("CORTEX_HOST") };
+    crate::env::remove_test_var("CORTEX_API_ADMIN_TOKEN");
+    crate::env::remove_test_var("CORTEX_HOST");
 
     let cfg = result.expect("Config::load() should succeed");
     assert_eq!(cfg.api.admin_token, Some("api-admin-token".into()));
@@ -55,15 +47,11 @@ fn api_admin_token_env_sets_admin_token() {
 #[test]
 #[serial]
 fn env_var_overrides_mcp_port() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_PORT", "3200") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_PORT", "3200");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_PORT") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_PORT");
 
     let cfg = result.expect("Config::load() should succeed");
     assert_eq!(cfg.mcp.port, 3200);
@@ -72,19 +60,54 @@ fn env_var_overrides_mcp_port() {
 #[test]
 #[serial]
 fn env_var_overrides_receiver_port() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_RECEIVER_PORT", "2514") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_RECEIVER_PORT", "2514");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_RECEIVER_PORT") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_RECEIVER_PORT");
 
     let cfg = result.expect("Config::load() should succeed");
     assert_eq!(cfg.receiver.port, 2514);
     assert_eq!(cfg.receiver.bind_addr(), "0.0.0.0:2514");
+}
+
+#[test]
+fn unsupported_notification_blocks_are_rejected_explicitly() {
+    for (surface, raw) in [
+        (
+            "[notifications.quiet_hours]",
+            "[notifications.quiet_hours]\nenabled = true\n",
+        ),
+        (
+            "[notifications.apprise]",
+            "[notifications.apprise]\nbase_url = \"http://apprise:8000\"\n",
+        ),
+        (
+            "[notifications.digest]",
+            "[notifications.digest]\nenabled = true\n",
+        ),
+        (
+            "[[notifications.rules]]",
+            "[[notifications.rules]]\nid = \"legacy-rule\"\n",
+        ),
+    ] {
+        let err = reject_unsupported_config_blocks(raw).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("{surface} is not implemented")),
+            "wrong error for {surface}: {err}"
+        );
+    }
+}
+
+#[test]
+fn supported_notifications_config_is_not_rejected() {
+    let raw = r#"
+[notifications]
+enabled = true
+dispatcher_interval_secs = 15
+"#;
+    reject_unsupported_config_blocks(raw).unwrap();
 }
 
 #[test]
@@ -197,17 +220,14 @@ fn defaults_are_applied_without_env_vars() {
         "CORTEX_AUTH_ALLOWED_REDIRECT_URIS",
         "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH",
     ] {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(key) };
+        crate::env::remove_test_var(key);
     }
 
     // Bind cortex to loopback so the non-loopback safety gate (added in
     // cortex-brt0.4) does not reject the unauthenticated default config.
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
     let cfg = Config::load().expect("Config::load() should succeed with defaults");
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
+    crate::env::remove_test_var("CORTEX_HOST");
     assert_eq!(cfg.receiver.host, "0.0.0.0");
     assert_eq!(cfg.receiver.port, 1514);
     assert_eq!(cfg.receiver.bind_addr(), "0.0.0.0:1514");
@@ -243,10 +263,10 @@ fn inspection_load_does_not_require_the_runtime_database_mount() {
         .join("cortex.db");
     let _ = std::fs::remove_dir_all(missing.parent().unwrap());
 
-    unsafe { std::env::set_var("CORTEX_DB_PATH", &missing) };
+    crate::env::set_test_var("CORTEX_DB_PATH", &missing);
     let inspection = Config::load_for_inspection();
     let query = Config::load_for_stdio();
-    unsafe { std::env::remove_var("CORTEX_DB_PATH") };
+    crate::env::remove_test_var("CORTEX_DB_PATH");
 
     assert!(
         inspection.is_ok(),
@@ -272,11 +292,9 @@ fn rejects_invalid_syslog_ingest_env_settings() {
         ("CORTEX_FLUSH_INTERVAL", "flush_interval"),
         ("CORTEX_WRITE_CHANNEL_CAPACITY", "write_channel_capacity"),
     ] {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(key, "0") };
+        crate::env::set_test_var(key, "0");
         let result = Config::load();
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(key) };
+        crate::env::remove_test_var(key);
 
         let err = result.expect_err(&format!("Config::load should reject {key}=0"));
         assert!(
@@ -321,15 +339,11 @@ fn rejects_invalid_syslog_ingest_toml_settings() {
 #[test]
 #[serial]
 fn env_var_overrides_write_channel_capacity() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_WRITE_CHANNEL_CAPACITY", "100000") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_WRITE_CHANNEL_CAPACITY", "100000");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_WRITE_CHANNEL_CAPACITY") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_WRITE_CHANNEL_CAPACITY");
 
     let cfg = result.expect("Config::load() should parse write channel capacity");
     assert_eq!(cfg.receiver.write_channel_capacity, 100_000);
@@ -338,29 +352,19 @@ fn env_var_overrides_write_channel_capacity() {
 #[test]
 #[serial]
 fn env_var_overrides_mcp_allowed_hosts_and_origins() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe {
-        std::env::set_var(
-            "CORTEX_ALLOWED_HOSTS",
-            "syslog.example.com, syslog.example.com:443",
-        )
-    };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe {
-        std::env::set_var(
-            "CORTEX_ALLOWED_ORIGINS",
-            "https://app.example.com, https://syslog.example.com",
-        )
-    };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var(
+        "CORTEX_ALLOWED_HOSTS",
+        "syslog.example.com, syslog.example.com:443",
+    );
+    crate::env::set_test_var(
+        "CORTEX_ALLOWED_ORIGINS",
+        "https://app.example.com, https://syslog.example.com",
+    );
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_ALLOWED_HOSTS") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_ALLOWED_ORIGINS") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_ALLOWED_HOSTS");
+    crate::env::remove_test_var("CORTEX_ALLOWED_ORIGINS");
 
     let cfg = result.expect("Config::load() should parse comma-separated RMCP allow lists");
     assert_eq!(
@@ -378,18 +382,14 @@ fn env_var_overrides_mcp_allowed_hosts_and_origins() {
 fn env_var_can_clear_mcp_allowed_hosts_and_origins() {
     let mut hosts = vec!["syslog.example.com".to_string()];
     let mut origins = vec!["https://syslog.example.com".to_string()];
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_ALLOWED_HOSTS", "  , ") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_ALLOWED_ORIGINS", "") };
+    crate::env::set_test_var("CORTEX_ALLOWED_HOSTS", "  , ");
+    crate::env::set_test_var("CORTEX_ALLOWED_ORIGINS", "");
 
     env_override_list("CORTEX_ALLOWED_HOSTS", &mut hosts);
     env_override_list("CORTEX_ALLOWED_ORIGINS", &mut origins);
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_ALLOWED_HOSTS") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_ALLOWED_ORIGINS") };
+    crate::env::remove_test_var("CORTEX_ALLOWED_HOSTS");
+    crate::env::remove_test_var("CORTEX_ALLOWED_ORIGINS");
 
     assert!(hosts.is_empty());
     assert!(origins.is_empty());
@@ -398,17 +398,12 @@ fn env_var_can_clear_mcp_allowed_hosts_and_origins() {
 #[test]
 #[serial]
 fn api_token_loads_independently_of_mcp_token() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_API_TOKEN", "api-token") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_TOKEN", "mcp-token") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_API_TOKEN", "api-token");
+    crate::env::set_test_var("CORTEX_TOKEN", "mcp-token");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_API_TOKEN") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_TOKEN") };
+    crate::env::remove_test_var("CORTEX_API_TOKEN");
+    crate::env::remove_test_var("CORTEX_TOKEN");
 
     let cfg = result.expect("Config::load() should accept distinct API + MCP tokens");
     assert_eq!(cfg.api.api_token, Some("api-token".into()));
@@ -444,15 +439,11 @@ fn auth_validation_rejects_blank_api_admin_token() {
 #[test]
 #[serial]
 fn host_with_port_is_rejected() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_RECEIVER_HOST", "0.0.0.0:1514") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_RECEIVER_HOST", "0.0.0.0:1514");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_RECEIVER_HOST") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_RECEIVER_HOST");
 
     let err = result.expect_err("Host containing ':' should be rejected");
     assert!(
@@ -477,26 +468,16 @@ fn defaults_include_storage_budget_settings() {
 #[test]
 #[serial]
 fn env_var_overrides_storage_budget_settings() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_MAX_DB_SIZE_MB", "2048") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_RECOVERY_DB_SIZE_MB", "1800") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_MIN_FREE_DISK_MB", "1024") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_RECOVERY_FREE_DISK_MB", "1536") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_CLEANUP_INTERVAL_SECS", "120") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_SQLITE_PAGE_CACHE_MB", "64") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_SQLITE_MMAP_MB", "128") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HEAVY_READ_CONCURRENCY", "2") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_WAL_CHECKPOINT_MB", "32") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_MAX_DB_SIZE_MB", "2048");
+    crate::env::set_test_var("CORTEX_RECOVERY_DB_SIZE_MB", "1800");
+    crate::env::set_test_var("CORTEX_MIN_FREE_DISK_MB", "1024");
+    crate::env::set_test_var("CORTEX_RECOVERY_FREE_DISK_MB", "1536");
+    crate::env::set_test_var("CORTEX_CLEANUP_INTERVAL_SECS", "120");
+    crate::env::set_test_var("CORTEX_SQLITE_PAGE_CACHE_MB", "64");
+    crate::env::set_test_var("CORTEX_SQLITE_MMAP_MB", "128");
+    crate::env::set_test_var("CORTEX_HEAVY_READ_CONCURRENCY", "2");
+    crate::env::set_test_var("CORTEX_WAL_CHECKPOINT_MB", "32");
 
     let result = Config::load();
 
@@ -512,8 +493,7 @@ fn env_var_overrides_storage_budget_settings() {
         "CORTEX_HEAVY_READ_CONCURRENCY",
         "CORTEX_WAL_CHECKPOINT_MB",
     ] {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(key) };
+        crate::env::remove_test_var(key);
     }
 
     let cfg = result.expect("Config::load() should succeed");
@@ -561,19 +541,13 @@ fn storage_rejects_zero_sqlite_memory_guardrails() {
 #[test]
 #[serial]
 fn rejects_invalid_storage_budget_relationships() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_MAX_DB_SIZE_MB", "100") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_RECOVERY_DB_SIZE_MB", "100") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_MAX_DB_SIZE_MB", "100");
+    crate::env::set_test_var("CORTEX_RECOVERY_DB_SIZE_MB", "100");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_MAX_DB_SIZE_MB") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_RECOVERY_DB_SIZE_MB") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_MAX_DB_SIZE_MB");
+    crate::env::remove_test_var("CORTEX_RECOVERY_DB_SIZE_MB");
 
     let err = result.expect_err("Config::load() should reject invalid recovery_db_size_mb");
     assert!(err.to_string().contains("recovery_db_size_mb"));
@@ -608,15 +582,11 @@ fn error_detection_validation_rejects_invalid_notify_min_severity() {
 #[test]
 #[serial]
 fn rejects_cleanup_chunk_size_zero() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_CLEANUP_CHUNK_SIZE", "0") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_CLEANUP_CHUNK_SIZE", "0");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_CLEANUP_CHUNK_SIZE") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_CLEANUP_CHUNK_SIZE");
 
     let err = result.expect_err("Config::load() should reject cleanup_chunk_size == 0");
     assert!(err.to_string().contains("cleanup_chunk_size"));
@@ -625,15 +595,11 @@ fn rejects_cleanup_chunk_size_zero() {
 #[test]
 #[serial]
 fn rejects_cleanup_chunk_size_over_max() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_CLEANUP_CHUNK_SIZE", "1000001") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_CLEANUP_CHUNK_SIZE", "1000001");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_CLEANUP_CHUNK_SIZE") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_CLEANUP_CHUNK_SIZE");
 
     let err = result.expect_err("Config::load() should reject cleanup_chunk_size > 1_000_000");
     assert!(
@@ -645,15 +611,11 @@ fn rejects_cleanup_chunk_size_over_max() {
 #[test]
 #[serial]
 fn accepts_cleanup_chunk_size_at_max() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_CLEANUP_CHUNK_SIZE", "1000000") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_CLEANUP_CHUNK_SIZE", "1000000");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_CLEANUP_CHUNK_SIZE") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_CLEANUP_CHUNK_SIZE");
 
     let cfg = result.expect("cleanup_chunk_size == 1_000_000 should be accepted");
     assert_eq!(cfg.storage.cleanup_chunk_size, 1_000_000);
@@ -751,22 +713,15 @@ fn docker_ingest_loads_hosts_file_from_env() {
     )
     .unwrap();
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_DOCKER_INGEST_ENABLED", "true") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_DOCKER_HOSTS_FILE", &path) };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_DOCKER_INGEST_ENABLED", "true");
+    crate::env::set_test_var("CORTEX_DOCKER_HOSTS_FILE", &path);
     // Ensure the host list env var doesn't override the file path under test
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_HOSTS") };
+    crate::env::remove_test_var("CORTEX_DOCKER_HOSTS");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_INGEST_ENABLED") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_HOSTS_FILE") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_DOCKER_INGEST_ENABLED");
+    crate::env::remove_test_var("CORTEX_DOCKER_HOSTS_FILE");
 
     let config = result.expect("Config::load should parse docker host file");
     assert!(config.docker_ingest.enabled);
@@ -777,30 +732,20 @@ fn docker_ingest_loads_hosts_file_from_env() {
 #[test]
 #[serial]
 fn docker_ingest_loads_excluded_containers_from_env() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_DOCKER_INGEST_ENABLED", "true") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_DOCKER_HOSTS", "edge-host-a") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe {
-        std::env::set_var(
-            "CORTEX_DOCKER_EXCLUDED_CONTAINERS",
-            "arcane-mcp, axon-qdrant",
-        )
-    };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_DOCKER_INGEST_ENABLED", "true");
+    crate::env::set_test_var("CORTEX_DOCKER_HOSTS", "edge-host-a");
+    crate::env::set_test_var(
+        "CORTEX_DOCKER_EXCLUDED_CONTAINERS",
+        "arcane-mcp, axon-qdrant",
+    );
 
     let result = Config::load();
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_INGEST_ENABLED") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_HOSTS") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_EXCLUDED_CONTAINERS") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_DOCKER_INGEST_ENABLED");
+    crate::env::remove_test_var("CORTEX_DOCKER_HOSTS");
+    crate::env::remove_test_var("CORTEX_DOCKER_EXCLUDED_CONTAINERS");
 
     let config = result.expect("Config::load should parse excluded container list");
     assert_eq!(
@@ -812,24 +757,16 @@ fn docker_ingest_loads_excluded_containers_from_env() {
 #[test]
 #[serial]
 fn docker_ingest_ignores_hosts_file_when_disabled() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_DOCKER_INGEST_ENABLED", "false") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe {
-        std::env::set_var(
-            "CORTEX_DOCKER_HOSTS_FILE",
-            "/tmp/cortex-missing-docker-hosts.toml",
-        )
-    };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_DOCKER_INGEST_ENABLED", "false");
+    crate::env::set_test_var(
+        "CORTEX_DOCKER_HOSTS_FILE",
+        "/tmp/cortex-missing-docker-hosts.toml",
+    );
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_INGEST_ENABLED") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_DOCKER_HOSTS_FILE") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_DOCKER_INGEST_ENABLED");
+    crate::env::remove_test_var("CORTEX_DOCKER_HOSTS_FILE");
 
     let config = result.expect("disabled Docker ingest should ignore stale hosts file env");
     assert!(!config.docker_ingest.enabled);
@@ -902,13 +839,10 @@ fn auth_defaults_are_bearer_with_disable_static_token_enabled() {
 #[test]
 #[serial]
 fn config_load_defaults_to_bearer_mode() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_AUTH_MODE") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
+    crate::env::remove_test_var("CORTEX_AUTH_MODE");
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
+    crate::env::remove_test_var("CORTEX_HOST");
 
     let cfg = result.expect("loopback bind, no token, no oauth → permitted");
     assert_eq!(cfg.mcp.auth.mode, AuthMode::Bearer);
@@ -917,18 +851,12 @@ fn config_load_defaults_to_bearer_mode() {
 #[test]
 #[serial]
 fn cortex_auth_mode_env_flips_to_oauth() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_AUTH_MODE", "oauth") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_PUBLIC_URL", "https://syslog.example.com") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_GOOGLE_CLIENT_ID", "client-id") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_GOOGLE_CLIENT_SECRET", "client-secret") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_AUTH_ADMIN_EMAIL", "admin@example.com") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_AUTH_MODE", "oauth");
+    crate::env::set_test_var("CORTEX_PUBLIC_URL", "https://syslog.example.com");
+    crate::env::set_test_var("CORTEX_GOOGLE_CLIENT_ID", "client-id");
+    crate::env::set_test_var("CORTEX_GOOGLE_CLIENT_SECRET", "client-secret");
+    crate::env::set_test_var("CORTEX_AUTH_ADMIN_EMAIL", "admin@example.com");
     let result = Config::load();
     for k in [
         "CORTEX_HOST",
@@ -938,8 +866,7 @@ fn cortex_auth_mode_env_flips_to_oauth() {
         "CORTEX_GOOGLE_CLIENT_SECRET",
         "CORTEX_AUTH_ADMIN_EMAIL",
     ] {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(k) };
+        crate::env::remove_test_var(k);
     }
 
     let cfg = result.expect("oauth env overrides should satisfy startup validation");
@@ -950,15 +877,11 @@ fn cortex_auth_mode_env_flips_to_oauth() {
 #[test]
 #[serial]
 fn cortex_auth_mode_env_rejects_invalid_value() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_AUTH_MODE", "magic") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_AUTH_MODE", "magic");
     let result = Config::load();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_HOST") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_AUTH_MODE") };
+    crate::env::remove_test_var("CORTEX_HOST");
+    crate::env::remove_test_var("CORTEX_AUTH_MODE");
 
     let err = result.expect_err("bogus AUTH_MODE must be rejected");
     assert!(err.to_string().contains("CORTEX_AUTH_MODE"));
@@ -967,28 +890,18 @@ fn cortex_auth_mode_env_rejects_invalid_value() {
 #[test]
 #[serial]
 fn auth_env_overrides_propagate_to_config() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_PUBLIC_URL", "https://syslog.example.com") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_GOOGLE_CLIENT_ID", "id-from-env") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_GOOGLE_CLIENT_SECRET", "secret-from-env") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_AUTH_ADMIN_EMAIL", "admin-from-env@example.com") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe {
-        std::env::set_var(
-            "CORTEX_AUTH_ALLOWED_REDIRECT_URIS",
-            "https://callback.example.com/callback,https://claude.ai/api/mcp/auth_callback",
-        )
-    };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH", "false") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_PUBLIC_URL", "https://syslog.example.com");
+    crate::env::set_test_var("CORTEX_GOOGLE_CLIENT_ID", "id-from-env");
+    crate::env::set_test_var("CORTEX_GOOGLE_CLIENT_SECRET", "secret-from-env");
+    crate::env::set_test_var("CORTEX_AUTH_ADMIN_EMAIL", "admin-from-env@example.com");
+    crate::env::set_test_var(
+        "CORTEX_AUTH_ALLOWED_REDIRECT_URIS",
+        "https://callback.example.com/callback,https://claude.ai/api/mcp/auth_callback",
+    );
+    crate::env::set_test_var("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH", "false");
     // Stay in bearer mode so validation doesn't require an allowlist.
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CORTEX_AUTH_MODE") };
+    crate::env::remove_test_var("CORTEX_AUTH_MODE");
     let result = Config::load();
     for k in [
         "CORTEX_HOST",
@@ -999,8 +912,7 @@ fn auth_env_overrides_propagate_to_config() {
         "CORTEX_AUTH_ALLOWED_REDIRECT_URIS",
         "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH",
     ] {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var(k) };
+        crate::env::remove_test_var(k);
     }
 
     let cfg = result.expect("env overrides should land in config");
@@ -1251,11 +1163,9 @@ fn loopback_oauth_without_static_token_keeps_dev_mode_allowed() {
 #[serial]
 fn auth_mode_parses_lowercase_only() {
     let mut mode = AuthMode::Bearer;
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("__TEST_AUTH_MODE_PARSE", "OAUTH") };
+    crate::env::set_test_var("__TEST_AUTH_MODE_PARSE", "OAUTH");
     env_override_auth_mode("__TEST_AUTH_MODE_PARSE", &mut mode).unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("__TEST_AUTH_MODE_PARSE") };
+    crate::env::remove_test_var("__TEST_AUTH_MODE_PARSE");
     assert_eq!(mode, AuthMode::OAuth, "case-insensitive");
 }
 
@@ -1451,15 +1361,13 @@ fn notifications_whitespace_only_apprise_urls_rejected() {
 #[test]
 #[serial]
 fn env_override_populates_apprise_urls_list() {
-    unsafe {
-        std::env::set_var(
-            "CORTEX_NOTIFICATIONS_APPRISE_URLS",
-            "gotify://host/a, ntfy://ntfy.sh/b ",
-        );
-    }
+    crate::env::set_test_var(
+        "CORTEX_NOTIFICATIONS_APPRISE_URLS",
+        "gotify://host/a, ntfy://ntfy.sh/b ",
+    );
     let mut urls: Vec<String> = Vec::new();
     env_override_list("CORTEX_NOTIFICATIONS_APPRISE_URLS", &mut urls);
-    unsafe { std::env::remove_var("CORTEX_NOTIFICATIONS_APPRISE_URLS") };
+    crate::env::remove_test_var("CORTEX_NOTIFICATIONS_APPRISE_URLS");
     assert_eq!(urls, vec!["gotify://host/a", "ntfy://ntfy.sh/b"]);
 }
 
@@ -1507,11 +1415,11 @@ fn llm_config_parses_from_toml_with_action_subtables() {
 #[test]
 #[serial]
 fn cortex_llm_enabled_env_var_overrides_config() {
-    unsafe { std::env::set_var("CORTEX_LLM_ENABLED", "false") };
+    crate::env::set_test_var("CORTEX_LLM_ENABLED", "false");
     let mut cfg = crate::config::LlmConfig::default();
     env_override_bool("CORTEX_LLM_ENABLED", &mut cfg.enabled).unwrap();
     assert!(!cfg.enabled);
-    unsafe { std::env::remove_var("CORTEX_LLM_ENABLED") };
+    crate::env::remove_test_var("CORTEX_LLM_ENABLED");
 }
 
 #[test]
@@ -1521,14 +1429,14 @@ fn recovery_db_size_auto_adjusts_when_max_db_size_raised() {
     // significantly higher than the default (1024MB) but CORTEX_RECOVERY_DB_SIZE_MB
     // is not set, recovery should auto-adjust to 90% of max instead of staying
     // at the naive default of 900MB, which causes silent data loss.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    unsafe { std::env::set_var("CORTEX_MAX_DB_SIZE_MB", "51200") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_MAX_DB_SIZE_MB", "51200");
     // Explicitly ensure CORTEX_RECOVERY_DB_SIZE_MB is NOT set
-    unsafe { std::env::remove_var("CORTEX_RECOVERY_DB_SIZE_MB") };
+    crate::env::remove_test_var("CORTEX_RECOVERY_DB_SIZE_MB");
 
     let result = Config::load();
-    unsafe { std::env::remove_var("CORTEX_MAX_DB_SIZE_MB") };
-    unsafe { std::env::remove_var("CORTEX_HOST") };
+    crate::env::remove_test_var("CORTEX_MAX_DB_SIZE_MB");
+    crate::env::remove_test_var("CORTEX_HOST");
 
     let cfg = result.expect("Config::load() should succeed");
     // 90% of 51200 = 46080
@@ -1547,14 +1455,14 @@ fn recovery_db_size_auto_adjusts_when_max_db_size_raised() {
 fn recovery_db_size_preserves_explicit_setting() {
     // When CORTEX_RECOVERY_DB_SIZE_MB is explicitly set, it should be
     // preserved even if max_db_size_mb is high.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    unsafe { std::env::set_var("CORTEX_MAX_DB_SIZE_MB", "51200") };
-    unsafe { std::env::set_var("CORTEX_RECOVERY_DB_SIZE_MB", "40000") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_MAX_DB_SIZE_MB", "51200");
+    crate::env::set_test_var("CORTEX_RECOVERY_DB_SIZE_MB", "40000");
 
     let result = Config::load();
-    unsafe { std::env::remove_var("CORTEX_MAX_DB_SIZE_MB") };
-    unsafe { std::env::remove_var("CORTEX_RECOVERY_DB_SIZE_MB") };
-    unsafe { std::env::remove_var("CORTEX_HOST") };
+    crate::env::remove_test_var("CORTEX_MAX_DB_SIZE_MB");
+    crate::env::remove_test_var("CORTEX_RECOVERY_DB_SIZE_MB");
+    crate::env::remove_test_var("CORTEX_HOST");
 
     let cfg = result.expect("Config::load() should succeed");
     assert_eq!(cfg.storage.max_db_size_mb, 51200);
@@ -1569,13 +1477,13 @@ fn recovery_db_size_preserves_explicit_setting() {
 fn recovery_db_size_no_adjust_when_max_near_default() {
     // When max_db_size_mb is near the default (1024MB), no auto-adjust
     // should occur even if recovery is at the naive default.
-    unsafe { std::env::set_var("CORTEX_HOST", "127.0.0.1") };
-    unsafe { std::env::set_var("CORTEX_MAX_DB_SIZE_MB", "2048") };
-    unsafe { std::env::remove_var("CORTEX_RECOVERY_DB_SIZE_MB") };
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_MAX_DB_SIZE_MB", "2048");
+    crate::env::remove_test_var("CORTEX_RECOVERY_DB_SIZE_MB");
 
     let result = Config::load();
-    unsafe { std::env::remove_var("CORTEX_MAX_DB_SIZE_MB") };
-    unsafe { std::env::remove_var("CORTEX_HOST") };
+    crate::env::remove_test_var("CORTEX_MAX_DB_SIZE_MB");
+    crate::env::remove_test_var("CORTEX_HOST");
 
     let cfg = result.expect("Config::load() should succeed");
     assert_eq!(cfg.storage.max_db_size_mb, 2048);
@@ -1803,18 +1711,16 @@ fn agent_observatory_validation_rejects_zero_and_unsafe_limits() {
 #[test]
 #[serial]
 fn agent_observatory_environment_overrides_toml_values() {
-    unsafe {
-        std::env::set_var("CORTEX_HOST", "127.0.0.1");
-        std::env::set_var("CORTEX_AGENT_OBSERVATORY_ENABLED", "true");
-        std::env::set_var("CORTEX_AGENT_OBSERVATORY_PROJECTOR_POLL_MS", "125");
-        std::env::set_var(
-            "CORTEX_AGENT_OBSERVATORY_GIT_ROOTS",
-            "/workspace,/srv/repos",
-        );
-        std::env::set_var("CORTEX_AGENT_OBSERVATORY_STREAM_MAX_EVENT_BYTES", "131072");
-        std::env::set_var("CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PATHS", "false");
-        std::env::set_var("CORTEX_AGENT_OBSERVATORY_RETENTION_EVENTS_DAYS", "180");
-    }
+    crate::env::set_test_var("CORTEX_HOST", "127.0.0.1");
+    crate::env::set_test_var("CORTEX_AGENT_OBSERVATORY_ENABLED", "true");
+    crate::env::set_test_var("CORTEX_AGENT_OBSERVATORY_PROJECTOR_POLL_MS", "125");
+    crate::env::set_test_var(
+        "CORTEX_AGENT_OBSERVATORY_GIT_ROOTS",
+        "/workspace,/srv/repos",
+    );
+    crate::env::set_test_var("CORTEX_AGENT_OBSERVATORY_STREAM_MAX_EVENT_BYTES", "131072");
+    crate::env::set_test_var("CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PATHS", "false");
+    crate::env::set_test_var("CORTEX_AGENT_OBSERVATORY_RETENTION_EVENTS_DAYS", "180");
     let result = Config::load();
     for key in [
         "CORTEX_HOST",
@@ -1825,7 +1731,7 @@ fn agent_observatory_environment_overrides_toml_values() {
         "CORTEX_AGENT_OBSERVATORY_PRIVACY_INCLUDE_PATHS",
         "CORTEX_AGENT_OBSERVATORY_RETENTION_EVENTS_DAYS",
     ] {
-        unsafe { std::env::remove_var(key) };
+        crate::env::remove_test_var(key);
     }
     let cfg = result.expect("observatory env overrides should load");
     assert!(cfg.agent_observatory.enabled);

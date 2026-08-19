@@ -285,7 +285,7 @@ fn classify_path_error(error: &anyhow::Error, result: &mut IndexResult) {
 
 fn reject_broad_scan_path(path: &Path) -> Result<()> {
     let canonical = path.canonicalize()?;
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = crate::env::var_os("HOME").map(PathBuf::from);
     let cwd = std::env::current_dir().ok();
     if canonical == Path::new("/")
         || home.as_ref().is_some_and(|value| &canonical == value)
@@ -330,7 +330,7 @@ impl std::fmt::Display for PathScanError {
 impl std::error::Error for PathScanError {}
 
 fn is_known_transcript_root(path: &Path) -> bool {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+    let Some(home) = crate::env::var_os("HOME").map(PathBuf::from) else {
         return false;
     };
     let allowed = [
@@ -1544,7 +1544,7 @@ pub(crate) fn local_hostname() -> String {
                 }
             }
         }
-        std::env::var("HOSTNAME").unwrap_or_else(|_| {
+        crate::env::var("HOSTNAME").unwrap_or_else(|_| {
             warn_unresolved_hostname();
             "localhost".to_string()
         })
@@ -1553,7 +1553,7 @@ pub(crate) fn local_hostname() -> String {
     {
         // On Windows use COMPUTERNAME; fall back to HOSTNAME then "localhost".
         for var in &["COMPUTERNAME", "HOSTNAME"] {
-            if let Ok(name) = std::env::var(var) {
+            if let Ok(name) = crate::env::var(var) {
                 let name = name.trim().to_string();
                 if !name.is_empty() && name != "localhost" {
                     return name;
@@ -1688,7 +1688,7 @@ pub(crate) fn read_transcript_lines(
 }
 
 fn default_roots() -> Vec<PathBuf> {
-    std::env::var_os("HOME")
+    crate::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| {
             vec![

@@ -86,7 +86,7 @@ pub fn observations_from_agent_docker_identity(
 /// by the resolver, or they stay raw.
 // Test-only contract coverage: pins the plan-locked "raw labels never
 // self-upgrade" resolver rule (entity_resolution_tests.rs).
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn observations_from_raw_app_label(
     app_name: &str,
     host: &str,

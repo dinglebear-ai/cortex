@@ -9,28 +9,28 @@ fn refresh_interval_secs_parses_env_with_default_fallback() {
     let _guard = ENV_GUARD.lock().unwrap();
 
     let key = "CORTEX_GRAPH_REFRESH_INTERVAL_SECS";
-    let previous = std::env::var(key).ok();
+    let previous = crate::env::var(key).ok();
 
-    unsafe { std::env::remove_var(key) };
+    crate::env::remove_test_var(key);
     assert_eq!(refresh_interval_secs(), 0);
 
-    unsafe { std::env::set_var(key, "45") };
+    crate::env::set_test_var(key, "45");
     assert_eq!(refresh_interval_secs(), 45);
 
-    unsafe { std::env::set_var(key, "  90 ") };
+    crate::env::set_test_var(key, "  90 ");
     assert_eq!(refresh_interval_secs(), 90);
 
     // 0 disables the scheduler.
-    unsafe { std::env::set_var(key, "0") };
+    crate::env::set_test_var(key, "0");
     assert_eq!(refresh_interval_secs(), 0);
 
     // Garbage falls back to the disabled-by-default scheduler.
-    unsafe { std::env::set_var(key, "not-a-number") };
+    crate::env::set_test_var(key, "not-a-number");
     assert_eq!(refresh_interval_secs(), 0);
 
     match previous {
-        Some(value) => unsafe { std::env::set_var(key, value) },
-        None => unsafe { std::env::remove_var(key) },
+        Some(value) => crate::env::set_test_var(key, value),
+        None => crate::env::remove_test_var(key),
     }
 }
 
@@ -42,8 +42,8 @@ fn spawn_returns_none_when_disabled() {
     let _guard = ENV_GUARD.lock().unwrap();
 
     let key = "CORTEX_GRAPH_REFRESH_INTERVAL_SECS";
-    let previous = std::env::var(key).ok();
-    unsafe { std::env::set_var(key, "0") };
+    let previous = crate::env::var(key).ok();
+    crate::env::set_test_var(key, "0");
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -62,7 +62,7 @@ fn spawn_returns_none_when_disabled() {
     assert!(handle.is_none());
 
     match previous {
-        Some(value) => unsafe { std::env::set_var(key, value) },
-        None => unsafe { std::env::remove_var(key) },
+        Some(value) => crate::env::set_test_var(key, value),
+        None => crate::env::remove_test_var(key),
     }
 }

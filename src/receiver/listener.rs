@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use ipnet::IpNet;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
@@ -29,93 +30,35 @@ enum TcpFrame {
 /// `fill_buf` chunk. Tests should assert the property, not an exact byte count.
 const MAX_OVERSIZE_DRAIN_MULTIPLIER: usize = 8;
 
-/// Returns true if `addr` matches any CIDR in `allowed`, or `allowed` is empty
-/// (open policy).
-///
-/// Each entry in `allowed` must be in `<ip>/<prefix_len>` notation. Malformed
-/// entries are silently skipped (they were already rejected by
-/// `validate_receiver_config` at startup if the config path was used, but env
-/// may be set directly in tests or unusual deployments).
-fn is_source_allowed(addr: std::net::IpAddr, allowed: &[String]) -> bool {
-    if allowed.is_empty() {
-        return true;
-    }
-    for cidr in allowed {
-        if let Some((prefix, len)) = cidr.split_once('/') {
-            let Ok(network_addr) = prefix.parse::<std::net::IpAddr>() else {
-                continue;
-            };
-            let Ok(prefix_len) = len.parse::<u32>() else {
-                continue;
-            };
-            if addr_matches_cidr(addr, network_addr, prefix_len) {
-                return true;
-            }
-        }
-    }
-    false
+/// Parse a validated source allowlist once before listener hot paths start.
+/// `IpNet` rejects invalid address-family prefix lengths (for example IPv4
+/// /33), so startup validation and runtime matching share the same semantics.
+pub(super) fn parse_allowed_cidrs(allowed: &[String]) -> Result<Vec<IpNet>> {
+    allowed
+        .iter()
+        .map(|cidr| {
+            cidr.parse::<IpNet>()
+                .with_context(|| format!("invalid source CIDR '{cidr}'"))
+        })
+        .collect()
 }
 
-fn addr_matches_cidr(addr: std::net::IpAddr, network: std::net::IpAddr, prefix_len: u32) -> bool {
-    match (addr, network) {
-        (std::net::IpAddr::V4(a), std::net::IpAddr::V4(n)) => {
-            if prefix_len > 32 {
-                return false;
-            }
-            let mask = if prefix_len == 0 {
-                0u32
-            } else {
-                !0u32 << (32 - prefix_len)
-            };
-            (u32::from(a) & mask) == (u32::from(n) & mask)
-        }
-        (std::net::IpAddr::V6(a), std::net::IpAddr::V6(n)) => {
-            if prefix_len > 128 {
-                return false;
-            }
-            let a = u128::from(a);
-            let n = u128::from(n);
-            let mask = if prefix_len == 0 {
-                0u128
-            } else {
-                !0u128 << (128 - prefix_len)
-            };
-            (a & mask) == (n & mask)
-        }
-        _ => false, // v4 vs v6 mismatch
-    }
-}
-
-/// Read the CIDR allowlist from the environment at listener startup.
-///
-/// The `ReceiverConfig` struct stores `allowed_source_cidrs` and the field is
-/// populated via `env_override_list("CORTEX_ALLOWED_SOURCE_CIDRS", …)` in
-/// `Config::load_inner`. The listeners cannot accept the full `ReceiverConfig`
-/// because their call sites are in `src/syslog.rs`, which is outside the
-/// allowed edit scope for this change. To avoid touching that file, each
-/// listener reads the same env var once at startup. When the config path is
-/// used the env var will already be set (or the config value was read from
-/// TOML), so the two sources stay consistent; tests that set the env var
-/// directly also work as expected.
-fn load_allowed_cidrs_from_env() -> Vec<String> {
-    match std::env::var("CORTEX_ALLOWED_SOURCE_CIDRS") {
-        Ok(v) if !v.is_empty() => v
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
-        _ => Vec::new(),
-    }
+/// Returns true if `addr` matches any pre-parsed CIDR in `allowed`, or
+/// `allowed` is empty (open policy). This is called per UDP packet and per
+/// TCP connection, so it deliberately performs no parsing or allocation.
+fn is_source_allowed(addr: std::net::IpAddr, allowed: &[IpNet]) -> bool {
+    allowed.is_empty() || allowed.iter().any(|network| network.contains(&addr))
 }
 
 /// UDP syslog receiver.
-pub(super) async fn udp_listener(bind: &str, max_size: usize, ingest: IngestTx) -> Result<()> {
+pub(super) async fn udp_listener(
+    bind: &str,
+    max_size: usize,
+    ingest: IngestTx,
+    allowed_cidrs: Arc<Vec<IpNet>>,
+) -> Result<()> {
     let socket = UdpSocket::bind(bind).await?;
     info!(bind = %bind, "UDP syslog listener bound");
-
-    // Read CIDR allowlist once at startup (empty = accept all).
-    let allowed_cidrs = load_allowed_cidrs_from_env();
     if !allowed_cidrs.is_empty() {
         info!(
             cidrs = ?allowed_cidrs,
@@ -207,7 +150,7 @@ pub(super) async fn handle_tcp_connection(
     ingest: IngestTx,
     max_size: usize,
     idle_timeout_secs: u64,
-    allowed_cidrs: &[String],
+    allowed_cidrs: &[IpNet],
 ) {
     // CIDR allowlist check — reject connections from unknown sources early.
     if !is_source_allowed(addr.ip(), allowed_cidrs) {
@@ -225,6 +168,8 @@ pub(super) async fn handle_tcp_connection(
     // syslog frames, so max_size must apply per message line, not to the whole
     // connection lifetime.
     let mut reader = BufReader::new(stream);
+    let mut frame_buf = Vec::with_capacity(max_size.min(8192));
+    let source_addr = addr.to_string();
     let mut backpressure = false;
     let mut line_count: u64 = 0;
     let mut total_bytes: usize = 0;
@@ -236,7 +181,7 @@ pub(super) async fn handle_tcp_connection(
         // Idle timeout is per read, not wall-clock lifetime.
         let next = tokio::time::timeout(
             tokio::time::Duration::from_secs(idle_timeout_secs),
-            read_bounded_line(&mut reader, max_size),
+            read_bounded_line_into(&mut reader, max_size, &mut frame_buf),
         );
         match next.await {
             Ok(Ok(TcpFrame::Line(line))) => {
@@ -276,7 +221,7 @@ pub(super) async fn handle_tcp_connection(
                     queue_depth = ingest.queue_depth(),
                     "TCP syslog line received"
                 );
-                let mut entry = parse_syslog(&line, addr.to_string());
+                let mut entry = parse_syslog(&line, source_addr.clone());
                 stamp_source_kind(&mut entry, SourceKind::SyslogTcp);
                 if peer_hostname.is_none() {
                     peer_hostname = Some(entry.hostname.clone());
@@ -287,23 +232,8 @@ pub(super) async fn handle_tcp_connection(
                         "TCP syslog sender identified"
                     );
                 }
-                match ingest.try_send(entry) {
-                    Ok(()) => {}
-                    Err(crate::ingest::TrySendErr::Full) => {
-                        observability.record_tcp_line_dropped_queue_full(ingest.queue_depth());
-                        // Unlike UDP, TCP is reliable — the sender had no indication
-                        // this line was dropped. Emit an explicit warn per TCP drop so
-                        // the loss is observable; the batch backpressure log above marks
-                        // the window start but doesn't count individual drops.
-                        warn!(
-                            peer = %addr,
-                            line_count,
-                            "TCP syslog line dropped — write channel full"
-                        );
-                    }
-                    Err(crate::ingest::TrySendErr::Closed) => {
-                        break "write_channel_closed";
-                    }
+                if ingest.send(entry).await.is_err() {
+                    break "write_channel_closed";
                 }
             }
             Ok(Ok(TcpFrame::Oversize {
@@ -372,11 +302,15 @@ fn should_log_oversize(oversize_count: u64) -> bool {
     threshold == oversize_count
 }
 
-async fn read_bounded_line<R>(reader: &mut R, max_size: usize) -> std::io::Result<TcpFrame>
+async fn read_bounded_line_into<R>(
+    reader: &mut R,
+    max_size: usize,
+    line: &mut Vec<u8>,
+) -> std::io::Result<TcpFrame>
 where
     R: AsyncBufRead + Unpin,
 {
-    let mut line = Vec::with_capacity(max_size.min(8192));
+    line.clear();
     let mut oversize_bytes = None;
     // Accumulate one byte past `max_size` so a CRLF terminator split across two
     // `fill_buf` chunks does not misclassify an at-limit payload. A frame of
@@ -400,7 +334,7 @@ where
             return if line.is_empty() {
                 Ok(TcpFrame::Eof)
             } else {
-                Ok(TcpFrame::Line(decode_tcp_line(&line)))
+                Ok(TcpFrame::Line(decode_tcp_line(line)))
             };
         }
 
@@ -436,7 +370,7 @@ where
             }
             line.extend_from_slice(&available[..take]);
             reader.consume(take);
-            return Ok(TcpFrame::Line(decode_tcp_line(&line)));
+            return Ok(TcpFrame::Line(decode_tcp_line(line)));
         }
 
         let available_len = available.len();
@@ -447,7 +381,7 @@ where
         if oversize_bytes.is_some() || total > max_accumulate_bytes {
             reader.consume(available_len);
             // Nothing accumulated so far can be part of a deliverable frame.
-            line = Vec::new();
+            line.clear();
             if total > max_drain_bytes {
                 return Ok(TcpFrame::Oversize {
                     line_bytes: total,
@@ -461,6 +395,15 @@ where
         line.extend_from_slice(available);
         reader.consume(available_len);
     }
+}
+
+#[cfg(test)]
+async fn read_bounded_line<R>(reader: &mut R, max_size: usize) -> std::io::Result<TcpFrame>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = Vec::with_capacity(max_size.min(8192));
+    read_bounded_line_into(reader, max_size, &mut line).await
 }
 
 fn decode_tcp_line(raw: &[u8]) -> String {
@@ -482,12 +425,11 @@ pub(super) async fn tcp_listener(
     max_size: usize,
     max_connections: usize,
     idle_timeout_secs: u64,
+    allowed_cidrs: Arc<Vec<IpNet>>,
 ) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!(bind = %bind, max_connections, idle_timeout_secs, "TCP syslog listener bound");
 
-    // Read CIDR allowlist once at startup (empty = accept all).
-    let allowed_cidrs = Arc::new(load_allowed_cidrs_from_env());
     if !allowed_cidrs.is_empty() {
         info!(
             cidrs = ?allowed_cidrs,

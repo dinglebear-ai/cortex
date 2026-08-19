@@ -74,13 +74,14 @@ fn snapshot_reports_queue_pressure_counters() {
     let obs = RuntimeObservability::default();
     obs.record_write_channel_full_transition();
     obs.record_udp_packet_dropped_queue_full(10);
-    obs.record_tcp_line_dropped_queue_full(20);
 
     let snapshot = obs.snapshot();
 
     assert_eq!(snapshot.syslog_write_channel_full_transitions, 1);
     assert_eq!(snapshot.syslog_udp_packets_dropped_queue_full, 1);
-    assert_eq!(snapshot.syslog_tcp_lines_dropped_queue_full, 1);
-    assert_eq!(snapshot.ingest_queue_depth, 20);
+    // Compatibility field remains in the health payload, but TCP now waits
+    // for channel capacity instead of dropping on queue pressure.
+    assert_eq!(snapshot.syslog_tcp_lines_dropped_queue_full, 0);
+    assert_eq!(snapshot.ingest_queue_depth, 10);
     assert!(snapshot.last_error_at.is_some());
 }

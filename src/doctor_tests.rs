@@ -8,10 +8,8 @@ struct EnvGuard {
 
 impl EnvGuard {
     fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let previous = std::env::var(name).ok();
-        unsafe {
-            std::env::set_var(name, value);
-        }
+        let previous = crate::env::var(name).ok();
+        crate::env::set_test_var(name, value);
         Self { name, previous }
     }
 }
@@ -19,12 +17,12 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         match &self.previous {
-            Some(value) => unsafe {
-                std::env::set_var(self.name, value);
-            },
-            None => unsafe {
-                std::env::remove_var(self.name);
-            },
+            Some(value) => {
+                crate::env::set_test_var(self.name, value);
+            }
+            None => {
+                crate::env::remove_test_var(self.name);
+            }
         }
     }
 }
@@ -408,7 +406,7 @@ fn systemctl_unix_timestamp_parses_at_prefixed_seconds() {
     let path = format!(
         "{}:{}",
         bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
+        crate::env::var("PATH").unwrap_or_default()
     );
     let _path_guard = EnvGuard::set("PATH", path);
 
@@ -446,7 +444,7 @@ esac
     let path = format!(
         "{}:{}",
         bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
+        crate::env::var("PATH").unwrap_or_default()
     );
     let _path_guard = EnvGuard::set("PATH", path);
 
@@ -478,7 +476,7 @@ fn ai_watcher_is_active_requires_success_and_active_stdout() {
     let path = format!(
         "{}:{}",
         bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
+        crate::env::var("PATH").unwrap_or_default()
     );
     let _path_guard = EnvGuard::set("PATH", path);
     let _state_guard = EnvGuard::set("CORTEX_TEST_SYSTEMD_STATE", "active");
@@ -516,7 +514,7 @@ esac
     let path = format!(
         "{}:{}",
         bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
+        crate::env::var("PATH").unwrap_or_default()
     );
     let _path_guard = EnvGuard::set("PATH", path);
 

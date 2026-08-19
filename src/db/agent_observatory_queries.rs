@@ -1,9 +1,13 @@
 //! Transactional repository and worktree persistence for Agent Observatory.
 
 use super::{RepositoryRow, RepositoryWorktreeRow};
-use crate::db::pool::{DbPool, write_lock};
+use crate::db::pool::DbPool;
+#[cfg(test)]
+use crate::db::pool::write_lock;
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use std::collections::HashSet;
 use std::path::{Component, Path};
 
@@ -372,6 +376,7 @@ fn upsert_worktree_tx(
     worktree_by_key(tx, &input.worktree_key)?.context("worktree missing after upsert")
 }
 
+#[cfg(test)]
 pub fn reconcile_repository(
     pool: &DbPool,
     repository: &RepositoryUpsert,
@@ -465,6 +470,7 @@ pub fn get_repository_by_key(pool: &DbPool, repository_key: &str) -> Result<Opti
     repository_by_key(&conn, repository_key)
 }
 
+#[cfg(test)]
 pub fn get_worktree_by_key(
     pool: &DbPool,
     worktree_key: &str,
@@ -482,6 +488,7 @@ pub fn list_repository_worktrees(
     list_worktrees(&conn, repository_id, include_removed)
 }
 
+#[cfg(test)]
 pub fn mark_repository_removed(
     pool: &DbPool,
     repository_key: &str,
@@ -502,6 +509,7 @@ pub fn mark_repository_removed(
     )? > 0)
 }
 
+#[cfg(test)]
 pub fn mark_worktree_removed(pool: &DbPool, worktree_key: &str, removed_at: &str) -> Result<bool> {
     required(worktree_key, "worktree_key")?;
     required(removed_at, "removed_at")?;

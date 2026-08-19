@@ -42,6 +42,12 @@ pub(crate) struct IngestEnvelope {
     durable_ack: Option<oneshot::Sender<DurableAckResult>>,
 }
 
+impl std::borrow::Borrow<db::LogBatchEntry> for IngestEnvelope {
+    fn borrow(&self) -> &db::LogBatchEntry {
+        &self.entry
+    }
+}
+
 impl IngestEnvelope {
     pub(crate) fn best_effort(entry: db::LogBatchEntry) -> Self {
         Self {

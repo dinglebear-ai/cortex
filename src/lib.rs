@@ -22,6 +22,8 @@ pub mod config;
 pub mod deploy;
 pub mod doctor;
 pub mod enrich;
+#[doc(hidden)]
+pub mod env;
 pub mod filetail;
 pub mod git_observer;
 pub(crate) mod hook_assessment;

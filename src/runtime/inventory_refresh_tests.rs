@@ -16,86 +16,56 @@ fn inventory_refresh_interval_parser_accepts_zero_disable() {
 #[test]
 fn remote_docker_events_default_to_disabled() {
     let _guard = env_lock().lock().unwrap();
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS");
     assert!(!remote_docker_events_enabled());
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS", "true");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS", "true");
     assert!(remote_docker_events_enabled());
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS");
 }
 
 #[test]
 fn inventory_graph_projection_defaults_to_disabled() {
     let _guard = env_lock().lock().unwrap();
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED");
     assert!(!inventory_graph_projection_enabled());
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED", "true");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED", "true");
     assert!(inventory_graph_projection_enabled());
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED", "1");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED", "1");
     assert!(inventory_graph_projection_enabled());
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED", "false");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED", "false");
     assert!(!inventory_graph_projection_enabled());
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED");
 }
 
 #[test]
 fn inventory_watch_env_accepts_common_false_values() {
     let _guard = env_lock().lock().unwrap();
     for value in ["0", "false", "FALSE", "no", " No "] {
-        unsafe {
-            std::env::set_var("CORTEX_INVENTORY_WATCH_ENABLED", value);
-        }
+        crate::env::set_test_var("CORTEX_INVENTORY_WATCH_ENABLED", value);
         assert!(!inventory_watch_enabled(), "{value:?} should disable watch");
     }
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_WATCH_ENABLED", "yes");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_WATCH_ENABLED", "yes");
     assert!(inventory_watch_enabled());
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_WATCH_ENABLED");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_WATCH_ENABLED");
 }
 
 #[test]
 fn inventory_refresh_interval_env_falls_back_on_invalid_values() {
     let _guard = env_lock().lock().unwrap();
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS", "not-a-number");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS", "not-a-number");
     assert_eq!(
         inventory_refresh_interval_secs(),
         INVENTORY_REFRESH_INTERVAL_SECS
     );
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS", "42");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS", "42");
     assert_eq!(inventory_refresh_interval_secs(), 42);
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_REFRESH_INTERVAL_SECS");
 }
 
 #[test]
 fn start_config_watcher_returns_none_when_watch_disabled() {
     let _guard = env_lock().lock().unwrap();
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_WATCH_ENABLED", "false");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_WATCH_ENABLED", "false");
     let mut config = crate::inventory::InventoryConfig::from_env();
     config.compose_paths = vec!["/tmp/cortex-compose.yml".into()];
 
@@ -103,17 +73,13 @@ fn start_config_watcher_returns_none_when_watch_disabled() {
     let watcher = start_config_watcher(&config, tx);
 
     assert!(watcher.is_none());
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_WATCH_ENABLED");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_WATCH_ENABLED");
 }
 
 #[test]
 fn start_config_watcher_returns_none_when_no_targets_are_configured() {
     let _guard = env_lock().lock().unwrap();
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_WATCH_ENABLED", "true");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_WATCH_ENABLED", "true");
     let mut config = crate::inventory::InventoryConfig::from_env();
     config.compose_paths.clear();
     config.proxy_paths.clear();
@@ -123,9 +89,7 @@ fn start_config_watcher_returns_none_when_no_targets_are_configured() {
     let watcher = start_config_watcher(&config, tx);
 
     assert!(watcher.is_none());
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_WATCH_ENABLED");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_WATCH_ENABLED");
 }
 
 #[test]
@@ -365,9 +329,7 @@ async fn debounce_watch_events_drains_queued_events_after_delay() {
 #[test]
 fn remote_docker_event_tasks_return_empty_when_disabled_even_with_hosts() {
     let _guard = env_lock().lock().unwrap();
-    unsafe {
-        std::env::set_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS", "false");
-    }
+    crate::env::set_test_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS", "false");
     let mut config = crate::inventory::InventoryConfig::from_env();
     config.ssh_hosts = vec!["nashost".into()];
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -380,9 +342,7 @@ fn remote_docker_event_tasks_return_empty_when_disabled_even_with_hosts() {
     );
 
     assert!(tasks.is_empty());
-    unsafe {
-        std::env::remove_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS");
-    }
+    crate::env::remove_test_var("CORTEX_INVENTORY_REMOTE_DOCKER_EVENTS");
 }
 
 #[test]

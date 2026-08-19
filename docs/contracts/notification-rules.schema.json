@@ -1,8 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cortex.example.invalid/contracts/notification-rules.schema.json",
-  "title": "cortex notification rule",
-  "description": "Contract derived from docs/superpowers/specs/2026-05-16-digest-notifications-design.md §4-§7. Changing it requires updating the spec first. Validates a single rule object as it appears in a [[notifications.rules]] TOML array. Decoders should TOML-parse first, then validate each element against this schema.",
+  "title": "cortex notification rule (planned, not implemented)",
+  "x-cortex-status": "planned-not-implemented",
+  "description": "Design contract derived from docs/superpowers/specs/2026-05-16-digest-notifications-design.md §4-§7. Current Cortex does not parse [[notifications.rules]] and does not expose this schema as live configuration. Runtime notifications use built-in evaluators configured through [notifications.evaluators]. Keep this schema only as a forward-looking design artifact until operator-defined rules are implemented.",
 
   "type": "object",
   "additionalProperties": false,
@@ -43,7 +44,7 @@
     "severityTier": {
       "type": "string",
       "enum": ["info", "warn", "critical"],
-      "description": "info = digest-only (never pushes as standalone alert). warn = single push, no repeat. critical = first push + repeats every repeat_seconds until acked; overrides quiet hours."
+      "description": "Planned rule-tier vocabulary: info = digest-only, warn = single push, critical = repeat-until-ack. Current runtime notifications do not consume this configurable rule tier, and quiet-hours behavior is not implemented."
     },
 
     "duration": {
@@ -220,7 +221,7 @@
               "description": "When false, this rule bypasses global quiet hours. critical alerts already bypass by contract; this is for warn rules that should also bypass."
             }
           },
-          "description": "Per-rule override of the global [notifications.quiet_hours] block."
+          "description": "Planned per-rule override of the unimplemented global [notifications.quiet_hours] design. Current Cortex does not parse this configurable rule surface."
         }
       }
     }

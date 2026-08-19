@@ -1,10 +1,98 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 const MAX_CLEANUP_CHUNK_SIZE: usize = 1_000_000;
+
+thread_local! {
+    /// Setup-generated .env values are a low-priority config input, not
+    /// process state. Plugin-hook options are a separate high-priority layer.
+    static SETUP_ENV_OVERLAY: RefCell<Option<HashMap<String, String>>> = const { RefCell::new(None) };
+    static PLUGIN_ENV_OVERLAY: RefCell<Option<HashMap<String, String>>> = const { RefCell::new(None) };
+}
+
+#[cfg(not(test))]
+struct SetupEnvGuard(Option<HashMap<String, String>>);
+
+#[cfg(not(test))]
+impl SetupEnvGuard {
+    fn install(values: HashMap<String, String>) -> Self {
+        let previous = SETUP_ENV_OVERLAY.with(|overlay| overlay.replace(Some(values)));
+        Self(previous)
+    }
+}
+
+#[cfg(not(test))]
+impl Drop for SetupEnvGuard {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        SETUP_ENV_OVERLAY.with(|overlay| {
+            overlay.replace(previous);
+        });
+    }
+}
+
+#[doc(hidden)]
+pub struct PluginEnvGuard(Option<HashMap<String, String>>);
+
+impl PluginEnvGuard {
+    pub fn install(values: HashMap<String, String>) -> Self {
+        let previous = PLUGIN_ENV_OVERLAY.with(|overlay| overlay.replace(Some(values)));
+        Self(previous)
+    }
+}
+
+impl Drop for PluginEnvGuard {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        PLUGIN_ENV_OVERLAY.with(|overlay| {
+            overlay.replace(previous);
+        });
+    }
+}
+
+/// Resolve a config environment variable with explicit precedence:
+/// plugin-hook options > real process environment > setup .env > TOML/defaults.
+#[doc(hidden)]
+pub fn config_env_var(key: &str) -> Option<String> {
+    if let Some(value) = PLUGIN_ENV_OVERLAY.with(|overlay| {
+        overlay
+            .borrow()
+            .as_ref()
+            .and_then(|values| values.get(key).cloned())
+    }) {
+        return Some(value);
+    }
+    // Presence wins even when the process value is non-Unicode; in that case
+    // preserve std::env::var's old behavior and do not fall back to setup .env.
+    if crate::env::var_os(key).is_some() {
+        return crate::env::var(key).ok();
+    }
+    SETUP_ENV_OVERLAY.with(|overlay| {
+        overlay
+            .borrow()
+            .as_ref()
+            .and_then(|values| values.get(key).cloned())
+    })
+}
+
+fn config_env_present(key: &str) -> bool {
+    PLUGIN_ENV_OVERLAY.with(|overlay| {
+        overlay
+            .borrow()
+            .as_ref()
+            .is_some_and(|values| values.contains_key(key))
+    }) || crate::env::var_os(key).is_some()
+        || SETUP_ENV_OVERLAY.with(|overlay| {
+            overlay
+                .borrow()
+                .as_ref()
+                .is_some_and(|values| values.contains_key(key))
+        })
+}
 
 /// Wrapper for secret string values that prints `[REDACTED]` in Debug output
 /// and is skipped during Serialize so secrets never leak into logs or JSON exports.
@@ -1100,6 +1188,7 @@ impl Config {
         //    fields keep their defaults from step 1 via #[serde(default)] annotations)
         match std::fs::read_to_string("config.toml") {
             Ok(contents) => {
+                reject_unsupported_config_blocks(&contents)?;
                 config = toml::from_str(&contents)
                     .map_err(|e| anyhow::anyhow!("Failed to parse config.toml: {e}"))?;
             }
@@ -1108,9 +1197,11 @@ impl Config {
         }
 
         #[cfg(not(test))]
-        load_setup_env_file();
+        let _setup_env_guard = SetupEnvGuard::install(load_setup_env_file());
 
-        // 3. Overlay environment variables (highest priority)
+        // 3. Overlay setup .env, then process environment (highest priority).
+        //    config_env_var() resolves that precedence without mutating the
+        //    process-global environment.
         //    CORTEX_*     → syslog listener settings
         //    CORTEX_* → MCP server + storage settings
         env_override_str("CORTEX_RECEIVER_HOST", &mut config.receiver.host);
@@ -1163,7 +1254,7 @@ impl Config {
         // bind-mounted into the container, producing a cryptic "Permission denied"
         // error deep in SQLite pool initialisation.
         if check_db_path
-            && std::env::var_os("CORTEX_DB_PATH").is_some()
+            && config_env_present("CORTEX_DB_PATH")
             && let Some(parent) = config.storage.db_path.parent()
             && !parent.as_os_str().is_empty()
             && !parent.exists()
@@ -1504,7 +1595,7 @@ impl Config {
             &mut config.docker_ingest.excluded_containers,
         );
         if config.docker_ingest.enabled {
-            if let Ok(val) = std::env::var("CORTEX_DOCKER_HOSTS") {
+            if let Some(val) = config_env_var("CORTEX_DOCKER_HOSTS") {
                 if !val.is_empty() {
                     config.docker_ingest.hosts = val
                         .split(',')
@@ -1525,7 +1616,7 @@ impl Config {
                         );
                     }
                 }
-            } else if let Ok(path) = std::env::var("CORTEX_DOCKER_HOSTS_FILE")
+            } else if let Some(path) = config_env_var("CORTEX_DOCKER_HOSTS_FILE")
                 && !path.is_empty()
             {
                 match std::fs::read_to_string(&path) {
@@ -1571,15 +1662,15 @@ impl Config {
 }
 
 #[cfg(not(test))]
-fn load_setup_env_file() {
+fn load_setup_env_file() -> HashMap<String, String> {
     let Ok(home) = crate::setup::cortex_home_dir() else {
-        tracing::trace!("load_setup_env_file: syslog home directory unavailable");
-        return;
+        tracing::trace!("load_setup_env_file: cortex home directory unavailable");
+        return HashMap::new();
     };
     let path = home.join(".env");
     let Ok(metadata) = std::fs::symlink_metadata(&path) else {
         tracing::trace!(path = %path.display(), "load_setup_env_file: env file metadata unavailable");
-        return;
+        return HashMap::new();
     };
     if metadata.file_type().is_symlink() {
         tracing::trace!(path = %path.display(), "load_setup_env_file: refusing symlinked env file");
@@ -1587,17 +1678,16 @@ fn load_setup_env_file() {
             "cortex: warning: refusing to load symlinked env file {}",
             path.display()
         );
-        return;
+        return HashMap::new();
     }
     let Ok(raw) = std::fs::read_to_string(&path) else {
         tracing::trace!(path = %path.display(), "load_setup_env_file: env file read failed");
-        return;
+        return HashMap::new();
     };
     let mut entries = Vec::new();
     for (line_no, line) in raw.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
-            tracing::trace!("load_setup_env_file: skipped blank/comment line");
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
@@ -1625,13 +1715,11 @@ fn load_setup_env_file() {
         .find(|(key, _)| key == "CORTEX_DATA_VOLUME")
         .filter(|(_, value)| !value.trim().is_empty())
         .map(|(_, value)| value.clone());
-    if let Some(data_volume) = data_volume.as_deref() {
-        tracing::trace!(data_volume, "load_setup_env_file: found CORTEX_DATA_VOLUME");
-    }
-
+    let mut overlay = HashMap::with_capacity(entries.len());
     for (key, mut value) in entries {
-        if std::env::var_os(&key).is_some() {
-            tracing::trace!(key, "load_setup_env_file: process env already set");
+        // Preserve the setup loader's historical first-definition-wins
+        // behavior while leaving real process variables to config_env_var().
+        if overlay.contains_key(&key) {
             continue;
         }
         if key == "CORTEX_DB_PATH"
@@ -1644,19 +1732,14 @@ fn load_setup_env_file() {
                 .to_string();
             tracing::trace!(value, "load_setup_env_file: rewrote CORTEX_DB_PATH");
         }
-        tracing::trace!(key, "load_setup_env_file: setting env entry");
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var(key, value) };
+        overlay.insert(key, value);
     }
+    overlay
 }
 
 #[cfg(not(test))]
 fn is_supported_setup_env_key(key: &str) -> bool {
-    key == "NO_AUTH"
-        || key.starts_with("CORTEX_")
-        || key.starts_with("CORTEX_")
-        || key.starts_with("CORTEX_API_")
-        || key.starts_with("CORTEX_DOCKER_")
+    key == "NO_AUTH" || key.starts_with("CORTEX_")
 }
 
 /// Warn about `agent_docker_source_prefixes` entries that can never match a
@@ -1710,8 +1793,30 @@ fn is_agent_docker_prefix_shape(prefix: &str) -> bool {
 
 // --- Env var helpers ---
 
+fn reject_unsupported_config_blocks(contents: &str) -> anyhow::Result<()> {
+    let value: toml::Value = toml::from_str(contents)
+        .map_err(|e| anyhow::anyhow!("Failed to parse config.toml: {e}"))?;
+    let Some(notifications) = value.get("notifications") else {
+        return Ok(());
+    };
+
+    for (key, surface) in [
+        ("quiet_hours", "[notifications.quiet_hours]"),
+        ("apprise", "[notifications.apprise]"),
+        ("digest", "[notifications.digest]"),
+        ("rules", "[[notifications.rules]]"),
+    ] {
+        if notifications.get(key).is_some() {
+            anyhow::bail!(
+                "config.toml {surface} is not implemented; remove it rather than relying on silently ignored notification configuration"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn env_override_str(key: &str, target: &mut String) {
-    if let Ok(v) = std::env::var(key)
+    if let Some(v) = config_env_var(key)
         && !v.is_empty()
     {
         *target = v;
@@ -1719,7 +1824,7 @@ fn env_override_str(key: &str, target: &mut String) {
 }
 
 fn env_override_opt_str(key: &str, target: &mut Option<String>) {
-    if let Ok(v) = std::env::var(key)
+    if let Some(v) = config_env_var(key)
         && !v.is_empty()
     {
         *target = Some(v);
@@ -1727,7 +1832,7 @@ fn env_override_opt_str(key: &str, target: &mut Option<String>) {
 }
 
 fn env_override_path(key: &str, target: &mut PathBuf) {
-    if let Ok(v) = std::env::var(key)
+    if let Some(v) = config_env_var(key)
         && !v.is_empty()
     {
         *target = PathBuf::from(v);
@@ -1735,7 +1840,7 @@ fn env_override_path(key: &str, target: &mut PathBuf) {
 }
 
 fn env_override_list(key: &str, target: &mut Vec<String>) {
-    let Ok(v) = std::env::var(key) else {
+    let Some(v) = config_env_var(key) else {
         return;
     };
     let values: Vec<String> = v
@@ -1748,7 +1853,7 @@ fn env_override_list(key: &str, target: &mut Vec<String>) {
 }
 
 fn env_override_auth_mode(key: &str, target: &mut AuthMode) -> anyhow::Result<()> {
-    let Ok(v) = std::env::var(key) else {
+    let Some(v) = config_env_var(key) else {
         return Ok(());
     };
     if v.is_empty() {
@@ -1767,7 +1872,7 @@ fn env_override_auth_mode(key: &str, target: &mut AuthMode) -> anyhow::Result<()
 }
 
 fn env_override_bool(key: &str, target: &mut bool) -> anyhow::Result<()> {
-    let Ok(v) = std::env::var(key) else {
+    let Some(v) = config_env_var(key) else {
         return Ok(());
     };
     if v.is_empty() {
@@ -2115,21 +2220,12 @@ pub(crate) fn validate_receiver_config(config: &ReceiverConfig) -> anyhow::Resul
         return Err(anyhow::anyhow!("syslog.write_channel_capacity must be > 0"));
     }
     for cidr in &config.allowed_source_cidrs {
-        if let Some((prefix, len)) = cidr.split_once('/') {
-            let prefix_ok = prefix.parse::<std::net::IpAddr>().is_ok();
-            let len_ok = len.parse::<u32>().is_ok();
-            if !prefix_ok || !len_ok {
-                return Err(anyhow::anyhow!(
-                    "CORTEX_ALLOWED_SOURCE_CIDRS: invalid CIDR entry '{cidr}' — \
-                     expected format is <ip>/<prefix_len> (e.g. 10.0.0.0/8)"
-                ));
-            }
-        } else {
-            return Err(anyhow::anyhow!(
-                "CORTEX_ALLOWED_SOURCE_CIDRS: invalid entry '{cidr}' — \
-                 missing prefix length (e.g. 10.0.0.0/8)"
-            ));
-        }
+        cidr.parse::<ipnet::IpNet>().map_err(|error| {
+            anyhow::anyhow!(
+                "CORTEX_ALLOWED_SOURCE_CIDRS: invalid CIDR entry '{cidr}' — {error}; \
+                 expected format is <ip>/<prefix_len> (e.g. 10.0.0.0/8)"
+            )
+        })?;
     }
     Ok(())
 }
@@ -2147,7 +2243,7 @@ fn env_override_parse<T: std::str::FromStr>(key: &str, target: &mut T) -> anyhow
 where
     T::Err: std::fmt::Display,
 {
-    if let Ok(v) = std::env::var(key)
+    if let Some(v) = config_env_var(key)
         && !v.is_empty()
     {
         *target = v

@@ -31,10 +31,10 @@ Changing it requires updating the spec first.
 |---|---|---|
 | `cortex agent ...` | server + client | Agent lifecycle: server-side enrollment/revocation/tail; client-side daemon/enroll/status |
 | `cortex pollers ...` | server | Poller management: reset cursors, dump current state |
-| `cortex rules ...` | server | Alert rule introspection (list / test / history) |
-| `cortex digest ...` | server | Digest preview / send-now |
+| `cortex rules ...` | planned server surface | **Not implemented.** Alert rule introspection design (list / test / history). |
+| `cortex digest ...` | planned server surface | **Not implemented.** Digest preview / send-now design. |
 
-All groups are gated on the corresponding feature being enabled in `config.toml`. Calling a gated subcommand on a disabled feature exits with code 1 and a clear message ("digest is disabled in config.toml; enable [notifications.digest] before previewing").
+Implemented groups use their normal runtime/config gating. The `rules` and `digest` groups above are design-only and are not invokable in current Cortex. In particular, do not enable them with nested notification blocks: `Config::load` rejects `[notifications.digest]` and `[[notifications.rules]]` rather than silently accepting unsupported configuration.
 
 ## 3. Server-side vs Client-side Table
 
@@ -53,11 +53,11 @@ This is the most important table for operators — it disambiguates where each c
 | `cortex agent status` (client form) | client | local agent state + WS conn | Local-only; prints buffer depth, errors. |
 | `cortex pollers reset` | server | local SQLite (`poller_checkpoints` row delete) | |
 | `cortex pollers status` | server | local SQLite + in-memory `PollerObservability` | Same data exposed inside `cortex status` MCP action's `pollers` block. |
-| `cortex rules list` | server | TOML config + SQLite (`alert_state` for last-fired) | Wraps MCP `rules_list`. |
-| `cortex rules test` | server | TOML config + in-memory rule evaluator | Dry-runs a rule against fixture or sample line. |
-| `cortex rules history` | server | SQLite (`alert_state` + audit) | Wraps MCP `rules_fire_history`. |
-| `cortex digest preview` | server | local SQLite + Tera template | Wraps MCP `digest_preview`. |
-| `cortex digest send-now` | server | local SQLite + apprise HTTP | Renders and POSTs immediately, ignoring schedule. |
+| `cortex rules list` | planned server surface | planned TOML + SQLite design | **Not implemented;** would wrap planned MCP `rules_list`. |
+| `cortex rules test` | planned server surface | planned TOML + evaluator design | **Not implemented;** dry-run contract only. |
+| `cortex rules history` | planned server surface | planned SQLite audit design | **Not implemented;** would wrap planned MCP `rules_fire_history`. |
+| `cortex digest preview` | planned server surface | planned SQLite + template design | **Not implemented;** would wrap planned MCP `digest_preview`. |
+| `cortex digest send-now` | planned server surface | planned SQLite + Apprise design | **Not implemented;** delivery contract only. |
 
 Whether `cortex agent status` is the server or client form is disambiguated by the binary's runtime context: the client agent binary uses a distinct entrypoint (`bin/cortex-agent` symlinked to the same crate), or — equivalently — `cortex agent status` on a host that has no `/var/lib/syslog-agent/host_id` file produces the server-side view.
 
@@ -208,6 +208,8 @@ Per-source dump: `enabled`, `last_tick_at`, `cursor`, `lag_seconds`, `consecutiv
 
 Exit codes: `0`, `2` (server unreachable).
 
+> **Planned surface, not implemented:** the rule-management and digest CLI commands below are retained as design contracts only. Current Cortex has no `rules list`, `rules test`, `rules history`, `digest preview`, or `digest send-now` command surface and does not parse `[[notifications.rules]]`.
+
 ### syslog rules list
 
 ```
@@ -267,7 +269,7 @@ Exit codes: `0`, `2` (apprise unreachable; HTTP error code in JSON output).
 - **`--json` flag**: most subcommands listed here accept `--json`; see individual entries. JSON output is a single object per command (never a stream). Errors in JSON mode still set the exit code and emit `{"ok": false, "error": {"code": "...", "message": "..."}}` on stdout.
 - **Exit codes**: `0` = success, `1` = invocation/usage error (bad flag, conflict between flags, file unreadable), `2` = remote/server error (server unreachable, MCP `ok:false`, apprise non-2xx), `3` = state error (unknown host_id, hostname conflict, source unknown).
 - **Env precedence**: `CORTEX_*` env vars override config.toml for credentials only; CLI flags override env for everything else. This matches the existing `src/config.rs:load_*` ordering.
-- **Confirmation prompts**: destructive commands (`agent revoke`, `digest send-now`) accept `--confirm` to bypass; without it, the command prints a preview and exits 0.
+- **Confirmation prompts**: implemented destructive commands such as `agent revoke` use explicit confirmation. The planned `digest send-now` contract likewise reserves `--confirm`, but that command is not implemented.
 - **Color**: respects `NO_COLOR` and `--no-color` per the rest of `src/cli.rs`. JSON output is never colorized.
 - **Inherited flags**: `--config <path>`, `--server-url <url>`, `--db-path <path>` from the existing top-level CLI continue to apply to all new subcommands.
 
@@ -275,8 +277,8 @@ Exit codes: `0`, `2` (apprise unreachable; HTTP error code in JSON output).
 
 - `cortex agent status` / `agent list` consume the `agents` table from epic A §9.
 - `cortex pollers status` / `pollers reset` consume the `poller_checkpoints` table from epic C §4.
-- `cortex rules list` / `rules history` / `digest preview` consume the rule TOML defined by `docs/contracts/notification-rules.schema.json` and the `alert_state` table from epic E §6.
-- `cortex rules list` and the alert subcommands wrap MCP actions specified in `docs/contracts/mcp-actions.md` (`rules_list`, `rules_fire_history`, `alerts_active`, `alerts_ack`, `digest_preview`).
+- **Planned only:** `cortex rules list` / `rules history` / `digest preview` were designed around `docs/contracts/notification-rules.schema.json` and the epic E `alert_state` design; current Cortex exposes none of these CLI commands.
+- **Planned only:** those CLI surfaces would wrap the similarly unimplemented MCP actions in `docs/contracts/mcp-actions.md` (`rules_list`, `rules_fire_history`, `alerts_active`, `alerts_ack`, `digest_preview`).
 - `cortex agent run` (client-side) implements the wire protocol defined by `docs/contracts/agent-protocol.md`.
 
 ## 7. Locked Ambiguities
@@ -284,7 +286,7 @@ Exit codes: `0`, `2` (apprise unreachable; HTTP error code in JSON output).
 - **Probe-result CLI wrappers (epic D)**: spec D §9 only defines the MCP actions, leaving open whether each probe action should also get a `cortex probe disk-usage --host <h>` CLI wrapper. **Locked: no per-probe CLI in V1.** Operators script against `cortex mcp-call <action>` (existing) or use the chat-driven MCP tool. Adding per-probe CLI is purely additive and can land in a follow-up without breaking this contract.
 - **`agent status` ambiguity**: a single subcommand serves both server-side and client-side contexts. **Locked: the running binary's environment disambiguates** — presence of `/var/lib/syslog-agent/host_id` plus a configured agent daemon implies client form; absence implies server form (queries DB). An explicit `--server` flag is reserved for future use if the heuristic ever fails.
 - **`pollers reset` granularity**: spec C §14.4 lists `unifi`, `adguard`, `all` but is silent on whether `unifi` resets events + alarms together. **Locked: `--source unifi` resets BOTH `unifi-events` and `unifi-alarms` instances.** Use the lower-level SQL (`DELETE FROM poller_checkpoints WHERE poller = 'unifi-alarms'`) for surgical resets.
-- **`digest send-now` confirm**: spec E doesn't specify whether `send-now` is dangerous. **Locked: requires `--confirm` to actually POST** — protects against an operator wiring it into a cron entry by mistake before they've validated the template.
+- **Planned `digest send-now` confirm**: spec E doesn't specify whether `send-now` is dangerous. The design is locked to require `--confirm` before a POST if/when the command is implemented.
 
 ## 8. Surface Parity Additions (2026-05-21)
 

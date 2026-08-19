@@ -19,10 +19,16 @@ pub async fn collect(services: &[MediaServiceConfig], timeout: Duration) -> Coll
         out.warn("http", "failed to initialize media HTTP client");
         return out;
     };
-    for service in services {
+    let responses = futures_util::future::join_all(services.iter().map(|service| {
         let endpoint = endpoint_for(service);
         let request_endpoint = request_endpoint_for(service, &endpoint);
-        match http.get_json(&request_endpoint, headers_for(service)).await {
+        let headers = headers_for(service);
+        let http = &http;
+        async move { http.get_json(&request_endpoint, headers).await }
+    }))
+    .await;
+    for (service, response) in services.iter().zip(responses) {
+        match response {
             Ok(response) if response.status < 400 => {
                 normalize_service(service, &response.body, "ok", &mut out)
             }

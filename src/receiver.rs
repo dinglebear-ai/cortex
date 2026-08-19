@@ -129,10 +129,12 @@ pub(crate) async fn start_listeners(
     observability: Arc<RuntimeObservability>,
 ) -> Result<ListenerHandles> {
     let bind_addr = config.bind_addr();
+    let allowed_cidrs = Arc::new(listener::parse_allowed_cidrs(&config.allowed_source_cidrs)?);
 
     let udp_ingest = ingest.clone();
     let udp_bind = bind_addr.clone();
     let max_size = config.max_message_size;
+    let udp_allowed_cidrs = Arc::clone(&allowed_cidrs);
     let udp_handle = tokio::spawn(supervise_listener(
         "udp_syslog",
         Arc::clone(&observability),
@@ -140,7 +142,8 @@ pub(crate) async fn start_listeners(
         move || {
             let bind = udp_bind.clone();
             let ingest = udp_ingest.clone();
-            async move { listener::udp_listener(&bind, max_size, ingest).await }
+            let allowed_cidrs = Arc::clone(&udp_allowed_cidrs);
+            async move { listener::udp_listener(&bind, max_size, ingest, allowed_cidrs).await }
         },
     ));
 
@@ -148,6 +151,7 @@ pub(crate) async fn start_listeners(
     let tcp_bind = bind_addr.clone();
     let max_tcp_connections = config.max_tcp_connections;
     let tcp_idle_timeout_secs = config.tcp_idle_timeout_secs;
+    let tcp_allowed_cidrs = Arc::clone(&allowed_cidrs);
     let tcp_handle = tokio::spawn(supervise_listener(
         "tcp_syslog",
         Arc::clone(&observability),
@@ -155,6 +159,7 @@ pub(crate) async fn start_listeners(
         move || {
             let bind = tcp_bind.clone();
             let ingest = tcp_ingest.clone();
+            let allowed_cidrs = Arc::clone(&tcp_allowed_cidrs);
             async move {
                 listener::tcp_listener(
                     &bind,
@@ -162,6 +167,7 @@ pub(crate) async fn start_listeners(
                     max_size,
                     max_tcp_connections,
                     tcp_idle_timeout_secs,
+                    allowed_cidrs,
                 )
                 .await
             }

@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -6,8 +7,19 @@ use rusqlite::{Error as SqliteError, ErrorCode, Transaction, params};
 use super::models::LogBatchEntry;
 use super::pool::DbPool;
 
-/// Batch insert for higher throughput
+/// Batch insert for higher throughput.
+///
+/// Keep the public API concrete so callers can pass `&[]` without type
+/// annotations. The ingest writer uses the crate-private borrowed variant to
+/// persist `IngestEnvelope` values without cloning their `LogBatchEntry`.
 pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usize> {
+    insert_logs_batch_borrowed(pool, entries)
+}
+
+pub(crate) fn insert_logs_batch_borrowed<T>(pool: &DbPool, entries: &[T]) -> Result<usize>
+where
+    T: Borrow<LogBatchEntry>,
+{
     const RETRY_DELAYS_MS: &[u64] = &[25, 100, 250];
 
     let mut attempt = 0usize;
@@ -31,11 +43,14 @@ pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usi
     }
 }
 
-fn insert_logs_batch_once(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usize> {
+fn insert_logs_batch_once<T>(pool: &DbPool, entries: &[T]) -> Result<usize>
+where
+    T: Borrow<LogBatchEntry>,
+{
     let mut conn = pool.get()?;
     let _write_guard = crate::db::write_lock();
     let tx = conn.transaction()?;
-    let _ids = insert_logs_batch_in_tx(&tx, entries)?;
+    insert_logs_batch_in_tx_with_ids(&tx, entries, None)?;
     tx.commit()?;
     tracing::debug!(
         entry_count = entries.len(),
@@ -44,11 +59,23 @@ fn insert_logs_batch_once(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<us
     Ok(entries.len())
 }
 
-pub(crate) fn insert_logs_batch_in_tx(
-    tx: &Transaction<'_>,
-    entries: &[LogBatchEntry],
-) -> Result<Vec<i64>> {
+pub(crate) fn insert_logs_batch_in_tx<T>(tx: &Transaction<'_>, entries: &[T]) -> Result<Vec<i64>>
+where
+    T: Borrow<LogBatchEntry>,
+{
     let mut ids = Vec::with_capacity(entries.len());
+    insert_logs_batch_in_tx_with_ids(tx, entries, Some(&mut ids))?;
+    Ok(ids)
+}
+
+fn insert_logs_batch_in_tx_with_ids<T>(
+    tx: &Transaction<'_>,
+    entries: &[T],
+    mut ids: Option<&mut Vec<i64>>,
+) -> Result<()>
+where
+    T: Borrow<LogBatchEntry>,
+{
     {
         let mut stmt = tx.prepare_cached(
             "INSERT INTO logs (
@@ -59,6 +86,7 @@ pub(crate) fn insert_logs_batch_in_tx(
         )?;
 
         for entry in entries {
+            let entry = entry.borrow();
             stmt.execute(params![
                 entry.timestamp,
                 entry.hostname,
@@ -80,12 +108,15 @@ pub(crate) fn insert_logs_batch_in_tx(
                 entry.event_action,
                 entry.parse_error,
             ])?;
-            ids.push(tx.last_insert_rowid());
+            if let Some(ids) = ids.as_deref_mut() {
+                ids.push(tx.last_insert_rowid());
+            }
         }
 
         // Batch upsert hosts — group by hostname to avoid one upsert per log entry
         let mut host_counts: HashMap<&str, i64> = HashMap::new();
         for entry in entries {
+            let entry = entry.borrow();
             *host_counts.entry(entry.hostname.as_str()).or_insert(0) += 1;
         }
         let mut host_stmt = tx.prepare_cached(
@@ -107,6 +138,7 @@ pub(crate) fn insert_logs_batch_in_tx(
         )?;
         let mut checkpoint_count = 0usize;
         for entry in entries {
+            let entry = entry.borrow();
             if let Some(checkpoint) = &entry.docker_checkpoint {
                 checkpoint_stmt.execute(params![
                     checkpoint.host_name,
@@ -124,7 +156,7 @@ pub(crate) fn insert_logs_batch_in_tx(
             "Prepared batch insert transaction"
         );
     }
-    Ok(ids)
+    Ok(())
 }
 
 fn is_transient_sqlite_lock(err: &anyhow::Error) -> bool {

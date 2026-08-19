@@ -31,9 +31,9 @@ pub(crate) async fn run_shell_atuin_index(mode: &CliMode, args: ShellAtuinIndexA
 
 fn atuin_history_path() -> PathBuf {
     resolve_atuin_history_path(
-        std::env::var_os("ATUIN_DB_PATH").map(PathBuf::from),
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
+        crate::env::var_os("ATUIN_DB_PATH").map(PathBuf::from),
+        crate::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        crate::env::var_os("HOME").map(PathBuf::from),
     )
 }
 

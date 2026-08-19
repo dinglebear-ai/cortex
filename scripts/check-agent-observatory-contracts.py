@@ -6,7 +6,9 @@ import re
 import sys
 from pathlib import Path
 
-from jsonschema import Draft202012Validator, FormatChecker, RefResolver
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "docs/contracts"
@@ -22,12 +24,32 @@ def fail(message: str) -> None:
 schema = json.loads(SCHEMA_PATH.read_text())
 openapi = json.loads(OPENAPI_PATH.read_text())
 fixture = json.loads(FIXTURE_PATH.read_text())
-resolver = RefResolver(base_uri=SCHEMA_PATH.as_uri(), referrer=schema)
+SCHEMA_URI = SCHEMA_PATH.as_uri()
+OPENAPI_URI = OPENAPI_PATH.as_uri()
+registry = Registry().with_resources(
+    [
+        (
+            SCHEMA_URI,
+            Resource.from_contents(schema, default_specification=DRAFT202012),
+        ),
+        (
+            OPENAPI_URI,
+            Resource.from_contents(openapi, default_specification=DRAFT202012),
+        ),
+    ]
+)
+
+
+def validator_for_ref(uri: str, pointer: str, *, check_formats: bool = True) -> Draft202012Validator:
+    return Draft202012Validator(
+        {"$ref": f"{uri}{pointer}"},
+        registry=registry,
+        format_checker=FormatChecker() if check_formats else None,
+    )
 
 
 def validate_schema(name: str, value: object) -> None:
-    candidate = {"$ref": f"#/$defs/{name}", "$defs": schema["$defs"]}
-    Draft202012Validator(candidate, resolver=resolver, format_checker=FormatChecker()).validate(value)
+    validator_for_ref(SCHEMA_URI, f"#/$defs/{name}").validate(value)
 
 
 validate_schema("AgentRunDetail", fixture["run_detail"])
@@ -36,27 +58,19 @@ validate_schema("StreamEnvelope", fixture["stream"])
 validate_schema("Page", fixture["terminal_page"])
 validate_schema("Page", fixture["continued_page"])
 
-telemetry_schema = openapi["components"]["schemas"]["Telemetry"]
-store = {SCHEMA_PATH.as_uri(): schema, OPENAPI_PATH.as_uri(): openapi}
-Draft202012Validator(
-    telemetry_schema,
-    resolver=RefResolver(base_uri=OPENAPI_PATH.as_uri(), referrer=openapi, store=store),
-    format_checker=FormatChecker(),
-).validate(fixture["telemetry"])
-
-backfill_schema = openapi["components"]["schemas"]["BackfillJob"]
-Draft202012Validator(
-    backfill_schema,
-    resolver=RefResolver(base_uri=OPENAPI_PATH.as_uri(), referrer=openapi, store=store),
-    format_checker=FormatChecker(),
-).validate(fixture["backfill_job"])
+validator_for_ref(OPENAPI_URI, "#/components/schemas/Telemetry").validate(fixture["telemetry"])
+validator_for_ref(OPENAPI_URI, "#/components/schemas/BackfillJob").validate(fixture["backfill_job"])
 
 detail_ref = openapi["paths"]["/api/agent-runs/{run_key}"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
 if not detail_ref.endswith("#/$defs/AgentRunDetail"):
     fail("OpenAPI run detail does not reference AgentRunDetail")
 
 reconcile = openapi["paths"]["/api/agent-observatory/reconcile"]["post"]["requestBody"]["content"]["application/json"]["schema"]
-reconcile_validator = Draft202012Validator(reconcile, resolver=RefResolver(base_uri=OPENAPI_PATH.as_uri(), referrer=openapi, store=store))
+reconcile_validator = validator_for_ref(
+    OPENAPI_URI,
+    "#/paths/~1api~1agent-observatory~1reconcile/post/requestBody/content/application~1json/schema",
+    check_formats=False,
+)
 for accepted in ({"repository_id": "1"}, {"all": True}, {"repository_id": "1", "dry_run": True}):
     reconcile_validator.validate(accepted)
 for rejected in ({}, {"all": False}, {"repository_id": "1", "all": True}):
@@ -82,10 +96,10 @@ for name in ("RepositoryPage", "WorktreePage", "RunPage", "EventPage", "Telemetr
         fail(f"response component {name} is not strict")
 
 bad_detail = dict(fixture["run_detail"], unexpected=True)
-if Draft202012Validator({"$ref": "#/$defs/AgentRunDetail", "$defs": schema["$defs"]}).is_valid(bad_detail):
+if validator_for_ref(SCHEMA_URI, "#/$defs/AgentRunDetail", check_formats=False).is_valid(bad_detail):
     fail("AgentRunDetail accepts unknown fields")
 bad_page = {"limit": 50, "truncated": False}
-if Draft202012Validator({"$ref": "#/$defs/Page", "$defs": schema["$defs"]}).is_valid(bad_page):
+if validator_for_ref(SCHEMA_URI, "#/$defs/Page", check_formats=False).is_valid(bad_page):
     fail("Page accepts missing next_cursor")
 
 rust = (CONTRACTS / "agent-observatory-types.rs").read_text()

@@ -239,31 +239,51 @@ These rows are sourced from the design specs under `docs/superpowers/specs/`. Th
 | `poll_interval_secs` | — | u64 | `30` (unifi) / `15` (adguard) | tuning | restart-only | `>= 5` | |
 | `verify_tls` | — | bool | `true` | public | restart-only | — | |
 
-### `[notifications]` (Epic E — `…-digest-notifications-design.md`)
+### `[notifications]`
+
+Current Cortex uses a fixed set of built-in notification evaluators. Operator-defined
+`[[notifications.rules]]`, nested `[notifications.apprise]`, and nested
+`[notifications.digest]` blocks from the 2026-05-16 design are **not implemented**.
 
 | TOML key | Env var | Type | Default | Sens. | Reload | Validation | Notes |
 |---|---|---|---|---|---|---|---|
-| `enabled` | — | bool | `false` | public | restart-only | — | Master switch |
+| `enabled` | `CORTEX_NOTIFICATIONS_ENABLED` | bool | `false` | public | restart-only | when true, both Apprise fields below must be non-empty | Master switch |
+| `apprise_url` | `CORTEX_NOTIFICATIONS_APPRISE_URL` | string | `""` | public | restart-only | required when enabled | Apprise API base URL |
+| `apprise_urls` | `CORTEX_NOTIFICATIONS_APPRISE_URLS` | string[] | `[]` | **secret** | restart-only | at least one nonblank target when enabled | Delivery URLs may embed credentials/tokens |
+| `dispatcher_interval_secs` | — | u64 | `30` | tuning | restart-only | `> 0` | Outbox dispatcher interval |
+| `dedup_window_secs` | — | u64 | `900` | tuning | restart-only | — | Duplicate suppression window |
+| `digest_cron_local` | — | string | `"0 8 * * *"` | tuning | restart-only | parsed by digest scheduler | Daily digest schedule |
+| `max_retry_attempts` | — | u8 | `8` | tuning | restart-only | — | Dead-letter threshold |
 
-#### `[notifications.apprise]`
+#### `[notifications.evaluators]`
 
-| TOML key | Env var | Type | Default | Sens. | Reload | Notes |
-|---|---|---|---|---|---|---|
-| `base_url` | `CORTEX_NOTIFICATIONS_APPRISE_URL` | string | — | public | restart-only | Apprise API endpoint |
-| `tag` | — | string | `"cortex"` | public | restart-only | |
-| `default_targets` | — | string[] | `[]` | public | restart-only | |
+| TOML key | Env var | Type | Default | Validation / notes |
+|---|---|---|---|---|
+| `oom_kill` | — | bool | `true` | Built-in kernel OOM evaluator |
+| `container_die_nonzero` | — | bool | `true` | Built-in Docker exit evaluator |
+| `fail2ban_ban` | — | bool | `true` | Built-in fail2ban evaluator |
+| `authelia_mfa_fail` | — | bool | `true` | Built-in Authelia evaluator |
+| `disk_fill` | — | bool | `true` | Storage guardrail evaluator |
+| `ingest_queue_pressure` | — | bool | `true` | Ingest queue pressure evaluator |
+| `ingest_silence` | — | bool | `true` | Threshold below must be `> 0` when enabled |
+| `ingest_silence_threshold_secs` | — | u64 | `900` | Ingest silence threshold |
+| `heartbeat_silence` | `CORTEX_NOTIFICATIONS_HEARTBEAT_SILENCE` | bool | `true` | Threshold below must be `> 0` when enabled |
+| `heartbeat_silence_threshold_secs` | `CORTEX_NOTIFICATIONS_HEARTBEAT_SILENCE_SECS` | u64 | `600` | Heartbeat silence threshold |
+| `stream_silence` | `CORTEX_NOTIFICATIONS_STREAM_SILENCE` | bool | `true` | Threshold and source-kind list must be non-empty when enabled |
+| `stream_silence_threshold_secs` | `CORTEX_NOTIFICATIONS_STREAM_SILENCE_SECS` | u64 | `3600` | Stream silence threshold |
+| `stream_silence_kinds` | `CORTEX_NOTIFICATIONS_STREAM_SILENCE_KINDS` | string[] | continuous source kinds | Must contain a nonblank value when stream silence is enabled |
+| `silence_forget_secs` | `CORTEX_NOTIFICATIONS_SILENCE_FORGET_SECS` | u64 | `604800` | Must exceed the heartbeat/stream silence thresholds |
+| `evaluator_interval_secs` | — | u64 | `300` | `> 0` |
 
-#### `[[notifications.rules]]` (array-of-tables)
+#### Planned notification policy surfaces — **not implemented**
 
-`match` (`severity`, `app_name`, `query`), `trigger` (`window_secs`, `threshold`, `dedupe_key`), `deliver` (`targets`, `priority`). All values `public`/`tuning`, restart-only. See spec for full schema.
-
-#### `[notifications.quiet_hours]`
-
-`enabled`, `start` (HH:MM), `end` (HH:MM), `timezone`.
-
-#### `[notifications.digest]`
-
-`enabled`, `schedule_cron`, `targets`, `lookback_hours`.
+The rule schema in `notification-rules.schema.json`, configurable
+`[[notifications.rules]]`, and quiet-hours behavior document the earlier design only.
+Current Cortex does not parse operator-defined notification rules. `Config::load`
+explicitly rejects `[notifications.quiet_hours]`, `[notifications.apprise]`,
+`[notifications.digest]`, and `[[notifications.rules]]` so operators cannot mistake
+silently ignored legacy/design configuration for active behavior. The current digest
+schedule is the flat `notifications.digest_cron_local` field above.
 
 ### `[rag]` (Epic F — `…-rag-incidents-design.md`)
 

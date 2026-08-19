@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::{self, ErrorKind, Write as _};
 use std::path::Path;
-use std::process::Command;
 use std::time::Instant;
 
 use super::{
@@ -245,7 +244,7 @@ fn insert_process_optional(env: &mut BTreeMap<String, String>, key: &str) {
 }
 
 fn process_env_value(key: &str) -> Option<String> {
-    std::env::var(key)
+    crate::env::var(key)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty() && !value.contains(['\n', '\r']))
@@ -392,7 +391,7 @@ pub(crate) fn command_phase<const N: usize>(name: &'static str, args: [&str; N])
     } else {
         name
     };
-    match Command::new(program).args(args).output() {
+    match crate::env::command(program).args(args).output() {
         Ok(output) if output.status.success() => timer.finish(
             SetupStatus::Ok,
             String::from_utf8_lossy(&output.stdout)
@@ -425,14 +424,14 @@ pub(crate) fn ensure_network_phase(
         .and_then(|env| env.get("DOCKER_NETWORK"))
         .map(String::as_str)
         .unwrap_or("cortex");
-    let inspect = Command::new("docker")
+    let inspect = crate::env::command("docker")
         .args(["network", "inspect", network])
         .output();
     if inspect.as_ref().is_ok_and(|output| output.status.success()) {
         phases.push(timer.finish(SetupStatus::Ok, format!("{network} exists")));
         return;
     }
-    match Command::new("docker")
+    match crate::env::command("docker")
         .args(["network", "create", network])
         .output()
     {
@@ -458,7 +457,7 @@ pub(crate) fn run_compose_phase(compose_dir: &Path, env_path: &Path, args: &[&st
     } else {
         "compose-up"
     });
-    let mut command = Command::new("docker");
+    let mut command = crate::env::command("docker");
     command
         .arg("compose")
         .arg("--env-file")
@@ -499,7 +498,7 @@ pub(crate) fn health_phase(env: &Option<BTreeMap<String, String>>) -> SetupPhase
         .map(String::as_str)
         .unwrap_or("3100");
     let url = format!("http://127.0.0.1:{port}/health");
-    match Command::new("curl")
+    match crate::env::command("curl")
         .args(["-fsS", "--max-time", "5", &url])
         .output()
     {
@@ -538,7 +537,7 @@ pub(super) fn current_uid_gid() -> (String, String) {
 
 #[cfg(not(unix))]
 fn command_stdout<const N: usize>(program: &str, args: [&str; N]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = crate::env::command(program).args(args).output().ok()?;
     output
         .status
         .success()
