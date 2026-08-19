@@ -353,7 +353,7 @@ async fn artifact_evidence_actions_record_replay_query_and_reject_raw_bodies() {
         "revisionId": "revision-mcp-1",
         "contentDigest": digest,
         "correlationId": "corr-mcp-1",
-        "targetId": "target-dookie",
+        "targetId": "target-node-a",
         "operationRef": "mcp:tools/call",
         "outcome": "success",
         "metadata": {"message": "result sk-super-secret", "resultBytes": 91}

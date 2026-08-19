@@ -10,7 +10,7 @@ fn artifact_evidence_args_map_to_shared_request_without_transport_specific_field
         content_digest: Some(format!("sha256:{}", "a".repeat(64))),
         correlation_id: Some("corr-1".to_string()),
         request_id: Some("req-1".to_string()),
-        target_id: Some("target-dookie".to_string()),
+        target_id: Some("target-node-a".to_string()),
         source_system: Some("labby".to_string()),
         since: Some("2026-08-19T15:00:00.000Z".to_string()),
         until: Some("2026-08-19T17:00:00.000Z".to_string()),
@@ -24,7 +24,7 @@ fn artifact_evidence_args_map_to_shared_request_without_transport_specific_field
     assert_eq!(req.revision_id.as_deref(), Some("revision-1"));
     assert_eq!(req.correlation_id.as_deref(), Some("corr-1"));
     assert_eq!(req.request_id.as_deref(), Some("req-1"));
-    assert_eq!(req.target_id.as_deref(), Some("target-dookie"));
+    assert_eq!(req.target_id.as_deref(), Some("target-node-a"));
     assert_eq!(req.source_system.as_deref(), Some("labby"));
     assert_eq!(req.from.as_deref(), Some("2026-08-19T15:00:00.000Z"));
     assert_eq!(req.to.as_deref(), Some("2026-08-19T17:00:00.000Z"));

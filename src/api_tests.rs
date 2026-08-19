@@ -187,7 +187,7 @@ fn artifact_evidence_body(event_id: &str, artifact_id: &str) -> serde_json::Valu
         "contentDigest": format!("sha256:{}", "a".repeat(64)),
         "requestId": "req-rest-1",
         "correlationId": "corr-rest-1",
-        "targetId": "target-dookie",
+        "targetId": "target-node-a",
         "operationRef": "mcp:tools/call",
         "outcome": "success",
         "metadata": {
@@ -333,7 +333,7 @@ async fn artifact_evidence_rest_replay_conflict_and_malformed_metadata_fail_clos
     assert_eq!(replay["cortexLogId"], first_id);
 
     let mut conflict = body.clone();
-    conflict["targetId"] = serde_json::json!("target-steamy");
+    conflict["targetId"] = serde_json::json!("target-node-b");
     let (status, conflict_response) = post_json_with_admin(
         app.clone(),
         "/api/artifact-evidence",

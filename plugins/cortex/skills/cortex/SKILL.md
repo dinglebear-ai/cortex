@@ -59,6 +59,8 @@ A single MCP tool, `mcp__cortex__cortex`, dispatches on a required `action` argu
 | `similar_incidents` | FTS5 cluster search over historical system logs matching a query |
 | `incident_context` | Full log context bundle for a known time window |
 | `graph` | Resolve graph entities and return bounded one-hop neighborhoods with evidence |
+| `artifact_evidence` | Query bounded source-attributed artifact ecosystem evidence |
+| `artifact_evidence_record` | Append one bounded source-attributed artifact ecosystem evidence event (admin) |
 | `skill_events` | List extracted AI skill-invocation events |
 | `skill_incidents` | Groups negative-signal transcript hits following a skill invocation into scored incident candidates |
 | `skill_investigate` | Expands skill-usage incidents into deterministic evidence bundles, skill-first |

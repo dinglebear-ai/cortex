@@ -22,6 +22,7 @@
 #   mcp_call notifications_recent, mcp_call file_tails, mcp_call notifications_test,
 #   mcp_call llm_invocations,
 #   mcp_call similar_incidents, mcp_call ask_history, mcp_call incident_context, mcp_call graph,
+#   mcp_call artifact_evidence, mcp_call artifact_evidence_record,
 #   mcp_call skill_events, mcp_call skill_incidents, mcp_call skill_investigate,
 #   mcp_call mcp_events, mcp_call mcp_incidents, mcp_call mcp_investigate,
 #   mcp_call hook_events, mcp_call hook_incidents, mcp_call hook_investigate,
@@ -1133,6 +1134,36 @@ print('ok')
 " "$HELP_FILE" 2>/dev/null || echo "error")
 rm -f "$HELP_FILE"
 assert_eq "help: contains all action sections" "$HELP_VALID" "ok"
+
+# ── artifact evidence ─────────────────────────────────────────────────────────
+echo ""
+echo "Action: artifact_evidence"
+ARTIFACT_EVIDENCE=$(mcp_call artifact_evidence "limit=5" 2>&1)
+assert_no_error "artifact_evidence: bounded query no error" "$ARTIFACT_EVIDENCE"
+
+echo ""
+echo "Action: artifact_evidence_record"
+if mcp_admin_scope_available; then
+    ARTIFACT_SMOKE_ID="smoke-artifact-${RUN_ID}"
+    ARTIFACT_EVENT_ID="smoke-event-${RUN_ID}"
+    ARTIFACT_OBSERVED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    ARTIFACT_RECORD=$(mcp_call artifact_evidence_record \
+        "schemaVersion=dinglebear.cortex-artifact-evidence/v1" \
+        "eventId=${ARTIFACT_EVENT_ID}" \
+        "eventKind=runtime_call" \
+        "sourceSystem=smoke" \
+        "sourceIssuer=smoke:integration" \
+        "observedAt=${ARTIFACT_OBSERVED_AT}" \
+        "artifactId=${ARTIFACT_SMOKE_ID}" \
+        "outcome=success" 2>&1)
+    assert_no_error "artifact_evidence_record: append no error" "$ARTIFACT_RECORD"
+    ARTIFACT_QUERY=$(mcp_call artifact_evidence "artifactId=${ARTIFACT_SMOKE_ID}" "limit=5" 2>&1)
+    assert_no_error "artifact_evidence: recorded event query no error" "$ARTIFACT_QUERY"
+    ARTIFACT_QUERY_COUNT=$(printf '%s\n' "$ARTIFACT_QUERY" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('events', [])))" 2>/dev/null || echo 0)
+    assert_gte "artifact_evidence: recorded event query returns row" "$ARTIFACT_QUERY_COUNT" 1
+else
+    skip "artifact_evidence_record: requires cortex:admin (set CORTEX_STATIC_TOKEN_ADMIN=true or CORTEX_SMOKE_ADMIN=true)"
+fi
 
 # ── skill_events ─────────────────────────────────────────────────────────────
 echo ""

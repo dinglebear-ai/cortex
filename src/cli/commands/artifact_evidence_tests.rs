@@ -16,7 +16,7 @@ fn parses_artifact_evidence_query_flags() {
         "--request-id".into(),
         "req-1".into(),
         "--target-id".into(),
-        "target-dookie".into(),
+        "target-node-a".into(),
         "--source-system".into(),
         "labby".into(),
         "--since".into(),
@@ -37,7 +37,7 @@ fn parses_artifact_evidence_query_flags() {
     assert_eq!(args.revision_id.as_deref(), Some("revision-1"));
     assert_eq!(args.correlation_id.as_deref(), Some("corr-1"));
     assert_eq!(args.request_id.as_deref(), Some("req-1"));
-    assert_eq!(args.target_id.as_deref(), Some("target-dookie"));
+    assert_eq!(args.target_id.as_deref(), Some("target-node-a"));
     assert_eq!(args.source_system.as_deref(), Some("labby"));
     assert_eq!(args.limit, Some(25));
     assert!(args.json);

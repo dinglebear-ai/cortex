@@ -17,7 +17,7 @@ fn valid_input() -> ArtifactEvidenceInput {
         request_id: Some("req-123".to_string()),
         correlation_id: Some("corr-123".to_string()),
         causation_id: None,
-        target_id: Some("target-dookie".to_string()),
+        target_id: Some("target-node-a".to_string()),
         target_kind: Some("linux".to_string()),
         loadout_id: None,
         share_grant_id: None,

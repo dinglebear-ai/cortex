@@ -32,7 +32,7 @@ fn input(event_id: &str, artifact_id: &str) -> ArtifactEvidenceInput {
         request_id: Some("req-1".to_string()),
         correlation_id: Some("corr-1".to_string()),
         causation_id: None,
-        target_id: Some("target-dookie".to_string()),
+        target_id: Some("target-node-a".to_string()),
         target_kind: Some("linux".to_string()),
         loadout_id: None,
         share_grant_id: None,

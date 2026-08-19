@@ -28,7 +28,7 @@ fn sample_event(event_id: &str, observed_at: &str) -> NormalizedArtifactEvidence
         request_id: Some(format!("req-{event_id}")),
         correlation_id: Some("corr-123".to_string()),
         causation_id: None,
-        target_id: Some("target-dookie".to_string()),
+        target_id: Some("target-node-a".to_string()),
         target_kind: Some("linux".to_string()),
         loadout_id: None,
         share_grant_id: None,
@@ -115,7 +115,7 @@ fn list_filters_exact_evidence_dimensions_and_orders_newest_first() {
     newer.revision_id = Some("revision-999".to_string());
     newer.content_digest = Some(format!("sha256:{}", "b".repeat(64)));
     newer.correlation_id = Some("corr-999".to_string());
-    newer.target_id = Some("target-steamy".to_string());
+    newer.target_id = Some("target-node-b".to_string());
     record_artifact_evidence(&pool, older).unwrap();
     record_artifact_evidence(&pool, newer.clone()).unwrap();
 
@@ -145,7 +145,7 @@ fn list_filters_exact_evidence_dimensions_and_orders_newest_first() {
             ..Default::default()
         },
         ArtifactEvidenceParams {
-            target_id: Some("target-steamy".into()),
+            target_id: Some("target-node-b".into()),
             ..Default::default()
         },
         ArtifactEvidenceParams {

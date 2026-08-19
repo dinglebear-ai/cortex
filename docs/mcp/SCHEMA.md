@@ -26,7 +26,7 @@ wins.
 ## Current Actions
 
 cortex exposes one MCP tool named `cortex`. The required `action` argument
-selects one of these 56 actions:
+selects one of these 58 actions:
 
 | Action | Scope | Cost | Purpose |
 | --- | --- | --- | --- |
@@ -71,6 +71,8 @@ selects one of these 56 actions:
 | `similar_incidents` | `cortex:read` | moderate | FTS5 historical incident clusters |
 | `incident_context` | `cortex:read` | moderate | Window bundle: log aggregates, errors, AI sessions |
 | `graph` | `cortex:read` | moderate | Entity lookup and one-hop graph neighborhoods |
+| `artifact_evidence` | `cortex:read` | cheap | Query bounded source-attributed artifact ecosystem evidence |
+| `artifact_evidence_record` | `cortex:admin` | write | Append one bounded source-attributed artifact ecosystem evidence event |
 | `skill_events` | `cortex:read` | cheap | List extracted AI skill-invocation events |
 | `skill_incidents` | `cortex:read` | moderate | Grouped skill-usage incident candidates |
 | `skill_investigate` | `cortex:read` | expensive | Evidence bundles for skill-usage incidents, skill-first |
@@ -201,6 +203,8 @@ See [CORRELATION.md](CORRELATION.md) for the full behavior matrix.
 | `similar_incidents` | `query`, `hostname`, `app_name`, `severity_min`, `from`, `to`, `window_minutes`, `limit` |
 | `incident_context` | `from`, `to`, `hostname`, `app_name`, `query`, `severity_min`, `limit`; `query` applies FTS5 filtering to returned error logs |
 | `graph` | `mode=entity|around|explain|evidence`; entity/around/explain require exactly one target lookup strategy (`entity_id`, `entity_type` + `key`, or `alias_type` + `alias_key`); `around` accepts `depth=1` only; `explain` accepts `depth=1..3`; `evidence` requires `evidence_id`; optional `limit`, `evidence_sample_limit`, `payload_budget` |
+| `artifact_evidence` | Optional exact filters: `eventKind`, `artifactId`, `revisionId`, `contentDigest`, `correlationId`, `requestId`, `targetId`, `sourceSystem`, `since`/`until` (or `from`/`to` wire aliases), `limit`; all filters are validated by the shared service and responses are bounded |
+| `artifact_evidence_record` | Required: `schemaVersion=dinglebear.cortex-artifact-evidence/v1`, `eventId`, `eventKind`, `sourceSystem`, `sourceIssuer`, `observedAt`, plus at least one artifact/revision/digest/provenance subject; optional bounded opaque references, `outcome`, and secret-safe bounded `metadata`; raw artifact/tool/request/result bodies are rejected |
 | `file_tails` | `op` is required and enumerated as `list`, `add`, `remove`, `enable`, `disable`, or `status`; add requires only `path`, derives `id` and `tag` from the file name, and derives omitted `host` as stable synthetic owner `file-tail-<id>`; remove/enable/disable require `id`; optional `facility`, `severity`, `start_at_end` |
 
 ## Validation
