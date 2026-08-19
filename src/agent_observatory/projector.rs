@@ -2,12 +2,14 @@
 
 #[path = "projector_sources.rs"]
 mod sources;
+pub(crate) use sources::project_agent_source_with_cursor;
 pub use sources::{
     SourceProjectionDiagnostic, SourceProjectionOutcome, SourceProjectionSkipReason,
     project_agent_source,
 };
 #[path = "projector_commands.rs"]
 mod commands;
+pub(crate) use commands::project_command_log_with_cursor;
 pub use commands::{
     CommandProjectionDiagnostic, CommandProjectionOutcome, CommandProjectionSkipReason,
     project_command_log,
@@ -15,13 +17,13 @@ pub use commands::{
 
 use super::AGENT_OBSERVATORY_PROJECTION_VERSION;
 use super::classifier::{
-    TranscriptLogClassification, TranscriptLogProjection, TranscriptSkipDiagnostic,
-    classify_transcript_log,
+    CommandLogClassification, TranscriptLogClassification, TranscriptLogProjection,
+    TranscriptSkipDiagnostic, classify_command_log, classify_transcript_log,
 };
 use crate::db::agent_observatory::{
     AgentEventKind, AgentProjectionOutboxInput, AgentProjectionWriteInput,
     AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert, RunStatus, StreamEventName,
-    write_agent_projection,
+    advance_projection_cursor, write_agent_projection, write_agent_projection_with_cursor,
 };
 use crate::db::{DbPool, LogEntry};
 use anyhow::{Context, Result};
@@ -137,18 +139,86 @@ fn projection_input(source: &TranscriptLogProjection) -> Result<AgentProjectionW
     })
 }
 
-pub fn project_transcript_log(
+fn project_transcript_log_inner(
     pool: &DbPool,
     row: &LogEntry,
+    cursor: Option<(&str, &str)>,
 ) -> Result<TranscriptProjectionOutcome> {
     match classify_transcript_log(row) {
         TranscriptLogClassification::Skip(diagnostic) => {
             Ok(TranscriptProjectionOutcome::Skipped(diagnostic))
         }
-        TranscriptLogClassification::Project(source) => Ok(TranscriptProjectionOutcome::Projected(
-            Box::new(write_agent_projection(pool, &projection_input(&source)?)?),
-        )),
+        TranscriptLogClassification::Project(source) => {
+            let input = projection_input(&source)?;
+            let written = match cursor {
+                Some((source_name, cursor)) => {
+                    write_agent_projection_with_cursor(pool, &input, source_name, cursor)?
+                }
+                None => write_agent_projection(pool, &input)?,
+            };
+            Ok(TranscriptProjectionOutcome::Projected(Box::new(written)))
+        }
     }
+}
+
+pub fn project_transcript_log(
+    pool: &DbPool,
+    row: &LogEntry,
+) -> Result<TranscriptProjectionOutcome> {
+    project_transcript_log_inner(pool, row, None)
+}
+
+pub(crate) fn project_log_row(pool: &DbPool, row: &LogEntry) -> Result<bool> {
+    let transcript_projects = matches!(
+        classify_transcript_log(row),
+        TranscriptLogClassification::Project(_)
+    );
+    let command_projects = matches!(
+        classify_command_log(row),
+        CommandLogClassification::Project(_)
+    );
+    match (transcript_projects, command_projects) {
+        (true, true) => anyhow::bail!(
+            "log row {} matches both transcript and command projection contracts",
+            row.id
+        ),
+        (true, false) => {
+            project_transcript_log(pool, row)?;
+            Ok(true)
+        }
+        (false, true) => {
+            project_command_log(pool, row)?;
+            Ok(true)
+        }
+        (false, false) => Ok(false),
+    }
+}
+
+pub(crate) fn project_log_row_with_cursor(pool: &DbPool, row: &LogEntry) -> Result<()> {
+    let transcript_projects = matches!(
+        classify_transcript_log(row),
+        TranscriptLogClassification::Project(_)
+    );
+    let command_projects = matches!(
+        classify_command_log(row),
+        CommandLogClassification::Project(_)
+    );
+    let cursor = row.id.to_string();
+
+    match (transcript_projects, command_projects) {
+        (true, true) => anyhow::bail!(
+            "log row {} matches both transcript and command projection contracts",
+            row.id
+        ),
+        (true, false) => {
+            project_transcript_log_inner(pool, row, Some(("logs", &cursor)))?;
+        }
+        (false, true) => {
+            project_command_log_with_cursor(pool, row, "logs", &cursor)?;
+        }
+        (false, false) => advance_projection_cursor(pool, "logs", &cursor)?,
+    }
+    Ok(())
 }
 
 #[cfg(test)]

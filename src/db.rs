@@ -16,6 +16,7 @@ mod hook_events;
 mod hook_incident_evidence;
 mod hook_incidents;
 mod ingest;
+pub(crate) use ingest::{TRANSIENT_SQLITE_RETRY_DELAYS_MS, is_transient_sqlite_lock};
 mod ingest_health;
 pub(crate) mod llm_invocations;
 mod maintenance;
@@ -24,6 +25,7 @@ mod mcp_incident_evidence;
 mod mcp_incidents;
 mod models;
 pub(crate) mod notifications;
+pub mod otlp_traces;
 mod pool;
 mod queries;
 pub(crate) use queries::page_agent_projection_logs;
@@ -79,9 +81,10 @@ pub use maintenance::{
     SystemDiskSpaceProbe, checkpoint_wal_and_incremental_vacuum, db_full_vacuum,
     db_incremental_vacuum, db_integrity_check, db_wal_checkpoint, enforce_storage_budget,
     enforce_storage_budget_with_state, exceeds_trigger, finish_maintenance_job,
-    get_maintenance_job, get_storage_metrics, insert_maintenance_job, physical_size_bytes,
-    purge_by_tag_window, purge_old_heartbeats, purge_old_llm_invocations, purge_old_logs,
-    wal_checkpoint_complete,
+    get_maintenance_job, get_storage_metrics, insert_maintenance_job,
+    insert_maintenance_job_with_result, physical_size_bytes, purge_by_tag_window,
+    purge_old_heartbeats, purge_old_llm_invocations, purge_old_logs,
+    update_maintenance_job_progress, wal_checkpoint_complete,
 };
 pub(crate) use mcp_events::insert_mcp_events_in_tx;
 pub use mcp_events::{

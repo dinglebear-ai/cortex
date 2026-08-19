@@ -39,7 +39,7 @@ pub fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 47;
+pub const KNOWN_SCHEMA_VERSION: i64 = 48;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -2929,6 +2929,48 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              COMMIT;",
         )?;
         tracing::info!("Migration 47: OTLP metric points");
+    }
+
+    // Migration 48: terminal-time paging for Agent Observatory LLM source rows.
+    // Running invocations are mutable; paging by started_at can permanently skip
+    // an older invocation that completes after the cursor has passed newer rows.
+    if !migration_applied(&conn, 48)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+
+             CREATE INDEX IF NOT EXISTS idx_llm_invocations_finished_id
+                 ON llm_invocations(finished_at, id)
+                 WHERE finished_at IS NOT NULL;
+
+             UPDATE agent_projection_cursors SET source_name = 'mcp_events'
+              WHERE cursor_type = 'source' AND source_name = 'mcp'
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_projection_cursors
+                     WHERE cursor_type = 'source' AND source_name = 'mcp_events'
+                );
+             UPDATE agent_projection_cursors SET source_name = 'hook_events'
+              WHERE cursor_type = 'source' AND source_name = 'hook'
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_projection_cursors
+                     WHERE cursor_type = 'source' AND source_name = 'hook_events'
+                );
+             UPDATE agent_projection_cursors SET source_name = 'skill_events'
+              WHERE cursor_type = 'source' AND source_name = 'skill'
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_projection_cursors
+                     WHERE cursor_type = 'source' AND source_name = 'skill_events'
+                );
+             UPDATE agent_projection_cursors SET source_name = 'llm_invocations'
+              WHERE cursor_type = 'source' AND source_name = 'llm'
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_projection_cursors
+                     WHERE cursor_type = 'source' AND source_name = 'llm_invocations'
+                );
+
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (48);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 48: indexed terminal LLM invocation paging");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

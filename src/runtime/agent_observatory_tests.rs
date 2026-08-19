@@ -2,12 +2,22 @@ use super::*;
 use crate::db::agent_observatory::{
     advance_projection_cursor, projection_cursor, projection_health,
 };
+use crate::db::{LogBatchEntry, insert_logs_batch};
 
 fn pool() -> (tempfile::TempDir, Arc<DbPool>) {
     let directory = tempfile::tempdir().unwrap();
     let storage = crate::config::StorageConfig::for_test(directory.path().join("runtime.db"));
     let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
     (directory, pool)
+}
+
+#[test]
+fn projector_sqlite_retry_backoff_reuses_ingest_policy_and_caps() {
+    assert_eq!(projector_retry_delay_ms(1), 25);
+    assert_eq!(projector_retry_delay_ms(2), 100);
+    assert_eq!(projector_retry_delay_ms(3), 250);
+    assert_eq!(projector_retry_delay_ms(4), 250);
+    assert_eq!(projector_retry_delay_ms(100), 250);
 }
 
 #[test]
@@ -60,11 +70,101 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         })
         .await
         .unwrap();
-        for source in ["mcp", "hook", "skill", "llm"] {
+        for source in [
+            "mcp_events",
+            "hook_events",
+            "skill_events",
+            "llm_invocations",
+        ] {
             assert_eq!(projection_cursor(&pool, source).unwrap(), "");
         }
-        let health = projection_health(&pool, "projector").unwrap().unwrap();
-        assert!(health.contains("oversized_first_rows=1"));
+        // Parallel DB tests share Cortex's process-wide SQLite write lock; under
+        // suite load health persistence can legitimately queue behind other writers.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if projection_health(&pool, "projector")
+                    .unwrap()
+                    .is_some_and(|health| health.contains("oversized_first_rows=1"))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        token.cancel();
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+}
+
+#[test]
+fn projector_wakes_on_committed_log_ingest_before_fallback_poll() {
+    let (_directory, pool) = pool();
+    let config = AgentObservatoryConfig {
+        enabled: true,
+        projector_poll_ms: 60_000,
+        ..AgentObservatoryConfig::default()
+    };
+    let token = CancellationToken::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if projection_health(&pool, "projector").unwrap().is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        insert_logs_batch(
+            &pool,
+            &[LogBatchEntry {
+                timestamp: "2026-08-09T12:00:00.000Z".to_string(),
+                hostname: "test-host".to_string(),
+                facility: None,
+                severity: "info".to_string(),
+                app_name: Some("wake-test".to_string()),
+                process_id: None,
+                message: "wake test row".to_string(),
+                raw: "wake test row".to_string(),
+                source_ip: "test://wake".to_string(),
+                docker_checkpoint: None,
+                ai_tool: None,
+                ai_project: None,
+                ai_session_id: None,
+                ai_transcript_path: None,
+                metadata_json: None,
+                http_status: None,
+                auth_outcome: None,
+                dns_blocked: None,
+                event_action: None,
+                parse_error: None,
+            }],
+        )
+        .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if projection_cursor(&pool, "logs").unwrap() == "1" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("committed ingest should wake projector without waiting for fallback poll");
+
         token.cancel();
         tokio::time::timeout(Duration::from_secs(1), handle)
             .await
@@ -148,12 +248,14 @@ fn projector_failure_is_queryable_retries_without_advancing_and_stops_after_canc
         .unwrap();
     runtime.block_on(async {
         let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let health = projection_health(&pool, "projector")
                     .unwrap()
                     .unwrap_or_default();
                 if health.contains("\"status\":\"error\"") && health.contains("\"attempts\":2") {
+                    assert!(health.contains("retry_safe=false"));
+                    assert!(health.contains("retry_delay_ms=0"));
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -163,7 +265,7 @@ fn projector_failure_is_queryable_retries_without_advancing_and_stops_after_canc
         .unwrap();
         assert_eq!(projection_cursor(&pool, "logs").unwrap(), "invalid");
         token.cancel();
-        tokio::time::timeout(Duration::from_secs(1), handle)
+        tokio::time::timeout(Duration::from_secs(5), handle)
             .await
             .unwrap()
             .unwrap();

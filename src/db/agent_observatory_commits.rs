@@ -1,8 +1,9 @@
 //! Transactional exact Git commit persistence.
 
-use super::GitCommitRow;
+use super::{GitCommitRow, RepositoryObservationRow, RepositoryReconcileResult};
+use crate::db::pool::DbPool;
 #[cfg(test)]
-use crate::db::pool::{DbPool, write_lock};
+use crate::db::pool::write_lock;
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use rusqlite::TransactionBehavior;
@@ -14,6 +15,13 @@ const COMMIT_COLUMNS: &str =
     "id, repository_id, sha, parent_shas_json, author_name, author_email_hash,
      authored_at, committed_at, subject, changed_files, insertions, deletions,
      changed_paths_json, first_observed_at, last_observed_at, reachable, metadata_json";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GitRepositoryReconcileResult {
+    pub topology: RepositoryReconcileResult,
+    pub commits: Vec<GitCommitRow>,
+    pub observations: Vec<RepositoryObservationRow>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitCommitReachabilityUpdate {
@@ -295,7 +303,6 @@ pub fn get_git_commit(
     commit_by_sha(&conn, repository_id, sha)
 }
 
-#[cfg(test)]
 pub fn list_git_commits(pool: &DbPool, repository_id: i64) -> Result<Vec<GitCommitRow>> {
     if repository_id <= 0 {
         bail!("repository_id must be positive");

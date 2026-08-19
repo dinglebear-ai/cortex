@@ -198,7 +198,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 Required proof:
 
-- fresh schema and schema-43 upgrade end at 47
+- fresh schema and schema-43 upgrade end at 48
 - repeated open is unchanged
 - `PRAGMA foreign_key_check` returns no rows
 - `PRAGMA integrity_check` returns `ok`

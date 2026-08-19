@@ -1,8 +1,12 @@
-use super::{SourceProjectionOutcome, SourceProjectionSkipReason, project_agent_source};
+use super::{
+    SourceProjectionOutcome, SourceProjectionSkipReason, project_agent_source,
+    project_agent_source_with_cursor,
+};
 use crate::config::StorageConfig;
 use crate::db::agent_observatory::{
     AgentEventKind, AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow, AgentSkillSourceRow,
-    AgentSourceRecord, RepositoryUpsert, RepositoryWorktreeUpsert, reconcile_repository,
+    AgentSourceRecord, RepositoryUpsert, RepositoryWorktreeUpsert, projection_cursor,
+    reconcile_repository,
 };
 use crate::db::{LogBatchEntry, init_pool, insert_logs_batch};
 
@@ -165,6 +169,119 @@ fn records(log_id: i64) -> Vec<AgentSourceRecord> {
             metadata_json: Some("{}".to_string()),
         }),
     ]
+}
+
+#[test]
+fn cursor_aware_llm_replay_consumes_legacy_projected_event_without_collision() {
+    let (pool, _dir, log_id) = setup();
+    let source_records = records(log_id);
+
+    let SourceProjectionOutcome::Projected(_) =
+        project_agent_source(&pool, &source_records[0]).unwrap()
+    else {
+        panic!("MCP fixture should seed the owning run");
+    };
+
+    let AgentSourceRecord::Llm(mut running) = source_records[3].clone() else {
+        unreachable!("fixture index 3 is the LLM source");
+    };
+    running.finished_at = None;
+    running.duration_ms = None;
+    running.status = "running".to_string();
+    running.output_bytes = None;
+    let running_record = AgentSourceRecord::Llm(running);
+    let SourceProjectionOutcome::Projected(first) =
+        project_agent_source(&pool, &running_record).unwrap()
+    else {
+        panic!("legacy running LLM source should project");
+    };
+    assert!(first.event_inserted);
+
+    assert_eq!(projection_cursor(&pool, "llm_invocations").unwrap(), "");
+    let terminal_record = source_records[3].clone();
+    let terminal_cursor = terminal_record.next_cursor();
+    let outcome = project_agent_source_with_cursor(
+        &pool,
+        &terminal_record,
+        "llm_invocations",
+        &terminal_cursor,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        SourceProjectionOutcome::Skipped(super::SourceProjectionDiagnostic {
+            source_kind: crate::db::agent_observatory::AgentSourceKind::Llm,
+            source_id: "llm-one".to_string(),
+            reason: SourceProjectionSkipReason::AlreadyProjected,
+        })
+    );
+    assert_eq!(
+        projection_cursor(&pool, "llm_invocations").unwrap(),
+        terminal_cursor
+    );
+
+    let conn = pool.get().unwrap();
+    let llm_events: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_run_events
+              WHERE source_kind = 'llm_invocations' AND source_id = 'llm-one'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(llm_events, 1);
+}
+
+#[test]
+fn cursor_aware_final_llm_replay_preserves_collision_detection() {
+    let (pool, _dir, log_id) = setup();
+    let source_records = records(log_id);
+
+    let SourceProjectionOutcome::Projected(_) =
+        project_agent_source(&pool, &source_records[0]).unwrap()
+    else {
+        panic!("MCP fixture should seed the owning run");
+    };
+
+    let terminal_record = source_records[3].clone();
+    let SourceProjectionOutcome::Projected(first) =
+        project_agent_source(&pool, &terminal_record).unwrap()
+    else {
+        panic!("terminal LLM source should project");
+    };
+    assert!(first.event_inserted);
+
+    let AgentSourceRecord::Llm(mut changed) = terminal_record.clone() else {
+        unreachable!("fixture index 3 is the LLM source");
+    };
+    changed.output_bytes = Some(41);
+    let changed_record = AgentSourceRecord::Llm(changed);
+    let changed_cursor = changed_record.next_cursor();
+    let error = project_agent_source_with_cursor(
+        &pool,
+        &changed_record,
+        "llm_invocations",
+        &changed_cursor,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("event identity conflict"));
+    assert_eq!(projection_cursor(&pool, "llm_invocations").unwrap(), "");
+
+    let terminal_cursor = terminal_record.next_cursor();
+    let SourceProjectionOutcome::Projected(replay) = project_agent_source_with_cursor(
+        &pool,
+        &terminal_record,
+        "llm_invocations",
+        &terminal_cursor,
+    )
+    .unwrap() else {
+        panic!("exact final LLM replay should use the strict idempotent writer");
+    };
+    assert!(!replay.event_inserted);
+    assert_eq!(
+        projection_cursor(&pool, "llm_invocations").unwrap(),
+        terminal_cursor
+    );
 }
 
 #[test]

@@ -101,7 +101,7 @@ Each task must stay narrow. When a task grows beyond 10 minutes because of a new
 ### Checkpoint A after AO-018 and ENV-004
 
 - contract validator green
-- schema 47 fresh and schema-43 upgrade green
+- schema 48 fresh and schema-43 upgrade green
 - new transcript-forward variable is authoritative and generated everywhere
 - legacy alias precedence, warnings, doctor migration, and local watcher independence are proven
 - no production feature starts yet
@@ -136,7 +136,7 @@ Each task must stay narrow. When a task grows beyond 10 minutes because of a new
 
 The final real-binary acceptance fixture must perform this end-to-end sequence:
 
-1. start Cortex against a schema-43 fixture and upgrade to 47
+1. start Cortex against a schema-43 fixture and upgrade to 48
 2. create a temporary repository and linked worktree
 3. start a synthetic Claude session with transcript, command, hook, MCP, OTLP log/span/metric evidence
 4. make two exact commits and change branch state

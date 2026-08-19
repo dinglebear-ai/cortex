@@ -66,6 +66,9 @@ pub fn insert_skill_events(pool: &DbPool, events: &[SkillEventInsert]) -> Result
     let tx = conn.transaction()?;
     let inserted = insert_skill_events_in_tx(&tx, events)?;
     tx.commit()?;
+    if inserted > 0 {
+        super::agent_observatory::notify_projection_work();
+    }
     Ok(inserted)
 }
 

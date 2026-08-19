@@ -1,15 +1,16 @@
 use super::{
     AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionWriteFault,
     AgentProjectionWriteInput, AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
-    write_agent_projection, write_agent_projection_with_fault,
+    write_agent_projection, write_agent_projection_with_cursor,
+    write_agent_projection_with_cursor_and_fault, write_agent_projection_with_fault,
 };
 use crate::agent_observatory::identity::{actor_key, event_key, run_key};
 use crate::config::StorageConfig;
 use crate::db::agent_observatory::{
     AgentEventKind, EvidenceTrustLevel, GitCommitUpsert, RepositoryObservationInput,
     RepositoryObservationKind, RepositoryUpsert, RepositoryWorktreeUpsert, RunStatus,
-    StreamEventName, get_repository_by_key, reconcile_git_repository_snapshot_with,
-    reconcile_repository,
+    StreamEventName, get_repository_by_key, projection_cursor,
+    reconcile_git_repository_snapshot_with, reconcile_repository,
 };
 use crate::db::init_pool;
 use rusqlite::Connection;
@@ -160,12 +161,9 @@ fn injected_failure_after_event_insert_rolls_back_everything_and_retry_is_idempo
     let (_dir, pool) = setup();
     let input = input();
 
-    let error = write_agent_projection_with_fault(
-        &pool,
-        &input,
-        AgentProjectionWriteFault::AfterEventInsert,
-    )
-    .unwrap_err();
+    let error =
+        write_agent_projection_with_fault(&pool, &input, AgentProjectionWriteFault::EventInsert)
+            .unwrap_err();
     assert!(error.to_string().contains("after event insert"));
     assert_projection_counts(&pool, [0, 0, 0, 0, 0]);
 
@@ -212,6 +210,57 @@ fn injected_failure_after_event_insert_rolls_back_everything_and_retry_is_idempo
     );
     assert_eq!(replay.event.id, written.event.id);
     assert!(replay.outbox.is_none());
+    assert_projection_counts(&pool, [1, 1, 1, 1, 1]);
+}
+
+#[test]
+fn existing_projection_cursor_read_does_not_require_sqlite_write_lock() {
+    let (dir, pool) = setup();
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "");
+
+    let blocker = Connection::open(dir.path().join("projection.db")).unwrap();
+    blocker.busy_timeout(std::time::Duration::ZERO).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "");
+
+    blocker.execute_batch("ROLLBACK").unwrap();
+}
+
+#[test]
+fn projection_and_source_cursor_commit_atomically_and_replay_without_duplicates() {
+    let (_dir, pool) = setup();
+    let input = input();
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "");
+
+    let error = write_agent_projection_with_cursor_and_fault(
+        &pool,
+        &input,
+        "logs",
+        "42",
+        AgentProjectionWriteFault::CursorAdvance,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("after cursor advance"));
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "");
+    assert_projection_counts(&pool, [0, 0, 0, 0, 0]);
+
+    let error = write_agent_projection_with_cursor_and_fault(
+        &pool,
+        &input,
+        "logs",
+        "42",
+        AgentProjectionWriteFault::Commit,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("after commit"));
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "42");
+    assert_projection_counts(&pool, [1, 1, 1, 1, 1]);
+
+    let replay = write_agent_projection_with_cursor(&pool, &input, "logs", "42").unwrap();
+    assert!(!replay.materialized_state_changed);
+    assert!(!replay.event_inserted);
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "42");
     assert_projection_counts(&pool, [1, 1, 1, 1, 1]);
 }
 

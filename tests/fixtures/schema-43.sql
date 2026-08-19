@@ -16,6 +16,36 @@ WITH RECURSIVE versions(version) AS (
 INSERT INTO schema_migrations(version, applied_at)
 SELECT version, '2026-01-01T00:00:00.000Z' FROM versions;
 
+-- Migration 37 is already marked applied in a schema-43 database, so its
+-- durable audit table must be present even though this fixture keeps no LLM rows.
+CREATE TABLE llm_invocations (
+    id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    caller_surface TEXT NOT NULL,
+    action TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT,
+    program TEXT,
+    incident_id TEXT,
+    ai_tool TEXT,
+    ai_project TEXT,
+    ai_session_id TEXT,
+    evidence_counts_json TEXT,
+    prompt_bytes INTEGER,
+    output_bytes INTEGER,
+    status TEXT NOT NULL,
+    error TEXT,
+    metadata_json TEXT
+);
+CREATE INDEX idx_llm_invocations_started
+    ON llm_invocations(started_at);
+CREATE INDEX idx_llm_invocations_action_started
+    ON llm_invocations(action, started_at);
+CREATE INDEX idx_llm_invocations_status_started
+    ON llm_invocations(status, started_at);
+
 CREATE TABLE logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,

@@ -449,6 +449,18 @@ GATE: transcript-derived project paths create verified transcript_project_path e
 REGRESSION: all 76 Agent Observatory tests passed, including source paging, replay idempotence, VACUUM-stable cursors, provider identity preservation, projection transactions, schema migrations, attribution, lifecycle, command, shell, and transcript paths
 GATE: workspace Clippy passed with -D warnings; cargo fmt --check, git diff --check, 500-line module-size gate, Agent Observatory JSON/SQL/TypeScript/placeholder contracts, and Cargo.toml/Cargo.lock no-diff gate passed
 
+## AO-039 Implement transactional source cursors and projector loop
+commit/worktree SHA: 0ebb3d2b (task started)
+RED: crash/replay, wakeup, bounded-page, retry-health, late LLM completion, and cursor migration tests exercised the projector before source materialization and durable cursor advancement were one atomic operation
+RED result: source skips could leave cursors pinned, projector retries did not distinguish retry-safe SQLite lock failures, LLM started-at paging could skip an invocation that completed late, and steady-state cursor reads performed a hidden SQLite write
+GREEN: source projection and cursor advancement now commit in the same transaction; committed ingest wakes the projector with poll fallback; retry-safe SQLite busy/locked failures reuse Cortex's bounded 25/100/250 ms backoff while persistent faults fall back to the configured poll interval
+GREEN result: terminal LLM rows page by finished_at plus durable invocation ID; migration 48 adds the supporting partial index and preserves legacy source cursor names; legacy running LLM events are consumed without weakening immutable collision detection for final events
+FIX: existing projection-cursor reads are read-only after one-time initialization, removing an INSERT OR IGNORE from every projector/status read and eliminating unnecessary global SQLite write-lock pressure
+GATE: source pages remain bounded to 1..=500 rows and the runtime enforces the configured byte cap, cancellation leaves durable cursors consistent, non-retryable failures do not advance cursors, and committed log ingestion wakes before the long fallback poll
+REGRESSION: definitive Agent Observatory focused binary ran 95 tests with 0 failures; projection DB suite ran 10 tests with 0 failures; Git observer suite ran 62 tests with 0 failures; migration-48 upgrade regression passed
+GATE: workspace Clippy passed with -D warnings; cargo fmt --all -- --check, git diff --check, production Rust 500-line module-size gate, Agent Observatory golden contracts, and Cargo.toml/Cargo.lock no-diff gate passed
+NOTES: schema head is now 48. The old schema-47 plan references were updated where they described the current/final schema; historical RED/GREEN proof entries remain historical.
+
 ## PR-160 final adversarial remediation
 RED: beads `syslog-mcp-kq015`, `syslog-mcp-f5p26`, `syslog-mcp-de0oi`, and `syslog-mcp-ce3tq`
 RED result: equal-timestamp mutable projections could oscillate, older metadata replay could report a change and emit outbox, hostname provenance was not scrubbed, and an oversized first page row wedged its cursor while reporting healthy.
@@ -458,3 +470,41 @@ REGRESSION: Agent Observatory focused suite, runtime worker suite, private-ident
 REGRESSION result: 86 focused tests passed; full nextest ran 2,930 tests with 2 skipped, one slow, and no failures.
 FILES: `src/db/agent_observatory_projection_sql.rs`, `src/db/agent_observatory_projection_tests.rs`, `src/agent_observatory/classifier.rs`, `src/agent_observatory/classifier_tests.rs`, `src/runtime/agent_observatory.rs`, `src/runtime/agent_observatory_tests.rs`
 NOTES: Equal timestamps are resolved by a stable mutable-state fingerprint, not arrival order. Byte limits allow exactly one oversized first row so cursor progress remains bounded and observable.
+
+## AO-040 Add resumable backfill and exact Git commit attribution
+commit/worktree SHA: dcd69957 (task started)
+RED: no durable resumable backfill/job progress, no run-to-commit persistence, and no post-reconcile exact commit attribution path; legacy HEAD observations also lacked enough transition detail to repair multi-commit history deterministically
+RED result: new backfill and attribution fixtures initially had no engine/DB surfaces; early integration runs exposed live-cursor fixture setup and canonical provider-field mismatches before the intended invariants could be proven
+GREEN: added one-snapshot fixed high-water capture, independent per-source maintenance-job cursors, bounded resumable pages that never mutate live projector cursors, exact new/displaced SHA persistence on HEAD observations, legacy commit-graph range reconstruction, and scorer-backed run-to-commit relations with provenance
+GREEN result: interrupt/reopen/resume matched uninterrupted materialized state; post-high-water live rows stayed owned by the live projector; two exact Git commits linked at verified 0.98 command-cwd confidence, replay remained idempotent, relation deletion was repaired by backfill, and rewind preserved historical links
+FIX: adversarial review added repository-consistency validation for worktree/commit relations, prevented future run/evidence activity from retroactively activating stale historical runs, made high-water capture one SQLite read snapshot, fixed the runtime health/cursor assertion race, and split DB types into ownership sidecars instead of weakening the 500-line production-module gate
+REGRESSION: final harness ran 102 Agent Observatory tests, 63 Git observer tests, and 10 projection DB tests with 0 failures; focused attribution ran 4/4, backfill 3/3, runtime health 1/1, and real-Git attribution/backfill repair 1/1
+GATE: workspace Clippy passed with -D warnings; cargo fmt --all -- --check, git diff --check, full 500-line Rust production-module gate, Agent Observatory golden contracts, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-041 Extract shared OTLP normalization
+commit/worktree SHA: d356739c (task started)
+RED: OTLP provider/session/project normalization lived only inside the log adapter, omitted `gen_ai.conversation.id`, had no `gen_ai.agent.name` or service fallback, and exposed no reusable deterministic bounded-attribute representation for traces/metrics
+GREEN: extracted `src/otlp/normalization.rs` with the frozen signal-before-resource session/project precedence, explicit/agent/service tool precedence, known Claude/Codex/Gemini aliases, Unicode-safe idempotent `unknown:` normalization, and shared secret-redacting bounded metadata conversion
+COMPAT: `/v1/logs` intentionally retains its prior explicit-only `ai_tool` behavior and historical 128-field nested log-attribute view, while the shared signal representation supports the 256-attribute Agent Observatory contract for upcoming spans/metrics
+FIX: adversarial review made over-limit attribute selection deterministic with `BTreeMap`, bounded total normalized tool length rather than only source length, preserved unknown attributes while redacting sensitive values, generalized the metadata sanitizer to an explicit field cap, and removed a future-only dead helper instead of suppressing `dead_code`
+PROOF: 8 shared-normalization tests, 22 existing/new OTLP log-entry compatibility tests, and 5 metadata-sanitizer tests passed; the complete OTLP library regression ran 50 tests with 0 failures
+GATE: workspace Clippy passed with `-D warnings`; `cargo fmt --all -- --check`, `git diff --check`, full 500-line production Rust module-size gate, Agent Observatory golden contracts, and Cargo.toml/Cargo.lock no-diff gate passed
+
+## AO-042 Decode one OTLP trace span
+commit/worktree SHA: c5958c93 (task started)
+RED: the pinned `opentelemetry-proto` dependency exposed logs only, migration-46 had a row scaffold but no write-input type, and there was no trace-span converter for IDs/times/status/provider/resource/scope normalization
+GREEN: enabled the already-pinned 0.32 `trace` message feature, added `OtelSpanInput`, and implemented a pure one-span converter with exact 16-byte trace / 8-byte span IDs, optional parent ID, checked nanosecond-to-SQLite integer conversion, duration, flags, raw enum integers, status, shared provider/session/project normalization, and bounded resource/scope/span metadata
+FIX: adversarial review moved core ID/time rejection ahead of JSON work, rejects all-zero IDs and over-limit resource/scope/span attributes with typed errors, preserves unknown future span-kind/status integer values, enforces serialized metadata and API-shaped string bounds, and leaves `content_scrubbed=false` until AO-043 applies the configurable prompt/tool/user/path privacy policy rather than falsely claiming full scrubbing
+COMPAT: events/links remain empty arrays by design because AO-043 owns their bounded/privacy-aware serialization; the authenticated `/v1/traces` route remains the existing not-supported response until AO-045, proven by the broad OTLP regression
+PROOF: 7 focused trace normalization tests passed, including exact IDs/times/status/resource/scope context, root optionals, malformed/zero IDs, integer/time failures, attribute caps, future enums, metadata limits, and privacy-state truthfulness; the complete trace-enabled OTLP regression ran 57 tests with 0 failures
+GATE: locked workspace Clippy passed with `-D warnings`; `cargo fmt --all -- --check`, `git diff --check`, full 500-line production Rust module-size gate, and Agent Observatory golden contracts passed; Cargo.lock changed only because enabling the pinned trace feature activates its required transitive feature dependencies
+
+## AO-043 Preserve span events, links, and OTLP privacy
+commit/worktree SHA: 7c5ff1c9 (task started)
+RED: AO-042 intentionally discarded event/link arrays, producer dropped counts were not materialized, and arbitrary GenAI prompt/tool/user/path content plus structural span strings could bypass the Agent Observatory privacy policy
+GREEN: added ordered bounded event/link serialization with strict linked trace/span IDs, flags, timestamps, tracestate, per-item dropped-attribute counts, producer dropped-count diagnostics, and explicit Cortex byte-cap omission diagnostics; added a shared OTLP privacy layer driven by `AgentObservatoryPrivacyConfig`
+PRIVACY: current GenAI prompt/output/system and tool-call argument/result keys default to redacted, user identity defaults redacted while email may retain configured SHA-256 pseudonyms, command/path fields respect their switches, nested arrays/kvlists recurse through the same policy, and generic Cortex secret-pattern/key scrubbing always remains active even when content is explicitly opted in
+FIX: adversarial review made nested-array truncation explicit, deterministic attribute retention remains BTree-ordered, validates event/link attribute caps and every linked ID even after byte truncation begins, and secret-scrubs structural strings including span/status/tracestate, event names, link tracestate, service/scope strings, schema URLs, and entity-ref strings before setting `content_scrubbed=true`
+PROOF: 6 focused privacy tests and 12 trace tests passed; ordered multi-event/link fixtures preserved exact fields/order, producer and Cortex truncation diagnostics were exact, invalid links/caps rejected safely, path/content opt-ins behaved as configured, and structural-secret negative fixtures proved no planted bearer-token values survived
+REGRESSION: complete OTLP library filter ran 68 tests with 0 failures on the definitive locked harness
+GATE: locked workspace Clippy passed with `-D warnings`; canonical workspace rustfmt, full 500-line production Rust module-size gate, Agent Observatory golden contracts, `git diff --check`, and no Cargo.toml/Cargo.lock drift from AO-042 all passed

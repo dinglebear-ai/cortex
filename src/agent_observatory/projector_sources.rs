@@ -11,8 +11,9 @@ use crate::db::agent_observatory::{
     AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionRunMatch,
     AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunRow,
     AgentRunUpsert, AgentSourceKind, AgentSourceRecord, AgentWorktreeEvidenceUpsert,
-    EvidenceTrustLevel, RunStatus, StreamEventName, find_active_projection_worktree,
-    find_unique_projection_run_by_session, write_agent_projection,
+    EvidenceTrustLevel, RunStatus, StreamEventName, advance_projection_cursor,
+    find_active_projection_worktree, find_unique_projection_run_by_session,
+    projection_event_has_summary, write_agent_projection, write_agent_projection_with_cursor,
 };
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
@@ -23,6 +24,7 @@ pub enum SourceProjectionSkipReason {
     MissingTool,
     MissingSession,
     MissingHostname,
+    AlreadyProjected,
     NoMatchingRun,
     AmbiguousMatchingRun,
 }
@@ -246,18 +248,62 @@ fn projection_input(
     }))
 }
 
+fn project_agent_source_inner(
+    pool: &DbPool,
+    record: &AgentSourceRecord,
+    cursor: Option<(&str, &str)>,
+) -> Result<SourceProjectionOutcome> {
+    let source = projection_parts(record);
+    let terminal_llm_replay = matches!(
+        record,
+        AgentSourceRecord::Llm(row)
+            if row.finished_at.is_some() && !row.status.eq_ignore_ascii_case("running")
+    );
+    if terminal_llm_replay
+        && let Some((source_name, cursor)) = cursor
+        && projection_event_has_summary(
+            pool,
+            source.source_kind,
+            &source.source_id,
+            source.projection_variant,
+            "running",
+        )?
+    {
+        advance_projection_cursor(pool, source_name, cursor)?;
+        return Ok(skip(&source, SourceProjectionSkipReason::AlreadyProjected));
+    }
+    let input = match projection_input(pool, &source)? {
+        Ok(input) => input,
+        Err(reason) => {
+            if let Some((source_name, cursor)) = cursor {
+                advance_projection_cursor(pool, source_name, cursor)?;
+            }
+            return Ok(skip(&source, reason));
+        }
+    };
+    let written = match cursor {
+        Some((source_name, cursor)) => {
+            write_agent_projection_with_cursor(pool, &input, source_name, cursor)?
+        }
+        None => write_agent_projection(pool, &input)?,
+    };
+    Ok(SourceProjectionOutcome::Projected(Box::new(written)))
+}
+
 pub fn project_agent_source(
     pool: &DbPool,
     record: &AgentSourceRecord,
 ) -> Result<SourceProjectionOutcome> {
-    let source = projection_parts(record);
-    let input = match projection_input(pool, &source)? {
-        Ok(input) => input,
-        Err(reason) => return Ok(skip(&source, reason)),
-    };
-    Ok(SourceProjectionOutcome::Projected(Box::new(
-        write_agent_projection(pool, &input)?,
-    )))
+    project_agent_source_inner(pool, record, None)
+}
+
+pub(crate) fn project_agent_source_with_cursor(
+    pool: &DbPool,
+    record: &AgentSourceRecord,
+    source_name: &str,
+    cursor: &str,
+) -> Result<SourceProjectionOutcome> {
+    project_agent_source_inner(pool, record, Some((source_name, cursor)))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{OptionalExtension, params};
 
@@ -155,6 +155,38 @@ pub fn insert_maintenance_job(pool: &DbPool, kind: &str) -> Result<i64> {
         [kind],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Insert a running maintenance job with an initial durable JSON payload.
+pub fn insert_maintenance_job_with_result(
+    pool: &DbPool,
+    kind: &str,
+    result_json: &str,
+) -> Result<i64> {
+    serde_json::from_str::<serde_json::Value>(result_json)
+        .context("maintenance job result_json must be valid JSON")?;
+    let _guard = crate::db::write_lock();
+    let conn = pool.get()?;
+    conn.execute(
+        "INSERT INTO maintenance_jobs (kind, status, started_at, result_json)
+         VALUES (?1, 'running', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?2)",
+        rusqlite::params![kind, result_json],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Update the durable progress payload for a running maintenance job.
+pub fn update_maintenance_job_progress(pool: &DbPool, id: i64, result_json: &str) -> Result<()> {
+    serde_json::from_str::<serde_json::Value>(result_json)
+        .context("maintenance job result_json must be valid JSON")?;
+    let _guard = crate::db::write_lock();
+    let conn = pool.get()?;
+    let changed = conn.execute(
+        "UPDATE maintenance_jobs SET result_json = ?2 WHERE id = ?1 AND status = 'running'",
+        rusqlite::params![id, result_json],
+    )?;
+    anyhow::ensure!(changed == 1, "running maintenance job not found");
+    Ok(())
 }
 
 /// Mark a maintenance job terminal (`done`/`failed`) with its JSON result.

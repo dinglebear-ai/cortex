@@ -9,8 +9,9 @@ use crate::db::agent_observatory::{
     AgentEventKind, AgentProjectionOutboxInput, AgentProjectionRunMatch, AgentProjectionWriteInput,
     AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunRow, AgentRunUpsert,
     AgentWorktreeEvidenceUpsert, EvidenceTrustLevel, RunStatus, StreamEventName,
-    find_active_projection_worktree, find_unique_overlapping_projection_run,
-    write_agent_projection,
+    advance_projection_cursor, find_active_projection_worktree,
+    find_unique_overlapping_projection_run, write_agent_projection,
+    write_agent_projection_with_cursor,
 };
 use crate::db::{DbPool, LogEntry};
 use anyhow::{Context, Result};
@@ -248,22 +249,42 @@ fn atuin_input(
     })
 }
 
-pub fn project_command_log(pool: &DbPool, row: &LogEntry) -> Result<CommandProjectionOutcome> {
+fn skipped_with_cursor(
+    pool: &DbPool,
+    cursor: Option<(&str, &str)>,
+    log_id: i64,
+    reason: CommandProjectionSkipReason,
+) -> Result<CommandProjectionOutcome> {
+    if let Some((source_name, cursor)) = cursor {
+        advance_projection_cursor(pool, source_name, cursor)?;
+    }
+    Ok(skip(log_id, reason))
+}
+
+fn project_command_log_inner(
+    pool: &DbPool,
+    row: &LogEntry,
+    cursor: Option<(&str, &str)>,
+) -> Result<CommandProjectionOutcome> {
     let source = match classify_command_log(row) {
         CommandLogClassification::Skip(CommandSkipDiagnostic { log_id, reason }) => {
-            return Ok(skip(
+            return skipped_with_cursor(
+                pool,
+                cursor,
                 log_id,
                 CommandProjectionSkipReason::Classification(reason),
-            ));
+            );
         }
         CommandLogClassification::Project(source) => source,
     };
     let Some(worktree) = find_active_projection_worktree(pool, &source.hostname, &source.cwd)?
     else {
-        return Ok(skip(
+        return skipped_with_cursor(
+            pool,
+            cursor,
             source.log_id,
             CommandProjectionSkipReason::NoMatchingWorktree,
-        ));
+        );
     };
     let input = match source.source {
         CommandLogSource::AgentCommand => agent_input(&source, &worktree.worktree_key)?,
@@ -274,25 +295,46 @@ pub fn project_command_log(pool: &DbPool, row: &LogEntry) -> Result<CommandProje
                 &source.timestamp,
             )? {
                 AgentProjectionRunMatch::None => {
-                    return Ok(skip(
+                    return skipped_with_cursor(
+                        pool,
+                        cursor,
                         source.log_id,
                         CommandProjectionSkipReason::NoOverlappingRun,
-                    ));
+                    );
                 }
                 AgentProjectionRunMatch::Ambiguous => {
-                    return Ok(skip(
+                    return skipped_with_cursor(
+                        pool,
+                        cursor,
                         source.log_id,
                         CommandProjectionSkipReason::AmbiguousOverlappingRun,
-                    ));
+                    );
                 }
                 AgentProjectionRunMatch::Unique(run) => run,
             };
             atuin_input(&source, &run, &worktree.worktree_key)?
         }
     };
-    Ok(CommandProjectionOutcome::Projected(Box::new(
-        write_agent_projection(pool, &input)?,
-    )))
+    let written = match cursor {
+        Some((source_name, cursor)) => {
+            write_agent_projection_with_cursor(pool, &input, source_name, cursor)?
+        }
+        None => write_agent_projection(pool, &input)?,
+    };
+    Ok(CommandProjectionOutcome::Projected(Box::new(written)))
+}
+
+pub fn project_command_log(pool: &DbPool, row: &LogEntry) -> Result<CommandProjectionOutcome> {
+    project_command_log_inner(pool, row, None)
+}
+
+pub(crate) fn project_command_log_with_cursor(
+    pool: &DbPool,
+    row: &LogEntry,
+    source_name: &str,
+    cursor: &str,
+) -> Result<CommandProjectionOutcome> {
+    project_command_log_inner(pool, row, Some((source_name, cursor)))
 }
 
 #[cfg(test)]
