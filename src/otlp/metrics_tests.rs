@@ -86,7 +86,7 @@ fn normalize(metric: &Metric, resource: &Resource) -> MetricPointInput {
 fn integer_gauge_ignores_start_time_and_normalizes_identity() {
     let resource = resource(vec![
         kv("service.name", "claude-code"),
-        kv("host.name", "dookie"),
+        kv("host.name", "fixture-host"),
     ]);
     let output = normalize(
         &gauge(number_point(number_data_point::Value::AsInt(7))),
@@ -97,7 +97,7 @@ fn integer_gauge_ignores_start_time_and_normalizes_identity() {
     assert_eq!(output.aggregation_temporality, None);
     assert_eq!(output.monotonic, None);
     assert_eq!(output.time_unix_nano, 200);
-    assert_eq!(output.hostname, "dookie");
+    assert_eq!(output.hostname, "fixture-host");
     assert_eq!(output.ai_tool.as_deref(), Some("claude"));
     assert_eq!(
         serde_json::from_str::<Value>(&output.value_json).unwrap(),
@@ -130,7 +130,10 @@ fn cumulative_and_delta_sums_preserve_temporality_monotonic_and_start() {
 
 #[test]
 fn repeated_fixture_and_reordered_attributes_have_same_point_key() {
-    let mut resource = resource(vec![kv("service.name", "codex"), kv("host.name", "dookie")]);
+    let mut resource = resource(vec![
+        kv("service.name", "codex"),
+        kv("host.name", "fixture-host"),
+    ]);
     resource.entity_refs = vec![
         EntityRef {
             schema_url: "entity/v1".into(),
