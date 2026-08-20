@@ -1,3 +1,5 @@
+use cortex::artifact_evidence::ArtifactEvidenceKind;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SilentHostsArgs {
     pub silent_minutes: Option<u32>,
@@ -24,6 +26,22 @@ pub(crate) struct CompareArgs {
     pub a_to: Option<String>,
     pub b_from: Option<String>,
     pub b_to: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ArtifactEvidenceArgs {
+    pub event_kind: Option<ArtifactEvidenceKind>,
+    pub artifact_id: Option<String>,
+    pub revision_id: Option<String>,
+    pub content_digest: Option<String>,
+    pub correlation_id: Option<String>,
+    pub request_id: Option<String>,
+    pub target_id: Option<String>,
+    pub source_system: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub limit: Option<u32>,
     pub json: bool,
 }
 

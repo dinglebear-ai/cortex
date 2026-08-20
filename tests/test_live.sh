@@ -29,6 +29,7 @@
 #   cortex unack_error, cortex notifications_recent, cortex file_tails, cortex notifications_test,
 #   cortex llm_invocations,
 #   cortex similar_incidents, cortex ask_history, cortex incident_context, cortex graph,
+#   cortex artifact_evidence, cortex artifact_evidence_record,
 #   cortex skill_events, cortex skill_incidents, cortex skill_investigate,
 #   cortex mcp_events, cortex mcp_incidents, cortex mcp_investigate,
 #   cortex hook_events, cortex hook_incidents, cortex hook_investigate,

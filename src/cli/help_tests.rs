@@ -26,6 +26,7 @@ const PARSER_TOKENS: &[&str] = &[
     "graph",
     "timeline",
     "apps",
+    "artifactevents",
     "completions",
     // Mode-level (src/main.rs)
     "serve",

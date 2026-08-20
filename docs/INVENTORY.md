@@ -88,6 +88,8 @@ that registry by `src/mcp/schemas.rs::tool_definitions()`.
 | `similar_incidents` | FTS5 historical incident clusters with overlapping AI sessions | no |
 | `incident_context` | Window bundle of non-AI log aggregates/errors and active AI sessions | no |
 | `graph` | Resolve graph entities, neighborhoods, and evidence-backed explanations | no |
+| `artifact_evidence` | Query bounded source-attributed artifact ecosystem evidence | no |
+| `artifact_evidence_record` | Append one bounded artifact ecosystem evidence event | yes |
 | `skill_events` | List extracted AI skill-invocation events | no |
 | `skill_incidents` | Groups negative-signal transcript hits following a skill invocation into scored incident candidates | no |
 | `skill_investigate` | Expands skill-usage incidents into deterministic evidence bundles, skill-first | no |
@@ -105,11 +107,12 @@ that registry by `src/mcp/schemas.rs::tool_definitions()`.
 | `help` | Returns markdown documentation for all actions | no |
 
 Most MCP actions are read-only. `ack_error`, `unack_error`, `file_tails`,
-`notifications_test`, and `llm_invocations` require `cortex:admin`. The first
-four mutate acknowledgement/audit or notification state through service-owned
-actor and safety policy; `llm_invocations` is read-only but is admin-scoped
-because it exposes operational kill-switch/circuit-breaker state, not log
-content.
+`notifications_test`, `artifact_evidence_record`, and `llm_invocations` require
+`cortex:admin`. Artifact-evidence writes append only bounded source-attributed
+evidence through the canonical log transaction path; they do not grant artifact,
+license, publication, policy, or deployment authority. `llm_invocations` is
+read-only but admin-scoped because it exposes operational kill-switch/circuit-breaker
+state, not log content.
 
 ## Direct CLI commands
 
@@ -137,6 +140,7 @@ methods as the MCP actions.
 | `cortex graph around` | `graph` | One-hop graph neighborhood with typed relationships and evidence |
 | `cortex graph explain` | `graph` | Evidence-backed deterministic incident explanation over graph chains |
 | `cortex graph evidence` | `graph` | Inspect one evidence id with relationship endpoints and bounded source proof |
+| `cortex artifactevents` | `artifact_evidence` | Query bounded artifact ecosystem evidence by artifact/revision/digest/correlation/target/source/time |
 | `cortex sessions correlate` | `ai_correlate` | AI transcript anchors cross-referenced against nearby non-AI logs |
 | `cortex sessions incidents` | `abuse_incidents` | Grouped abuse incident candidates |
 | `cortex sessions investigate` | `abuse_investigate` | Abuse incident evidence bundles |

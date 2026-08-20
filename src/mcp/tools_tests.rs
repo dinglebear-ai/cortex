@@ -198,6 +198,23 @@ fn graph_inventory_without_route_target_fixture() -> HomelabInventory {
     inventory
 }
 
+#[test]
+fn artifact_evidence_actions_have_read_and_admin_scopes() {
+    let read = crate::mcp::actions::ACTION_SPECS
+        .iter()
+        .find(|spec| spec.name == "artifact_evidence")
+        .expect("artifact_evidence registered");
+    assert_eq!(read.scope, crate::mcp::actions::Scope::Read);
+    assert_eq!(read.cost.as_str(), "cheap");
+
+    let write = crate::mcp::actions::ACTION_SPECS
+        .iter()
+        .find(|spec| spec.name == "artifact_evidence_record")
+        .expect("artifact_evidence_record registered");
+    assert_eq!(write.scope, crate::mcp::actions::Scope::Admin);
+    assert_eq!(write.cost.as_str(), "write");
+}
+
 #[tokio::test]
 async fn file_tails_action_requires_admin_scope() {
     let spec = crate::mcp::actions::ACTION_SPECS
@@ -318,6 +335,79 @@ async fn host_state_action_returns_bounded_heartbeat_state() {
     assert_eq!(value["host_id"], "host-a");
     assert_eq!(value["samples"].as_array().unwrap().len(), 1);
     assert_eq!(value["flags"]["collector_partial"], true);
+}
+
+#[tokio::test]
+async fn artifact_evidence_actions_record_replay_query_and_reject_raw_bodies() {
+    let h = TestHarness::new();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let record = json!({
+        "action": "artifact_evidence_record",
+        "schemaVersion": "dinglebear.cortex-artifact-evidence/v1",
+        "eventId": "evt-mcp-1",
+        "eventKind": "runtime_call",
+        "sourceSystem": "labby",
+        "sourceIssuer": "gateway:personal/jake",
+        "observedAt": "2026-08-19T12:00:00-04:00",
+        "artifactId": "artifact-mcp-1",
+        "revisionId": "revision-mcp-1",
+        "contentDigest": digest,
+        "correlationId": "corr-mcp-1",
+        "targetId": "target-node-a",
+        "operationRef": "mcp:tools/call",
+        "outcome": "success",
+        "metadata": {"message": "result sk-super-secret", "resultBytes": 91}
+    });
+
+    let first = execute_tool(&h.state, "cortex", record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first["inserted"], true);
+    assert_eq!(first["event"]["metadata"]["message"], "result [REDACTED]");
+    let cortex_log_id = first["cortexLogId"].as_i64().unwrap();
+
+    let replay = execute_tool(&h.state, "cortex", record, None)
+        .await
+        .unwrap();
+    assert_eq!(replay["inserted"], false);
+    assert_eq!(replay["cortexLogId"], cortex_log_id);
+
+    let queried = execute_tool(
+        &h.state,
+        "cortex",
+        json!({
+            "action": "artifact_evidence",
+            "artifactId": "artifact-mcp-1",
+            "correlationId": "corr-mcp-1",
+            "since": "2026-08-19T15:59:00Z",
+            "until": "2026-08-19T16:01:00Z"
+        }),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(queried["events"].as_array().unwrap().len(), 1);
+    assert_eq!(queried["events"][0]["eventId"], "evt-mcp-1");
+
+    let malformed = execute_tool(
+        &h.state,
+        "cortex",
+        json!({
+            "action": "artifact_evidence_record",
+            "schemaVersion": "dinglebear.cortex-artifact-evidence/v1",
+            "eventId": "evt-mcp-bad",
+            "eventKind": "runtime_call",
+            "sourceSystem": "labby",
+            "sourceIssuer": "gateway:personal/jake",
+            "observedAt": "2026-08-19T12:00:00-04:00",
+            "artifactId": "artifact-mcp-2",
+            "metadata": {"requestBody": "raw payload"}
+        }),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(malformed.to_string().contains("forbidden"));
 }
 
 #[tokio::test]
@@ -1305,6 +1395,17 @@ fn sample_args_for_action(action: &str) -> Option<serde_json::Value> {
         "filter" => json!({"action": action, "host": "schema-test-host"}),
         "map" => json!({"action": action, "mode": "snapshot"}),
         "abuse" => json!({"action": action, "terms": ["schema"]}),
+        "artifact_evidence_record" => json!({
+            "action": action,
+            "schemaVersion": "dinglebear.cortex-artifact-evidence/v1",
+            "eventId": "schema-event",
+            "eventKind": "discovery_observed",
+            "sourceSystem": "axon",
+            "sourceIssuer": "crawler:schema",
+            "observedAt": "2026-01-01T00:00:00Z",
+            "artifactId": "artifact-schema"
+        }),
+        "artifact_evidence" => json!({"action": action}),
         "fleet_state"
         | "search"
         | "tail"
@@ -1400,6 +1501,8 @@ fn typed_unknown_field_samples() -> Vec<serde_json::Value> {
         "notifications_recent",
         "similar_incidents",
         "incident_context",
+        "artifact_evidence",
+        "artifact_evidence_record",
     ]
     .into_iter()
     .filter_map(sample_args_for_action)

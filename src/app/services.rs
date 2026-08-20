@@ -88,6 +88,7 @@ where
 mod ai;
 mod ai_indexing;
 mod analytics;
+mod artifact_evidence;
 mod assessment;
 mod compose;
 mod correlate_events;

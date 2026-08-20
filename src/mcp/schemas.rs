@@ -657,8 +657,10 @@ fn exact_action_schema(
     for field in allowed {
         let property = root_properties
             .get(*field)
+            .cloned()
+            .or_else(|| super::artifact_evidence_schema::exact_property_schema(field))
             .unwrap_or_else(|| panic!("exact action contract references unknown field: {}", field));
-        properties.insert((*field).to_string(), property.clone());
+        properties.insert((*field).to_string(), property);
     }
 
     let mut required_fields = vec![Value::String("action".to_string())];

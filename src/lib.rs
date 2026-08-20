@@ -14,6 +14,7 @@ pub mod ai_transcript_ingest;
 pub mod ai_watch;
 pub mod api;
 pub mod app;
+pub mod artifact_evidence;
 pub(crate) mod assessment;
 pub mod color_policy;
 pub mod command_log;

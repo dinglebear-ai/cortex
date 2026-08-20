@@ -23,6 +23,7 @@
 pub(crate) mod alerts;
 pub(crate) mod anomalies;
 pub(crate) mod apps;
+pub(crate) mod artifact_evidence;
 pub(crate) mod clock_skew;
 pub(crate) mod compare;
 pub(crate) mod correlate_state;

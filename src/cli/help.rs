@@ -41,7 +41,14 @@ const SECTIONS: &[(&str, &[&str])] = &[
     (
         "Search & Logs",
         &[
-            "search", "filter", "tail", "hosts", "apps", "entity", "graph",
+            "search",
+            "filter",
+            "tail",
+            "hosts",
+            "apps",
+            "artifactevents",
+            "entity",
+            "graph",
         ],
     ),
     (
@@ -143,6 +150,13 @@ const CATALOG: &[CommandDoc] = &[
         summary: "Top application/program names by volume",
         usage: &[
             "cortex apps [--host HOST] [--since TIME] [--until TIME] [--limit N] [--offset N] [--json]",
+        ],
+    },
+    CommandDoc {
+        name: "artifactevents",
+        summary: "Query source-attributed artifact ecosystem evidence",
+        usage: &[
+            "cortex artifactevents [--event-kind KIND] [--artifact-id ID] [--revision-id ID] [--content-digest sha256:HEX] [--correlation-id ID] [--request-id ID] [--target-id ID] [--source-system SOURCE] [--since TIME] [--until TIME] [--limit N] [--json]",
         ],
     },
     CommandDoc {

@@ -404,8 +404,10 @@ fn id_request(op: FileTailOp, args: FileTailIdArgs) -> (FileTailRequest, bool) {
     (FileTailRequest::id_op(op, args.id), args.json)
 }
 
+mod artifact_evidence;
 mod surface;
 
+pub(crate) use self::artifact_evidence::run_artifact_evidence;
 pub(crate) use self::surface::{
     run_anomalies, run_apps, run_clock_skew, run_compare, run_correlate_state, run_entity_lookup,
     run_fleet_state, run_graph_around, run_graph_evidence, run_graph_explain, run_graph_rebuild,

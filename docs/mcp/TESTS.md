@@ -86,8 +86,8 @@ Action registry covered by live/script references: `search`, `filter`, `tail`, `
 `silent_hosts`, `clock_skew`, `anomalies`, `compare`, `compose_status`,
 `compose_doctor`, `unaddressed_errors`, `ack_error`, `unack_error`,
 `notifications_recent`, `file_tails`, `notifications_test`, `llm_invocations`,
-`similar_incidents`, `incident_context`, `graph`, `skill_events`,
-`skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`,
+`similar_incidents`, `incident_context`, `graph`, `artifact_evidence`,
+`artifact_evidence_record`, `skill_events`, `skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`,
 `mcp_investigate`, `hook_events`, `hook_incidents`, `hook_investigate`, `help`.
 
 ### mcporter-based testing

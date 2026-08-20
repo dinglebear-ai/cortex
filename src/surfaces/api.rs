@@ -126,6 +126,9 @@ pub(super) const API_SURFACE_SPECS: &[SurfaceSpec] = &[
         Read
     ),
     api!("/api/apps", Search, Canonical, Read),
+    // GET is the canonical read surface. POST on the same route requires the
+    // existing explicit admin-token guard in api.rs.
+    api!("/api/artifact-evidence", Evidence, Canonical, Read),
     api!(
         "/api/similar-incidents",
         Analysis,

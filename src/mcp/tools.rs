@@ -21,12 +21,14 @@ use crate::app::{
     AnomaliesRequest, ClockSkewRequest, CompareRequest, ContextRequest, CorrelateEventsRequest,
     CorrelateStateRequest, FilterLogsRequest, FleetStateRequest, GetErrorsRequest, GetLogRequest,
     HomelabMapRequest, HostStateRequest, IngestRateRequest, ListAiProjectsRequest,
-    ListAiToolsRequest, ListAppsRequest, ListHookEventsRequest, ListMcpEventsRequest,
-    ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
-    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, SearchLogsRequest,
-    SearchSessionsRequest, SilentHostsRequest, TailLogsRequest, TimelineRequest,
+    ListAiToolsRequest, ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest,
+    ListMcpEventsRequest, ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest,
+    LlmInvocationsRequest, NotificationsRecentRequest, PatternsRequest, ProjectContextRequest,
+    SearchLogsRequest, SearchSessionsRequest, SilentHostsRequest, TailLogsRequest, TimelineRequest,
     TopicCorrelateRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
 };
+
+use crate::artifact_evidence::ArtifactEvidenceInput;
 
 use super::AppState;
 use super::actions;
@@ -125,6 +127,8 @@ async fn dispatch_cortex_action(
         H::SimilarIncidents => context::tool_similar_incidents(state, args).await,
         H::IncidentContext => context::tool_incident_context(state, args).await,
         H::Graph => context::tool_graph(state, args).await,
+        H::ArtifactEvidence => tool_artifact_evidence(state, args).await,
+        H::ArtifactEvidenceRecord => tool_artifact_evidence_record(state, args).await,
         H::SkillEvents => tool_skill_events(state, args).await,
         H::SkillIncidents => skill_incidents::tool_skill_incidents(state, args).await,
         H::SkillInvestigate => skill_incidents::tool_skill_investigate(state, args).await,
@@ -275,6 +279,18 @@ async fn tool_project_context(state: &AppState, args: Value) -> anyhow::Result<V
 async fn tool_list_ai_tools(state: &AppState, args: Value) -> anyhow::Result<Value> {
     let req: ListAiToolsRequest = action_payload(args, "list_ai_tools")?;
     let response = state.service.list_ai_tools(req).await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+async fn tool_artifact_evidence(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    let req: ListArtifactEvidenceRequest = action_payload(args, "artifact_evidence")?;
+    let response = state.service.list_artifact_evidence(req).await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+async fn tool_artifact_evidence_record(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    let input: ArtifactEvidenceInput = action_payload(args, "artifact_evidence_record")?;
+    let response = state.service.record_artifact_evidence(input).await?;
     Ok(serde_json::to_value(response)?)
 }
 

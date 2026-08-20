@@ -9,6 +9,7 @@ use crate::otlp::OtlpCounters;
 
 mod action_flags;
 mod actions;
+mod artifact_evidence_schema;
 mod prompts;
 mod rmcp_server;
 mod routes;

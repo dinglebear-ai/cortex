@@ -103,6 +103,8 @@ pub(super) enum ActionHandler {
     SimilarIncidents,
     IncidentContext,
     Graph,
+    ArtifactEvidence,
+    ArtifactEvidenceRecord,
     SkillEvents,
     SkillIncidents,
     SkillInvestigate,
@@ -579,6 +581,31 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Graph
     ),
     action_spec!(
+        "artifact_evidence",
+        Read,
+        "Query bounded artifact ecosystem evidence",
+        Cheap,
+        ArtifactEvidence,
+        exact: {
+            allowed: &[
+                "eventKind",
+                "artifactId",
+                "revisionId",
+                "contentDigest",
+                "correlationId",
+                "requestId",
+                "targetId",
+                "sourceSystem",
+                "from",
+                "to",
+                "since",
+                "until",
+                "limit",
+            ],
+            required: &[]
+        }
+    ),
+    action_spec!(
         "skill_events",
         Read,
         "List extracted AI skill-invocation events",
@@ -698,6 +725,49 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         defaults: Defaults::new()
     ),
     // ── Admin / write actions ──────────────────────────────────────────────
+    action_spec!(
+        "artifact_evidence_record",
+        Admin,
+        "Append one bounded source-attributed artifact evidence event",
+        Write,
+        ArtifactEvidenceRecord,
+        exact: {
+            allowed: &[
+                "schemaVersion",
+                "eventId",
+                "eventKind",
+                "sourceSystem",
+                "sourceIssuer",
+                "observedAt",
+                "artifactId",
+                "revisionId",
+                "contentDigest",
+                "provenanceRef",
+                "requestId",
+                "correlationId",
+                "causationId",
+                "targetId",
+                "targetKind",
+                "loadoutId",
+                "shareGrantId",
+                "capabilityLeaseId",
+                "deploymentPlanId",
+                "runtimeId",
+                "pluginId",
+                "operationRef",
+                "outcome",
+                "metadata",
+            ],
+            required: &[
+                "schemaVersion",
+                "eventId",
+                "eventKind",
+                "sourceSystem",
+                "sourceIssuer",
+                "observedAt",
+            ]
+        }
+    ),
     action_spec!(
         "ack_error",
         Admin,
