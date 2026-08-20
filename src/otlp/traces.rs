@@ -1,11 +1,7 @@
 //! OTLP trace-span normalization into the Agent Observatory DB input contract.
 //!
-//! HTTP decoding/persistence is intentionally deferred to later Phase 3 slices.
-//! This module owns the pure, deterministic conversion of one protobuf span.
-
-// AO-042 intentionally lands the pure converter before AO-045 wires the HTTP
-// handler. Keep the production seam compiled now without pretending it is live.
-#![allow(dead_code)]
+//! This module owns the pure, deterministic conversion of one protobuf span;
+//! the HTTP receiver applies it before idempotent persistence.
 
 use std::fmt::Write as _;
 
@@ -180,6 +176,7 @@ fn resource_scope_json(
 }
 
 /// Normalize one OTLP protobuf span with the default Agent Observatory privacy policy.
+#[cfg(test)]
 pub(crate) fn normalize_span(
     resource: Option<&Resource>,
     resource_schema_url: &str,

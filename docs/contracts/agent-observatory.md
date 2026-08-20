@@ -79,11 +79,12 @@ Source kinds and variants are ASCII lower snake case. Event keys are determinist
 The metric point key is SHA-256 hex over the canonical tuple:
 
 ```text
-resource fingerprint, scope, metric name, instrument kind,
-start timestamp, point timestamp, sorted attributes, value, exemplar IDs
+resource fingerprint, scope, metric name, instrument kind, unit,
+aggregation temporality, monotonicity, start timestamp, point timestamp,
+sorted attributes, value, exemplar IDs
 ```
 
-This makes repeated OTLP export idempotent without assuming producer point IDs.
+Unit and applicable aggregation temporality/monotonicity are stream-identifying properties and therefore participate in the key; description does not. `value` is the canonical bounded point payload, including data-point flags. This makes repeated OTLP export idempotent without assuming producer point IDs.
 
 ## 3. Enumerations
 

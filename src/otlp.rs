@@ -1,16 +1,18 @@
-//! OTLP/HTTP receiver — accepts OpenTelemetry log records over HTTP and feeds
-//! them into the existing cortex ingest pipeline. Logs only — `/v1/traces`
-//! returns 404 (deferred) and `/v1/metrics` returns 404 (deferred).
+//! OTLP/HTTP receiver for OpenTelemetry logs and traces. Logs feed the existing
+//! Cortex ingest pipeline; traces normalize into the Agent Observatory span store.
+//! `/v1/metrics` remains deferred.
 //!
-//! Mounted on the same axum server as MCP. Body limit: 4 MiB. Bearer auth uses
-//! the same static MCP token as `/mcp` — `config.mcp.api_token`, set via
+//! Mounted on the same axum server as MCP. Logs retain a 4 MiB body limit;
+//! traces and the future metrics endpoint use 8 MiB. Bearer auth uses the same
+//! static MCP token as `/mcp` — `config.mcp.api_token`, set via
 //! `CORTEX_TOKEN`. It is NOT `CORTEX_API_TOKEN` (that is `config.api.api_token`,
 //! the separate REST `/api/*` token) and NOT `CORTEX_API_ADMIN_TOKEN`.
 //! Loopback / trusted-gateway policies skip the check; OAuth-only deployments
 //! with no static token deny OTLP outright (no OAuth flow for exporters).
 //!
-//! Request → response wiring lives here; `AnyValue`/`LogBatchEntry`
-//! conversion is in [`entries`] and the bearer-token gate is in [`auth`].
+//! Log request wiring lives here; trace HTTP handling is in [`trace_http`],
+//! `AnyValue`/`LogBatchEntry` conversion is in [`entries`], and the bearer-token
+//! gate is in [`auth`].
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -27,16 +29,22 @@ use axum::{
 };
 use bytes::Bytes;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use parking_lot::Mutex;
 use prost::Message;
 use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
 
+use crate::config::AgentObservatoryPrivacyConfig;
+use crate::db::{DbPool, StorageBudgetState};
 use crate::ingest::IngestTx;
 
 mod auth;
 mod entries;
+mod metrics;
+mod metrics_payload;
 mod normalization;
 mod privacy;
+mod trace_http;
 mod traces;
 
 use auth::{
@@ -44,10 +52,14 @@ use auth::{
     unauthorized_diagnostics,
 };
 use entries::build_entries;
+#[cfg(test)]
+use trace_http::MAX_SPANS_PER_REQUEST;
+use trace_http::{TraceIngestState, traces_handler};
 
-/// Per-request body cap. Matches the OpenTelemetry Collector default for
-/// HTTP receivers. Larger payloads receive 413 + `Retry-After: 86400`.
+/// Existing `/v1/logs` body cap. Larger payloads receive 413 + `Retry-After: 86400`.
 pub const OTLP_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+/// Agent Observatory trace and metric body cap.
+pub const OTLP_SIGNAL_BODY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Atomic counters for the OTLP receiver, surfaced via `/health`.
 #[derive(Debug, Default)]
@@ -63,6 +75,7 @@ pub struct OtlpState {
     pub api_token: Option<String>,
     pub counters: Arc<OtlpCounters>,
     pub auth_policy: AuthPolicy,
+    trace_ingest: Option<TraceIngestState>,
 }
 
 impl OtlpState {
@@ -77,19 +90,37 @@ impl OtlpState {
             api_token,
             counters,
             auth_policy,
+            trace_ingest: None,
         }
+    }
+
+    pub(crate) fn with_trace_ingest(
+        mut self,
+        pool: Arc<DbPool>,
+        storage_state: Arc<Mutex<Option<StorageBudgetState>>>,
+        privacy: AgentObservatoryPrivacyConfig,
+    ) -> Self {
+        self.trace_ingest = Some(TraceIngestState::new(pool, storage_state, privacy));
+        self
     }
 }
 
-/// Build the OTLP router. Mounts `/v1/logs` (functional ingest),
-/// `/v1/metrics` (404 — deferred), `/v1/traces` (404 — deferred) on the same
-/// axum server as MCP.
+/// Build the OTLP router. Logs retain their existing 4 MiB body cap while
+/// traces and the future metrics endpoint use the Agent Observatory 8 MiB cap.
 pub fn router(state: OtlpState) -> Router {
     Router::new()
-        .route("/v1/logs", post(logs_handler))
-        .route("/v1/metrics", post(metrics_handler))
-        .route("/v1/traces", post(traces_handler))
-        .layer(RequestBodyLimitLayer::new(OTLP_BODY_LIMIT_BYTES))
+        .route(
+            "/v1/logs",
+            post(logs_handler).layer(RequestBodyLimitLayer::new(OTLP_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/metrics",
+            post(metrics_handler).layer(RequestBodyLimitLayer::new(OTLP_SIGNAL_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/v1/traces",
+            post(traces_handler).layer(RequestBodyLimitLayer::new(OTLP_SIGNAL_BODY_LIMIT_BYTES)),
+        )
         .layer(from_fn(add_retry_after_on_413))
         .with_state(state)
 }
@@ -253,33 +284,7 @@ async fn metrics_handler(
         StatusCode::NOT_FOUND,
         Json(json!({
             "error": "metrics_not_supported",
-            "message": "OTLP metrics deferred. Use /v1/logs only."
-        })),
-    )
-        .into_response()
-}
-
-async fn traces_handler(
-    State(state): State<OtlpState>,
-    headers: HeaderMap,
-) -> axum::response::Response {
-    if !is_authorized(&state, &headers) {
-        return unauthorized();
-    }
-    let content_length = headers
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(0);
-    tracing::warn!(
-        content_length,
-        "OTLP traces received but traces ingestion is not supported"
-    );
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "error": "traces_not_supported",
-            "message": "OTLP traces deferred. Use /v1/logs only."
+            "message": "OTLP metrics ingestion is deferred."
         })),
     )
         .into_response()
