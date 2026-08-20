@@ -321,6 +321,8 @@ jobs:
     timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' }}
+    env:
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.npm-cache
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
