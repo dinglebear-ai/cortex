@@ -11,9 +11,9 @@ Updated: 2026-08-19
 - Worktree: /home/jmagar/workspace/cortex/.worktrees/w16-cortex-artifact-evidence-20260819
 - Branch: codex/w16-cortex-artifact-evidence-20260819
 - Original lane base: origin/main 0ebb3d2bb6c220147dd4ee27f9efb162f3e88ba9 (v3.13.2)
-- Current branch base: origin/main 74eaa151dc5b1282def8c3a6a43db6e46b50c929 (#193 and #195 merged)
-- Coordination target: origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 (#199 merged); rebase after this tracker checkpoint
-- Prior post-C4 integration rebase onto 74eaa151 completed cleanly with zero conflicts
+- Current branch base: origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 (#199 merged)
+- Rebase onto exact origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 completed cleanly with zero conflicts
+- Active OTLP PR #200/worktree remained untouched throughout validation
 - Draft PR: #198, feat: add W16 artifact evidence foundation
 
 ## Active-lane inventory
@@ -97,13 +97,29 @@ C4 adversarial fixes: REST admin authorization now precedes body read/parse, RES
 
 Coordination pre-rebase rerun on committed C4 source b1c30578: `cargo test --lib artifact_evidence -- --nocapture` PASS, 22 passed / 0 failed / 2317 filtered. This rerun covers the artifact-evidence domain, DB/service, REST, MCP schema/actions and transport tests; broader catalog/help/HTTP/full gates will be rerun after the 64098b3f rebase.
 
+Post-#199 validation on rebased code head `6c84827a0311da87f8cf51d4c7344ecc893c8898`:
+
+- Public Identity exact CI scripts: PASS after neutralizing private fixture hostnames.
+- `env -u CORTEX_API_TOKEN -u NO_AUTH cargo nextest run --locked`: PASS, 2980 passed / 0 failed / 2 skipped in 486.103s.
+- `cargo test --doc --locked`: PASS, 0 failures.
+- `CORTEX_TOKEN=ci-integration-token bash tests/test_live.sh`: PASS, 131 passed / 0 failed / 4 skipped / 135 total.
+- `cargo clippy --all-targets -- -D warnings`: PASS; isolated build completed in 13m40s.
+- `cargo fmt -- --check` and `git diff --check`: PASS.
+- cargo-deny policy: PASS with cargo-deny 0.20.2 local syntax `cargo deny --all-features check`, equivalent to the CI action command `check` plus arguments `--all-features`.
+- `cargo xtask check-version-sync`: PASS, 16 version-bearing files in sync at 3.13.2.
+- `bash scripts/check-agent-memory-symlinks.sh`: PASS.
+- `bash scripts/check-rust-module-size.sh --limit 500`: PASS.
+- `env -u CORTEX_API_TOKEN -u NO_AUTH cargo test --lib --locked docs_tests::`: PASS.
+- An isolated `CARGO_TARGET_DIR` under the W16 worktree avoided an unrelated Soma target-dir lock; no sibling process or worktree was modified.
+- The migration-free artifact-evidence design remains unchanged, and OTLP PR #200/worktree was not touched.
+
 ## Blockers / dependencies
 
 - PR #195 has landed migration 48. The durable first slice remains migration-free; a measured dedicated projection/index follow-up may start at migration 49+.
 - No Agent Observatory abstraction dependency is required for the current design.
-- Clean rebase onto origin/main 74eaa151 completed with zero conflicts; W16 still does not touch Agent Observatory hot ingest/cursor files.
-- PR #199 has now advanced origin/main to 64098b3fa4471837aec82a6063cc625f02a61f78. OTLP PR #200/worktree is explicitly out of scope and must remain untouched.
+- Clean rebase onto origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 completed with zero conflicts; W16 still does not touch Agent Observatory hot ingest/cursor files.
+- PR #199 is incorporated at the exact requested base. OTLP PR #200/worktree remained untouched.
 
 ## Next action
 
-Commit this coordination tracker checkpoint, rebase the clean W16 branch onto exact origin/main 64098b3fa4471837aec82a6063cc625f02a61f78, then rerun Public Identity + Tests first, MCP integration, clippy -D warnings, fmt, cargo-deny, repository contract and full relevant gates. Force-with-lease push #198 only after the rebased result is validated.
+Commit and force-with-lease push this final evidence checkpoint, refresh PR #198 with exact SHAs/results, and require fresh GitHub CI plus Repository Contract to be green/mergeable.
