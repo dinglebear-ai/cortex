@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.0](https://github.com/dinglebear-ai/cortex/compare/v3.13.2...v3.14.0) (2026-08-20)
+
+
+### Added
+
+* add W16 artifact evidence foundation ([#198](https://github.com/dinglebear-ai/cortex/issues/198)) ([d232d82](https://github.com/dinglebear-ai/cortex/commit/d232d82bdafc1978fd389cf1f134f29631febc4c))
+* **agent-observatory:** ingest OTLP traces and normalize metrics ([#200](https://github.com/dinglebear-ai/cortex/issues/200)) ([154474a](https://github.com/dinglebear-ai/cortex/commit/154474a17531f3281a18589ebc9bfeeddb7a8686))
+* **agent-observatory:** make projector cursors transactional ([#195](https://github.com/dinglebear-ai/cortex/issues/195)) ([74eaa15](https://github.com/dinglebear-ai/cortex/commit/74eaa151dc5b1282def8c3a6a43db6e46b50c929))
+
+
+### Fixed
+
+* harden actionable error-signature reads ([#199](https://github.com/dinglebear-ai/cortex/issues/199)) ([64098b3](https://github.com/dinglebear-ai/cortex/commit/64098b3fa4471837aec82a6063cc625f02a61f78))
+
+
+### Changed
+
+* harden Cortex hot paths and eliminate audit debt ([#196](https://github.com/dinglebear-ai/cortex/issues/196)) ([ecbd33b](https://github.com/dinglebear-ai/cortex/commit/ecbd33b8383313c84c5e71a97c06f3a4175e0c6c))
+
 ## [3.13.2](https://github.com/dinglebear-ai/cortex/compare/v3.13.1...v3.13.2) (2026-08-10)
 
 
