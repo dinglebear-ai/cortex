@@ -209,6 +209,28 @@ async fn health_full(State(state): State<AppState>, headers: HeaderMap) -> impl 
     let started = Instant::now();
     let logs_received = state.otlp_counters.logs_received.load(Ordering::Relaxed);
     let decode_errors = state.otlp_counters.decode_errors.load(Ordering::Relaxed);
+    let metrics_accepted = state.otlp_counters.metrics_accepted.load(Ordering::Relaxed);
+    let metrics_duplicates = state
+        .otlp_counters
+        .metrics_duplicates
+        .load(Ordering::Relaxed);
+    let metrics_rejected = state.otlp_counters.metrics_rejected.load(Ordering::Relaxed);
+    let metrics_backpressure = state
+        .otlp_counters
+        .metrics_backpressure
+        .load(Ordering::Relaxed);
+    let metrics_auth_failures = state
+        .otlp_counters
+        .metrics_auth_failures
+        .load(Ordering::Relaxed);
+    let metrics_decode_errors = state
+        .otlp_counters
+        .metrics_decode_errors
+        .load(Ordering::Relaxed);
+    let metrics_persistence_errors = state
+        .otlp_counters
+        .metrics_persistence_errors
+        .load(Ordering::Relaxed);
     let observability = state.observability.snapshot();
     match state.service.health_check().await {
         Ok(()) => {
@@ -220,6 +242,13 @@ async fn health_full(State(state): State<AppState>, headers: HeaderMap) -> impl 
                 "status": "ok",
                 "otlp_logs_received": logs_received,
                 "otlp_decode_errors": decode_errors,
+                "otlp_metrics_accepted": metrics_accepted,
+                "otlp_metrics_duplicates": metrics_duplicates,
+                "otlp_metrics_rejected": metrics_rejected,
+                "otlp_metrics_backpressure": metrics_backpressure,
+                "otlp_metrics_auth_failures": metrics_auth_failures,
+                "otlp_metrics_decode_errors": metrics_decode_errors,
+                "otlp_metrics_persistence_errors": metrics_persistence_errors,
                 "ingest": observability,
             }))
             .into_response()
@@ -236,6 +265,13 @@ async fn health_full(State(state): State<AppState>, headers: HeaderMap) -> impl 
                     "status": "error",
                     "otlp_logs_received": logs_received,
                     "otlp_decode_errors": decode_errors,
+                    "otlp_metrics_accepted": metrics_accepted,
+                    "otlp_metrics_duplicates": metrics_duplicates,
+                    "otlp_metrics_rejected": metrics_rejected,
+                    "otlp_metrics_backpressure": metrics_backpressure,
+                    "otlp_metrics_auth_failures": metrics_auth_failures,
+                    "otlp_metrics_decode_errors": metrics_decode_errors,
+                    "otlp_metrics_persistence_errors": metrics_persistence_errors,
                     "ingest": observability,
                 })),
             )

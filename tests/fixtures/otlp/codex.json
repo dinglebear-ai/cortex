@@ -1,0 +1,33 @@
+{
+  "provider": "codex",
+  "provenance": {
+    "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json",
+    "retrieved": "2026-08-21",
+    "note": "Codex config supports independent OTLP log, metric, and trace exporters plus static span attributes. This fixture intentionally omits a metric export."
+  },
+  "resource": {
+    "service.name": "codex",
+    "host.name": "fixture-host",
+    "session.id": "codex-session-01",
+    "project.path": "/workspace/cortex"
+  },
+  "log": {
+    "event_name": "codex.tool_call",
+    "body": "tool completed",
+    "tool_name": "exec_command",
+    "prompt": "PRIVATE_CODEX_PROMPT"
+  },
+  "span": {
+    "name": "codex.tool_call",
+    "tool_name": "exec_command",
+    "prompt": "PRIVATE_CODEX_TRACE_PROMPT"
+  },
+  "expected": {
+    "tool": "codex",
+    "session_id": "codex-session-01",
+    "project": "/workspace/cortex",
+    "log": "observed",
+    "trace": "observed",
+    "metric": "not_observed"
+  }
+}

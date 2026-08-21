@@ -18,6 +18,13 @@ pub(in super::super) async fn tool_get_stats(
             json!({
                 "logs_received": state.otlp_counters.logs_received.load(std::sync::atomic::Ordering::Relaxed),
                 "decode_errors": state.otlp_counters.decode_errors.load(std::sync::atomic::Ordering::Relaxed),
+                "metrics_accepted": state.otlp_counters.metrics_accepted.load(std::sync::atomic::Ordering::Relaxed),
+                "metrics_duplicates": state.otlp_counters.metrics_duplicates.load(std::sync::atomic::Ordering::Relaxed),
+                "metrics_rejected": state.otlp_counters.metrics_rejected.load(std::sync::atomic::Ordering::Relaxed),
+                "metrics_backpressure": state.otlp_counters.metrics_backpressure.load(std::sync::atomic::Ordering::Relaxed),
+                "metrics_auth_failures": state.otlp_counters.metrics_auth_failures.load(std::sync::atomic::Ordering::Relaxed),
+                "metrics_decode_errors": state.otlp_counters.metrics_decode_errors.load(std::sync::atomic::Ordering::Relaxed),
+                "metrics_persistence_errors": state.otlp_counters.metrics_persistence_errors.load(std::sync::atomic::Ordering::Relaxed),
             }),
         );
     }
@@ -61,6 +68,13 @@ pub(in super::super) async fn tool_get_status(
         "otlp": {
             "logs_received": state.otlp_counters.logs_received.load(std::sync::atomic::Ordering::Relaxed),
             "decode_errors": state.otlp_counters.decode_errors.load(std::sync::atomic::Ordering::Relaxed),
+            "metrics_accepted": state.otlp_counters.metrics_accepted.load(std::sync::atomic::Ordering::Relaxed),
+            "metrics_duplicates": state.otlp_counters.metrics_duplicates.load(std::sync::atomic::Ordering::Relaxed),
+            "metrics_rejected": state.otlp_counters.metrics_rejected.load(std::sync::atomic::Ordering::Relaxed),
+            "metrics_backpressure": state.otlp_counters.metrics_backpressure.load(std::sync::atomic::Ordering::Relaxed),
+            "metrics_auth_failures": state.otlp_counters.metrics_auth_failures.load(std::sync::atomic::Ordering::Relaxed),
+            "metrics_decode_errors": state.otlp_counters.metrics_decode_errors.load(std::sync::atomic::Ordering::Relaxed),
+            "metrics_persistence_errors": state.otlp_counters.metrics_persistence_errors.load(std::sync::atomic::Ordering::Relaxed),
         }
     }))
 }

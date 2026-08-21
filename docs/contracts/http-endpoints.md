@@ -89,8 +89,8 @@ the non-loopback safety gate (§9) bars this combo at startup.
 | `DELETE /mcp`                                            | `stable`       | bearer-or-oauth †     | n/a        | configured allowlist       | —                   | 0.1.x      | `mcp/routes.rs`                 | Same as `GET /mcp` — RMCP is stateless. `401` precedes `405` when auth is on.                    |
 | `GET /health`                                            | `stable`       | none                  | n/a        | configured allowlist       | —                   | 0.1.x      | `mcp/routes.rs::health`         | Lightweight DB ping + OTLP/ingest counters. Used by Docker `HEALTHCHECK`, compose, SWAG.         |
 | `POST /v1/logs`                                          | `experimental` | optional-bearer ‡     | 4 MiB      | (no CORS)                  | —                   | 0.11.x     | `otlp.rs::logs_handler`         | OTLP/HTTP log ingest (`ExportLogsServiceRequest` protobuf). Returns `200` on accept, `413+Retry-After: 86400` on oversize, `503 channel_full` on backpressure. |
-| `POST /v1/metrics`                                       | `deferred`     | optional-bearer ‡     | 4 MiB      | (no CORS)                  | —                   | 0.11.x     | `otlp.rs::metrics_handler`      | Reserved. Returns `404 metrics_not_supported`. **MUST NOT** be repurposed.                       |
-| `POST /v1/traces`                                        | `deferred`     | none                  | 4 MiB      | (no CORS)                  | —                   | 0.11.x     | `otlp.rs::traces_handler`       | Reserved. Returns `404 traces_not_supported`. **MUST NOT** be repurposed.                        |
+| `POST /v1/metrics`                                       | `experimental` | optional-bearer ‡     | 8 MiB      | (no CORS)                  | —                   | 3.14.x     | `otlp/metric_http.rs`           | OTLP/HTTP metric ingest with bounded normalization, idempotent persistence, and protobuf partial-success responses. |
+| `POST /v1/traces`                                        | `experimental` | optional-bearer ‡     | 8 MiB      | (no CORS)                  | —                   | 3.14.x     | `otlp/trace_http.rs`            | OTLP/HTTP trace ingest with bounded normalization, idempotent persistence, and protobuf partial-success responses.  |
 | `GET /.well-known/oauth-authorization-server`            | `stable`       | none                  | n/a        | configured allowlist       | —                   | OAuth GA   | `mcp/routes.rs` (lab-auth)      | OAuth 2.1 authorization-server metadata. Mounted **only** when `auth.mode = OAuth`.              |
 | `GET /.well-known/oauth-protected-resource`              | `stable`       | none                  | n/a        | configured allowlist       | —                   | OAuth GA   | `mcp/routes.rs` (lab-auth)      | OAuth 2.1 protected-resource metadata. Same condition.                                            |
 | `GET /mcp/.well-known/oauth-authorization-server`        | `stable`       | none                  | n/a        | configured allowlist       | —                   | OAuth GA   | `mcp/routes.rs`                 | Path-prefixed mirror of the AS discovery doc for clients that probe under `/mcp/`.               |
@@ -151,7 +151,8 @@ OTel exporters back off for a day instead of retrying immediately.
 | Merged MCP router (`/mcp`, `/health`, OAuth, fallback) | 64 KiB | `mcp/routes.rs::MCP_BODY_LIMIT_BYTES`         | `413` (no `Retry-After`)                       |
 | Non-MCP API (`/api/*`) — `GET` routes                 | n/a    | All GET endpoints use querystring only.       | n/a                                            |
 | Non-MCP API (`/api/*`) — `POST` routes                | 64 KiB | `POST /api/errors/ack`, `POST /api/errors/unack`, `POST /api/notifications/test` | `413` (no `Retry-After`) |
-| OTLP (`/v1/logs`, `/v1/metrics`, `/v1/traces`)         | 4 MiB  | `otlp.rs::OTLP_BODY_LIMIT_BYTES`              | `413 + Retry-After: 86400`                     |
+| OTLP logs (`/v1/logs`)                                  | 4 MiB  | `otlp.rs::OTLP_BODY_LIMIT_BYTES`              | `413 + Retry-After: 86400`                     |
+| OTLP traces/metrics (`/v1/traces`, `/v1/metrics`)       | 8 MiB  | `otlp.rs::OTLP_SIGNAL_BODY_LIMIT_BYTES`       | `413 + Retry-After: 86400`                     |
 | `/ws/agent` pre-handshake                              | 1 KiB  | `agent-protocol.md` §2                        | WS close `4000` (handshake timeout)            |
 | `/ws/agent` post-handshake per frame                   | 1 MiB  | `agent-protocol.md` §2                        | WS close `1009 Message Too Big`                |
 
@@ -256,12 +257,13 @@ non-loopback) — see `agent-protocol.md` §2.
 
 ## 11. Self-check
 
-- Every route mounted by `main.rs::serve_mcp` is in §4, including the
-  deferred 404s (`/v1/metrics`, `/v1/traces`) and the fallback handler.
+- Every route mounted by `main.rs::serve_mcp` is in §4, including the OTLP
+  signal handlers and the fallback handler.
 - Every authenticated route's auth column references the policy matrix
   in §3 — no route exposes a one-off auth scheme.
 - Every body limit visible in code (`MCP_BODY_LIMIT_BYTES`,
-  `OTLP_BODY_LIMIT_BYTES`, agent pre-hello / per-frame caps) appears in §5.
+  `OTLP_BODY_LIMIT_BYTES`, `OTLP_SIGNAL_BODY_LIMIT_BYTES`, agent pre-hello /
+  per-frame caps) appears in §5.
 - The non-loopback safety gate in §9 matches the three branches in
   `validate_auth_config`.
 - `/ws/agent` is listed with a pointer to the wire-level contract in

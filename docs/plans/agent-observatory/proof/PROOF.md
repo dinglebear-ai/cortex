@@ -537,3 +537,89 @@ STRUCTURE: split canonical exemplar/value/key encoding into `metrics_payload.rs`
 PROOF: definitive locked focused metric normalization suite passed 8/8, including gauge/sum semantics, deterministic reorder-insensitive keys, stream-identity/flags collision resistance, exemplar validation, non-finite doubles, privacy policy, and fail-closed invalid fields
 REGRESSION: definitive locked full OTLP library sweep passed 90/90 with all prior logs/traces/auth/privacy/runtime/database coverage intact
 GATE: locked production `cargo check` passed without warnings; canonical rustfmt, `git diff --check`, and the full 500-line production Rust module-size gate passed; exact `cargo clippy --all-targets --all-features --locked -- -D warnings` passed after structurally reducing the point-normalizer argument surface and fixing the test config construction lint; the exact four-script Public Identity CI bundle passed after replacing private hostname fixtures with a neutral test host
+
+## AO-047 Normalize histogram points
+commit/worktree SHA: `codex/agent-observatory-ao047` (pre-commit proof)
+RED: the metric normalizer accepted only gauge and sum instruments, so explicit histograms had no lossless bounded representation or point-key identity and malformed bucket layouts could not be rejected at point scope
+GREEN: added a focused explicit-histogram normalizer that reuses the shared metric envelope, privacy, exemplar, metadata-cap, and point-key path; count, optional sum/min/max, ordered explicit bounds, bucket counts, flags, attributes, and exemplars are preserved in deterministic JSON
+VALIDATION: bucket arrays are capped at 16,384 entries before serialization; bucket/bound cardinality, bucket total, strictly increasing finite bounds, temporality, timestamps, attributes, exemplars, and encoded metadata fail closed through typed point errors
+PROOF: focused metric suite passed 11/11 and the complete OTLP library sweep passed 93/93, including histogram losslessness, stable identity, invalid shape/count/order/non-finite rejection, and pre-serialization cap enforcement
+GATE: locked workspace Clippy passed with `-D warnings`; canonical rustfmt, Agent Observatory golden contracts, and `git diff --check` passed; the hermetic nextest suite ran 3,005 tests with 3,005 passed, two intentionally skipped, and one slow
+## AO-048 Normalize exponential histogram and summary points
+commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
+RED: gauge, sum, and explicit histogram points normalized, but exponential histograms and summaries had no bounded lossless representation or typed validation
+GREEN: added privacy-aware exponential-histogram and summary normalization through the shared metric envelope, metadata, exemplar, timestamp, and deterministic point-key path
+VALIDATION: distribution arrays are capped before serialization; exponential bucket totals and summary quantile order/range/finite values fail closed at metric scope
+PROOF: focused metric normalization suite covers stable identity, lossless payloads, invalid count totals, invalid quantiles, and pre-serialization limits; the broad OTLP sweep passed 91/91
+
+## AO-049 Persist metric points idempotently
+commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
+RED: normalized metric points had no durable write path or duplicate accounting
+GREEN: added serialized transactional batch persistence with bounded transient-lock retry and `ON CONFLICT(point_key) DO NOTHING`
+VALIDATION: malformed identities, kinds, timestamps, JSON shapes, metadata sizes, and missing run foreign keys reject per row without poisoning valid neighbors
+PROOF: focused persistence suite passed 3/3 for repeat-export idempotency, malformed-neighbor isolation, and metadata/run validation
+
+## AO-050 Mount functional /v1/metrics
+commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
+RED: authenticated `/v1/metrics` returned a deferred 404
+GREEN: mounted authenticated protobuf metric ingestion with the 8 MiB signal body cap, blocking decode/persistence, all five OTLP metric kinds, configurable privacy, retryable storage-budget refusal, and protobuf partial-success responses
+PARTIAL: invalid points, points beyond the 5,000-point cap, and direct-storage validation failures are rejected without poisoning valid neighbors; duplicate exports remain successful and idempotent; temporary storage backpressure returns `503` plus `Retry-After` so exporters retry instead of discarding the batch
+PROOF: handler tests cover valid persistence, bearer auth, duplicate replay, invalid-point partial success, retryable storage backpressure, deterministic over-cap rejection, and the 8 MiB route limit
+GATE: broad OTLP sweep passed 91/91; workspace Clippy passed with warnings denied; rustfmt, diff, module-size, golden-contract, and version-sync gates passed; hermetic nextest ran 3,017 tests with 3,017 passed, two skipped, and one slow
+
+## AO-051 Add Claude OTLP fixture
+commit/worktree SHA: `codex/agent-observatory-provider-fixtures` (pre-commit proof)
+FIXTURE: added a synthetic Claude Code resource, tool event, trace span, and token metric using the official `service.name=claude-code` and shared `session.id` convention; provenance URL and retrieval date live in the artifact
+PROOF: the provider fixture invokes the real log converter plus privacy-aware span and metric normalizers; all three signals resolve the same session/project and trace/metric prompt content is absent under default privacy
+GATE: fixture contains synthetic values only and no credentials; official source is `https://code.claude.com/docs/en/monitoring-usage`, retrieved 2026-08-21
+
+## AO-052 Add Codex OTLP fixture
+commit/worktree SHA: `codex/agent-observatory-provider-fixtures` (pre-commit proof)
+FIXTURE: added a synthetic Codex resource, tool event, and tool-call span shaped from the generated Codex configuration contract; the metric lane is intentionally absent because exporters are independently configurable
+PROOF: log and trace evidence resolve the expected service/session/project while fixture freshness explicitly records metric as `not_observed`; absence is asserted only as freshness and creates no terminal, idle, or ended evidence
+GATE: provenance points to the generated official config schema at `https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json`, retrieved 2026-08-21
+
+## AO-053 Add Gemini OTLP fixture
+commit/worktree SHA: `codex/agent-observatory-provider-fixtures` (pre-commit proof)
+FIXTURE: added a synthetic Gemini CLI tool log, trace, and GenAI token metric with documented `service.name=gemini-cli`, `session.id`, and `gen_ai.conversation.id`; detailed prompt content remains disabled by default
+GREEN: official fixture exposure found and fixed the narrow `gemini-cli` service alias gap in canonical provider normalization
+PROOF: all three signals resolve one canonical Gemini session/project; `session.id` wins by frozen precedence while bounded resource metadata preserves both original session identifiers, and trace/metric prompt values are absent after privacy scrubbing
+GATE: exact fixture replay remains distinct per durable OTLP signal key; no heuristic cross-source deduplication was added; official source is `https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/telemetry.md`, retrieved 2026-08-21
+BATCH GATE: canonical rustfmt and `git diff --check` passed; the complete `otlp::` library filter ran 84 tests with 0 failures, including all existing auth/log/normalization/privacy/trace/metric coverage
+
+## AO-054 Implement opaque cursor codec
+GREEN: added dependency-free URL-safe base64 JSON cursors containing the stable sort value, durable ID, direction, and SHA-256 fingerprint of the canonical filter model.
+PROOF: round-trip, malformed encoding, direction reuse, and changed-filter rejection tests pass; cursors contain no bearer or request payload data and are opaque pagination state rather than an authorization boundary.
+
+## AO-055 Add repository/worktree query service
+GREEN: added bounded repository and worktree pages with host/query/activity/removal/time and branch/dirty filters, activity-ordered keyset traversal with first-page ID high-water capture, string-ready identifiers, response time, and stream cursor metadata.
+PROOF: a concurrent newer repository insert cannot duplicate or skip the remaining traversal; all SQL is parameterized and service methods keep it out of handlers. Durable snapshots across mutable activity updates are tracked in `syslog-mcp-7x7me`.
+
+## AO-056 Add agent-run list/detail service
+GREEN: added global and repository/worktree-constrained run reads with branch/status/tool/host/query/time/activity filters and contract-required `(last_activity_at,id)` descending keyset pages; first-page ID high-water excludes later inserts.
+PROOF: the planner uses `idx_agent_runs_status_activity`; pages contain summary fields and bounded freshness metadata rather than event payloads.
+
+## AO-057 Add event and telemetry query service
+GREEN: added independent ascending/descending event pages plus trace and metric pages, filter-bound cursors, payload opt-in, hard 500-row caps, and run-key resolution for telemetry.
+PROOF: cursor tests and SQLite plan fixtures cover `idx_agent_run_events_run_order`, `idx_otel_spans_run_time`, and `idx_otel_metric_points_run_time`; event payloads remain omitted unless explicitly requested.
+
+## AO-065 Create pinned pnpm/Next workspace
+commit/worktree SHA: `codex/agent-observatory-frontend-foundation` (pre-commit proof)
+RED: `pnpm install --frozen-lockfile` failed with `ERR_PNPM_NO_LOCKFILE` before the workspace lockfile existed
+GREEN: added a pnpm 10.33.2 workspace with Next 16.2.11, React/DOM 19.2.7, TypeScript 5.9.3, Tailwind 4.3.3, App Router shells, and a frozen lockfile; Next uses `output: "export"`, `basePath: "/app"`, and `trailingSlash: true`
+COEXISTENCE: the legacy `web/app/index.html`, `app.js`, and `app.css` remain untouched for the current Rust `include_str!` server while the new application exports independently to ignored `web/out`; no production Node runtime, server action, middleware, cookie, rewrite, or dynamic route was introduced
+PROOF: frozen install and static build produced `web/out/index.html`, `web/out/agents/index.html`, and `web/out/investigate/index.html`
+
+## AO-066 Add frontend lint, typecheck, and Vitest harness
+commit/worktree SHA: `codex/agent-observatory-frontend-foundation` (pre-commit proof)
+RED: the workspace had no lint, typecheck, test scripts, or typed disconnected contract helper
+GREEN: added ESLint 9.39.5 with eslint-config-next 16.2.11, strict TypeScript, and Vitest 4.1.11; the smoke helper imports the frozen TypeScript contract declarations directly and represents disconnected freshness without fabricating observations
+PROOF: `pnpm lint`, `pnpm typecheck`, and `pnpm test` passed with one Vitest file and one test
+GATE: generated output, test artifacts, legacy embedded JavaScript, and the reviewed vendored Cytoscape bundle are outside the new workspace lint ownership
+
+## AO-067 Add Playwright and axe harness
+commit/worktree SHA: `codex/agent-observatory-frontend-foundation` (pre-commit proof)
+RED: `/app/agents/` had no exported route, deterministic static server, browser configuration, or accessibility scanner
+GREEN: added Playwright 1.61.1 and `@axe-core/playwright` 4.12.1, a dependency-free loopback static-export server that mounts `web/out` at `/app`, and desktop Chrome plus Pixel 7 projects
+PROOF: both Chromium projects passed route, title, main landmark, heading, and zero-violation axe assertions against `/app/agents/`
+GATE: the harness uses only static contract-backed shells; a later phase replaces this local server with the real Cortex binary

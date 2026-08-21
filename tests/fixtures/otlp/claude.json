@@ -1,0 +1,38 @@
+{
+  "provider": "claude",
+  "provenance": {
+    "url": "https://code.claude.com/docs/en/monitoring-usage",
+    "retrieved": "2026-08-21",
+    "note": "Claude Code documents OTLP logs, metrics, optional traces, and session.id. Synthetic values only."
+  },
+  "resource": {
+    "service.name": "claude-code",
+    "host.name": "fixture-host",
+    "session.id": "claude-session-01",
+    "project.path": "/workspace/cortex"
+  },
+  "log": {
+    "event_name": "claude_code.tool_result",
+    "body": "tool completed",
+    "tool_name": "Bash",
+    "prompt": "PRIVATE_CLAUDE_PROMPT"
+  },
+  "span": {
+    "name": "claude_code.tool",
+    "tool_name": "Bash",
+    "prompt": "PRIVATE_CLAUDE_TRACE_PROMPT"
+  },
+  "metric": {
+    "name": "claude_code.token.usage",
+    "value": 42,
+    "prompt": "PRIVATE_CLAUDE_METRIC_PROMPT"
+  },
+  "expected": {
+    "tool": "claude",
+    "session_id": "claude-session-01",
+    "project": "/workspace/cortex",
+    "log": "observed",
+    "trace": "observed",
+    "metric": "observed"
+  }
+}

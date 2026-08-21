@@ -1,13 +1,12 @@
 //! Pure OTLP gauge/sum normalization for Agent Observatory metric points.
 
-use super::metrics_payload::{
-    PointKeyParts, exemplar_ids, number_value, point_key, serialize_exemplars,
-};
+use super::metrics_payload::{PointKeyParts, number_value, point_key, serialize_exemplars};
 use super::normalization::{MAX_RESOURCE_ATTRIBUTES, MAX_SIGNAL_ATTRIBUTES, normalize_attributes};
 use super::privacy::{private_attributes, private_text};
 use crate::config::AgentObservatoryPrivacyConfig;
 use opentelemetry_proto::tonic::{
-    common::v1::{EntityRef, InstrumentationScope},
+    common::v1::{EntityRef, InstrumentationScope, KeyValue},
+    metrics::v1::Exemplar,
     metrics::v1::{Metric, NumberDataPoint, metric},
     resource::v1::Resource,
 };
@@ -23,7 +22,17 @@ const MAX_SCOPE_VERSION_CHARS: usize = 512;
 const MAX_HOSTNAME_CHARS: usize = 255;
 const MAX_SERVICE_NAME_CHARS: usize = 512;
 const MAX_SERVICE_VERSION_CHARS: usize = 512;
-const MAX_EXEMPLARS: usize = 128;
+pub(super) const MAX_EXEMPLARS: usize = 128;
+
+#[path = "metrics_distribution.rs"]
+mod distribution;
+#[path = "metrics_histogram.rs"]
+mod histogram;
+
+#[cfg(test)]
+pub(crate) use distribution::normalize_distribution_metric;
+#[cfg(test)]
+pub(crate) use histogram::normalize_histogram_metric;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MetricPointInput {
@@ -55,7 +64,7 @@ pub(crate) struct MetricPointInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum MetricNormalizeError {
-    #[error("metric kind is not a gauge or sum")]
+    #[error("metric kind is unsupported or missing")]
     UnsupportedInstrument,
     #[error("metric name must not be empty")]
     EmptyMetricName,
@@ -71,6 +80,22 @@ pub(crate) enum MetricNormalizeError {
     },
     #[error("point contains {actual} exemplars; maximum is {maximum}")]
     ExemplarLimit { actual: usize, maximum: usize },
+    #[error("histogram contains {actual} buckets; maximum is {maximum}")]
+    HistogramBucketLimit { actual: usize, maximum: usize },
+    #[error("histogram has {buckets} bucket counts and {bounds} explicit bounds")]
+    InvalidHistogramShape { buckets: usize, bounds: usize },
+    #[error("histogram bucket counts do not sum to the point count")]
+    HistogramCountMismatch,
+    #[error("histogram explicit bounds must be strictly increasing")]
+    HistogramBoundsNotIncreasing,
+    #[error("distribution contains {actual} values; maximum is {maximum}")]
+    DistributionValueLimit { actual: usize, maximum: usize },
+    #[error("exponential histogram bucket counts do not sum to the point count")]
+    ExponentialHistogramCountMismatch,
+    #[error("summary quantiles must be finite, ordered, and within 0..=1")]
+    InvalidSummaryQuantiles,
+    #[error("summary quantile values must be finite")]
+    InvalidSummaryValue,
     #[error("{field} must be empty or exactly {expected} non-zero bytes; got {actual}")]
     InvalidOptionalId {
         field: &'static str,
@@ -95,8 +120,53 @@ pub(crate) enum MetricNormalizeError {
     },
 }
 
+pub(crate) fn normalize_metric_with_privacy(
+    resource: Option<&Resource>,
+    resource_schema_url: &str,
+    scope: Option<&InstrumentationScope>,
+    scope_schema_url: &str,
+    metric: &Metric,
+    privacy: &AgentObservatoryPrivacyConfig,
+    received_at: &str,
+) -> Result<Vec<MetricPointInput>, MetricNormalizeError> {
+    match metric.data.as_ref() {
+        Some(metric::Data::Gauge(_) | metric::Data::Sum(_)) => {
+            normalize_number_metric_with_privacy(
+                resource,
+                resource_schema_url,
+                scope,
+                scope_schema_url,
+                metric,
+                privacy,
+                received_at,
+            )
+        }
+        Some(metric::Data::Histogram(_)) => histogram::normalize_histogram_metric_with_privacy(
+            resource,
+            resource_schema_url,
+            scope,
+            scope_schema_url,
+            metric,
+            privacy,
+            received_at,
+        ),
+        Some(metric::Data::ExponentialHistogram(_) | metric::Data::Summary(_)) => {
+            distribution::normalize_distribution_metric_with_privacy(
+                resource,
+                resource_schema_url,
+                scope,
+                scope_schema_url,
+                metric,
+                privacy,
+                received_at,
+            )
+        }
+        None => Err(MetricNormalizeError::UnsupportedInstrument),
+    }
+}
+
 #[derive(Clone, Copy)]
-struct NumberMetricContext<'a> {
+pub(super) struct NumberMetricContext<'a> {
     resource: Option<&'a Resource>,
     resource_schema_url: &'a str,
     scope: Option<&'a InstrumentationScope>,
@@ -108,6 +178,14 @@ struct NumberMetricContext<'a> {
     aggregation_temporality: Option<i32>,
     monotonic: Option<bool>,
     ignore_start_time: bool,
+}
+
+pub(super) struct PointParts<'a> {
+    pub attributes: &'a [KeyValue],
+    pub exemplars: &'a [Exemplar],
+    pub start_time_unix_nano: u64,
+    pub time_unix_nano: u64,
+    pub value: Value,
 }
 
 #[cfg(test)]
@@ -130,8 +208,6 @@ pub(crate) fn normalize_number_metric(
     )
 }
 
-/// AO-046 stages this converter before AO-049/050 consume it from DB/HTTP paths.
-#[allow(dead_code)]
 pub(crate) fn normalize_number_metric_with_privacy(
     resource: Option<&Resource>,
     resource_schema_url: &str,
@@ -182,7 +258,7 @@ pub(crate) fn normalize_number_metric_with_privacy(
         .collect()
 }
 
-fn validate_metric_envelope(
+pub(super) fn validate_metric_envelope(
     resource: Option<&Resource>,
     scope: Option<&InstrumentationScope>,
     metric: &Metric,
@@ -223,6 +299,29 @@ fn normalize_number_point(
     context: NumberMetricContext<'_>,
     point: &NumberDataPoint,
 ) -> Result<MetricPointInput, MetricNormalizeError> {
+    let value = number_value(
+        point
+            .value
+            .as_ref()
+            .ok_or(MetricNormalizeError::MissingValue)?,
+        point.flags,
+    );
+    build_metric_point(
+        context,
+        PointParts {
+            attributes: &point.attributes,
+            exemplars: &point.exemplars,
+            start_time_unix_nano: point.start_time_unix_nano,
+            time_unix_nano: point.time_unix_nano,
+            value,
+        },
+    )
+}
+
+pub(super) fn build_metric_point(
+    context: NumberMetricContext<'_>,
+    point: PointParts<'_>,
+) -> Result<MetricPointInput, MetricNormalizeError> {
     if point.attributes.len() > MAX_SIGNAL_ATTRIBUTES {
         return Err(MetricNormalizeError::AttributeLimit {
             field: "point",
@@ -255,7 +354,7 @@ fn normalize_number_point(
         context
             .resource
             .map_or(&[], |value| value.attributes.as_slice()),
-        &point.attributes,
+        point.attributes,
     );
     check_chars(&normalized.host_name, MAX_HOSTNAME_CHARS, "hostname")?;
     if let Some(value) = normalized.service_name.as_deref() {
@@ -276,20 +375,13 @@ fn normalize_number_point(
         "scope": scope_value.clone(),
     });
     let attributes_value =
-        private_attributes(&point.attributes, MAX_SIGNAL_ATTRIBUTES, context.privacy);
-    let value_value = number_value(
-        point
-            .value
-            .as_ref()
-            .ok_or(MetricNormalizeError::MissingValue)?,
-        point.flags,
-    );
-    let exemplars_value = serialize_exemplars(&point.exemplars, context.privacy)?;
+        private_attributes(point.attributes, MAX_SIGNAL_ATTRIBUTES, context.privacy);
+    let value_value = point.value;
+    let exemplars_value = serialize_exemplars(point.exemplars, context.privacy)?;
     let resource_json = encode_json(resource_json_value, "resource")?;
     let attributes_json = encode_json(attributes_value.clone(), "attributes")?;
     let value_json = encode_json(value_value.clone(), "value")?;
     let exemplars_json = encode_json(exemplars_value, "exemplars")?;
-    let exemplar_ids = exemplar_ids(&point.exemplars)?;
     let metric_name = private_text(&context.metric.name);
     let unit = private_text(&context.metric.unit);
     let point_key = point_key(PointKeyParts {
@@ -303,8 +395,6 @@ fn normalize_number_point(
         start_time_unix_nano,
         time_unix_nano,
         attributes: &attributes_value,
-        value: &value_value,
-        exemplar_ids: &exemplar_ids,
     });
 
     Ok(MetricPointInput {

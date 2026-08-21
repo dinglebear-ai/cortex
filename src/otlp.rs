@@ -1,9 +1,9 @@
-//! OTLP/HTTP receiver for OpenTelemetry logs and traces. Logs feed the existing
-//! Cortex ingest pipeline; traces normalize into the Agent Observatory span store.
-//! `/v1/metrics` remains deferred.
+//! OTLP/HTTP receiver for OpenTelemetry logs, traces, and metrics. Logs feed the
+//! existing Cortex ingest pipeline; traces and metrics normalize into the Agent
+//! Observatory stores.
 //!
 //! Mounted on the same axum server as MCP. Logs retain a 4 MiB body limit;
-//! traces and the future metrics endpoint use 8 MiB. Bearer auth uses the same
+//! traces and metrics use 8 MiB. Bearer auth uses the same
 //! static MCP token as `/mcp` — `config.mcp.api_token`, set via
 //! `CORTEX_TOKEN`. It is NOT `CORTEX_API_TOKEN` (that is `config.api.api_token`,
 //! the separate REST `/api/*` token) and NOT `CORTEX_API_ADMIN_TOKEN`.
@@ -40,6 +40,7 @@ use crate::ingest::IngestTx;
 
 mod auth;
 mod entries;
+mod metric_http;
 mod metrics;
 mod metrics_payload;
 mod normalization;
@@ -47,11 +48,18 @@ mod privacy;
 mod trace_http;
 mod traces;
 
+#[cfg(test)]
+#[path = "otlp/provider_fixtures_tests.rs"]
+mod provider_fixtures_tests;
+
 use auth::{
     is_authorized, otlp_auth_policy_label, should_warn_unauthorized, unauthorized,
     unauthorized_diagnostics,
 };
 use entries::build_entries;
+#[cfg(test)]
+use metric_http::MAX_METRIC_POINTS_PER_REQUEST;
+use metric_http::{MetricIngestState, metrics_handler};
 #[cfg(test)]
 use trace_http::MAX_SPANS_PER_REQUEST;
 use trace_http::{TraceIngestState, traces_handler};
@@ -66,6 +74,13 @@ pub const OTLP_SIGNAL_BODY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 pub struct OtlpCounters {
     pub logs_received: AtomicU64,
     pub decode_errors: AtomicU64,
+    pub metrics_accepted: AtomicU64,
+    pub metrics_duplicates: AtomicU64,
+    pub metrics_rejected: AtomicU64,
+    pub metrics_backpressure: AtomicU64,
+    pub metrics_auth_failures: AtomicU64,
+    pub metrics_decode_errors: AtomicU64,
+    pub metrics_persistence_errors: AtomicU64,
 }
 
 /// Shared state for every OTLP route.
@@ -75,6 +90,7 @@ pub struct OtlpState {
     pub api_token: Option<String>,
     pub counters: Arc<OtlpCounters>,
     pub auth_policy: AuthPolicy,
+    metric_ingest: Option<MetricIngestState>,
     trace_ingest: Option<TraceIngestState>,
 }
 
@@ -90,6 +106,7 @@ impl OtlpState {
             api_token,
             counters,
             auth_policy,
+            metric_ingest: None,
             trace_ingest: None,
         }
     }
@@ -100,13 +117,18 @@ impl OtlpState {
         storage_state: Arc<Mutex<Option<StorageBudgetState>>>,
         privacy: AgentObservatoryPrivacyConfig,
     ) -> Self {
+        self.metric_ingest = Some(MetricIngestState::new(
+            Arc::clone(&pool),
+            Arc::clone(&storage_state),
+            privacy.clone(),
+        ));
         self.trace_ingest = Some(TraceIngestState::new(pool, storage_state, privacy));
         self
     }
 }
 
 /// Build the OTLP router. Logs retain their existing 4 MiB body cap while
-/// traces and the future metrics endpoint use the Agent Observatory 8 MiB cap.
+/// traces and metrics use the Agent Observatory 8 MiB cap.
 pub fn router(state: OtlpState) -> Router {
     Router::new()
         .route(
@@ -262,32 +284,6 @@ async fn logs_handler(
         .fetch_add(count as u64, Ordering::Relaxed);
     tracing::info!(records = count, source_ip = %peer, "OTLP logs ingested");
     StatusCode::OK.into_response()
-}
-
-async fn metrics_handler(
-    State(state): State<OtlpState>,
-    headers: HeaderMap,
-) -> axum::response::Response {
-    if !is_authorized(&state, &headers) {
-        return unauthorized();
-    }
-    let content_length = headers
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(0);
-    tracing::warn!(
-        content_length,
-        "OTLP metrics received but metrics ingestion is not supported"
-    );
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "error": "metrics_not_supported",
-            "message": "OTLP metrics ingestion is deferred."
-        })),
-    )
-        .into_response()
 }
 
 #[cfg(test)]

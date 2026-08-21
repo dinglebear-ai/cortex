@@ -595,7 +595,7 @@ async fn serve_mcp() -> Result<()> {
         );
     }
     app = app.merge(runtime.otlp_router());
-    info!("OTLP receiver mounted at /v1/logs (and /v1/metrics, /v1/traces → 404)");
+    info!("OTLP receiver mounted at /v1/logs, /v1/metrics, and /v1/traces");
     app = app.merge(runtime.heartbeat_router());
     info!("Heartbeat receiver mounted at /v1/heartbeats");
     app = app.merge(runtime.agent_command_router());
