@@ -545,7 +545,6 @@ GREEN: added a focused explicit-histogram normalizer that reuses the shared metr
 VALIDATION: bucket arrays are capped at 16,384 entries before serialization; bucket/bound cardinality, bucket total, strictly increasing finite bounds, temporality, timestamps, attributes, exemplars, and encoded metadata fail closed through typed point errors
 PROOF: focused metric suite passed 11/11 and the complete OTLP library sweep passed 93/93, including histogram losslessness, stable identity, invalid shape/count/order/non-finite rejection, and pre-serialization cap enforcement
 GATE: locked workspace Clippy passed with `-D warnings`; canonical rustfmt, Agent Observatory golden contracts, and `git diff --check` passed; the hermetic nextest suite ran 3,005 tests with 3,005 passed, two intentionally skipped, and one slow
-
 ## AO-048 Normalize exponential histogram and summary points
 commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
 RED: gauge, sum, and explicit histogram points normalized, but exponential histograms and summaries had no bounded lossless representation or typed validation
@@ -567,3 +566,23 @@ GREEN: mounted authenticated protobuf metric ingestion with the 8 MiB signal bod
 PARTIAL: invalid points, points beyond the 5,000-point cap, and direct-storage validation failures are rejected without poisoning valid neighbors; duplicate exports remain successful and idempotent
 PROOF: handler tests cover valid persistence, bearer auth, duplicate replay, invalid-point and storage-budget partial success, deterministic over-cap rejection, and the 8 MiB route limit
 GATE: broad OTLP sweep passed 91/91; workspace Clippy passed with warnings denied; rustfmt, diff, module-size, golden-contract, and version-sync gates passed; hermetic nextest ran 3,017 tests with 3,017 passed, two skipped, and one slow
+
+## AO-051 Add Claude OTLP fixture
+commit/worktree SHA: `codex/agent-observatory-provider-fixtures` (pre-commit proof)
+FIXTURE: added a synthetic Claude Code resource, tool event, trace span, and token metric using the official `service.name=claude-code` and shared `session.id` convention; provenance URL and retrieval date live in the artifact
+PROOF: the provider fixture invokes the real log converter plus privacy-aware span and metric normalizers; all three signals resolve the same session/project and trace/metric prompt content is absent under default privacy
+GATE: fixture contains synthetic values only and no credentials; official source is `https://code.claude.com/docs/en/monitoring-usage`, retrieved 2026-08-21
+
+## AO-052 Add Codex OTLP fixture
+commit/worktree SHA: `codex/agent-observatory-provider-fixtures` (pre-commit proof)
+FIXTURE: added a synthetic Codex resource, tool event, and tool-call span shaped from the generated Codex configuration contract; the metric lane is intentionally absent because exporters are independently configurable
+PROOF: log and trace evidence resolve the expected service/session/project while fixture freshness explicitly records metric as `not_observed`; absence is asserted only as freshness and creates no terminal, idle, or ended evidence
+GATE: provenance points to the generated official config schema at `https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json`, retrieved 2026-08-21
+
+## AO-053 Add Gemini OTLP fixture
+commit/worktree SHA: `codex/agent-observatory-provider-fixtures` (pre-commit proof)
+FIXTURE: added a synthetic Gemini CLI tool log, trace, and GenAI token metric with documented `service.name=gemini-cli`, `session.id`, and `gen_ai.conversation.id`; detailed prompt content remains disabled by default
+GREEN: official fixture exposure found and fixed the narrow `gemini-cli` service alias gap in canonical provider normalization
+PROOF: all three signals resolve one canonical Gemini session/project; `session.id` wins by frozen precedence while bounded resource metadata preserves both original session identifiers, and trace/metric prompt values are absent after privacy scrubbing
+GATE: exact fixture replay remains distinct per durable OTLP signal key; no heuristic cross-source deduplication was added; official source is `https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/telemetry.md`, retrieved 2026-08-21
+BATCH GATE: canonical rustfmt and `git diff --check` passed; the complete `otlp::` library filter ran 84 tests with 0 failures, including all existing auth/log/normalization/privacy/trace/metric coverage

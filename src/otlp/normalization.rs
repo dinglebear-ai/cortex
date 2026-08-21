@@ -143,7 +143,7 @@ fn canonical_tool(value: &str) -> Option<String> {
     let known = match normalized.as_str() {
         "claude" | "claude-code" | "claude-transcript" => Some("claude"),
         "codex" | "codex-transcript" => Some("codex"),
-        "gemini" | "gemini-transcript" => Some("gemini"),
+        "gemini" | "gemini-cli" | "gemini-transcript" => Some("gemini"),
         _ => None,
     };
     if let Some(known) = known {

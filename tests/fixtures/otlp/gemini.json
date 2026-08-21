@@ -1,0 +1,39 @@
+{
+  "provider": "gemini",
+  "provenance": {
+    "url": "https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/telemetry.md",
+    "retrieved": "2026-08-21",
+    "note": "Gemini CLI documents logs, metrics, traces, common session.id, and gen_ai.conversation.id. Synthetic values only."
+  },
+  "resource": {
+    "service.name": "gemini-cli",
+    "host.name": "fixture-host",
+    "session.id": "gemini-session-01",
+    "gen_ai.conversation.id": "gemini-conversation-01",
+    "project.path": "/workspace/cortex"
+  },
+  "log": {
+    "event_name": "gemini_cli.tool_call",
+    "body": "tool completed",
+    "tool_name": "read_file",
+    "prompt": "PRIVATE_GEMINI_PROMPT"
+  },
+  "span": {
+    "name": "tool_call",
+    "tool_name": "read_file",
+    "prompt": "PRIVATE_GEMINI_TRACE_PROMPT"
+  },
+  "metric": {
+    "name": "gen_ai.client.token.usage",
+    "value": 17,
+    "prompt": "PRIVATE_GEMINI_METRIC_PROMPT"
+  },
+  "expected": {
+    "tool": "gemini",
+    "session_id": "gemini-session-01",
+    "project": "/workspace/cortex",
+    "log": "observed",
+    "trace": "observed",
+    "metric": "observed"
+  }
+}

@@ -48,6 +48,10 @@ mod privacy;
 mod trace_http;
 mod traces;
 
+#[cfg(test)]
+#[path = "otlp/provider_fixtures_tests.rs"]
+mod provider_fixtures_tests;
+
 use auth::{
     is_authorized, otlp_auth_policy_label, should_warn_unauthorized, unauthorized,
     unauthorized_diagnostics,
