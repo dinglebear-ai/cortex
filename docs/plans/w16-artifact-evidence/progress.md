@@ -1,20 +1,20 @@
 # W16 Cortex Artifact Evidence Progress
 
-Status: ACTIVE
+Status: COMPLETE / MERGED
 Workstream: W16 / L06-E
 Bead: phoenix-ek9
-Updated: 2026-08-19
+Updated: 2026-08-21
 
 ## Lane identity
 
 - Repository: dinglebear-ai/cortex
-- Worktree: /home/jmagar/workspace/cortex/.worktrees/w16-cortex-artifact-evidence-20260819
-- Branch: codex/w16-cortex-artifact-evidence-20260819
+- Worktree: retired after merge; former path `/home/jmagar/workspace/cortex/.worktrees/w16-cortex-artifact-evidence-20260819`
+- Branch: former branch `codex/w16-cortex-artifact-evidence-20260819`, merged through PR #198
 - Original lane base: origin/main 0ebb3d2bb6c220147dd4ee27f9efb162f3e88ba9 (v3.13.2)
 - Current branch base: origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 (#199 merged)
 - Rebase onto exact origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 completed cleanly with zero conflicts
-- Active OTLP PR #200/worktree remained untouched throughout validation
-- Draft PR: #198, feat: add W16 artifact evidence foundation
+- OTLP PR #200/worktree remained untouched throughout W16 validation; #200 later merged as `154474a17531f3281a18589ebc9bfeeddb7a8686` and its worktree was retired during conductor cleanup.
+- Merged PR: #198, `feat: add W16 artifact evidence foundation`, squash merge `d232d82bdafc1978fd389cf1f134f29631febc4c` on 2026-08-20.
 
 ## Active-lane inventory
 
@@ -120,6 +120,6 @@ Post-#199 validation on rebased code head `6c84827a0311da87f8cf51d4c7344ecc893c8
 - Clean rebase onto origin/main 64098b3fa4471837aec82a6063cc625f02a61f78 completed with zero conflicts; W16 still does not touch Agent Observatory hot ingest/cursor files.
 - PR #199 is incorporated at the exact requested base. OTLP PR #200/worktree remained untouched.
 
-## Next action
+## Terminal status
 
-Commit and force-with-lease push this final evidence checkpoint, refresh PR #198 with exact SHAs/results, and require fresh GitHub CI plus Repository Contract to be green/mergeable.
+W16 is complete. PR #198 merged on 2026-08-20 as `d232d82bdafc1978fd389cf1f134f29631febc4c`. The W16 worktree was removed during conductor cleanup after its landed state was verified. No W16 implementation work remains pending.
