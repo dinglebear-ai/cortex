@@ -602,3 +602,24 @@ PROOF: the planner uses `idx_agent_runs_status_activity`; pages contain summary 
 ## AO-057 Add event and telemetry query service
 GREEN: added independent ascending/descending event pages plus trace and metric pages, filter-bound cursors, payload opt-in, hard 500-row caps, and run-key resolution for telemetry.
 PROOF: cursor tests and SQLite plan fixtures cover `idx_agent_run_events_run_order`, `idx_otel_spans_run_time`, and `idx_otel_metric_points_run_time`; event payloads remain omitted unless explicitly requested.
+
+## AO-065 Create pinned pnpm/Next workspace
+commit/worktree SHA: `codex/agent-observatory-frontend-foundation` (pre-commit proof)
+RED: `pnpm install --frozen-lockfile` failed with `ERR_PNPM_NO_LOCKFILE` before the workspace lockfile existed
+GREEN: added a pnpm 10.33.2 workspace with Next 16.2.11, React/DOM 19.2.7, TypeScript 5.9.3, Tailwind 4.3.3, App Router shells, and a frozen lockfile; Next uses `output: "export"`, `basePath: "/app"`, and `trailingSlash: true`
+COEXISTENCE: the legacy `web/app/index.html`, `app.js`, and `app.css` remain untouched for the current Rust `include_str!` server while the new application exports independently to ignored `web/out`; no production Node runtime, server action, middleware, cookie, rewrite, or dynamic route was introduced
+PROOF: frozen install and static build produced `web/out/index.html`, `web/out/agents/index.html`, and `web/out/investigate/index.html`
+
+## AO-066 Add frontend lint, typecheck, and Vitest harness
+commit/worktree SHA: `codex/agent-observatory-frontend-foundation` (pre-commit proof)
+RED: the workspace had no lint, typecheck, test scripts, or typed disconnected contract helper
+GREEN: added ESLint 9.39.5 with eslint-config-next 16.2.11, strict TypeScript, and Vitest 4.1.11; the smoke helper imports the frozen TypeScript contract declarations directly and represents disconnected freshness without fabricating observations
+PROOF: `pnpm lint`, `pnpm typecheck`, and `pnpm test` passed with one Vitest file and one test
+GATE: generated output, test artifacts, legacy embedded JavaScript, and the reviewed vendored Cytoscape bundle are outside the new workspace lint ownership
+
+## AO-067 Add Playwright and axe harness
+commit/worktree SHA: `codex/agent-observatory-frontend-foundation` (pre-commit proof)
+RED: `/app/agents/` had no exported route, deterministic static server, browser configuration, or accessibility scanner
+GREEN: added Playwright 1.61.1 and `@axe-core/playwright` 4.12.1, a dependency-free loopback static-export server that mounts `web/out` at `/app`, and desktop Chrome plus Pixel 7 projects
+PROOF: both Chromium projects passed route, title, main landmark, heading, and zero-violation axe assertions against `/app/agents/`
+GATE: the harness uses only static contract-backed shells; a later phase replaces this local server with the real Cortex binary
