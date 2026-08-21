@@ -586,3 +586,19 @@ GREEN: official fixture exposure found and fixed the narrow `gemini-cli` service
 PROOF: all three signals resolve one canonical Gemini session/project; `session.id` wins by frozen precedence while bounded resource metadata preserves both original session identifiers, and trace/metric prompt values are absent after privacy scrubbing
 GATE: exact fixture replay remains distinct per durable OTLP signal key; no heuristic cross-source deduplication was added; official source is `https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/telemetry.md`, retrieved 2026-08-21
 BATCH GATE: canonical rustfmt and `git diff --check` passed; the complete `otlp::` library filter ran 84 tests with 0 failures, including all existing auth/log/normalization/privacy/trace/metric coverage
+
+## AO-054 Implement opaque cursor codec
+GREEN: added dependency-free URL-safe base64 JSON cursors containing the stable sort value, durable ID, direction, and SHA-256 fingerprint of the canonical filter model.
+PROOF: round-trip, malformed/tampered input, direction reuse, and changed-filter rejection tests pass; cursors contain no bearer or request payload data.
+
+## AO-055 Add repository/worktree query service
+GREEN: added bounded repository and worktree pages with host/query/activity/removal/time and branch/dirty filters, stable `(last_seen_at,id)` traversal, string-ready identifiers, snapshot time, and stream cursor metadata.
+PROOF: a concurrent newer repository insert cannot duplicate or skip the remaining traversal; all SQL is parameterized and service methods keep it out of handlers.
+
+## AO-056 Add agent-run list/detail service
+GREEN: added global and repository/worktree-constrained run reads with branch/status/tool/host/query/time/activity filters and stable `(last_activity_at,id)` descending pages.
+PROOF: the planner uses `idx_agent_runs_status_activity`; pages contain summary fields and bounded freshness metadata rather than event payloads.
+
+## AO-057 Add event and telemetry query service
+GREEN: added independent ascending/descending event pages plus trace and metric pages, filter-bound cursors, payload opt-in, hard 500-row caps, and run-key resolution for telemetry.
+PROOF: cursor tests and SQLite plan fixtures cover `idx_agent_run_events_run_order`, `idx_otel_spans_run_time`, and `idx_otel_metric_points_run_time`; event payloads remain omitted unless explicitly requested.

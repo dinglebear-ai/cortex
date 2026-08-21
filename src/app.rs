@@ -1,4 +1,6 @@
+pub mod agent_observatory;
 mod correlate;
+pub mod cursor;
 mod error;
 pub(crate) mod error_detection;
 pub(crate) mod heartbeat_flags;

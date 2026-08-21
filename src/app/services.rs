@@ -271,7 +271,7 @@ impl CortexService {
         Arc::clone(&self.pool)
     }
 
-    async fn run_db<F, T>(&self, op: &'static str, f: F) -> ServiceResult<T>
+    pub(super) async fn run_db<F, T>(&self, op: &'static str, f: F) -> ServiceResult<T>
     where
         F: FnOnce(&DbPool) -> anyhow::Result<T> + Send + 'static,
         T: Send + 'static,
