@@ -193,7 +193,7 @@ fn normalize_summary_point(
             {
                 return Err(MetricNormalizeError::InvalidSummaryQuantiles);
             }
-            if !value.value.is_finite() || value.value < 0.0 {
+            if !value.value.is_finite() {
                 return Err(MetricNormalizeError::InvalidSummaryValue);
             }
             previous = Some(value.quantile);

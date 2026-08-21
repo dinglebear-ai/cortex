@@ -57,9 +57,9 @@ mod read;
 pub use read::{
     AgentEventQuery, AgentRunQuery, ObservatoryEventRow, ObservatoryMetricRow,
     ObservatoryRepositoryRow, ObservatoryRunRow, ObservatorySpanRow, ObservatoryWorktreeRow,
-    RepositoryQuery, TelemetryQuery, list_observatory_events, list_observatory_metrics,
-    list_observatory_repositories, list_observatory_runs, list_observatory_spans,
-    list_observatory_worktrees,
+    RepositoryQuery, RunTelemetryIdentity, TelemetryQuery, list_observatory_events,
+    list_observatory_metrics, list_observatory_repositories, list_observatory_runs,
+    list_observatory_spans, list_observatory_worktrees,
 };
 
 use crate::db::pool::{DbPool, write_lock};

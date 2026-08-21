@@ -1,8 +1,6 @@
 //! Pure OTLP gauge/sum normalization for Agent Observatory metric points.
 
-use super::metrics_payload::{
-    PointKeyParts, exemplar_ids, number_value, point_key, serialize_exemplars,
-};
+use super::metrics_payload::{PointKeyParts, number_value, point_key, serialize_exemplars};
 use super::normalization::{MAX_RESOURCE_ATTRIBUTES, MAX_SIGNAL_ATTRIBUTES, normalize_attributes};
 use super::privacy::{private_attributes, private_text};
 use crate::config::AgentObservatoryPrivacyConfig;
@@ -96,7 +94,7 @@ pub(crate) enum MetricNormalizeError {
     ExponentialHistogramCountMismatch,
     #[error("summary quantiles must be finite, ordered, and within 0..=1")]
     InvalidSummaryQuantiles,
-    #[error("summary quantile values must be finite and non-negative")]
+    #[error("summary quantile values must be finite")]
     InvalidSummaryValue,
     #[error("{field} must be empty or exactly {expected} non-zero bytes; got {actual}")]
     InvalidOptionalId {
@@ -384,7 +382,6 @@ pub(super) fn build_metric_point(
     let attributes_json = encode_json(attributes_value.clone(), "attributes")?;
     let value_json = encode_json(value_value.clone(), "value")?;
     let exemplars_json = encode_json(exemplars_value, "exemplars")?;
-    let exemplar_ids = exemplar_ids(point.exemplars)?;
     let metric_name = private_text(&context.metric.name);
     let unit = private_text(&context.metric.unit);
     let point_key = point_key(PointKeyParts {
@@ -398,8 +395,6 @@ pub(super) fn build_metric_point(
         start_time_unix_nano,
         time_unix_nano,
         attributes: &attributes_value,
-        value: &value_value,
-        exemplar_ids: &exemplar_ids,
     });
 
     Ok(MetricPointInput {

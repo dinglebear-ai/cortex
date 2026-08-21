@@ -150,6 +150,7 @@ fn valid_input(tx: &Transaction<'_>, entry: &OtelMetricPointInput) -> Result<boo
             entry.instrument_kind.as_str(),
             "gauge" | "sum" | "histogram" | "exponential_histogram" | "summary"
         )
+        && valid_instrument_metadata(entry)
         && entry.time_unix_nano > 0
         && entry
             .start_time_unix_nano
@@ -183,6 +184,17 @@ fn valid_input(tx: &Transaction<'_>, entry: &OtelMetricPointInput) -> Result<boo
         }
     }
     Ok(true)
+}
+
+fn valid_instrument_metadata(entry: &OtelMetricPointInput) -> bool {
+    match entry.instrument_kind.as_str() {
+        "gauge" | "summary" => entry.aggregation_temporality.is_none() && entry.monotonic.is_none(),
+        "sum" => matches!(entry.aggregation_temporality, Some(1 | 2)) && entry.monotonic.is_some(),
+        "histogram" | "exponential_histogram" => {
+            matches!(entry.aggregation_temporality, Some(1 | 2)) && entry.monotonic.is_none()
+        }
+        _ => false,
+    }
 }
 
 fn within_chars(value: &str, maximum: usize) -> bool {

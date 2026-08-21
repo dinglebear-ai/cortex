@@ -15,6 +15,11 @@ pub enum CursorDirection {
 pub struct PageCursor {
     pub sort: String,
     pub id: i64,
+    /// Stable row-id ceiling captured before the first page is read.
+    pub high_water: i64,
+    /// Database timestamp captured with `high_water`; mutable sort columns may
+    /// not advance beyond it on later pages.
+    pub as_of: String,
     pub direction: CursorDirection,
     pub filters: String,
 }
@@ -57,7 +62,12 @@ pub fn decode_cursor(
     }
     let bytes = base64url_decode(encoded)?;
     let cursor: PageCursor = serde_json::from_slice(&bytes).map_err(|_| CursorError::Invalid)?;
-    if cursor.id <= 0 || cursor.sort.is_empty() || cursor.direction != expected_direction {
+    if cursor.id <= 0
+        || cursor.high_water <= 0
+        || cursor.sort.is_empty()
+        || chrono::DateTime::parse_from_rfc3339(&cursor.as_of).is_err()
+        || cursor.direction != expected_direction
+    {
         return Err(CursorError::Invalid);
     }
     if cursor.filters != expected_filters {

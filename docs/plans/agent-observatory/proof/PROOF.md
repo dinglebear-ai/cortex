@@ -562,9 +562,9 @@ PROOF: focused persistence suite passed 3/3 for repeat-export idempotency, malfo
 ## AO-050 Mount functional /v1/metrics
 commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
 RED: authenticated `/v1/metrics` returned a deferred 404
-GREEN: mounted authenticated protobuf metric ingestion with the 8 MiB signal body cap, blocking decode/persistence, all five OTLP metric kinds, configurable privacy, storage-budget refusal, and protobuf partial-success responses
-PARTIAL: invalid points, points beyond the 5,000-point cap, and direct-storage validation failures are rejected without poisoning valid neighbors; duplicate exports remain successful and idempotent
-PROOF: handler tests cover valid persistence, bearer auth, duplicate replay, invalid-point and storage-budget partial success, deterministic over-cap rejection, and the 8 MiB route limit
+GREEN: mounted authenticated protobuf metric ingestion with the 8 MiB signal body cap, blocking decode/persistence, all five OTLP metric kinds, configurable privacy, retryable storage-budget refusal, and protobuf partial-success responses
+PARTIAL: invalid points, points beyond the 5,000-point cap, and direct-storage validation failures are rejected without poisoning valid neighbors; duplicate exports remain successful and idempotent; temporary storage backpressure returns `503` plus `Retry-After` so exporters retry instead of discarding the batch
+PROOF: handler tests cover valid persistence, bearer auth, duplicate replay, invalid-point partial success, retryable storage backpressure, deterministic over-cap rejection, and the 8 MiB route limit
 GATE: broad OTLP sweep passed 91/91; workspace Clippy passed with warnings denied; rustfmt, diff, module-size, golden-contract, and version-sync gates passed; hermetic nextest ran 3,017 tests with 3,017 passed, two skipped, and one slow
 
 ## AO-051 Add Claude OTLP fixture
@@ -589,14 +589,14 @@ BATCH GATE: canonical rustfmt and `git diff --check` passed; the complete `otlp:
 
 ## AO-054 Implement opaque cursor codec
 GREEN: added dependency-free URL-safe base64 JSON cursors containing the stable sort value, durable ID, direction, and SHA-256 fingerprint of the canonical filter model.
-PROOF: round-trip, malformed/tampered input, direction reuse, and changed-filter rejection tests pass; cursors contain no bearer or request payload data.
+PROOF: round-trip, malformed encoding, direction reuse, and changed-filter rejection tests pass; cursors contain no bearer or request payload data and are opaque pagination state rather than an authorization boundary.
 
 ## AO-055 Add repository/worktree query service
-GREEN: added bounded repository and worktree pages with host/query/activity/removal/time and branch/dirty filters, stable `(last_seen_at,id)` traversal, string-ready identifiers, snapshot time, and stream cursor metadata.
-PROOF: a concurrent newer repository insert cannot duplicate or skip the remaining traversal; all SQL is parameterized and service methods keep it out of handlers.
+GREEN: added bounded repository and worktree pages with host/query/activity/removal/time and branch/dirty filters, activity-ordered keyset traversal with first-page ID high-water capture, string-ready identifiers, response time, and stream cursor metadata.
+PROOF: a concurrent newer repository insert cannot duplicate or skip the remaining traversal; all SQL is parameterized and service methods keep it out of handlers. Durable snapshots across mutable activity updates are tracked in `syslog-mcp-7x7me`.
 
 ## AO-056 Add agent-run list/detail service
-GREEN: added global and repository/worktree-constrained run reads with branch/status/tool/host/query/time/activity filters and stable `(last_activity_at,id)` descending pages.
+GREEN: added global and repository/worktree-constrained run reads with branch/status/tool/host/query/time/activity filters and contract-required `(last_activity_at,id)` descending keyset pages; first-page ID high-water excludes later inserts.
 PROOF: the planner uses `idx_agent_runs_status_activity`; pages contain summary fields and bounded freshness metadata rather than event payloads.
 
 ## AO-057 Add event and telemetry query service

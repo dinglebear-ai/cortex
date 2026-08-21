@@ -3,7 +3,7 @@
 //! Observatory stores.
 //!
 //! Mounted on the same axum server as MCP. Logs retain a 4 MiB body limit;
-//! traces and the future metrics endpoint use 8 MiB. Bearer auth uses the same
+//! traces and metrics use 8 MiB. Bearer auth uses the same
 //! static MCP token as `/mcp` — `config.mcp.api_token`, set via
 //! `CORTEX_TOKEN`. It is NOT `CORTEX_API_TOKEN` (that is `config.api.api_token`,
 //! the separate REST `/api/*` token) and NOT `CORTEX_API_ADMIN_TOKEN`.
@@ -74,6 +74,13 @@ pub const OTLP_SIGNAL_BODY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 pub struct OtlpCounters {
     pub logs_received: AtomicU64,
     pub decode_errors: AtomicU64,
+    pub metrics_accepted: AtomicU64,
+    pub metrics_duplicates: AtomicU64,
+    pub metrics_rejected: AtomicU64,
+    pub metrics_backpressure: AtomicU64,
+    pub metrics_auth_failures: AtomicU64,
+    pub metrics_decode_errors: AtomicU64,
+    pub metrics_persistence_errors: AtomicU64,
 }
 
 /// Shared state for every OTLP route.

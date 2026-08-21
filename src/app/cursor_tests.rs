@@ -2,10 +2,12 @@ use super::*;
 
 #[test]
 fn cursor_round_trips_without_padding() {
-    let filters = filter_fingerprint(&serde_json::json!({"host":"dookie"})).unwrap();
+    let filters = filter_fingerprint(&serde_json::json!({"host":"node-a.example.test"})).unwrap();
     let cursor = PageCursor {
         sort: "2026-08-21T12:00:00Z".into(),
         id: 42,
+        high_water: 42,
+        as_of: "2026-08-21T12:00:00Z".into(),
         direction: CursorDirection::Desc,
         filters: filters.clone(),
     };
@@ -19,10 +21,12 @@ fn cursor_round_trips_without_padding() {
 
 #[test]
 fn cursor_rejects_tampering_and_filter_or_direction_reuse() {
-    let filters = filter_fingerprint(&serde_json::json!({"host":"dookie"})).unwrap();
+    let filters = filter_fingerprint(&serde_json::json!({"host":"node-a.example.test"})).unwrap();
     let cursor = PageCursor {
         sort: "9".into(),
         id: 7,
+        high_water: 7,
+        as_of: "2026-08-21T12:00:00Z".into(),
         direction: CursorDirection::Asc,
         filters: filters.clone(),
     };

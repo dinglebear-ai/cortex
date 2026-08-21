@@ -262,7 +262,8 @@ non-loopback) — see `agent-protocol.md` §2.
 - Every authenticated route's auth column references the policy matrix
   in §3 — no route exposes a one-off auth scheme.
 - Every body limit visible in code (`MCP_BODY_LIMIT_BYTES`,
-  `OTLP_BODY_LIMIT_BYTES`, agent pre-hello / per-frame caps) appears in §5.
+  `OTLP_BODY_LIMIT_BYTES`, `OTLP_SIGNAL_BODY_LIMIT_BYTES`, agent pre-hello /
+  per-frame caps) appears in §5.
 - The non-loopback safety gate in §9 matches the three branches in
   `validate_auth_config`.
 - `/ws/agent` is listed with a pointer to the wire-level contract in

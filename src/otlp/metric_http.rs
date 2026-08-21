@@ -4,7 +4,10 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header::CONTENT_TYPE},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CONTENT_TYPE, RETRY_AFTER},
+    },
     response::{IntoResponse, Json},
 };
 use bytes::Bytes;
@@ -87,6 +90,10 @@ pub(super) async fn metrics_handler(
     body: Bytes,
 ) -> axum::response::Response {
     if !is_authorized(&state, &headers) {
+        state
+            .counters
+            .metrics_auth_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return unauthorized();
     }
     if !is_protobuf_content_type(&headers) {
@@ -112,6 +119,10 @@ pub(super) async fn metrics_handler(
                 .counters
                 .decode_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state
+                .counters
+                .metrics_decode_errors
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!(error = %error, source_ip = %peer, "OTLP /v1/metrics decode failed");
             return (
                 StatusCode::BAD_REQUEST,
@@ -123,6 +134,10 @@ pub(super) async fn metrics_handler(
             state
                 .counters
                 .decode_errors
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            state
+                .counters
+                .metrics_decode_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!(error = %error, "OTLP metric decode task panicked");
             return (
@@ -184,11 +199,18 @@ pub(super) async fn metrics_handler(
         .as_ref()
         .is_some_and(|state| state.write_blocked)
     {
-        rejected += normalized.len();
-        if !normalized.is_empty() {
-            messages.push("metric storage temporarily blocked by configured storage budget");
-        }
-        return metric_success_response(rejected, &messages);
+        let blocked = normalized.len();
+        state.counters.metrics_backpressure.fetch_add(
+            u64::try_from(blocked).unwrap_or(u64::MAX),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        tracing::warn!(source_ip = %peer, blocked, "OTLP metric persistence blocked by storage budget");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(RETRY_AFTER, HeaderValue::from_static("1"))],
+            Json(json!({"error": "metric_storage_blocked", "retryable": true})),
+        )
+            .into_response();
     }
     let pool = Arc::clone(&ingest.pool);
     let persisted = tokio::task::spawn_blocking(move || {
@@ -198,6 +220,10 @@ pub(super) async fn metrics_handler(
     let result = match persisted {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => {
+            state
+                .counters
+                .metrics_persistence_errors
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!(error = %error, source_ip = %peer, "OTLP metric persistence failed");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -206,6 +232,10 @@ pub(super) async fn metrics_handler(
                 .into_response();
         }
         Err(error) => {
+            state
+                .counters
+                .metrics_persistence_errors
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!(error = %error, "OTLP metric persistence task panicked");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -218,6 +248,18 @@ pub(super) async fn metrics_handler(
     if result.rejected > 0 {
         messages.push("metric points rejected by storage validation");
     }
+    state.counters.metrics_accepted.fetch_add(
+        u64::try_from(result.accepted).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    state.counters.metrics_duplicates.fetch_add(
+        u64::try_from(result.duplicates).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    state.counters.metrics_rejected.fetch_add(
+        u64::try_from(rejected).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     tracing::info!(source_ip = %peer, accepted = result.accepted, duplicates = result.duplicates, rejected, "OTLP metrics ingested");
     metric_success_response(rejected, &messages)
 }

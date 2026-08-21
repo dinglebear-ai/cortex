@@ -237,6 +237,59 @@ async fn metrics_handler_requires_configured_bearer() {
     .await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(metric_rows(&test.pool), 0);
+    assert_eq!(
+        test.state
+            .counters
+            .metrics_auth_failures
+            .load(Ordering::Relaxed),
+        1
+    );
+}
+
+#[tokio::test]
+async fn metrics_handler_rejects_unsupported_content_type() {
+    let test = state_with_token(None);
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    let response = call_metrics(&test.state, headers, metric_request(vec![metric_point(1)])).await;
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(metric_rows(&test.pool), 0);
+}
+
+#[tokio::test]
+async fn metrics_handler_rejects_malformed_protobuf_and_counts_decode_error() {
+    let test = state_with_token(None);
+    let response = metrics_handler(
+        State(test.state.clone()),
+        peer(),
+        protobuf_headers(None),
+        Bytes::from_static(&[0xff]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(metric_rows(&test.pool), 0);
+    assert_eq!(
+        test.state
+            .counters
+            .metrics_decode_errors
+            .load(Ordering::Relaxed),
+        1
+    );
+}
+
+#[tokio::test]
+async fn metrics_handler_reports_unavailable_ingest_state() {
+    let test = state_with_token(None);
+    let mut state = test.state.clone();
+    state.metric_ingest = None;
+    let response = call_metrics(
+        &state,
+        protobuf_headers(None),
+        metric_request(vec![metric_point(1)]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(metric_rows(&test.pool), 0);
 }
 
 #[tokio::test]
@@ -302,7 +355,7 @@ async fn metric_request_over_cap_reports_excess_as_partial_success() {
 }
 
 #[tokio::test]
-async fn metric_storage_budget_block_returns_partial_success() {
+async fn metric_storage_budget_block_is_retryable() {
     let test = state_with_token(None);
     let metrics = get_storage_metrics(&test.pool, &test.storage).unwrap();
     *test.storage_state.lock() = Some(StorageBudgetState {
@@ -315,12 +368,15 @@ async fn metric_storage_budget_block_returns_partial_success() {
         metric_request(vec![metric_point(1_700_000_000_000_000_000)]),
     )
     .await;
-    let partial = decode_metric_response(response)
-        .await
-        .partial_success
-        .unwrap();
-    assert_eq!(partial.rejected_data_points, 1);
-    assert!(partial.error_message.contains("storage budget"));
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "1");
+    assert_eq!(
+        test.state
+            .counters
+            .metrics_backpressure
+            .load(Ordering::Relaxed),
+        1
+    );
     assert_eq!(metric_rows(&test.pool), 0);
 }
 
@@ -500,4 +556,8 @@ fn counters_default_to_zero() {
     let counters = OtlpCounters::default();
     assert_eq!(counters.logs_received.load(Ordering::Relaxed), 0);
     assert_eq!(counters.decode_errors.load(Ordering::Relaxed), 0);
+    assert_eq!(counters.metrics_accepted.load(Ordering::Relaxed), 0);
+    assert_eq!(counters.metrics_duplicates.load(Ordering::Relaxed), 0);
+    assert_eq!(counters.metrics_rejected.load(Ordering::Relaxed), 0);
+    assert_eq!(counters.metrics_backpressure.load(Ordering::Relaxed), 0);
 }

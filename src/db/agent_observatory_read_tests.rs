@@ -16,7 +16,7 @@ fn repository_pages_are_stable_when_a_newer_row_arrives() {
     }
     drop(conn);
     let query = RepositoryQuery::default();
-    let first = list_observatory_repositories(&pool, &query, None, 2).unwrap();
+    let first = list_observatory_repositories(&pool, &query, None, 2, i64::MAX).unwrap();
     assert_eq!(
         first.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
         vec!["c", "b", "a"]
@@ -26,8 +26,9 @@ fn repository_pages_are_stable_when_a_newer_row_arrives() {
     let second = list_observatory_repositories(
         &pool,
         &query,
-        Some((&boundary.last_seen_at, boundary.id)),
+        Some((boundary.last_seen_at.as_str(), boundary.id)),
         2,
+        i64::MAX,
     )
     .unwrap();
     assert_eq!(
@@ -71,4 +72,102 @@ fn contract_indexes_cover_run_event_span_and_metric_ordering() {
             "{index}: {details:?}"
         );
     }
+}
+
+#[test]
+fn event_paging_is_bidirectional_and_payload_is_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("events.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('run','session','codex','host','active','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z')", []).unwrap();
+    let run_id = conn.last_insert_rowid();
+    for (key, at) in [
+        ("one", "2026-08-21T10:00:00Z"),
+        ("two", "2026-08-21T10:00:00Z"),
+        ("three", "2026-08-21T11:00:00Z"),
+    ] {
+        conn.execute("INSERT INTO agent_run_events(event_key,run_id,observed_at,ingested_at,event_kind,source_kind,source_id,severity,title,summary,payload_json) VALUES(?1,?2,?3,?3,'transcript','transcript',?1,'info',?1,?1,'{\"secret\":true}')", rusqlite::params![key, run_id, at]).unwrap();
+    }
+    drop(conn);
+    let hidden = list_observatory_events(
+        &pool,
+        "run",
+        &AgentEventQuery::default(),
+        None,
+        10,
+        false,
+        i64::MAX,
+    )
+    .unwrap();
+    assert!(hidden.iter().all(|row| row.payload_json.is_none()));
+    let visible = list_observatory_events(
+        &pool,
+        "run",
+        &AgentEventQuery {
+            include_payload: true,
+            ..Default::default()
+        },
+        None,
+        10,
+        true,
+        i64::MAX,
+    )
+    .unwrap();
+    assert_eq!(
+        visible
+            .iter()
+            .map(|r| r.event_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["one", "two", "three"]
+    );
+    assert!(
+        visible
+            .iter()
+            .all(|row| row.payload_json.as_deref() == Some("{\"secret\":true}"))
+    );
+}
+
+#[test]
+fn telemetry_includes_only_unambiguous_unlinked_identity_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("telemetry.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('run','session','codex','host','active','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z')", []).unwrap();
+    let run_id = conn.last_insert_rowid();
+    conn.execute("INSERT INTO otel_spans(trace_id,span_id,span_name,span_kind,start_time_unix_nano,end_time_unix_nano,duration_nano,hostname,ai_tool,ai_session_id,received_at) VALUES(?1,?2,'span',1,100,200,100,'host','codex','session','2026-08-21T10:00:00Z')", rusqlite::params!["11".repeat(16), "22".repeat(8)]).unwrap();
+    drop(conn);
+    let identity = RunTelemetryIdentity {
+        hostname: "host".into(),
+        tool: "codex".into(),
+        provider_tool: None,
+        native_session_id: "session".into(),
+    };
+    assert_eq!(
+        list_observatory_spans(
+            &pool,
+            run_id,
+            &identity,
+            &TelemetryQuery::default(),
+            None,
+            10,
+            i64::MAX
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    pool.get().unwrap().execute("INSERT INTO agent_runs(run_key,native_session_id,tool,provider_tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('other','session','other','codex','host','active','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z')", []).unwrap();
+    assert!(
+        list_observatory_spans(
+            &pool,
+            run_id,
+            &identity,
+            &TelemetryQuery::default(),
+            None,
+            10,
+            i64::MAX
+        )
+        .unwrap()
+        .is_empty()
+    );
 }

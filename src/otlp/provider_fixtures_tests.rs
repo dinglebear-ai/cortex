@@ -238,7 +238,7 @@ fn assert_metric(fixture: &Fixture, resource: &Resource) {
 }
 
 #[test]
-fn official_shape_provider_fixtures_normalize_identity_signals_and_privacy() {
+fn official_semantic_provider_fixtures_normalize_identity_signals_and_privacy() {
     for name in ["claude", "codex", "gemini"] {
         let fixture = fixture(name);
         assert_common_fixture_contract(&fixture);

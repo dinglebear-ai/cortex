@@ -31,20 +31,6 @@ pub(super) fn serialize_exemplars(
         .map(Value::Array)
 }
 
-pub(super) fn exemplar_ids(exemplars: &[Exemplar]) -> Result<Vec<String>, MetricNormalizeError> {
-    let mut ids = exemplars
-        .iter()
-        .map(|value| {
-            let trace =
-                optional_hex_id(&value.trace_id, 16, "exemplar.trace_id")?.unwrap_or_default();
-            let span = optional_hex_id(&value.span_id, 8, "exemplar.span_id")?.unwrap_or_default();
-            Ok(format!("{trace}:{span}"))
-        })
-        .collect::<Result<Vec<_>, MetricNormalizeError>>()?;
-    ids.sort();
-    Ok(ids)
-}
-
 pub(super) fn number_value(value: &number_data_point::Value, flags: u32) -> Value {
     match value {
         number_data_point::Value::AsInt(value) => {
@@ -111,8 +97,6 @@ pub(super) struct PointKeyParts<'a> {
     pub start_time_unix_nano: Option<i64>,
     pub time_unix_nano: i64,
     pub attributes: &'a Value,
-    pub value: &'a Value,
-    pub exemplar_ids: &'a [String],
 }
 
 pub(super) fn point_key(parts: PointKeyParts<'_>) -> String {
@@ -136,8 +120,6 @@ pub(super) fn point_key(parts: PointKeyParts<'_>) -> String {
             .map_or_else(String::new, |value| value.to_string()),
         parts.time_unix_nano.to_string(),
         parts.attributes.to_string(),
-        parts.value.to_string(),
-        parts.exemplar_ids.join(","),
     ] {
         hash_component(&mut hasher, &component);
     }

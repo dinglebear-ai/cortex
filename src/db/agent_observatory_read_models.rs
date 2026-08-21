@@ -39,6 +39,13 @@ pub struct TelemetryQuery {
     pub since_nano: Option<i64>,
     pub until_nano: Option<i64>,
 }
+#[derive(Debug, Clone)]
+pub struct RunTelemetryIdentity {
+    pub hostname: String,
+    pub tool: String,
+    pub provider_tool: Option<String>,
+    pub native_session_id: String,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryRepositoryRow {
     pub id: i64,

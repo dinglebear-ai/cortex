@@ -3,77 +3,24 @@
 use super::DbPool;
 use anyhow::{Context, Result};
 use rusqlite::{Row, params_from_iter, types::Value};
+#[path = "agent_observatory_read_cursor.rs"]
+mod cursor;
+use cursor::{bounded_limit, int_cursor, push_filter, text_cursor};
 #[path = "agent_observatory_read_models.rs"]
 mod models;
 pub use models::*;
-
-fn bounded_limit(limit: usize, maximum: usize) -> usize {
-    limit.clamp(1, maximum)
-}
-fn push_filter(
-    sql: &mut String,
-    values: &mut Vec<Value>,
-    expression: &str,
-    value: impl Into<Value>,
-) {
-    sql.push_str(" AND ");
-    sql.push_str(expression);
-    values.push(value.into());
-}
-fn text_cursor(
-    sql: &mut String,
-    values: &mut Vec<Value>,
-    columns: (&str, &str),
-    cursor: Option<(&str, i64)>,
-    asc: bool,
-) {
-    if let Some((sort, id)) = cursor {
-        let op = if asc { ">" } else { "<" };
-        push_filter(
-            sql,
-            values,
-            &format!(
-                "({0} {op} ? OR ({0} = ? AND {1} {op} ?))",
-                columns.0, columns.1
-            ),
-            sort.to_owned(),
-        );
-        values.push(sort.to_owned().into());
-        values.push(id.into());
-    }
-}
-fn int_cursor(
-    sql: &mut String,
-    values: &mut Vec<Value>,
-    columns: (&str, &str),
-    cursor: Option<(i64, i64)>,
-    asc: bool,
-) {
-    if let Some((sort, id)) = cursor {
-        let op = if asc { ">" } else { "<" };
-        push_filter(
-            sql,
-            values,
-            &format!(
-                "({0} {op} ? OR ({0} = ? AND {1} {op} ?))",
-                columns.0, columns.1
-            ),
-            sort,
-        );
-        values.push(sort.into());
-        values.push(id.into());
-    }
-}
 
 pub fn list_observatory_repositories(
     pool: &DbPool,
     query: &RepositoryQuery,
     cursor: Option<(&str, i64)>,
     limit: usize,
+    high_water: i64,
 ) -> Result<Vec<ObservatoryRepositoryRow>> {
     let conn = pool.get()?;
     let mut values = Vec::new();
     let mut sql = "SELECT r.id,r.repository_key,r.hostname,r.primary_path,r.display_name,r.first_seen_at,r.last_seen_at,r.removed_at,(SELECT COUNT(*) FROM repository_worktrees w WHERE w.repository_id=r.id),(SELECT COUNT(*) FROM agent_runs a JOIN agent_run_worktrees rw ON rw.run_id=a.id JOIN repository_worktrees w ON w.id=rw.worktree_id WHERE w.repository_id=r.id AND a.status IN ('starting','active','waiting','idle')) FROM repositories r WHERE 1=1".to_string();
+    push_filter(&mut sql, &mut values, "r.id <= ?", high_water);
     if !query.include_removed {
         sql.push_str(" AND r.removed_at IS NULL");
     }
@@ -126,6 +73,7 @@ pub fn list_observatory_repositories(
         .context("list observatory repositories")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn list_observatory_worktrees(
     pool: &DbPool,
     repository_id: i64,
@@ -134,10 +82,12 @@ pub fn list_observatory_worktrees(
     include_removed: bool,
     cursor: Option<(&str, i64)>,
     limit: usize,
+    high_water: i64,
 ) -> Result<Vec<ObservatoryWorktreeRow>> {
     let conn = pool.get()?;
     let mut values = vec![repository_id.into()];
     let mut sql="SELECT id,worktree_key,repository_id,hostname,path,branch_ref,branch_name,head_sha,upstream_ref,detached,bare,locked,lock_reason,prunable,prune_reason,dirty,staged_count,unstaged_count,untracked_count,ahead,behind,first_seen_at,last_seen_at,removed_at FROM repository_worktrees WHERE repository_id=?".to_string();
+    push_filter(&mut sql, &mut values, "id <= ?", high_water);
     if !include_removed {
         sql.push_str(" AND removed_at IS NULL");
     }
@@ -188,10 +138,12 @@ pub fn list_observatory_runs(
     q: &AgentRunQuery,
     cursor: Option<(&str, i64)>,
     limit: usize,
+    high_water: i64,
 ) -> Result<Vec<ObservatoryRunRow>> {
     let conn = pool.get()?;
     let mut values = Vec::new();
     let mut sql="SELECT DISTINCT a.id,a.run_key,a.native_session_id,a.tool,a.provider_tool,a.hostname,a.status,a.status_reason,a.status_observed_at,a.started_at,a.last_activity_at,a.ended_at,a.transcript_path,a.primary_worktree_id,a.primary_branch,a.start_head_sha,a.current_head_sha,a.event_count,a.error_count,a.freshness_json FROM agent_runs a WHERE 1=1".to_string();
+    push_filter(&mut sql, &mut values, "a.id <= ?", high_water);
     if let Some(id) = q.worktree_id {
         push_filter(
             &mut sql,
@@ -286,6 +238,7 @@ fn run_row(r: &Row<'_>) -> rusqlite::Result<ObservatoryRunRow> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn list_observatory_events(
     pool: &DbPool,
     run_key: &str,
@@ -293,6 +246,7 @@ pub fn list_observatory_events(
     cursor: Option<(&str, i64)>,
     limit: usize,
     asc: bool,
+    high_water: i64,
 ) -> Result<Vec<ObservatoryEventRow>> {
     let conn = pool.get()?;
     let mut values = vec![run_key.to_owned().into()];
@@ -302,8 +256,9 @@ pub fn list_observatory_events(
         "NULL"
     };
     let mut sql = format!(
-        "SELECT e.id,e.event_key,a.run_key,aa.actor_key,e.worktree_id,g.sha,e.observed_at,e.ingested_at,e.event_kind,e.source_kind,e.source_id,e.source_log_id,e.provider_sequence,e.trace_id,e.span_id,e.severity,e.title,e.summary,{payload},e.content_scrubbed FROM agent_run_events e JOIN agent_runs a ON a.id=e.run_id LEFT JOIN agent_actors aa ON aa.id=e.actor_id LEFT JOIN git_commits g ON g.id=e.commit_id WHERE a.run_key=?"
+        "SELECT e.id,e.event_key,a.run_key,aa.actor_key,e.worktree_id,g.sha,e.observed_at,e.ingested_at,e.event_kind,e.source_kind,e.source_id,e.source_log_id,e.provider_sequence,e.trace_id,e.span_id,e.severity,e.title,e.summary,{payload},e.content_scrubbed FROM agent_run_events e JOIN agent_runs a ON a.id=e.run_id LEFT JOIN agent_run_actors aa ON aa.id=e.actor_id LEFT JOIN git_commits g ON g.id=e.commit_id WHERE a.run_key=?"
     );
+    push_filter(&mut sql, &mut values, "e.id <= ?", high_water);
     if !q.kinds.is_empty() {
         sql.push_str(&format!(
             " AND e.event_kind IN ({})",
@@ -384,13 +339,22 @@ pub fn list_observatory_events(
 pub fn list_observatory_spans(
     pool: &DbPool,
     run_id: i64,
+    identity: &RunTelemetryIdentity,
     q: &TelemetryQuery,
     cursor: Option<(i64, i64)>,
     limit: usize,
+    high_water: i64,
 ) -> Result<Vec<ObservatorySpanRow>> {
     let conn = pool.get()?;
-    let mut values = vec![run_id.into()];
-    let mut sql="SELECT id,trace_id,span_id,parent_span_id,span_name,span_kind,start_time_unix_nano,end_time_unix_nano,duration_nano,status_code,status_message,service_name,attributes_json FROM otel_spans WHERE run_id=?".to_string();
+    let mut values = vec![
+        run_id.into(),
+        identity.hostname.clone().into(),
+        identity.native_session_id.clone().into(),
+        identity.tool.clone().into(),
+        identity.provider_tool.clone().unwrap_or_default().into(),
+    ];
+    let mut sql="SELECT id,trace_id,span_id,parent_span_id,span_name,span_kind,start_time_unix_nano,end_time_unix_nano,duration_nano,status_code,status_message,service_name,attributes_json FROM otel_spans WHERE (run_id=? OR (run_id IS NULL AND hostname=? AND ai_session_id=? AND (ai_tool=? OR ai_tool=?) AND (SELECT COUNT(*) FROM agent_runs ar WHERE ar.hostname=otel_spans.hostname AND ar.native_session_id=otel_spans.ai_session_id AND (ar.tool=otel_spans.ai_tool OR ar.provider_tool=otel_spans.ai_tool))=1))".to_string();
+    push_filter(&mut sql, &mut values, "id <= ?", high_water);
     if let Some(v) = &q.trace_id {
         push_filter(&mut sql, &mut values, "trace_id=?", v.clone());
     }
@@ -433,13 +397,22 @@ pub fn list_observatory_spans(
 pub fn list_observatory_metrics(
     pool: &DbPool,
     run_id: i64,
+    identity: &RunTelemetryIdentity,
     q: &TelemetryQuery,
     cursor: Option<(i64, i64)>,
     limit: usize,
+    high_water: i64,
 ) -> Result<Vec<ObservatoryMetricRow>> {
     let conn = pool.get()?;
-    let mut values = vec![run_id.into()];
-    let mut sql="SELECT id,point_key,metric_name,description,unit,instrument_kind,start_time_unix_nano,time_unix_nano,value_json,attributes_json,exemplars_json FROM otel_metric_points WHERE run_id=?".to_string();
+    let mut values = vec![
+        run_id.into(),
+        identity.hostname.clone().into(),
+        identity.native_session_id.clone().into(),
+        identity.tool.clone().into(),
+        identity.provider_tool.clone().unwrap_or_default().into(),
+    ];
+    let mut sql="SELECT id,point_key,metric_name,description,unit,instrument_kind,start_time_unix_nano,time_unix_nano,value_json,attributes_json,exemplars_json FROM otel_metric_points WHERE (run_id=? OR (run_id IS NULL AND hostname=? AND ai_session_id=? AND (ai_tool=? OR ai_tool=?) AND (SELECT COUNT(*) FROM agent_runs ar WHERE ar.hostname=otel_metric_points.hostname AND ar.native_session_id=otel_metric_points.ai_session_id AND (ar.tool=otel_metric_points.ai_tool OR ar.provider_tool=otel_metric_points.ai_tool))=1))".to_string();
+    push_filter(&mut sql, &mut values, "id <= ?", high_water);
     if let Some(v) = &q.metric_name {
         push_filter(&mut sql, &mut values, "metric_name=?", v.clone());
     }

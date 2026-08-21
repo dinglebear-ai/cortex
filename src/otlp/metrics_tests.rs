@@ -172,7 +172,7 @@ fn repeated_fixture_and_reordered_attributes_have_same_point_key() {
 }
 
 #[test]
-fn point_key_separates_identifying_stream_properties_and_flags() {
+fn point_key_separates_stream_identity_but_not_payload_flags() {
     let resource = resource(Vec::new());
     let point = number_point(number_data_point::Value::AsInt(7));
     let base_metric = sum(point.clone(), AggregationTemporality::Cumulative, true);
@@ -210,7 +210,7 @@ fn point_key_separates_identifying_stream_properties_and_flags() {
         &sum(flagged_point, AggregationTemporality::Cumulative, true),
         &resource,
     );
-    assert_ne!(base.point_key, flagged.point_key);
+    assert_eq!(base.point_key, flagged.point_key);
     let value: Value = serde_json::from_str(&flagged.value_json).unwrap();
     assert_eq!(value["flags"], 1);
 }
@@ -233,7 +233,7 @@ fn non_finite_double_values_are_lossless_valid_json_tokens() {
 }
 
 #[test]
-fn exemplar_ids_are_validated_serialized_and_affect_point_key() {
+fn exemplar_ids_are_validated_and_serialized_without_affecting_point_key() {
     let resource = resource(Vec::new());
     let mut point = number_point(number_data_point::Value::AsInt(7));
     point.exemplars.push(Exemplar {
@@ -254,7 +254,23 @@ fn exemplar_ids_are_validated_serialized_and_affect_point_key() {
     );
     point.exemplars[0].span_id = vec![0x33; 8];
     let changed = normalize(&gauge(point), &resource);
-    assert_ne!(with_exemplar.point_key, changed.point_key);
+    assert_eq!(with_exemplar.point_key, changed.point_key);
+}
+
+#[test]
+fn changed_metric_value_does_not_change_canonical_point_identity() {
+    let resource = resource(Vec::new());
+    let first = normalize(
+        &gauge(number_point(number_data_point::Value::AsInt(7))),
+        &resource,
+    );
+    let second = normalize(
+        &gauge(number_point(number_data_point::Value::AsInt(8))),
+        &resource,
+    );
+
+    assert_eq!(first.point_key, second.point_key);
+    assert_ne!(first.value_json, second.value_json);
 }
 
 #[test]
@@ -590,6 +606,40 @@ fn summary_preserves_ordered_quantiles_and_has_stable_identity() {
             {"quantile": 0.99, "value": 48.0}
         ])
     );
+}
+
+#[test]
+fn summary_accepts_finite_negative_measurements() {
+    let metric = Metric {
+        name: "temperature".into(),
+        data: Some(metric::Data::Summary(Summary {
+            data_points: vec![SummaryDataPoint {
+                start_time_unix_nano: 100,
+                time_unix_nano: 200,
+                count: 2,
+                sum: -15.0,
+                quantile_values: vec![ValueAtQuantile {
+                    quantile: 0.5,
+                    value: -7.5,
+                }],
+                ..Default::default()
+            }],
+        })),
+        ..Default::default()
+    };
+
+    let output = normalize_distribution_metric(
+        Some(&resource(Vec::new())),
+        "",
+        Some(&scope()),
+        "",
+        &metric,
+        RECEIVED_AT,
+    )
+    .unwrap()
+    .remove(0);
+    let value: Value = serde_json::from_str(&output.value_json).unwrap();
+    assert_eq!(value["quantile_values"][0]["value"], -7.5);
 }
 
 #[test]
