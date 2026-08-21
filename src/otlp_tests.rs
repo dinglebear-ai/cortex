@@ -11,8 +11,15 @@ use axum::http::{
     Request,
     header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER},
 };
+use opentelemetry_proto::tonic::collector::metrics::v1::{
+    ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+};
 use opentelemetry_proto::tonic::collector::trace::v1::{
     ExportTraceServiceRequest, ExportTraceServiceResponse,
+};
+use opentelemetry_proto::tonic::metrics::v1::{
+    Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics,
+    number_data_point::Value as NumberValue,
 };
 use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
 use parking_lot::Mutex;
@@ -105,6 +112,71 @@ fn trace_request(spans: Vec<Span>) -> ExportTraceServiceRequest {
     }
 }
 
+fn metric_request(points: Vec<NumberDataPoint>) -> ExportMetricsServiceRequest {
+    ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: None,
+            scope_metrics: vec![ScopeMetrics {
+                scope: None,
+                metrics: vec![Metric {
+                    name: "agent.tokens".to_string(),
+                    data: Some(
+                        opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+                            data_points: points,
+                        }),
+                    ),
+                    ..Default::default()
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    }
+}
+
+fn metric_point(time: u64) -> NumberDataPoint {
+    NumberDataPoint {
+        time_unix_nano: time,
+        value: Some(NumberValue::AsInt(42)),
+        ..Default::default()
+    }
+}
+
+async fn call_metrics(
+    state: &OtlpState,
+    headers: HeaderMap,
+    request: ExportMetricsServiceRequest,
+) -> axum::response::Response {
+    metrics_handler(
+        State(state.clone()),
+        peer(),
+        headers,
+        Bytes::from(request.encode_to_vec()),
+    )
+    .await
+}
+
+async fn decode_metric_response(
+    response: axum::response::Response,
+) -> ExportMetricsServiceResponse {
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        "application/x-protobuf"
+    );
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    ExportMetricsServiceResponse::decode(body).unwrap()
+}
+
+fn metric_rows(pool: &DbPool) -> i64 {
+    pool.get()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM otel_metric_points", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
 async fn call_traces(
     state: &OtlpState,
     headers: HeaderMap,
@@ -137,10 +209,119 @@ fn span_rows(pool: &DbPool) -> i64 {
 }
 
 #[tokio::test]
-async fn metrics_handler_returns_not_supported() {
+async fn metrics_handler_persists_valid_protobuf() {
     let test = state_with_token(None);
-    let response = metrics_handler(State(test.state), HeaderMap::new()).await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = call_metrics(
+        &test.state,
+        protobuf_headers(None),
+        metric_request(vec![metric_point(1_700_000_000_000_000_000)]),
+    )
+    .await;
+    assert!(
+        decode_metric_response(response)
+            .await
+            .partial_success
+            .is_none()
+    );
+    assert_eq!(metric_rows(&test.pool), 1);
+}
+
+#[tokio::test]
+async fn metrics_handler_requires_configured_bearer() {
+    let test = state_with_token(Some("secret"));
+    let response = call_metrics(
+        &test.state,
+        protobuf_headers(None),
+        metric_request(vec![metric_point(1_700_000_000_000_000_000)]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(metric_rows(&test.pool), 0);
+}
+
+#[tokio::test]
+async fn duplicate_metric_export_is_successful_and_idempotent() {
+    let test = state_with_token(None);
+    let request = metric_request(vec![metric_point(1_700_000_000_000_000_000)]);
+    let first = call_metrics(&test.state, protobuf_headers(None), request.clone()).await;
+    assert!(
+        decode_metric_response(first)
+            .await
+            .partial_success
+            .is_none()
+    );
+    let second = call_metrics(&test.state, protobuf_headers(None), request).await;
+    assert!(
+        decode_metric_response(second)
+            .await
+            .partial_success
+            .is_none()
+    );
+    assert_eq!(metric_rows(&test.pool), 1);
+}
+
+#[tokio::test]
+async fn metrics_handler_reports_invalid_point_as_partial_success() {
+    let test = state_with_token(None);
+    let response = call_metrics(
+        &test.state,
+        protobuf_headers(None),
+        metric_request(vec![metric_point(0)]),
+    )
+    .await;
+    let partial = decode_metric_response(response)
+        .await
+        .partial_success
+        .unwrap();
+    assert_eq!(partial.rejected_data_points, 1);
+    assert!(
+        partial
+            .error_message
+            .contains("invalid metric points rejected")
+    );
+    assert_eq!(metric_rows(&test.pool), 0);
+}
+
+#[tokio::test]
+async fn metric_request_over_cap_reports_excess_as_partial_success() {
+    let test = state_with_token(None);
+    let points = (1..=(MAX_METRIC_POINTS_PER_REQUEST + 1))
+        .map(|offset| metric_point(1_700_000_000_000_000_000 + offset as u64))
+        .collect();
+    let response = call_metrics(&test.state, protobuf_headers(None), metric_request(points)).await;
+    let partial = decode_metric_response(response)
+        .await
+        .partial_success
+        .unwrap();
+    assert_eq!(partial.rejected_data_points, 1);
+    assert!(partial.error_message.contains("5000 metric point limit"));
+    assert_eq!(
+        metric_rows(&test.pool),
+        MAX_METRIC_POINTS_PER_REQUEST as i64
+    );
+}
+
+#[tokio::test]
+async fn metric_storage_budget_block_returns_partial_success() {
+    let test = state_with_token(None);
+    let metrics = get_storage_metrics(&test.pool, &test.storage).unwrap();
+    *test.storage_state.lock() = Some(StorageBudgetState {
+        metrics,
+        write_blocked: true,
+    });
+    let response = call_metrics(
+        &test.state,
+        protobuf_headers(None),
+        metric_request(vec![metric_point(1_700_000_000_000_000_000)]),
+    )
+    .await;
+    let partial = decode_metric_response(response)
+        .await
+        .partial_success
+        .unwrap();
+    assert_eq!(partial.rejected_data_points, 1);
+    assert!(partial.error_message.contains("storage budget"));
+    assert_eq!(metric_rows(&test.pool), 0);
 }
 
 #[tokio::test]
@@ -276,6 +457,21 @@ async fn traces_router_enforces_eight_mib_body_limit_with_retry_after() {
     let request = Request::builder()
         .method("POST")
         .uri("/v1/traces")
+        .header(CONTENT_TYPE, "application/x-protobuf")
+        .extension(peer())
+        .body(Body::from(vec![0_u8; OTLP_SIGNAL_BODY_LIMIT_BYTES + 1]))
+        .unwrap();
+    let response = router(test.state).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "86400");
+}
+
+#[tokio::test]
+async fn metrics_router_enforces_eight_mib_body_limit_with_retry_after() {
+    let test = state_with_token(None);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/metrics")
         .header(CONTENT_TYPE, "application/x-protobuf")
         .extension(peer())
         .body(Body::from(vec![0_u8; OTLP_SIGNAL_BODY_LIMIT_BYTES + 1]))

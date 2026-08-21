@@ -63,7 +63,7 @@ fn exemplar_value(value: &exemplar::Value) -> Value {
     }
 }
 
-fn safe_double(value: f64) -> Value {
+pub(super) fn safe_double(value: f64) -> Value {
     if value.is_nan() {
         return Value::String("nan".to_string());
     }

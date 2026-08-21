@@ -1,5 +1,6 @@
 //! OTLP explicit histogram normalization for Agent Observatory metric points.
 
+use super::super::metrics_payload::safe_double;
 use super::{
     MetricNormalizeError, MetricPointInput, NumberMetricContext, PointParts, build_metric_point,
     validate_metric_envelope,
@@ -10,7 +11,7 @@ use opentelemetry_proto::tonic::{
     metrics::v1::{HistogramDataPoint, Metric, metric},
     resource::v1::Resource,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 const MAX_HISTOGRAM_BUCKETS: usize = 16_384;
 
@@ -133,16 +134,4 @@ fn validate_buckets(point: &HistogramDataPoint) -> Result<(), MetricNormalizeErr
         return Err(MetricNormalizeError::HistogramBoundsNotIncreasing);
     }
     Ok(())
-}
-
-fn safe_double(value: f64) -> Value {
-    if value.is_nan() {
-        Value::String("nan".to_string())
-    } else if value == f64::INFINITY {
-        Value::String("+infinity".to_string())
-    } else if value == f64::NEG_INFINITY {
-        Value::String("-infinity".to_string())
-    } else {
-        serde_json::Number::from_f64(value).map_or(Value::Null, Value::Number)
-    }
 }

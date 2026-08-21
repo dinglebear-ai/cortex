@@ -4,8 +4,10 @@ use opentelemetry_proto::tonic::{
         AnyValue, EntityRef, InstrumentationScope, KeyValue, any_value::Value as AnyValueKind,
     },
     metrics::v1::{
-        AggregationTemporality, Exemplar, Gauge, Histogram, HistogramDataPoint, Sum, exemplar,
-        metric, number_data_point,
+        AggregationTemporality, Exemplar, ExponentialHistogram, ExponentialHistogramDataPoint,
+        Gauge, Histogram, HistogramDataPoint, Sum, Summary, SummaryDataPoint, exemplar,
+        exponential_histogram_data_point::Buckets, metric, number_data_point,
+        summary_data_point::ValueAtQuantile,
     },
     resource::v1::Resource,
 };
@@ -483,5 +485,182 @@ fn histogram_enforces_bucket_cap_before_serialization() {
             actual: 16_385,
             maximum: 16_384,
         }
+    );
+}
+
+#[test]
+fn exponential_histogram_preserves_signed_buckets_and_zero_region() {
+    let metric = Metric {
+        name: "agent.latency".into(),
+        unit: "ms".into(),
+        data: Some(metric::Data::ExponentialHistogram(ExponentialHistogram {
+            aggregation_temporality: AggregationTemporality::Delta as i32,
+            data_points: vec![ExponentialHistogramDataPoint {
+                attributes: vec![kv("route", "/mcp")],
+                start_time_unix_nano: 100,
+                time_unix_nano: 200,
+                count: 10,
+                sum: Some(25.5),
+                scale: 3,
+                zero_count: 2,
+                positive: Some(Buckets {
+                    offset: -1,
+                    bucket_counts: vec![3, 2],
+                }),
+                negative: Some(Buckets {
+                    offset: 4,
+                    bucket_counts: vec![1, 2],
+                }),
+                flags: 1,
+                min: Some(-4.0),
+                max: Some(12.0),
+                zero_threshold: 0.01,
+                ..Default::default()
+            }],
+        })),
+        ..Default::default()
+    };
+    let scope = scope();
+    let output = normalize_distribution_metric(
+        Some(&resource(Vec::new())),
+        "",
+        Some(&scope),
+        "",
+        &metric,
+        RECEIVED_AT,
+    )
+    .unwrap()
+    .remove(0);
+    assert_eq!(output.instrument_kind, "exponential_histogram");
+    assert_eq!(output.aggregation_temporality, Some(1));
+    let value: Value = serde_json::from_str(&output.value_json).unwrap();
+    assert_eq!(value["positive"]["offset"], -1);
+    assert_eq!(value["positive"]["bucket_counts"], json!([3, 2]));
+    assert_eq!(value["negative"]["bucket_counts"], json!([1, 2]));
+    assert_eq!(value["zero_count"], 2);
+}
+
+#[test]
+fn summary_preserves_ordered_quantiles_and_has_stable_identity() {
+    let metric = Metric {
+        name: "agent.response.size".into(),
+        data: Some(metric::Data::Summary(Summary {
+            data_points: vec![SummaryDataPoint {
+                attributes: vec![kv("model", "fixture")],
+                start_time_unix_nano: 100,
+                time_unix_nano: 200,
+                count: 4,
+                sum: 100.0,
+                quantile_values: vec![
+                    ValueAtQuantile {
+                        quantile: 0.5,
+                        value: 20.0,
+                    },
+                    ValueAtQuantile {
+                        quantile: 0.99,
+                        value: 48.0,
+                    },
+                ],
+                flags: 0,
+            }],
+        })),
+        ..Default::default()
+    };
+    let scope = scope();
+    let normalize = || {
+        normalize_distribution_metric(
+            Some(&resource(Vec::new())),
+            "",
+            Some(&scope),
+            "",
+            &metric,
+            RECEIVED_AT,
+        )
+        .unwrap()
+        .remove(0)
+    };
+    let first = normalize();
+    let second = normalize();
+    assert_eq!(first.instrument_kind, "summary");
+    assert_eq!(first.point_key, second.point_key);
+    assert_eq!(
+        serde_json::from_str::<Value>(&first.value_json).unwrap()["quantile_values"],
+        json!([
+            {"quantile": 0.5, "value": 20.0},
+            {"quantile": 0.99, "value": 48.0}
+        ])
+    );
+}
+
+#[test]
+fn distribution_shapes_reject_invalid_counts_and_quantiles() {
+    let scope = scope();
+    let resource = resource(Vec::new());
+    let exponential = Metric {
+        name: "exp".into(),
+        data: Some(metric::Data::ExponentialHistogram(ExponentialHistogram {
+            aggregation_temporality: AggregationTemporality::Cumulative as i32,
+            data_points: vec![ExponentialHistogramDataPoint {
+                start_time_unix_nano: 1,
+                time_unix_nano: 2,
+                count: 2,
+                zero_count: 1,
+                positive: Some(Buckets {
+                    offset: 0,
+                    bucket_counts: vec![2],
+                }),
+                ..Default::default()
+            }],
+        })),
+        ..Default::default()
+    };
+    assert_eq!(
+        normalize_distribution_metric(
+            Some(&resource),
+            "",
+            Some(&scope),
+            "",
+            &exponential,
+            RECEIVED_AT,
+        )
+        .unwrap_err(),
+        MetricNormalizeError::ExponentialHistogramCountMismatch
+    );
+
+    let summary = Metric {
+        name: "summary".into(),
+        data: Some(metric::Data::Summary(Summary {
+            data_points: vec![SummaryDataPoint {
+                start_time_unix_nano: 1,
+                time_unix_nano: 2,
+                count: 2,
+                sum: 3.0,
+                quantile_values: vec![
+                    ValueAtQuantile {
+                        quantile: 0.9,
+                        value: 2.0,
+                    },
+                    ValueAtQuantile {
+                        quantile: 0.5,
+                        value: 1.0,
+                    },
+                ],
+                flags: 0,
+                ..Default::default()
+            }],
+        })),
+        ..Default::default()
+    };
+    assert_eq!(
+        normalize_distribution_metric(
+            Some(&resource),
+            "",
+            Some(&scope),
+            "",
+            &summary,
+            RECEIVED_AT,
+        )
+        .unwrap_err(),
+        MetricNormalizeError::InvalidSummaryQuantiles
     );
 }

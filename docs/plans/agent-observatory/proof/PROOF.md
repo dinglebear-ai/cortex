@@ -545,3 +545,25 @@ GREEN: added a focused explicit-histogram normalizer that reuses the shared metr
 VALIDATION: bucket arrays are capped at 16,384 entries before serialization; bucket/bound cardinality, bucket total, strictly increasing finite bounds, temporality, timestamps, attributes, exemplars, and encoded metadata fail closed through typed point errors
 PROOF: focused metric suite passed 11/11 and the complete OTLP library sweep passed 93/93, including histogram losslessness, stable identity, invalid shape/count/order/non-finite rejection, and pre-serialization cap enforcement
 GATE: locked workspace Clippy passed with `-D warnings`; canonical rustfmt, Agent Observatory golden contracts, and `git diff --check` passed; the hermetic nextest suite ran 3,005 tests with 3,005 passed, two intentionally skipped, and one slow
+
+## AO-048 Normalize exponential histogram and summary points
+commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
+RED: gauge, sum, and explicit histogram points normalized, but exponential histograms and summaries had no bounded lossless representation or typed validation
+GREEN: added privacy-aware exponential-histogram and summary normalization through the shared metric envelope, metadata, exemplar, timestamp, and deterministic point-key path
+VALIDATION: distribution arrays are capped before serialization; exponential bucket totals and summary quantile order/range/finite values fail closed at metric scope
+PROOF: focused metric normalization suite covers stable identity, lossless payloads, invalid count totals, invalid quantiles, and pre-serialization limits; the broad OTLP sweep passed 91/91
+
+## AO-049 Persist metric points idempotently
+commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
+RED: normalized metric points had no durable write path or duplicate accounting
+GREEN: added serialized transactional batch persistence with bounded transient-lock retry and `ON CONFLICT(point_key) DO NOTHING`
+VALIDATION: malformed identities, kinds, timestamps, JSON shapes, metadata sizes, and missing run foreign keys reject per row without poisoning valid neighbors
+PROOF: focused persistence suite passed 3/3 for repeat-export idempotency, malformed-neighbor isolation, and metadata/run validation
+
+## AO-050 Mount functional /v1/metrics
+commit/worktree SHA: `codex/agent-observatory-metrics-batch` (pre-commit proof)
+RED: authenticated `/v1/metrics` returned a deferred 404
+GREEN: mounted authenticated protobuf metric ingestion with the 8 MiB signal body cap, blocking decode/persistence, all five OTLP metric kinds, configurable privacy, storage-budget refusal, and protobuf partial-success responses
+PARTIAL: invalid points, points beyond the 5,000-point cap, and direct-storage validation failures are rejected without poisoning valid neighbors; duplicate exports remain successful and idempotent
+PROOF: handler tests cover valid persistence, bearer auth, duplicate replay, invalid-point and storage-budget partial success, deterministic over-cap rejection, and the 8 MiB route limit
+GATE: broad OTLP sweep passed 91/91; workspace Clippy passed with warnings denied; rustfmt, diff, module-size, golden-contract, and version-sync gates passed; hermetic nextest ran 3,017 tests with 3,017 passed, two skipped, and one slow

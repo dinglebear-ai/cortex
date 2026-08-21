@@ -26,9 +26,13 @@ const MAX_SERVICE_NAME_CHARS: usize = 512;
 const MAX_SERVICE_VERSION_CHARS: usize = 512;
 pub(super) const MAX_EXEMPLARS: usize = 128;
 
+#[path = "metrics_distribution.rs"]
+mod distribution;
 #[path = "metrics_histogram.rs"]
 mod histogram;
 
+#[cfg(test)]
+pub(crate) use distribution::normalize_distribution_metric;
 #[cfg(test)]
 pub(crate) use histogram::normalize_histogram_metric;
 
@@ -62,7 +66,7 @@ pub(crate) struct MetricPointInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum MetricNormalizeError {
-    #[error("metric kind is not a gauge or sum")]
+    #[error("metric kind is unsupported or missing")]
     UnsupportedInstrument,
     #[error("metric name must not be empty")]
     EmptyMetricName,
@@ -86,6 +90,14 @@ pub(crate) enum MetricNormalizeError {
     HistogramCountMismatch,
     #[error("histogram explicit bounds must be strictly increasing")]
     HistogramBoundsNotIncreasing,
+    #[error("distribution contains {actual} values; maximum is {maximum}")]
+    DistributionValueLimit { actual: usize, maximum: usize },
+    #[error("exponential histogram bucket counts do not sum to the point count")]
+    ExponentialHistogramCountMismatch,
+    #[error("summary quantiles must be finite, ordered, and within 0..=1")]
+    InvalidSummaryQuantiles,
+    #[error("summary quantile values must be finite and non-negative")]
+    InvalidSummaryValue,
     #[error("{field} must be empty or exactly {expected} non-zero bytes; got {actual}")]
     InvalidOptionalId {
         field: &'static str,
@@ -108,6 +120,51 @@ pub(crate) enum MetricNormalizeError {
         actual: usize,
         maximum: usize,
     },
+}
+
+pub(crate) fn normalize_metric_with_privacy(
+    resource: Option<&Resource>,
+    resource_schema_url: &str,
+    scope: Option<&InstrumentationScope>,
+    scope_schema_url: &str,
+    metric: &Metric,
+    privacy: &AgentObservatoryPrivacyConfig,
+    received_at: &str,
+) -> Result<Vec<MetricPointInput>, MetricNormalizeError> {
+    match metric.data.as_ref() {
+        Some(metric::Data::Gauge(_) | metric::Data::Sum(_)) => {
+            normalize_number_metric_with_privacy(
+                resource,
+                resource_schema_url,
+                scope,
+                scope_schema_url,
+                metric,
+                privacy,
+                received_at,
+            )
+        }
+        Some(metric::Data::Histogram(_)) => histogram::normalize_histogram_metric_with_privacy(
+            resource,
+            resource_schema_url,
+            scope,
+            scope_schema_url,
+            metric,
+            privacy,
+            received_at,
+        ),
+        Some(metric::Data::ExponentialHistogram(_) | metric::Data::Summary(_)) => {
+            distribution::normalize_distribution_metric_with_privacy(
+                resource,
+                resource_schema_url,
+                scope,
+                scope_schema_url,
+                metric,
+                privacy,
+                received_at,
+            )
+        }
+        None => Err(MetricNormalizeError::UnsupportedInstrument),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -153,8 +210,6 @@ pub(crate) fn normalize_number_metric(
     )
 }
 
-/// AO-046 stages this converter before AO-049/050 consume it from DB/HTTP paths.
-#[allow(dead_code)]
 pub(crate) fn normalize_number_metric_with_privacy(
     resource: Option<&Resource>,
     resource_schema_url: &str,
