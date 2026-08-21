@@ -4,7 +4,8 @@ use opentelemetry_proto::tonic::{
         AnyValue, EntityRef, InstrumentationScope, KeyValue, any_value::Value as AnyValueKind,
     },
     metrics::v1::{
-        AggregationTemporality, Exemplar, Gauge, Sum, exemplar, metric, number_data_point,
+        AggregationTemporality, Exemplar, Gauge, Histogram, HistogramDataPoint, Sum, exemplar,
+        metric, number_data_point,
     },
     resource::v1::Resource,
 };
@@ -340,4 +341,147 @@ fn metric_attributes_follow_configured_privacy_policy() {
     .unwrap();
     assert_eq!(private_output.ai_project, None);
     assert!(!private_output.resource_json.contains("/secret/project"));
+}
+
+fn histogram(point: HistogramDataPoint) -> Metric {
+    Metric {
+        name: "agent.request.duration".into(),
+        description: "request duration distribution".into(),
+        unit: "ms".into(),
+        data: Some(metric::Data::Histogram(Histogram {
+            data_points: vec![point],
+            aggregation_temporality: AggregationTemporality::Cumulative as i32,
+        })),
+        ..Default::default()
+    }
+}
+
+fn histogram_point() -> HistogramDataPoint {
+    HistogramDataPoint {
+        attributes: vec![kv("route", "/v1/traces")],
+        start_time_unix_nano: 100,
+        time_unix_nano: 200,
+        count: 6,
+        sum: Some(42.5),
+        bucket_counts: vec![1, 2, 3],
+        explicit_bounds: vec![5.0, 10.0],
+        flags: 1,
+        min: Some(1.25),
+        max: Some(18.75),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn histogram_preserves_distribution_and_has_stable_point_key() {
+    let resource = resource(vec![kv("service.name", "codex")]);
+    let scope = scope();
+    let metric = histogram(histogram_point());
+    let first = normalize_histogram_metric(
+        Some(&resource),
+        "resource/v1",
+        Some(&scope),
+        "scope/v1",
+        &metric,
+        RECEIVED_AT,
+    )
+    .unwrap()
+    .remove(0);
+    let second = normalize_histogram_metric(
+        Some(&resource),
+        "resource/v1",
+        Some(&scope),
+        "scope/v1",
+        &metric,
+        RECEIVED_AT,
+    )
+    .unwrap()
+    .remove(0);
+    assert_eq!(first.instrument_kind, "histogram");
+    assert_eq!(first.start_time_unix_nano, Some(100));
+    assert_eq!(first.point_key, second.point_key);
+    assert_eq!(
+        serde_json::from_str::<Value>(&first.value_json).unwrap(),
+        json!({
+            "count": 6,
+            "sum": 42.5,
+            "min": 1.25,
+            "max": 18.75,
+            "explicit_bounds": [5.0, 10.0],
+            "bucket_counts": [1, 2, 3],
+            "flags": 1,
+        })
+    );
+}
+
+#[test]
+fn histogram_rejects_invalid_bucket_layouts_and_counts() {
+    let scope = scope();
+    let resource = resource(Vec::new());
+    let normalize_error = |point| {
+        normalize_histogram_metric(
+            Some(&resource),
+            "",
+            Some(&scope),
+            "",
+            &histogram(point),
+            RECEIVED_AT,
+        )
+        .unwrap_err()
+    };
+
+    let mut wrong_shape = histogram_point();
+    wrong_shape.explicit_bounds.push(15.0);
+    assert_eq!(
+        normalize_error(wrong_shape),
+        MetricNormalizeError::InvalidHistogramShape {
+            buckets: 3,
+            bounds: 3,
+        }
+    );
+
+    let mut wrong_count = histogram_point();
+    wrong_count.count = 7;
+    assert_eq!(
+        normalize_error(wrong_count),
+        MetricNormalizeError::HistogramCountMismatch
+    );
+
+    let mut unordered = histogram_point();
+    unordered.explicit_bounds = vec![10.0, 5.0];
+    assert_eq!(
+        normalize_error(unordered),
+        MetricNormalizeError::HistogramBoundsNotIncreasing
+    );
+
+    let mut non_finite = histogram_point();
+    non_finite.explicit_bounds = vec![5.0, f64::INFINITY];
+    assert_eq!(
+        normalize_error(non_finite),
+        MetricNormalizeError::HistogramBoundsNotIncreasing
+    );
+}
+
+#[test]
+fn histogram_enforces_bucket_cap_before_serialization() {
+    let scope = scope();
+    let resource = resource(Vec::new());
+    let mut point = histogram_point();
+    point.bucket_counts = vec![0; 16_385];
+    point.explicit_bounds = (0..16_384).map(f64::from).collect();
+    assert_eq!(
+        normalize_histogram_metric(
+            Some(&resource),
+            "",
+            Some(&scope),
+            "",
+            &histogram(point),
+            RECEIVED_AT,
+        )
+        .unwrap_err(),
+        MetricNormalizeError::HistogramBucketLimit {
+            actual: 16_385,
+            maximum: 16_384,
+        }
+    );
 }

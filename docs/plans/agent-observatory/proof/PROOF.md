@@ -537,3 +537,11 @@ STRUCTURE: split canonical exemplar/value/key encoding into `metrics_payload.rs`
 PROOF: definitive locked focused metric normalization suite passed 8/8, including gauge/sum semantics, deterministic reorder-insensitive keys, stream-identity/flags collision resistance, exemplar validation, non-finite doubles, privacy policy, and fail-closed invalid fields
 REGRESSION: definitive locked full OTLP library sweep passed 90/90 with all prior logs/traces/auth/privacy/runtime/database coverage intact
 GATE: locked production `cargo check` passed without warnings; canonical rustfmt, `git diff --check`, and the full 500-line production Rust module-size gate passed; exact `cargo clippy --all-targets --all-features --locked -- -D warnings` passed after structurally reducing the point-normalizer argument surface and fixing the test config construction lint; the exact four-script Public Identity CI bundle passed after replacing private hostname fixtures with a neutral test host
+
+## AO-047 Normalize histogram points
+commit/worktree SHA: `codex/agent-observatory-ao047` (pre-commit proof)
+RED: the metric normalizer accepted only gauge and sum instruments, so explicit histograms had no lossless bounded representation or point-key identity and malformed bucket layouts could not be rejected at point scope
+GREEN: added a focused explicit-histogram normalizer that reuses the shared metric envelope, privacy, exemplar, metadata-cap, and point-key path; count, optional sum/min/max, ordered explicit bounds, bucket counts, flags, attributes, and exemplars are preserved in deterministic JSON
+VALIDATION: bucket arrays are capped at 16,384 entries before serialization; bucket/bound cardinality, bucket total, strictly increasing finite bounds, temporality, timestamps, attributes, exemplars, and encoded metadata fail closed through typed point errors
+PROOF: focused metric suite passed 11/11 and the complete OTLP library sweep passed 93/93, including histogram losslessness, stable identity, invalid shape/count/order/non-finite rejection, and pre-serialization cap enforcement
+GATE: locked workspace Clippy passed with `-D warnings`; canonical rustfmt, Agent Observatory golden contracts, and `git diff --check` passed; the hermetic nextest suite ran 3,005 tests with 3,005 passed, two intentionally skipped, and one slow
