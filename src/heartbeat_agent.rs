@@ -851,11 +851,45 @@ impl HeartbeatProbe for LinuxContainerProbe {
                     parse_docker_states(&String::from_utf8_lossy(&output.stdout)),
                 )),
                 Ok(output) => {
+                    // Docker is installed but unusable: no daemon running,
+                    // socket permission denied, or the CLI failing for any
+                    // other reason. That is precisely what `reachable: false`
+                    // reports, so emit it as telemetry rather than a probe
+                    // error — an unreachable runtime is a fact about the host,
+                    // not a failure to collect one.
+                    //
+                    // Reporting it as an error instead left `containers` as
+                    // `None` on the payload and marked the whole sample
+                    // partial, which is both misleading (the host genuinely has
+                    // no reachable containers) and environment-dependent: any
+                    // host with the docker CLI but no usable daemon — a CI
+                    // container, for instance — behaved differently from a host
+                    // with no docker at all.
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    bail!("docker ps exited {}: {}", output.status, stderr.trim())
+                    tracing::debug!(
+                        status = %output.status,
+                        stderr = %stderr.trim(),
+                        "docker ps unavailable; reporting containers unreachable"
+                    );
+                    Ok(ProbeOutput::Containers(HeartbeatContainers {
+                        runtime: None,
+                        reachable: false,
+                        running: 0,
+                        exited: 0,
+                        restarting: 0,
+                        unhealthy: 0,
+                        details: Vec::new(),
+                    }))
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    // Docker not installed — expected on non-Docker hosts
+                // Docker not installed, or present but not executable by this
+                // user — both mean the runtime is unreachable, not that the
+                // probe failed.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                    ) =>
+                {
                     Ok(ProbeOutput::Containers(HeartbeatContainers {
                         runtime: None,
                         reachable: false,
