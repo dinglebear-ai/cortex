@@ -237,7 +237,7 @@ fn test_purge_old_heartbeats_removes_children_before_parent() {
     .unwrap();
     drop(conn);
 
-    let deleted = purge_old_heartbeats(&pool, 90, 100).unwrap();
+    let deleted = purge_old_heartbeats(&pool, 90, 100, OrphanSweep::Run).unwrap();
     assert_eq!(deleted, 1);
 
     let conn = pool.get().unwrap();
@@ -318,7 +318,7 @@ fn test_heartbeat_cleanup_removes_all_child_tables_and_orphans() {
     .unwrap();
     drop(conn);
 
-    let deleted = purge_old_heartbeats(&pool, 90, 100).unwrap();
+    let deleted = purge_old_heartbeats(&pool, 90, 100, OrphanSweep::Run).unwrap();
     assert_eq!(deleted, 2);
 
     let conn = pool.get().unwrap();
@@ -470,6 +470,140 @@ fn delete_orphan_heartbeat_latest_removes_cache_rows_without_parent_sample() {
         })
         .unwrap();
     assert_eq!(remaining, 0);
+}
+
+/// Insert one child row for `table`, using the minimum column set each table
+/// accepts (`heartbeat_network.interface` is the only NOT NULL extra).
+fn insert_child_row(pool: &DbPool, table: &str, heartbeat_id: i64) {
+    let sql = if table == "heartbeat_network" {
+        format!("INSERT INTO {table} (heartbeat_id, interface) VALUES (?1, 'eth0')")
+    } else {
+        format!("INSERT INTO {table} (heartbeat_id) VALUES (?1)")
+    };
+    pool.get().unwrap().execute(&sql, [heartbeat_id]).unwrap();
+}
+
+fn count_rows(pool: &DbPool, table: &str) -> i64 {
+    pool.get()
+        .unwrap()
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+/// The P1 property: finding orphans is a full scan of each child table, so it
+/// must happen as a READER. Only the bounded delete may take the write lock.
+///
+/// A second thread holds the global write lock for the whole sweep; if the
+/// sweep needs that lock just to discover there is nothing to delete, it can
+/// only return after the holder releases, and the happens-before flag is set.
+#[test]
+fn orphan_child_sweep_scans_without_the_global_write_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (pool, _dir) = test_pool();
+    let heartbeat_id = insert_heartbeat(&pool, "host-live", "2099-01-01T00:00:00Z");
+    for table in HEARTBEAT_CHILD_TABLES {
+        for _ in 0..8 {
+            insert_child_row(&pool, table, heartbeat_id);
+        }
+    }
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let released = std::sync::Arc::new(AtomicBool::new(false));
+    let holder_released = std::sync::Arc::clone(&released);
+    let holder = std::thread::spawn(move || {
+        let _write_guard = crate::db::write_lock();
+        ready_tx.send(()).unwrap();
+        // Bounded so a regression fails the assertion instead of hanging.
+        let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+        holder_released.store(true, Ordering::SeqCst);
+    });
+    ready_rx.recv().unwrap();
+
+    let deleted = delete_orphan_heartbeat_children(&pool, 4).unwrap();
+    let finished_before_lock_released = !released.load(Ordering::SeqCst);
+    let _ = release_tx.send(());
+    holder.join().unwrap();
+
+    assert_eq!(deleted, 0, "there are no orphans to delete");
+    assert!(
+        finished_before_lock_released,
+        "orphan sweep must scan for orphans without waiting on the global write lock"
+    );
+    for table in HEARTBEAT_CHILD_TABLES {
+        assert_eq!(count_rows(&pool, table), 8, "{table} rows must survive");
+    }
+}
+
+/// A chunk size smaller than the orphan count must still drain every orphan:
+/// the sweep loops until the scan comes back empty rather than stopping after
+/// one bounded DELETE.
+#[test]
+fn orphan_child_sweep_drains_orphans_in_chunks_smaller_than_the_backlog() {
+    let (pool, _dir) = test_pool();
+    for _ in 0..5 {
+        insert_child_row(&pool, "heartbeat_cpu", 999_999);
+    }
+
+    let deleted = delete_orphan_heartbeat_children(&pool, 2).unwrap();
+
+    assert_eq!(deleted, 5, "every orphan must be deleted across chunks");
+    assert_eq!(count_rows(&pool, "heartbeat_cpu"), 0);
+}
+
+/// Chunking must not change what gets deleted: every orphan in every child
+/// table goes, live children stay, and the returned count is exact.
+#[test]
+fn orphan_child_sweep_deletes_all_orphans_across_chunks() {
+    let (pool, _dir) = test_pool();
+    let heartbeat_id = insert_heartbeat(&pool, "host-live", "2099-01-01T00:00:00Z");
+    for table in HEARTBEAT_CHILD_TABLES {
+        insert_child_row(&pool, table, heartbeat_id);
+        for _ in 0..3 {
+            insert_child_row(&pool, table, 999_999);
+        }
+        insert_child_row(&pool, table, heartbeat_id);
+    }
+
+    let deleted = delete_orphan_heartbeat_children(&pool, 2).unwrap();
+
+    assert_eq!(deleted, 3 * HEARTBEAT_CHILD_TABLES.len());
+    for table in HEARTBEAT_CHILD_TABLES {
+        assert_eq!(
+            count_rows(&pool, table),
+            2,
+            "{table} live rows must survive"
+        );
+        let orphans: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE heartbeat_id = 999999"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0, "{table} orphans must be gone");
+    }
+}
+
+/// Orphan cleanup is a repair mechanism, not per-tick retention work: the
+/// caller decides when it is due, and a skipped sweep leaves orphans alone.
+#[test]
+fn purge_old_heartbeats_sweeps_orphans_only_when_the_caller_says_it_is_due() {
+    let (pool, _dir) = test_pool();
+    insert_child_row(&pool, "heartbeat_cpu", 999_999);
+
+    let skipped = purge_old_heartbeats(&pool, 90, 100, OrphanSweep::Skip).unwrap();
+    assert_eq!(skipped, 0);
+    assert_eq!(count_rows(&pool, "heartbeat_cpu"), 1);
+
+    let swept = purge_old_heartbeats(&pool, 90, 100, OrphanSweep::Run).unwrap();
+    assert_eq!(swept, 1);
+    assert_eq!(count_rows(&pool, "heartbeat_cpu"), 0);
 }
 
 #[derive(Clone)]
