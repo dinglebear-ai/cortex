@@ -54,6 +54,21 @@ fn classify_db_error_promotes_sqlite_locked_to_retryable_busy() {
 }
 
 #[test]
+fn classify_db_error_promotes_pool_timeout_to_database_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::config::StorageConfig::for_test(dir.path().join("classify-timeout.db"));
+    let pool = crate::db::init_pool(&config).unwrap();
+    let _held = pool.get().unwrap();
+    let timeout = anyhow::Error::new(
+        pool.get_timeout(std::time::Duration::from_millis(50))
+            .expect_err("exhausted pool must time out"),
+    );
+
+    let classified = ServiceError::classify_db_error(timeout.context("read log page"));
+    assert!(matches!(classified, ServiceError::DatabaseTimeout));
+}
+
+#[test]
 fn typed_variants_display_correctly() {
     assert_eq!(
         ServiceError::DatabaseTimeout.to_string(),

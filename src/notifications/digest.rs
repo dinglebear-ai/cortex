@@ -189,6 +189,45 @@ pub(crate) async fn run_digest(
     Ok(())
 }
 
+/// Retryable failures tolerated inside one day's firing window.
+///
+/// The scheduler already wakes on minute boundaries and the window spans five
+/// ticks (`minutes_diff <= 2`), so retries are paced at ~60s with no extra
+/// sleeping. Bounding them at three keeps a persistently broken pool from
+/// consuming the whole window and makes the give-up decision explicit.
+/// Retrying is safe because `outbox_insert` is idempotent on the digest's
+/// `daily_digest:<date>` dedup key, so a duplicate attempt cannot double-send.
+const MAX_RETRYABLE_DIGEST_ATTEMPTS: u32 = 3;
+
+/// What the scheduler should do after a failed digest attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DigestFailureAction {
+    /// Leave the day open so the next minute tick tries again.
+    Retry,
+    /// Permanent failure, or the retry budget is spent: give up for today.
+    SuppressForToday,
+}
+
+/// True when the failure is transient and another attempt today is worthwhile.
+///
+/// An r2d2 pool timeout means the statement never reached SQLite, so it never
+/// downcasts to `rusqlite::Error`: a rusqlite-only predicate would misread a
+/// 6s pool timeout as a permanent failure.
+fn is_retryable_digest_error(error: &anyhow::Error) -> bool {
+    crate::db::is_transient_sqlite_lock(error) || crate::db::is_pool_timeout(error)
+}
+
+/// Decide whether a failed attempt keeps the day open or closes it.
+///
+/// `failed_attempts` counts today's failures including the current one.
+fn digest_failure_action(error: &anyhow::Error, failed_attempts: u32) -> DigestFailureAction {
+    if is_retryable_digest_error(error) && failed_attempts < MAX_RETRYABLE_DIGEST_ATTEMPTS {
+        DigestFailureAction::Retry
+    } else {
+        DigestFailureAction::SuppressForToday
+    }
+}
+
 /// Parse hour and minute from a cron string (fields 0 and 1).
 /// Returns `(hour, minute)` or defaults `(8, 0)` on parse failure.
 ///
@@ -239,6 +278,10 @@ pub(crate) fn spawn_digest(
     let (target_hour, target_minute) = parse_cron_hour_minute(&cfg.digest_cron_local);
     let handle = tokio::spawn(async move {
         let mut last_fired_date: Option<chrono::NaiveDate> = None;
+        // Retryable failures recorded for `retry_date`; both reset when the
+        // calendar day rolls over so each day gets a fresh budget.
+        let mut retry_date: Option<chrono::NaiveDate> = None;
+        let mut failed_attempts: u32 = 0;
         loop {
             // Align sleep to the next minute boundary to avoid slowly drifting
             // away from the configured time. Uses a minimum of 100ms to prevent
@@ -263,8 +306,31 @@ pub(crate) fn spawn_digest(
                 match run_digest(Arc::clone(&pool), Arc::clone(&permit_sem), &cfg).await {
                     Ok(()) => last_fired_date = Some(today),
                     Err(e) => {
-                        tracing::error!(error = %e, "digest: failed to build/queue daily digest");
-                        last_fired_date = Some(today); // suppress repeated attempts today
+                        if retry_date != Some(today) {
+                            retry_date = Some(today);
+                            failed_attempts = 0;
+                        }
+                        failed_attempts += 1;
+                        match digest_failure_action(&e, failed_attempts) {
+                            DigestFailureAction::Retry => {
+                                tracing::warn!(
+                                    error = %e,
+                                    attempt = failed_attempts,
+                                    max_attempts = MAX_RETRYABLE_DIGEST_ATTEMPTS,
+                                    "digest: transient failure, retrying on the next tick"
+                                );
+                            }
+                            DigestFailureAction::SuppressForToday => {
+                                tracing::error!(
+                                    error = %e,
+                                    attempt = failed_attempts,
+                                    "digest: failed to build/queue daily digest"
+                                );
+                                // Give up for today: permanent failure, or the
+                                // retry budget is spent.
+                                last_fired_date = Some(today);
+                            }
+                        }
                     }
                 }
             }

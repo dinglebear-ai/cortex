@@ -327,7 +327,7 @@ fn handle_failed_batch(
     error: &anyhow::Error,
 ) -> FailedBatchOutcome {
     let mut outcome = FailedBatchOutcome::default();
-    if is_retryable_sqlite_error(error) {
+    if is_retryable_write_error(error) {
         retain_or_discard_entries(&mut outcome, failed_batch);
         return outcome;
     }
@@ -351,7 +351,7 @@ fn retry_failed_chunk(pool: &DbPool, chunk: Vec<IngestEnvelope>, outcome: &mut F
             outcome.inserted_count += inserted;
             outcome.inserted_entries.extend(chunk);
         }
-        Err(e) if is_retryable_sqlite_error(&e) => {
+        Err(e) if is_retryable_write_error(&e) => {
             retain_or_discard_entries(outcome, chunk);
         }
         Err(_) if chunk.len() > 1 => {
@@ -412,6 +412,22 @@ fn retain_or_discard_entries(outcome: &mut FailedBatchOutcome, entries: Vec<Inge
     }
     outcome.discarded_count += discarded;
     outcome.discarded_chunks += 1;
+}
+
+/// True when a failed batch write should be retained and retried rather than
+/// discarded.
+///
+/// Two distinct transient conditions qualify, and only one of them is a
+/// `rusqlite::Error`:
+/// * SQLite reported BUSY / LOCKED / FULL, or
+/// * the r2d2 pool never yielded a connection, so nothing was attempted.
+///
+/// The split matters because `retry_failed_chunk` treats anything else as
+/// unrecoverable and acks it as failed — which for `durable_ack: None`
+/// entries (UDP syslog, docker ingest, OTLP, file tails) means the rows are
+/// gone.
+fn is_retryable_write_error(err: &anyhow::Error) -> bool {
+    is_retryable_sqlite_error(err) || db::is_pool_timeout(err)
 }
 
 fn is_retryable_sqlite_error(err: &anyhow::Error) -> bool {

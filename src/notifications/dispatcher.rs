@@ -66,6 +66,28 @@ where
     result
 }
 
+/// Like [`db_read`], but holds the process-wide write lock for the operation.
+///
+/// For single auto-committed writes that still return rows, so they cannot use
+/// the unit-returning [`db_tx`]. `outbox_claim_pending` is the motivating case:
+/// it is an `UPDATE ... RETURNING`, and `src/db/pool.rs` documents that every
+/// write must take this guard so writers queue in-process rather than colliding
+/// at the SQLite layer and burning their 5s `busy_timeout`.
+///
+/// The guard is taken inside the closure, i.e. after `pool.get()`, matching the
+/// ordering in [`db_tx`].
+async fn db_write<F, T>(pool: &Arc<DbPool>, op: &'static str, f: F) -> Result<T>
+where
+    F: FnOnce(&rusqlite::Connection) -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    db_read(pool, op, move |conn| {
+        let _write_guard = crate::db::write_lock();
+        f(conn)
+    })
+    .await
+}
+
 /// Run a blocking DB operation inside an explicit transaction.
 ///
 /// Centralizes the `Arc::clone` + `spawn_blocking` + `pool.get()` +
@@ -109,8 +131,10 @@ pub(crate) async fn run_dispatch_cycle(
     apprise: &AppriseClient,
     cfg: &NotificationsConfig,
 ) -> Result<u64> {
-    // Claim pending rows (read-only, no permit needed)
-    let rows = db_read(&pool, "notif.claim_pending", |conn| {
+    // Claim pending rows. This is a WRITE — `outbox_claim_pending` is an
+    // `UPDATE ... RETURNING` that leases the rows and consumes an attempt — so
+    // it must serialize on the process-wide write lock like every other writer.
+    let rows = db_write(&pool, "notif.claim_pending", |conn| {
         outbox_claim_pending(conn, CLAIM_LIMIT).map_err(anyhow::Error::from)
     })
     .await?;

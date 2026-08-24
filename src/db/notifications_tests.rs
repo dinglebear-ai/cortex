@@ -111,6 +111,107 @@ mod notifications_db_tests {
         assert_eq!(rows[0].rule_id, "oom_kill");
     }
 
+    fn expire_next_attempt(conn: &Connection) {
+        conn.execute(
+            "UPDATE notifications_outbox SET next_attempt_at = '2000-01-01T00:00:00.000Z'",
+            [],
+        )
+        .expect("expire next_attempt_at");
+    }
+
+    #[test]
+    fn outbox_claim_leases_rows_so_a_failed_write_back_cannot_redeliver() {
+        let conn = in_memory_conn();
+        outbox_insert(&conn, &make_params("key-lease")).expect("insert");
+        expire_next_attempt(&conn);
+
+        let first = outbox_claim_pending(&conn, 10).expect("first claim");
+        assert_eq!(first.len(), 1, "row should be claimable once");
+
+        // Simulates the dispatcher delivering via Apprise and then losing the
+        // outbox write-back to a pool timeout: status is still 'pending' and
+        // no firing row exists, so dedup cannot suppress a redelivery.
+        let second = outbox_claim_pending(&conn, 10).expect("second claim");
+        assert!(
+            second.is_empty(),
+            "a claimed row must stay leased so the next cycle cannot redeliver it"
+        );
+    }
+
+    #[test]
+    fn outbox_claim_reclaims_rows_once_the_lease_expires() {
+        let conn = in_memory_conn();
+        outbox_insert(&conn, &make_params("key-reclaim")).expect("insert");
+        expire_next_attempt(&conn);
+
+        let first = outbox_claim_pending(&conn, 10).expect("first claim");
+        assert_eq!(first[0].attempt_count, 0, "first claim is attempt 0");
+
+        // Lease expiry: an abandoned in-flight row becomes claimable again so
+        // a crash between delivery and write-back is not permanent loss.
+        expire_next_attempt(&conn);
+        let second = outbox_claim_pending(&conn, 10).expect("second claim");
+        assert_eq!(second.len(), 1, "expired lease must be reclaimable");
+        assert_eq!(
+            second[0].attempt_count, 1,
+            "each claim consumes one attempt so abandoned rows still dead-letter"
+        );
+
+        let stored: i64 = conn
+            .query_row(
+                "SELECT attempt_count FROM notifications_outbox WHERE id = ?1",
+                rusqlite::params![second[0].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 2, "two claims must have consumed two attempts");
+    }
+
+    #[test]
+    fn outbox_claim_keeps_row_pending_so_dedup_index_still_blocks_reenqueue() {
+        let conn = in_memory_conn();
+        outbox_insert(&conn, &make_params("key-inflight")).expect("insert");
+        expire_next_attempt(&conn);
+        outbox_claim_pending(&conn, 10).expect("claim");
+
+        // idx_outbox_dedup_pending is a UNIQUE partial index over
+        // status = 'pending'; an in-flight row must keep blocking a
+        // re-enqueue of the same dedup_key.
+        outbox_insert(&conn, &make_params("key-inflight")).expect("re-insert is a no-op");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notifications_outbox WHERE dedup_key = ?1",
+                rusqlite::params!["key-inflight"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "claimed row must still suppress a re-enqueue");
+    }
+
+    #[test]
+    fn outbox_write_back_does_not_double_count_the_claimed_attempt() {
+        let conn = in_memory_conn();
+        outbox_insert(&conn, &make_params("key-count")).expect("insert");
+        expire_next_attempt(&conn);
+        let rows = outbox_claim_pending(&conn, 10).expect("claim");
+        let id = rows[0].id;
+
+        outbox_schedule_retry(&conn, id, "2030-06-01T00:00:00.000Z", "timeout", Some(503))
+            .expect("retry");
+
+        let attempt_count: i64 = conn
+            .query_row(
+                "SELECT attempt_count FROM notifications_outbox WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            attempt_count, 1,
+            "the claim consumed the attempt; the write-back must not count it again"
+        );
+    }
+
     #[test]
     fn outbox_mark_sent_and_dead() {
         let conn = in_memory_conn();
@@ -167,18 +268,31 @@ mod notifications_db_tests {
             })
             .unwrap();
 
+        // Mirror the production cycle: a delivery attempt is always preceded by
+        // a claim, and it is the claim that consumes the attempt. Scheduling a
+        // retry only records the outcome, so it must not increment again.
+        expire_next_attempt(&conn);
+        let claimed = outbox_claim_pending(&conn, 10).expect("claim");
+        assert_eq!(claimed.len(), 1, "the row should be claimable");
+
         outbox_schedule_retry(&conn, id, "2030-06-01T00:00:00.000Z", "timeout", Some(503))
             .expect("retry");
 
-        let (attempt_count, last_error): (i64, String) = conn
+        let (attempt_count, last_error, next_attempt_at): (i64, String, String) = conn
             .query_row(
-                "SELECT attempt_count, last_error FROM notifications_outbox WHERE id = ?1",
+                "SELECT attempt_count, last_error, next_attempt_at
+                   FROM notifications_outbox WHERE id = ?1",
                 rusqlite::params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
         assert_eq!(attempt_count, 1);
         assert_eq!(last_error, "timeout");
+        // The backoff deadline must replace the claim's 300s lease. If this
+        // ever stopped being written, every transient retry would silently wait
+        // out the lease instead of the 1s first tier, and nothing else would
+        // catch it.
+        assert_eq!(next_attempt_at, "2030-06-01T00:00:00.000Z");
     }
 
     #[test]

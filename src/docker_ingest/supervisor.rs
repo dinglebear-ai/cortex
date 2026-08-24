@@ -20,6 +20,28 @@ const MIN_STREAM_DURATION_FOR_BACKOFF_RESET: Duration = Duration::from_secs(30);
 const RECONNECT_JITTER_MIN_PCT: u64 = 80;
 const RECONNECT_JITTER_SPREAD_PCT: u64 = 41;
 
+/// Concurrent checkpoint loads allowed across every container stream.
+///
+/// Each load takes a pooled connection directly, bypassing the service layer's
+/// read semaphore, so it competes with the ingest writers for the one
+/// connection reserved outside that semaphore (see
+/// `app::services::read_permits_for_pool`). One task is spawned per container,
+/// so a docker-daemon restart reconnects every stream at once and, uncapped,
+/// issues that many simultaneous `pool.get()` calls against an 8-connection
+/// pool — enough on its own to exhaust it and time out unrelated writers.
+/// Deliberately conservative: loads are short, and a small cap only staggers
+/// reconnects rather than slowing steady-state ingest.
+pub(super) const MAX_CONCURRENT_CHECKPOINT_LOADS: usize = 2;
+
+/// Process-wide gate for [`MAX_CONCURRENT_CHECKPOINT_LOADS`].
+pub(super) fn checkpoint_load_permits() -> Arc<tokio::sync::Semaphore> {
+    static PERMITS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    Arc::clone(
+        PERMITS
+            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CHECKPOINT_LOADS))),
+    )
+}
+
 pub(crate) fn spawn_all(
     config: DockerIngestConfig,
     pool: Arc<DbPool>,
@@ -412,6 +434,13 @@ async fn follow_container_logs_once(
         let pool = Arc::clone(pool);
         let host = host_name.to_string();
         let container = container_id.to_string();
+        // Bound how many streams can be loading a checkpoint at once; see
+        // MAX_CONCURRENT_CHECKPOINT_LOADS. Held across the blocking call so the
+        // cap covers the `pool.get()` wait, which is the contended part.
+        let _permit = checkpoint_load_permits()
+            .acquire_owned()
+            .await
+            .map_err(|e| anyhow::anyhow!("checkpoint load permits closed: {e}"))?;
         tokio::task::spawn_blocking(move || load_checkpoint(&pool, &host, &container))
             .await
             .map_err(|e| anyhow::anyhow!("checkpoint load task join error: {e}"))??
