@@ -4,6 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::config::{DockerHostConfig, DockerIngestConfig};
 use crate::db::{DockerCheckpoint, LogBatchEntry};
 use crate::docker_ingest::models::ContainerMeta;
+use crate::docker_ingest::supervisor::{MAX_CONCURRENT_CHECKPOINT_LOADS, checkpoint_load_permits};
 use crate::observability::RuntimeObservability;
 
 use super::{
@@ -276,4 +277,41 @@ async fn prune_finished_tasks_removes_panicked_tasks_without_panicking() {
     prune_finished_tasks(&mut tasks);
 
     assert!(tasks.is_empty());
+}
+
+/// The checkpoint-load gate is a shared, bounded singleton: every container
+/// stream draws from the same permits, so a reconnect storm cannot issue more
+/// than `MAX_CONCURRENT_CHECKPOINT_LOADS` simultaneous `pool.get()` calls.
+///
+/// Scope: this pins the cap and the sharing. It does not exercise
+/// `follow_container_logs_once` itself, which needs a live Docker endpoint.
+#[tokio::test]
+async fn checkpoint_load_permits_are_shared_and_bounded() {
+    let permits = checkpoint_load_permits();
+    assert!(
+        std::sync::Arc::ptr_eq(&permits, &checkpoint_load_permits()),
+        "all streams must share one gate, not get a fresh semaphore each call"
+    );
+
+    let mut held = Vec::new();
+    for _ in 0..MAX_CONCURRENT_CHECKPOINT_LOADS {
+        held.push(
+            checkpoint_load_permits()
+                .acquire_owned()
+                .await
+                .expect("permit within the cap"),
+        );
+    }
+
+    assert!(
+        checkpoint_load_permits().try_acquire().is_err(),
+        "a load beyond the cap must wait rather than pile onto the pool"
+    );
+
+    drop(held);
+    assert_eq!(
+        checkpoint_load_permits().available_permits(),
+        MAX_CONCURRENT_CHECKPOINT_LOADS,
+        "permits must be returned when loads finish"
+    );
 }

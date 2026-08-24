@@ -188,9 +188,19 @@ fn dead_letter_after_max_retries() {
         })
         .unwrap();
 
-    // Simulate 8 failed retries
+    // Simulate 8 failed delivery cycles. Each real cycle claims the row first —
+    // and the claim is what consumes the attempt — then records the failure via
+    // outbox_schedule_retry, which no longer increments. Expiring
+    // next_attempt_at between iterations stands in for the backoff elapsing.
     let max_retries: u8 = 8;
     for attempt in 0u8..max_retries {
+        conn.execute(
+            "UPDATE notifications_outbox SET next_attempt_at = '2000-01-01T00:00:00.000Z'",
+            [],
+        )
+        .unwrap();
+        let claimed = crate::db::notifications::outbox_claim_pending(&conn, 10).unwrap();
+        assert_eq!(claimed.len(), 1, "row should be claimable each cycle");
         let next_at = backoff_next_attempt_at(attempt);
         outbox_schedule_retry(&conn, id, &next_at, "timeout", None).unwrap();
     }
