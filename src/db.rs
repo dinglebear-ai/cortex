@@ -119,6 +119,7 @@ pub use models::{
 };
 #[cfg(test)]
 pub use pool::KNOWN_SCHEMA_VERSION;
+pub(crate) use pool::is_pool_timeout;
 pub use pool::{
     DbPool, backfill_inventory_stats, init_pool, inventory_backfill_complete,
     read_schema_version_info, read_schema_version_info_conn, reconcile_interrupted_server_work,

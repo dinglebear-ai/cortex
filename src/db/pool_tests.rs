@@ -12,6 +12,36 @@ fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
 }
 
 #[test]
+fn is_pool_timeout_detects_connection_acquisition_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("pool-timeout.db"));
+    let pool = init_pool(&config).unwrap();
+    // `StorageConfig::for_test` uses `pool_size: 1`, so holding the only
+    // connection guarantees the next acquisition times out.
+    let _held = pool.get().unwrap();
+
+    let timeout = anyhow::Error::new(
+        pool.get_timeout(std::time::Duration::from_millis(50))
+            .expect_err("exhausted pool must time out"),
+    );
+
+    assert!(is_pool_timeout(&timeout));
+    // Still detected once the writer/service layers add context on top.
+    assert!(is_pool_timeout(&timeout.context("insert log batch")));
+}
+
+#[test]
+fn is_pool_timeout_ignores_sqlite_and_plain_errors() {
+    let sqlite = anyhow::Error::new(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+        Some("UNIQUE constraint failed: logs.id".to_string()),
+    ));
+
+    assert!(!is_pool_timeout(&sqlite));
+    assert!(!is_pool_timeout(&anyhow::anyhow!("some other failure")));
+}
+
+#[test]
 fn test_init_pool_enables_incremental_auto_vacuum() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("autovac.db"));

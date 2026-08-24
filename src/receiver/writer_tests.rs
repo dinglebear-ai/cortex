@@ -216,6 +216,27 @@ fn failed_batch_retains_disk_full_errors_instead_of_discarding_rows() {
 }
 
 #[test]
+fn failed_batch_retains_pool_timeout_errors_instead_of_discarding_rows() {
+    let (pool, _storage, _dir) = test_pool();
+    // `StorageConfig::for_test` builds a single-connection pool, so holding
+    // that one connection makes every further acquisition fail with a real
+    // `r2d2::Error`. That error never carries a `rusqlite::Error` in its
+    // chain — the batch never reached SQLite at all.
+    let _held = pool.get().unwrap();
+    let error = anyhow::Error::new(
+        pool.get_timeout(std::time::Duration::from_millis(50))
+            .expect_err("exhausted pool must time out"),
+    );
+    let batch = envelope_batch(vec![make_entry("pool timeout retained")]);
+
+    let outcome = handle_failed_batch(&pool, batch, &error);
+
+    assert_eq!(outcome.retained_entries.len(), 1);
+    assert_eq!(outcome.retained_chunks, 1);
+    assert_eq!(outcome.discarded_count, 0);
+}
+
+#[test]
 fn ingest_summary_aggregates_cardinality_overflow() {
     let mut summary = IngestSummary::default();
     let entries = (0..(INGEST_SUMMARY_CARDINALITY_LIMIT + 5))

@@ -24,6 +24,22 @@ use crate::config::StorageConfig;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
+/// True when `err` was caused by failing to acquire a pooled connection.
+///
+/// A pool-acquisition failure produces an `r2d2::Error` and **no**
+/// `rusqlite::Error` anywhere in the chain — the statement never reached
+/// SQLite. Every predicate that asks "is this worth retrying?" must therefore
+/// consult this in addition to any `rusqlite::ErrorCode` matching, or a pool
+/// timeout gets misclassified as an unrecoverable failure.
+///
+/// Matching is on the error *type*, not on its message: r2d2 0.8 constructs
+/// `Error` at exactly two sites, both behind a `timed_out()` check, and its
+/// `Display` is the fixed string "timed out waiting for connection". The type
+/// is the discriminant; there is no structured variant to match.
+pub(crate) fn is_pool_timeout(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| cause.is::<r2d2::Error>())
+}
+
 /// Process-wide SQLite **write serialization** lock.
 ///
 /// SQLite permits only one writer at a time, but cortex runs an r2d2 pool of several

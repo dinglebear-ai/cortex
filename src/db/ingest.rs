@@ -165,6 +165,15 @@ where
     Ok(())
 }
 
+/// True only for SQLite BUSY/LOCKED — the conditions worth a short sleep and
+/// an immediate in-thread retry.
+///
+/// Deliberately excludes r2d2 pool-acquisition timeouts even though those are
+/// also transient: a pool timeout means every connection was busy for the full
+/// `connection_timeout` (6s), so the retry ladder here would block a thread for
+/// ~24s before giving up. Pool exhaustion is handled one layer up instead,
+/// where the batch writer retains the batch and retries on a later flush. Use
+/// `crate::db::is_pool_timeout` for that classification.
 pub(crate) fn is_transient_sqlite_lock(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         matches!(
