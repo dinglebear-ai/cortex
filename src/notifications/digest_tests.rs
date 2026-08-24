@@ -116,3 +116,72 @@ fn parse_cron_hour_minute_clamps_range() {
     // Out-of-range values should be clamped, not wrapped
     assert_eq!(parse_cron_hour_minute("99 25 * * *"), (23, 59));
 }
+
+/// Produce a real `r2d2::Error` timeout by starving a one-connection pool.
+///
+/// No production seam is needed: holding the only connection and asking for a
+/// second one reproduces exactly what the service pool does under load.
+fn pool_timeout_error() -> anyhow::Error {
+    let manager = r2d2_sqlite::SqliteConnectionManager::memory();
+    let pool = r2d2::Pool::builder()
+        .max_size(1)
+        .connection_timeout(std::time::Duration::from_millis(50))
+        .build(manager)
+        .expect("pool builds");
+    let _held = pool.get().expect("first connection acquired");
+    anyhow::Error::from(pool.get().expect_err("second get must time out"))
+}
+
+#[test]
+fn pool_timeout_is_invisible_to_the_sqlite_lock_predicate() {
+    // A pool timeout means the statement never reached SQLite, so a predicate
+    // that only inspects rusqlite error codes cannot see it. This is why the
+    // digest needs a check that also covers r2d2.
+    let error = pool_timeout_error();
+    assert!(
+        !crate::db::is_transient_sqlite_lock(&error),
+        "sanity: r2d2 errors never downcast to rusqlite::Error"
+    );
+}
+
+#[test]
+fn digest_failure_action_retries_pool_timeout() {
+    let error = pool_timeout_error();
+    assert_eq!(
+        digest_failure_action(&error, 1),
+        DigestFailureAction::Retry,
+        "a transient pool timeout must not lose the day's digest"
+    );
+}
+
+#[test]
+fn digest_failure_action_retries_sqlite_busy() {
+    let error = anyhow::Error::new(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error {
+            code: rusqlite::ErrorCode::DatabaseBusy,
+            extended_code: rusqlite::ffi::SQLITE_BUSY,
+        },
+        Some("database is locked".to_string()),
+    ));
+    assert_eq!(digest_failure_action(&error, 1), DigestFailureAction::Retry);
+}
+
+#[test]
+fn digest_failure_action_gives_up_once_the_retry_budget_is_spent() {
+    let error = pool_timeout_error();
+    assert_eq!(
+        digest_failure_action(&error, MAX_RETRYABLE_DIGEST_ATTEMPTS),
+        DigestFailureAction::SuppressForToday,
+        "a persistently broken pool must not retry forever"
+    );
+}
+
+#[test]
+fn digest_failure_action_suppresses_permanent_errors_immediately() {
+    let error = anyhow::anyhow!("digest template is malformed");
+    assert_eq!(
+        digest_failure_action(&error, 1),
+        DigestFailureAction::SuppressForToday,
+        "permanent failures must still suppress for the day"
+    );
+}
