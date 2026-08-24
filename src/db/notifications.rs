@@ -79,22 +79,56 @@ pub fn outbox_insert(
     Ok(())
 }
 
+/// How long a claimed row stays leased before another cycle may reclaim it.
+///
+/// Sized an order of magnitude above the worst case for a single in-flight row
+/// (5s Apprise timeout + the pool's 6s `connection_timeout` on the write-back),
+/// so a transient pool-exhaustion episode has cleared before the reclaim, while
+/// still redelivering within a useful window if the process dies mid-flight.
+pub const CLAIM_LEASE_SECS: i64 = 300;
+
 /// Claim up to `limit` pending outbox rows whose `next_attempt_at` is in the past.
+///
+/// This is a write, not a read. It stamps a lease into `next_attempt_at` and
+/// consumes one attempt *before* the caller delivers, so a failure between
+/// delivery and the outbox write-back cannot redeliver on the next cycle. The
+/// lease expires after [`CLAIM_LEASE_SECS`], so an abandoned in-flight row is
+/// reclaimed rather than lost — and because the claim already consumed an
+/// attempt, repeated reclaims still walk the row toward the dead-letter
+/// threshold instead of redelivering forever.
+///
+/// The lease lives in `next_attempt_at` rather than a dedicated `'claimed'`
+/// status for two reasons. `status` carries a `CHECK (status IN
+/// ('pending','sent','dead','dropped'))` constraint that SQLite can only widen
+/// by rebuilding the table; and a row moved out of `'pending'` would leave the
+/// `idx_outbox_dedup_pending` unique partial index, letting the evaluator
+/// re-enqueue the same `dedup_key` while delivery is still in flight.
+///
+/// `OutboxRow::attempt_count` is the count *before* this claim — the value the
+/// dispatcher's backoff tier and dead-letter threshold are defined in terms of.
+/// The write-back helpers below therefore do not increment it again.
 pub fn outbox_claim_pending(
     conn: &rusqlite::Connection,
     limit: i64,
 ) -> rusqlite::Result<Vec<OutboxRow>> {
+    // RETURNING requires SQLite >= 3.35 (rusqlite `bundled` ships 3.4x) and
+    // makes select-and-lease a single atomic statement.
     let mut stmt = conn.prepare(
-        "SELECT id, dedup_key, rule_id, severity, hostname, title, body,
-                apprise_urls_json, attempt_count
-         FROM notifications_outbox
-         WHERE status = 'pending'
-           AND next_attempt_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         ORDER BY next_attempt_at ASC
-         LIMIT ?1",
+        "UPDATE notifications_outbox
+            SET attempt_count = attempt_count + 1,
+                next_attempt_at =
+                    strftime('%Y-%m-%dT%H:%M:%fZ','now', printf('+%d seconds', ?2))
+          WHERE id IN (
+                SELECT id FROM notifications_outbox
+                 WHERE status = 'pending'
+                   AND next_attempt_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                 ORDER BY next_attempt_at ASC
+                 LIMIT ?1)
+      RETURNING id, dedup_key, rule_id, severity, hostname, title, body,
+                apprise_urls_json, attempt_count - 1",
     )?;
-    let rows = stmt
-        .query_map(params![limit], |row| {
+    let mut rows = stmt
+        .query_map(params![limit, CLAIM_LEASE_SECS], |row| {
             Ok(OutboxRow {
                 id: row.get(0)?,
                 dedup_key: row.get(1)?,
@@ -108,10 +142,17 @@ pub fn outbox_claim_pending(
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    // RETURNING emits rows in update order, which SQLite does not define; the
+    // subquery already picked the oldest `limit` rows, so sort by id to give
+    // the caller a stable, roughly enqueue-ordered batch.
+    rows.sort_by_key(|row| row.id);
     Ok(rows)
 }
 
-/// Mark a row as sent; increment attempt_count.
+/// Mark a row as sent.
+///
+/// Does not touch `attempt_count`: [`outbox_claim_pending`] already consumed
+/// the attempt this write-back is reporting on.
 pub fn outbox_mark_sent(
     conn: &rusqlite::Connection,
     id: i64,
@@ -120,7 +161,6 @@ pub fn outbox_mark_sent(
     conn.execute(
         "UPDATE notifications_outbox
          SET status = 'sent',
-             attempt_count = attempt_count + 1,
              last_status_code = ?2
          WHERE id = ?1",
         params![id, status_code],
@@ -129,6 +169,9 @@ pub fn outbox_mark_sent(
 }
 
 /// Mark a row as dead (exhausted retries).
+///
+/// Does not touch `attempt_count`: [`outbox_claim_pending`] already consumed
+/// the attempt this write-back is reporting on.
 pub fn outbox_mark_dead(
     conn: &rusqlite::Connection,
     id: i64,
@@ -138,7 +181,6 @@ pub fn outbox_mark_dead(
     conn.execute(
         "UPDATE notifications_outbox
          SET status = 'dead',
-             attempt_count = attempt_count + 1,
              last_status_code = ?2,
              last_error = ?3
          WHERE id = ?1",
@@ -148,6 +190,9 @@ pub fn outbox_mark_dead(
 }
 
 /// Mark a row as dropped (e.g. acked, deduplicated).
+///
+/// Does not touch `attempt_count`: [`outbox_claim_pending`] already consumed
+/// the attempt this write-back is reporting on.
 pub fn outbox_mark_dropped(
     conn: &rusqlite::Connection,
     id: i64,
@@ -156,7 +201,6 @@ pub fn outbox_mark_dropped(
     conn.execute(
         "UPDATE notifications_outbox
          SET status = 'dropped',
-             attempt_count = attempt_count + 1,
              last_error = ?2
          WHERE id = ?1",
         params![id, notes],
@@ -164,7 +208,11 @@ pub fn outbox_mark_dropped(
     Ok(())
 }
 
-/// Set next_attempt_at for exponential backoff retry; increment attempt_count.
+/// Set next_attempt_at for an exponential-backoff retry.
+///
+/// Overwrites the claim lease with the (shorter) backoff deadline, and does not
+/// touch `attempt_count`: [`outbox_claim_pending`] already consumed the attempt
+/// this write-back is reporting on.
 pub fn outbox_schedule_retry(
     conn: &rusqlite::Connection,
     id: i64,
@@ -174,8 +222,7 @@ pub fn outbox_schedule_retry(
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE notifications_outbox
-         SET attempt_count = attempt_count + 1,
-             next_attempt_at = ?2,
+         SET next_attempt_at = ?2,
              last_error = ?3,
              last_status_code = ?4
          WHERE id = ?1",
