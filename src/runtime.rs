@@ -176,6 +176,9 @@ pub(crate) fn background_interval(period: tokio::time::Duration) -> tokio::time:
 const ADGUARD_RETENTION_TAGS: &[&str] = &["adguard-allowed", "adguard-query", "adguard-rewrite"];
 const ADGUARD_RETENTION_DAYS: u32 = 7;
 const HEARTBEAT_RETENTION_DAYS: u32 = 14;
+/// Retention ticks between orphan-heartbeat sweeps. The retention task runs
+/// hourly, so 24 makes the sweep daily.
+const ORPHAN_SWEEP_EVERY_N_TICKS: u64 = 24;
 /// Cadence for refreshing the AI session rollup (bead cortex-2vre). 5 min
 /// bounds staleness of unbounded `sessions` results while keeping the periodic
 /// full re-aggregation cost negligible relative to ingest.
@@ -912,6 +915,14 @@ impl RuntimeCore {
         let cleanup_chunk_size = self.config.storage.cleanup_chunk_size;
         let handle = tokio::spawn(async move {
             let mut interval = background_interval(tokio::time::Duration::from_secs(3600));
+            // Orphan child rows are produced only when a delete is interrupted
+            // between children and parent, so they are rare by construction.
+            // Sweeping for them means a full scan of every heartbeat child
+            // table, which is wasted I/O at the hourly retention cadence even
+            // now that the scan no longer holds the write lock. Run it on the
+            // first tick after start (so a crash-induced backlog is cleared
+            // promptly) and daily thereafter.
+            let mut tick: u64 = 0;
             loop {
                 tokio::select! {
                     biased;
@@ -921,6 +932,12 @@ impl RuntimeCore {
                     }
                     _ = interval.tick() => {}
                 }
+                let orphan_sweep = if tick.is_multiple_of(ORPHAN_SWEEP_EVERY_N_TICKS) {
+                    db::OrphanSweep::Run
+                } else {
+                    db::OrphanSweep::Skip
+                };
+                tick = tick.wrapping_add(1);
                 let started = Instant::now();
                 let Ok(permit) = Arc::clone(&limiter).acquire_owned().await else {
                     tracing::error!("Maintenance limiter closed");
@@ -959,6 +976,7 @@ impl RuntimeCore {
                         &pool,
                         HEARTBEAT_RETENTION_DAYS,
                         cleanup_chunk_size,
+                        orphan_sweep,
                     ) {
                         Ok(n) => n,
                         Err(e) => {

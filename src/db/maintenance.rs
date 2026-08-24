@@ -370,7 +370,8 @@ pub fn enforce_storage_budget_with_state(
                 "DB-size budget exceeded — self-trimming oldest telemetry chunk"
             );
 
-            let deleted_orphan_children = delete_orphan_heartbeat_children(pool)?;
+            let deleted_orphan_children =
+                delete_orphan_heartbeat_children(pool, config.cleanup_chunk_size)?;
             if deleted_orphan_children > 0 {
                 deleted_rows += deleted_orphan_children;
                 tracing::info!(
@@ -674,6 +675,7 @@ pub fn purge_old_heartbeats(
     pool: &DbPool,
     retention_days: u32,
     chunk_size: usize,
+    orphan_sweep: OrphanSweep,
 ) -> Result<usize> {
     if retention_days == 0 {
         return Ok(0);
@@ -688,8 +690,13 @@ pub fn purge_old_heartbeats(
         .to_string();
 
     let mut total_deleted = 0usize;
-    let orphan_children = delete_orphan_heartbeat_children(pool)?;
-    let orphan_latest = delete_orphan_heartbeat_latest(pool)?;
+    let (orphan_children, orphan_latest) = match orphan_sweep {
+        OrphanSweep::Run => (
+            delete_orphan_heartbeat_children(pool, chunk_size)?,
+            delete_orphan_heartbeat_latest(pool)?,
+        ),
+        OrphanSweep::Skip => (0, 0),
+    };
     if orphan_children > 0 {
         tracing::warn!(
             deleted_rows = orphan_children,
@@ -1123,23 +1130,82 @@ fn delete_heartbeat_chunk_where(
     Ok(deleted)
 }
 
-fn delete_orphan_heartbeat_children(pool: &DbPool) -> Result<usize> {
-    let conn = pool.get()?;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrphanSweep {
+    Run,
+    Skip,
+}
+
+/// Delete child metric rows whose parent `host_heartbeats` row is gone.
+///
+/// **The scan runs without the global write lock.** Identifying orphans means
+/// examining every row of the child table, and on a production-sized DB that
+/// takes minutes; the previous implementation did it as one unchunked
+/// `DELETE ... WHERE NOT EXISTS` per table while holding `write_lock()` for the
+/// whole statement, which blocked every other writer in the process — heartbeat
+/// ingest, the syslog batch writer, notifications — long enough to exhaust the
+/// r2d2 pool and surface as fleet-wide 5xx.
+///
+/// Chunking alone would not have fixed it: with zero orphans (the steady state,
+/// since the normal delete path removes children before parents) a `LIMIT`ed
+/// `DELETE` still scans the entire table before returning nothing. So the phases
+/// are split — the expensive scan is a plain read, which WAL lets run alongside
+/// writers, and the lock is taken only for a bounded `DELETE` of rowids that
+/// are already known.
+fn delete_orphan_heartbeat_children(pool: &DbPool, chunk_size: usize) -> Result<usize> {
+    let chunk_limit = chunk_size.max(1) as i64;
     let mut total_deleted = 0usize;
+
     for table in HEARTBEAT_CHILD_TABLES {
-        let _write_guard = crate::db::write_lock();
-        let deleted = conn.execute(
-            &format!(
-                "DELETE FROM {table}
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM host_heartbeats
-                     WHERE host_heartbeats.id = {table}.heartbeat_id
-                 )"
-            ),
-            [],
-        )?;
-        total_deleted += deleted;
+        loop {
+            // Phase 1 — identify orphans. No write lock: readers do not block
+            // writers under WAL, so this may take as long as it needs.
+            let orphan_rowids: Vec<i64> = {
+                let conn = pool.get()?;
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT rowid FROM {table}
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM host_heartbeats
+                         WHERE host_heartbeats.id = {table}.heartbeat_id
+                     )
+                     LIMIT ?1"
+                ))?;
+                let rows = stmt.query_map([chunk_limit], |row| row.get::<_, i64>(0))?;
+                rows.collect::<rusqlite::Result<Vec<i64>>>()?
+            };
+
+            if orphan_rowids.is_empty() {
+                break;
+            }
+
+            // Phase 2 — delete exactly those rowids. The lock is held only for
+            // this bounded statement, never for a scan.
+            let deleted = {
+                let placeholders = std::iter::repeat_n("?", orphan_rowids.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let conn = pool.get()?;
+                let _write_guard = crate::db::write_lock();
+                conn.execute(
+                    &format!("DELETE FROM {table} WHERE rowid IN ({placeholders})"),
+                    rusqlite::params_from_iter(orphan_rowids.iter()),
+                )?
+            };
+            total_deleted += deleted;
+
+            tracing::debug!(
+                table,
+                deleted_rows = deleted,
+                chunk_size,
+                "Deleted orphan heartbeat child chunk"
+            );
+
+            // Yield so queued writers get the lock between chunks, matching
+            // `purge_old_logs` and `purge_by_tag_window`.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
+
     Ok(total_deleted)
 }
 

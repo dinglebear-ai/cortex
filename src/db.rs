@@ -83,9 +83,8 @@ pub use hook_incidents::{
 pub use ingest::insert_logs_batch;
 pub(crate) use ingest::{insert_logs_batch_borrowed, insert_logs_batch_in_tx};
 pub use ingest_health::{IngestSourceKindHealth, ingest_source_kind_health};
-pub(crate) use maintenance::{PragmaName, db_pragma_i64, db_pragma_string, sqlite_sidecar_path};
 pub use maintenance::{
-    SystemDiskSpaceProbe, checkpoint_wal_and_incremental_vacuum, db_full_vacuum,
+    OrphanSweep, SystemDiskSpaceProbe, checkpoint_wal_and_incremental_vacuum, db_full_vacuum,
     db_incremental_vacuum, db_integrity_check, db_wal_checkpoint, enforce_storage_budget,
     enforce_storage_budget_with_state, exceeds_trigger, finish_maintenance_job,
     get_maintenance_job, get_storage_metrics, insert_maintenance_job,
@@ -93,6 +92,7 @@ pub use maintenance::{
     purge_old_heartbeats, purge_old_llm_invocations, purge_old_logs,
     update_maintenance_job_progress, wal_checkpoint_complete,
 };
+pub(crate) use maintenance::{PragmaName, db_pragma_i64, db_pragma_string, sqlite_sidecar_path};
 pub(crate) use mcp_events::insert_mcp_events_in_tx;
 pub use mcp_events::{
     AiMcpEventEntry, AiMcpEventParams, ListMcpEventsResult, McpEventInsert, insert_mcp_events,
