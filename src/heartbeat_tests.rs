@@ -534,3 +534,150 @@ async fn agent_release_endpoint_proxies_authenticated_release_asset() {
         "a".repeat(64)
     );
 }
+
+// --- Connection-pool contention (bead syslog-mcp-2yhfy) ---
+//
+// Production `db::init_pool` hardcodes a 6s r2d2 `connection_timeout`, and
+// that value is out of scope here (see `db/pool.rs`). Waiting it out would
+// make every case below multi-second, so they point a *second* pool with a
+// short `connection_timeout` at the same already-migrated database file.
+// `heartbeat.rs` derives its per-attempt acquisition budget from
+// `DbPool::connection_timeout`, so the short-timeout pool drives the exact
+// production retry logic on a compressed clock.
+//
+// Deliberately not compressed further: `cargo test` runs these alongside the
+// rest of the suite, and the holder threads below release on a wall clock. The
+// margins are sized so ordinary scheduling jitter under a saturated test
+// machine cannot flip an outcome.
+const TEST_POOL_TIMEOUT: Duration = Duration::from_millis(400);
+
+fn short_timeout_pool(db_path: &std::path::Path, timeout: Duration) -> Arc<DbPool> {
+    let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
+    Arc::new(
+        r2d2::Pool::builder()
+            .max_size(1)
+            .connection_timeout(timeout)
+            .build(manager)
+            .expect("short-timeout test pool builds"),
+    )
+}
+
+/// Router backed by a single-connection, short-timeout pool over a freshly
+/// migrated database. Returns the pool so the caller can starve it.
+fn contention_app(dir: &tempfile::TempDir) -> (Router, Arc<DbPool>) {
+    let db_path = dir.path().join("contention.db");
+    let storage = StorageConfig::for_test(db_path.clone());
+    // Migrate through the normal constructor, then drop that pool so it holds
+    // nothing against the short-timeout pool the handler actually uses.
+    drop(crate::db::init_pool(&storage).unwrap());
+
+    let pool = short_timeout_pool(&db_path, TEST_POOL_TIMEOUT);
+    let state = HeartbeatState::new(
+        Arc::clone(&pool),
+        Some("secret".to_string()),
+        AuthPolicy::Mounted { auth_state: None },
+    );
+    let app = router(state).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    (app, pool)
+}
+
+/// Holds the pool's only connection plus the process write lock on a
+/// background thread, standing in for another ingest-side writer (the hourly
+/// retention purge, the syslog batch writer) occupying the single reserved
+/// writer slot. Blocks until the hold is established so the caller's request
+/// is guaranteed to race it. Releases after `hold_for`, or earlier when the
+/// returned sender fires.
+fn hold_only_connection(
+    pool: Arc<DbPool>,
+    hold_for: Duration,
+) -> (std::thread::JoinHandle<()>, std::sync::mpsc::Sender<()>) {
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _conn = pool
+            .get()
+            .expect("single-connection pool yields its connection to the holder");
+        // Declared second so it drops first: the write lock is always released
+        // before the connection returns to the pool, exactly as a real writer
+        // unwinds, so a waiting heartbeat can never deadlock behind it.
+        let _write_guard = crate::db::write_lock();
+        let _ = ready_tx.send(());
+        let _ = release_rx.recv_timeout(hold_for);
+    });
+    ready_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("holder thread established its hold");
+    (holder, release_tx)
+}
+
+/// Sustained contention must answer honestly: 503 `busy` ("try again"), not
+/// 500 `internal_error` ("the server is broken"). Pre-fix this was a single
+/// unretried `pool.get()` whose r2d2 timeout fell through to the handler's
+/// generic error arm.
+#[tokio::test]
+async fn heartbeat_returns_busy_when_pool_contention_outlasts_the_retry_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, pool) = contention_app(&dir);
+
+    // Far longer than the whole acquisition budget; released below.
+    let (holder, release_tx) = hold_only_connection(Arc::clone(&pool), Duration::from_secs(30));
+
+    let (status, value) =
+        post_json(app, "/v1/heartbeats", Some("secret"), heartbeat_payload()).await;
+
+    let _ = release_tx.send(());
+    holder.join().unwrap();
+
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "exhausted pool contention must surface as retryable, got body {value}"
+    );
+    // The literal the heartbeat contract specifies for a backpressured write
+    // path (docs/contracts/heartbeat-telemetry.md), not a generic "busy".
+    assert_eq!(value["error"], "storage_unavailable");
+}
+
+/// Contention shorter than the retry budget but longer than one attempt must
+/// still be accepted. Pre-fix the single attempt expired at the pool's
+/// `connection_timeout` and the heartbeat was lost to a 500.
+#[tokio::test]
+async fn heartbeat_recovers_from_contention_shorter_than_the_retry_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, pool) = contention_app(&dir);
+
+    // Outlasts a single attempt (one `TEST_POOL_TIMEOUT`) but sits well inside
+    // the three-attempt budget, leaving the last attempt as slack for jitter.
+    let hold = TEST_POOL_TIMEOUT + TEST_POOL_TIMEOUT / 2;
+    let (holder, release_tx) = hold_only_connection(Arc::clone(&pool), hold);
+
+    let (status, value) =
+        post_json(app, "/v1/heartbeats", Some("secret"), heartbeat_payload()).await;
+
+    let _ = release_tx.send(());
+    holder.join().unwrap();
+
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "bounded retry must ride out contention shorter than its budget, got body {value}"
+    );
+    assert_eq!(value["accepted"], 1);
+}
+
+/// The busy path must not swallow real failures: a genuine SQL error still
+/// reports 500 `internal_error`, unchanged.
+#[tokio::test]
+async fn genuine_insert_failure_still_returns_internal_error() {
+    let (app, pool, _dir) = test_app(Some("secret"));
+    {
+        let conn = pool.get().unwrap();
+        conn.execute_batch("DROP TABLE heartbeat_cpu").unwrap();
+    }
+
+    let (status, value) =
+        post_json(app, "/v1/heartbeats", Some("secret"), heartbeat_payload()).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(value["error"], "internal_error");
+}
