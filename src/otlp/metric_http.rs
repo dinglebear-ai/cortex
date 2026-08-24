@@ -227,8 +227,12 @@ pub(super) async fn metrics_handler(
             // A pool-acquisition timeout means the points never reached SQLite,
             // so this is backpressure rather than a server fault. OTLP/HTTP
             // only retries 429/502/503/504 — returning 500 makes a conforming
-            // exporter drop the batch permanently. Mirror the storage-budget
-            // response above so the exporter retries instead.
+            // exporter drop the batch permanently. Same 503 + Retry-After shape
+            // as the storage-budget branch above, so the exporter retries.
+            //
+            // Note the trace endpoint reports its storage-budget case
+            // differently (200 with `rejected_spans`), so only this file has
+            // that symmetry.
             if crate::db::is_pool_timeout(&error) {
                 tracing::warn!(
                     error = %error,

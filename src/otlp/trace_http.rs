@@ -179,8 +179,12 @@ pub(super) async fn traces_handler(
             // A pool-acquisition timeout means the spans never reached SQLite,
             // so this is backpressure rather than a server fault. OTLP/HTTP
             // only retries 429/502/503/504 — returning 500 makes a conforming
-            // exporter drop the batch permanently. Mirror the storage-budget
-            // response above so the exporter retries instead.
+            // exporter drop the batch permanently.
+            //
+            // Note this deliberately does NOT match the storage-budget branch
+            // above, which answers 200 with `rejected_spans` — a permanent
+            // rejection in OTLP terms. Only the pool-timeout case asks the
+            // exporter to retry; the two conditions are reported differently.
             if crate::db::is_pool_timeout(&error) {
                 tracing::warn!(
                     error = %error,
