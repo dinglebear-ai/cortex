@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header::CONTENT_TYPE},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CONTENT_TYPE, RETRY_AFTER},
+    },
     response::{IntoResponse, Json},
 };
 use bytes::Bytes;
@@ -173,6 +176,24 @@ pub(super) async fn traces_handler(
     let result = match persisted {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => {
+            // A pool-acquisition timeout means the spans never reached SQLite,
+            // so this is backpressure rather than a server fault. OTLP/HTTP
+            // only retries 429/502/503/504 — returning 500 makes a conforming
+            // exporter drop the batch permanently. Mirror the storage-budget
+            // response above so the exporter retries instead.
+            if crate::db::is_pool_timeout(&error) {
+                tracing::warn!(
+                    error = %error,
+                    source_ip = %peer,
+                    "OTLP trace persistence unavailable; asking exporter to retry"
+                );
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [(RETRY_AFTER, HeaderValue::from_static("1"))],
+                    Json(json!({"error": "trace_storage_unavailable", "retryable": true})),
+                )
+                    .into_response();
+            }
             tracing::error!(error = %error, source_ip = %peer, "OTLP trace persistence failed");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

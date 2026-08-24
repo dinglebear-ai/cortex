@@ -224,6 +224,24 @@ pub(super) async fn metrics_handler(
                 .counters
                 .metrics_persistence_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // A pool-acquisition timeout means the points never reached SQLite,
+            // so this is backpressure rather than a server fault. OTLP/HTTP
+            // only retries 429/502/503/504 — returning 500 makes a conforming
+            // exporter drop the batch permanently. Mirror the storage-budget
+            // response above so the exporter retries instead.
+            if crate::db::is_pool_timeout(&error) {
+                tracing::warn!(
+                    error = %error,
+                    source_ip = %peer,
+                    "OTLP metric persistence unavailable; asking exporter to retry"
+                );
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [(RETRY_AFTER, HeaderValue::from_static("1"))],
+                    Json(json!({"error": "metric_storage_unavailable", "retryable": true})),
+                )
+                    .into_response();
+            }
             tracing::error!(error = %error, source_ip = %peer, "OTLP metric persistence failed");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

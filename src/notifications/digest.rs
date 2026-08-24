@@ -212,21 +212,9 @@ enum DigestFailureAction {
 ///
 /// An r2d2 pool timeout means the statement never reached SQLite, so it never
 /// downcasts to `rusqlite::Error`: a rusqlite-only predicate would misread a
-/// 6s pool timeout as a permanent failure. Mirrors the pool-timeout arm of
-/// `ServiceError::classify_db_error`; unify with `db::is_pool_timeout` once
-/// that shared helper lands.
+/// 6s pool timeout as a permanent failure.
 fn is_retryable_digest_error(error: &anyhow::Error) -> bool {
-    if crate::db::is_transient_sqlite_lock(error) {
-        return true;
-    }
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<r2d2::Error>()
-            .is_some_and(|pool_error| {
-                let message = pool_error.to_string().to_ascii_lowercase();
-                message.contains("timed out") || message.contains("timeout")
-            })
-    })
+    crate::db::is_transient_sqlite_lock(error) || crate::db::is_pool_timeout(error)
 }
 
 /// Decide whether a failed attempt keeps the day open or closes it.

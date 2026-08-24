@@ -561,3 +561,61 @@ fn counters_default_to_zero() {
     assert_eq!(counters.metrics_rejected.load(Ordering::Relaxed), 0);
     assert_eq!(counters.metrics_backpressure.load(Ordering::Relaxed), 0);
 }
+
+/// A pool-acquisition timeout must read as retryable backpressure, not a server
+/// fault. OTLP/HTTP only retries 429/502/503/504, so answering 500 makes a
+/// conforming exporter drop the batch permanently.
+#[tokio::test]
+async fn metric_pool_exhaustion_returns_retryable_503_not_500() {
+    let test = state_with_token(None);
+    // `StorageConfig::for_test` builds a single-connection pool, so holding
+    // that connection reproduces production pool exhaustion exactly.
+    let hog = test.pool.get().unwrap();
+
+    let response = call_metrics(
+        &test.state,
+        protobuf_headers(None),
+        metric_request(vec![metric_point(1_700_000_000_000_000_000)]),
+    )
+    .await;
+
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "pool exhaustion must be retryable, not a 500"
+    );
+    assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "1");
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "metric_storage_unavailable");
+    assert_eq!(json["retryable"], true);
+
+    drop(hog);
+}
+
+/// Same contract for the trace endpoint.
+#[tokio::test]
+async fn trace_pool_exhaustion_returns_retryable_503_not_500() {
+    let test = state_with_token(None);
+    let hog = test.pool.get().unwrap();
+
+    let response = call_traces(
+        &test.state,
+        protobuf_headers(None),
+        trace_request(vec![span(1_700_000_000_000_000_000)]),
+    )
+    .await;
+
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "pool exhaustion must be retryable, not a 500"
+    );
+    assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "1");
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "trace_storage_unavailable");
+    assert_eq!(json["retryable"], true);
+
+    drop(hog);
+}
