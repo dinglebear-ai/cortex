@@ -362,6 +362,37 @@ pub fn enforce_storage_budget_with_state(
     // SELF-TRIM loop: only the DB-size trigger drives deletion. Its recovery exit
     // is `logical <= recovery_db_size_mb` (the free-disk arm never gates it).
     if db_size_exceeds_trigger(&metrics, config) {
+        // Orphan child rows are free space, so reclaim them before trimming
+        // real telemetry. Hoisted out of the trim loop below: each sweep is a
+        // full scan of all six heartbeat child tables, and
+        // `delete_orphan_heartbeat_children` already loops internally until no
+        // orphans remain — so running it per iteration re-scanned every table
+        // on each pass even once the first call had drained them, on exactly
+        // the code path that runs when the database is already under pressure.
+        // Log-and-continue rather than `?`: reclaiming orphans is an
+        // optimisation, and a transient pool timeout here must not abort the
+        // trim that is supposed to relieve a full disk.
+        let deleted_orphan_children =
+            match delete_orphan_heartbeat_children(pool, config.cleanup_chunk_size) {
+                Ok(deleted) => deleted,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "Orphan heartbeat sweep failed during storage recovery; continuing to trim"
+                    );
+                    0
+                }
+            };
+        if deleted_orphan_children > 0 {
+            deleted_rows += deleted_orphan_children;
+            tracing::info!(
+                deleted_rows = deleted_orphan_children,
+                total_deleted_rows = deleted_rows,
+                "Deleted orphan heartbeat child rows for storage recovery"
+            );
+            metrics = get_storage_metrics_with_probe(pool, config, probe)?;
+        }
+
         while !db_size_within_recovery(&metrics, &recovery, config) {
             tracing::warn!(
                 logical_db_size_bytes = metrics.logical_db_size_bytes,
@@ -369,19 +400,6 @@ pub fn enforce_storage_budget_with_state(
                 deleted_rows,
                 "DB-size budget exceeded — self-trimming oldest telemetry chunk"
             );
-
-            let deleted_orphan_children =
-                delete_orphan_heartbeat_children(pool, config.cleanup_chunk_size)?;
-            if deleted_orphan_children > 0 {
-                deleted_rows += deleted_orphan_children;
-                tracing::info!(
-                    deleted_rows = deleted_orphan_children,
-                    total_deleted_rows = deleted_rows,
-                    "Deleted orphan heartbeat child rows for storage recovery"
-                );
-                metrics = get_storage_metrics_with_probe(pool, config, probe)?;
-                continue;
-            }
 
             let deleted = match oldest_telemetry_source(pool)? {
                 Some(TelemetrySource::Heartbeats) => {
@@ -723,6 +741,7 @@ pub fn purge_old_heartbeats(
     tracing::info!(
         deleted = total_deleted,
         cutoff = %cutoff,
+        orphan_sweep = ?orphan_sweep,
         "Purged old heartbeats"
     );
     Ok(total_deleted)
@@ -1130,9 +1149,23 @@ fn delete_heartbeat_chunk_where(
     Ok(deleted)
 }
 
+/// Whether [`purge_old_heartbeats`] should also sweep for orphan child rows.
+///
+/// The sweep is a full scan of every heartbeat child table, so it is far more
+/// expensive than the retention delete it accompanies, while the orphans it
+/// looks for are rare (both the write and delete paths are single
+/// transactions). Callers therefore decide the cadence: `runtime.rs` runs it on
+/// the first retention tick after start and daily thereafter.
+///
+/// Note this only gates the sweep inside `purge_old_heartbeats`.
+/// `enforce_storage_budget_with_state` sweeps unconditionally, because there
+/// reclaiming orphan rows is the cheapest way to recover space before trimming
+/// live telemetry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrphanSweep {
+    /// Scan for and delete orphan child rows.
     Run,
+    /// Skip the scan entirely; orphan counts are reported as zero.
     Skip,
 }
 
@@ -1140,11 +1173,13 @@ pub enum OrphanSweep {
 ///
 /// **The scan runs without the global write lock.** Identifying orphans means
 /// examining every row of the child table, and on a production-sized DB that
-/// takes minutes; the previous implementation did it as one unchunked
-/// `DELETE ... WHERE NOT EXISTS` per table while holding `write_lock()` for the
-/// whole statement, which blocked every other writer in the process — heartbeat
+/// takes time proportional to child-table size; the previous implementation did
+/// it as one unchunked `DELETE ... WHERE NOT EXISTS` per table while holding
+/// `write_lock()` for the whole statement, which blocked every other writer in the process — heartbeat
 /// ingest, the syslog batch writer, notifications — long enough to exhaust the
-/// r2d2 pool and surface as fleet-wide 5xx.
+/// r2d2 pool and surface as fleet-wide 5xx. One production retention tick
+/// (~79 GB database, 2026-08-24) spent 15m25s here, of which the whole-table
+/// scans were the dominant cost.
 ///
 /// Chunking alone would not have fixed it: with zero orphans (the steady state,
 /// since the normal delete path removes children before parents) a `LIMIT`ed
@@ -1152,8 +1187,35 @@ pub enum OrphanSweep {
 /// are split — the expensive scan is a plain read, which WAL lets run alongside
 /// writers, and the lock is taken only for a bounded `DELETE` of rowids that
 /// are already known.
+///
+/// **Depends on `host_heartbeats.id` being `AUTOINCREMENT`.** Splitting the
+/// scan from the delete opens a window where a rowid identified as an orphan
+/// could, in principle, acquire a live parent before the delete runs — which
+/// would delete a row belonging to a real heartbeat. That cannot happen here
+/// because `AUTOINCREMENT` makes ids strictly monotonic and never reuses one
+/// (SQLite keeps the high-water mark in `sqlite_sequence`), so a deleted
+/// parent's id is never reissued and an orphan stays an orphan. A plain
+/// `INTEGER PRIMARY KEY` would reuse `max(rowid) + 1` after a delete and make
+/// this unsafe. If that column is ever rebuilt without `AUTOINCREMENT`, this
+/// function must go back to a single atomic `DELETE ... WHERE NOT EXISTS`.
+///
+/// The reverse races are benign: a rowid deleted by the parent-side purge
+/// between the phases simply matches nothing, and orphans created after the
+/// scan are picked up on the next iteration.
 fn delete_orphan_heartbeat_children(pool: &DbPool, chunk_size: usize) -> Result<usize> {
-    let chunk_limit = chunk_size.max(1) as i64;
+    // Phase 2 binds one parameter per rowid, so the chunk must stay under
+    // SQLite's SQLITE_MAX_VARIABLE_NUMBER (32766 on the bundled 3.32+ build,
+    // and rusqlite is built with `bundled`). `cleanup_chunk_size` is only
+    // validated as 1..=1_000_000, so an operator-set value can legally exceed
+    // that and would fail the DELETE with "too many SQL variables" — aborting
+    // the whole retention pass, and via `enforce_storage_budget_with_state`
+    // the storage-budget recovery loop, precisely when orphans exist.
+    //
+    // 500 is well under the bind ceiling and also keeps each lock hold short,
+    // which is the point of chunking here. Nothing is lost by capping: the
+    // loop simply runs more iterations.
+    const MAX_ROWIDS_PER_DELETE: usize = 500;
+    let chunk_limit = chunk_size.clamp(1, MAX_ROWIDS_PER_DELETE) as i64;
     let mut total_deleted = 0usize;
 
     for table in HEARTBEAT_CHILD_TABLES {
@@ -1193,6 +1255,19 @@ fn delete_orphan_heartbeat_children(pool: &DbPool, chunk_size: usize) -> Result<
             };
             total_deleted += deleted;
 
+            if deleted == 0 {
+                // Phase 1 found rowids but phase 2 removed none. Not reachable
+                // with the current schema, but without this guard the loop
+                // would spin on the same rowids, re-scanning the table each
+                // time while holding the maintenance permit.
+                tracing::warn!(
+                    table,
+                    candidates = orphan_rowids.len(),
+                    "Orphan sweep made no progress; stopping to avoid a spin"
+                );
+                break;
+            }
+
             tracing::debug!(
                 table,
                 deleted_rows = deleted,
@@ -1209,6 +1284,12 @@ fn delete_orphan_heartbeat_children(pool: &DbPool, chunk_size: usize) -> Result<
     Ok(total_deleted)
 }
 
+/// Delete `host_heartbeats_latest` rows whose heartbeat is gone.
+///
+/// Deliberately left as a single unchunked `DELETE ... WHERE NOT EXISTS` under
+/// the write lock, unlike [`delete_orphan_heartbeat_children`]: this table
+/// holds one row per host, so the scan is bounded by host count (tens) rather
+/// than by heartbeat volume (millions), and the lock hold is negligible.
 pub fn delete_orphan_heartbeat_latest(pool: &DbPool) -> Result<usize> {
     let conn = pool.get()?;
     let _write_guard = crate::db::write_lock();

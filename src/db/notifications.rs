@@ -81,7 +81,7 @@ pub fn outbox_insert(
 
 /// How long a claimed row stays leased before another cycle may reclaim it.
 ///
-/// Sized an order of magnitude above the worst case for a single in-flight row
+/// Sized well above the worst case for a single in-flight row
 /// (5s Apprise timeout + the pool's 6s `connection_timeout` on the write-back),
 /// so a transient pool-exhaustion episode has cleared before the reclaim, while
 /// still redelivering within a useful window if the process dies mid-flight.
@@ -91,8 +91,10 @@ pub const CLAIM_LEASE_SECS: i64 = 300;
 ///
 /// This is a write, not a read. It stamps a lease into `next_attempt_at` and
 /// consumes one attempt *before* the caller delivers, so a failure between
-/// delivery and the outbox write-back cannot redeliver on the next cycle. The
-/// lease expires after [`CLAIM_LEASE_SECS`], so an abandoned in-flight row is
+/// delivery and the outbox write-back cannot redeliver on the next 30s cycle.
+/// The guarantee is bounded, not absolute: once [`CLAIM_LEASE_SECS`] elapses
+/// the row is reclaimed, so a delivery abandoned for longer than the lease
+/// *will* be redelivered. That is the deliberate trade — an abandoned row is
 /// reclaimed rather than lost — and because the claim already consumed an
 /// attempt, repeated reclaims still walk the row toward the dead-letter
 /// threshold instead of redelivering forever.
@@ -111,8 +113,8 @@ pub fn outbox_claim_pending(
     conn: &rusqlite::Connection,
     limit: i64,
 ) -> rusqlite::Result<Vec<OutboxRow>> {
-    // RETURNING requires SQLite >= 3.35 (rusqlite `bundled` ships 3.4x) and
-    // makes select-and-lease a single atomic statement.
+    // RETURNING requires SQLite >= 3.35 and makes select-and-lease a single
+    // atomic statement.
     let mut stmt = conn.prepare(
         "UPDATE notifications_outbox
             SET attempt_count = attempt_count + 1,
@@ -210,7 +212,8 @@ pub fn outbox_mark_dropped(
 
 /// Set next_attempt_at for an exponential-backoff retry.
 ///
-/// Overwrites the claim lease with the (shorter) backoff deadline, and does not
+/// Overwrites the claim lease with the backoff deadline — which for the later
+/// tiers is longer than the lease, not shorter — and does not
 /// touch `attempt_count`: [`outbox_claim_pending`] already consumed the attempt
 /// this write-back is reporting on.
 pub fn outbox_schedule_retry(

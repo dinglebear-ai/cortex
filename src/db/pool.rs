@@ -28,14 +28,30 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 ///
 /// A pool-acquisition failure produces an `r2d2::Error` and **no**
 /// `rusqlite::Error` anywhere in the chain — the statement never reached
-/// SQLite. Every predicate that asks "is this worth retrying?" must therefore
-/// consult this in addition to any `rusqlite::ErrorCode` matching, or a pool
-/// timeout gets misclassified as an unrecoverable failure.
+/// SQLite — so a predicate that only matches `rusqlite::ErrorCode` reads a
+/// transient timeout as an unrecoverable failure. Consult this alongside any
+/// such matching wherever that distinction changes the outcome.
+///
+/// Consulted today by `ServiceError::classify_db_error`, the ingest batch
+/// writer (`receiver::writer::is_retryable_write_error`), the OTLP HTTP
+/// handlers, and the notification digest. Deliberately NOT consulted by
+/// `db::ingest::is_transient_sqlite_lock` — see its doc for why — and not yet
+/// by `runtime::agent_observatory`, whose projector still classifies with
+/// `is_transient_sqlite_lock` alone.
 ///
 /// Matching is on the error *type*, not on its message: r2d2 0.8 constructs
-/// `Error` at exactly two sites, both behind a `timed_out()` check, and its
-/// `Display` is the fixed string "timed out waiting for connection". The type
-/// is the discriminant; there is no structured variant to match.
+/// `Error` at exactly two sites, both behind a `timed_out()` check, so the type
+/// is the discriminant and there is no structured variant to match. Do not
+/// match on the message — `Display` writes the fixed description
+/// "timed out waiting for connection" and then appends `": {inner}"` whenever
+/// the pool recorded a connection-establishment error, so it is a prefix, not a
+/// fixed string.
+///
+/// Note the type is broader than pure backpressure: if every connect attempt
+/// fails for the whole timeout window (unopenable file, disk I/O error), the
+/// pool still reports a timeout. Callers treat that as retryable, which
+/// degrades a permanent fault into sustained backpressure rather than a hard
+/// error.
 pub(crate) fn is_pool_timeout(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| cause.is::<r2d2::Error>())
 }

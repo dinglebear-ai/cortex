@@ -1485,3 +1485,31 @@ fn test_purge_old_llm_invocations_cutoff_has_fractional_seconds() {
     );
     assert_eq!(count_llm_invocations(&pool), 0);
 }
+
+/// `delete_orphan_heartbeat_children` scans for orphan rowids in one statement
+/// and deletes them in another, which is only safe because a deleted
+/// heartbeat's id is never reissued — otherwise a rowid could gain a live
+/// parent between the two phases and take a real row with it.
+///
+/// `AUTOINCREMENT` is what guarantees that. Pin it, so rebuilding the table
+/// without it fails here instead of silently deleting live metric rows.
+#[test]
+fn host_heartbeats_id_is_autoincrement_so_orphan_rowids_stay_orphans() {
+    let (pool, _dir) = test_pool();
+    let conn = pool.get().unwrap();
+    let schema: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'host_heartbeats'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("host_heartbeats table should exist");
+
+    assert!(
+        schema.to_ascii_uppercase().contains("AUTOINCREMENT"),
+        "host_heartbeats.id must stay AUTOINCREMENT: the two-phase orphan sweep \
+         relies on ids never being reused. Without it, revert \
+         delete_orphan_heartbeat_children to a single atomic \
+         DELETE ... WHERE NOT EXISTS. Schema was: {schema}"
+    );
+}

@@ -915,8 +915,10 @@ impl RuntimeCore {
         let cleanup_chunk_size = self.config.storage.cleanup_chunk_size;
         let handle = tokio::spawn(async move {
             let mut interval = background_interval(tokio::time::Duration::from_secs(3600));
-            // Orphan child rows are produced only when a delete is interrupted
-            // between children and parent, so they are rare by construction.
+            // Orphan child rows are rare by construction: both the write path
+            // and `delete_heartbeat_chunk_where` delete children and parent
+            // inside a single transaction, so neither can strand a child. Any
+            // orphans are legacy or repair-only residue.
             // Sweeping for them means a full scan of every heartbeat child
             // table, which is wasted I/O at the hourly retention cadence even
             // now that the scan no longer holds the write lock. Run it on the

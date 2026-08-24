@@ -439,11 +439,10 @@ async fn heartbeat_handler(
         // instead of recording a hard error against a healthy server.
         // `acquire_write_conn` already logged the exhaustion.
         //
-        // `storage_unavailable` is the literal the heartbeat contract has
-        // specified for this case since 2026-07-30 (see
-        // docs/contracts/heartbeat-telemetry.md "503 | storage_unavailable |
-        // DB write path unavailable or backpressured"); it was documented but
-        // never implemented until now.
+        // `storage_unavailable` is the literal specified by
+        // docs/contracts/heartbeat-telemetry.md section 10 ("503 |
+        // storage_unavailable | DB write path unavailable or backpressured").
+        // It was documented but never emitted by any code path until now.
         Err(HeartbeatIngestError::PoolBusy { .. }) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "storage_unavailable"})),
@@ -497,7 +496,8 @@ const HEARTBEAT_ACQUIRE_ATTEMPTS: usize = HEARTBEAT_ACQUIRE_BACKOFF.len() + 1;
 /// a heartbeat used to spend on one attempt. Capping each attempt at a third
 /// of that keeps three attempts plus backoff at roughly the same wall clock,
 /// so the retry buys extra chances rather than extra latency. Pools configured
-/// with a shorter timeout than the cap keep their own, tighter budget.
+/// with a shorter timeout than the cap keep their own, tighter per-attempt
+/// budget (their total still spans three attempts plus backoff).
 const HEARTBEAT_ACQUIRE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
 
 type HeartbeatWriteConn = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;

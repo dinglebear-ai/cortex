@@ -278,15 +278,21 @@ mod notifications_db_tests {
         outbox_schedule_retry(&conn, id, "2030-06-01T00:00:00.000Z", "timeout", Some(503))
             .expect("retry");
 
-        let (attempt_count, last_error): (i64, String) = conn
+        let (attempt_count, last_error, next_attempt_at): (i64, String, String) = conn
             .query_row(
-                "SELECT attempt_count, last_error FROM notifications_outbox WHERE id = ?1",
+                "SELECT attempt_count, last_error, next_attempt_at
+                   FROM notifications_outbox WHERE id = ?1",
                 rusqlite::params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
         assert_eq!(attempt_count, 1);
         assert_eq!(last_error, "timeout");
+        // The backoff deadline must replace the claim's 300s lease. If this
+        // ever stopped being written, every transient retry would silently wait
+        // out the lease instead of the 1s first tier, and nothing else would
+        // catch it.
+        assert_eq!(next_attempt_at, "2030-06-01T00:00:00.000Z");
     }
 
     #[test]
