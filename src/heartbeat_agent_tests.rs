@@ -710,3 +710,40 @@ fn transcript_forward_env_does_not_gate_local_sessions_watch_service() {
     assert!(!unit.contains(AI_TRANSCRIPT_FORWARD_ENV));
     assert!(!unit.contains(AI_TRANSCRIPT_FORWARD_LEGACY_ENV));
 }
+
+/// A host with the docker CLI present but no usable daemon must report the
+/// runtime as unreachable, not fail the probe.
+///
+/// Reporting an error here left `containers` as `None` and marked the whole
+/// sample partial, and it made behaviour depend on the environment: a host with
+/// no docker at all reported `reachable: false`, while a host with docker but a
+/// dead or permission-denied daemon — a CI container, for instance — reported a
+/// probe error instead. Both are the same fact about the host.
+#[tokio::test]
+async fn container_probe_reports_unreachable_when_docker_ps_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_docker = dir.path().join("docker");
+    std::fs::write(
+        &fake_docker,
+        "#!/bin/sh\necho 'Cannot connect to the Docker daemon' >&2\nexit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    crate::env::set_test_var("PATH", dir.path().to_str().unwrap());
+
+    let output = LinuxContainerProbe.collect().await.expect(
+        "a failing `docker ps` is an unreachable runtime, not a probe error — \
+         it must not propagate as Err",
+    );
+
+    let ProbeOutput::Containers(containers) = output else {
+        panic!("expected a Containers probe output");
+    };
+    assert!(!containers.reachable, "daemon is not reachable");
+    assert_eq!(containers.running, 0);
+    assert!(containers.details.is_empty());
+}
