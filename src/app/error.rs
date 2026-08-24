@@ -57,11 +57,8 @@ impl ServiceError {
                     return ServiceError::Busy("database_busy".to_string());
                 }
 
-                if let Some(pool_error) = error.downcast_ref::<r2d2::Error>() {
-                    let message = pool_error.to_string().to_ascii_lowercase();
-                    if message.contains("timed out") || message.contains("timeout") {
-                        return ServiceError::DatabaseTimeout;
-                    }
+                if crate::db::is_pool_timeout(&error) {
+                    return ServiceError::DatabaseTimeout;
                 }
 
                 ServiceError::Internal(error)
