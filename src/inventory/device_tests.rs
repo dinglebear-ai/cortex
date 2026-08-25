@@ -117,7 +117,20 @@ async fn collect_warns_when_optional_device_commands_are_missing() {
     let bin_dir = dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     executable_file(&bin_dir.join("hostname"), "#!/bin/sh\nprintf '\\n'\n");
-    let _path_guard = EnvGuard::set("PATH", bin_dir.as_os_str());
+    // Mask the optional commands instead of replacing `PATH` with `bin_dir`.
+    // `PATH` overrides are process-global, so wiping it here also stopped every
+    // concurrently-running test in this binary from finding `sh`, `git`, and
+    // friends. Masking says what this test actually means — these four commands
+    // are not installed — and leaves every other program resolving normally.
+    // Safe to mask process-wide because `inventory::device` is the only caller
+    // of them and its tests are `#[serial]` with each other.
+    let _masked = crate::env::mask_test_programs(["uname", "ip", "ss", "df"]);
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        crate::env::var("PATH").unwrap_or_default()
+    );
+    let _path_guard = EnvGuard::set("PATH", path);
 
     let output = collect(std::time::Duration::from_millis(50)).await;
 
