@@ -16,6 +16,7 @@ use crate::scanner::local_hostname;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -37,14 +38,42 @@ fn projector_retry_delay_ms(attempt: usize) -> u64 {
     TRANSIENT_SQLITE_RETRY_DELAYS_MS[index]
 }
 
+/// Cumulative, monotonic progress of one projector instance.
+///
+/// A projector cycle has no wall-clock bound: it takes the process-wide SQLite
+/// write serialization lock (`db::pool::write_lock`) several times, so under
+/// contention — most visibly the parallel test suite, where every test's pool
+/// queues on that one lock — a single cycle can take tens of seconds. Anything
+/// that needs to know a cycle happened must therefore observe this signal
+/// rather than assume a cycle fits inside some interval.
+///
+/// Every field is cumulative and monotonic, so an observer can never miss a
+/// transition by sampling late — unlike the health row, whose `detail` describes
+/// only the cycle that wrote it and is overwritten by the next one.
+/// `health_records` counts only successfully persisted health rows, so it
+/// tracks the `attempts` counter inside the stored health JSON exactly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ProjectorProgress {
+    pub(super) cycles: u64,
+    pub(super) health_records: u64,
+    pub(super) projected: u64,
+    pub(super) oversized_first_rows: u64,
+}
+
+/// Spawn the projector, returning its join handle plus a receiver that reports
+/// [`ProjectorProgress`] after every completed cycle. Production drops the
+/// receiver; `watch::Sender::send_replace` never fails on a dropped receiver,
+/// so the signal costs one `watch` cell whether or not anyone is listening.
 pub(super) fn spawn_projector(
     token: CancellationToken,
     pool: Arc<DbPool>,
     config: AgentObservatoryConfig,
-) -> Option<JoinHandle<()>> {
+) -> Option<(JoinHandle<()>, watch::Receiver<ProjectorProgress>)> {
     config.enabled.then(|| {
         let mut wake = projection_wake_receiver();
-        tokio::spawn(async move {
+        let (progress_tx, progress_rx) = watch::channel(ProjectorProgress::default());
+        let task = tokio::spawn(async move {
+            let mut progress = ProjectorProgress::default();
             let mut consecutive_retry_safe_failures = 0usize;
             loop {
                 if token.is_cancelled() { break; }
@@ -158,7 +187,7 @@ pub(super) fn spawn_projector(
                     None
                 };
                 let status = if healthy { "ok" } else { "error" };
-                if let Err(error) = record_projection_health(
+                match record_projection_health(
                     &pool,
                     "projector",
                     status,
@@ -167,9 +196,20 @@ pub(super) fn spawn_projector(
                         retry_delay_ms.unwrap_or(0)
                     ),
                 ) {
-                    tracing::error!(error = %error, "Agent Observatory projector health write failed");
+                    Ok(()) => progress.health_records = progress.health_records.saturating_add(1),
+                    Err(error) => {
+                        tracing::error!(error = %error, "Agent Observatory projector health write failed");
+                    }
                 }
                 tracing::debug!(projected, "Agent Observatory projector cycle completed");
+                progress.cycles = progress.cycles.saturating_add(1);
+                progress.projected = progress.projected.saturating_add(projected as u64);
+                progress.oversized_first_rows = progress
+                    .oversized_first_rows
+                    .saturating_add(oversized_first_rows as u64);
+                // Published after the health row is committed so an observer
+                // woken by this signal always reads the row this cycle wrote.
+                progress_tx.send_replace(progress);
                 if healthy {
                     tokio::select! {
                         biased;
@@ -186,7 +226,8 @@ pub(super) fn spawn_projector(
                     }
                 }
             }
-        })
+        });
+        (task, progress_rx)
     })
 }
 

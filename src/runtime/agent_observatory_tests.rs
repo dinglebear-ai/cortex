@@ -3,6 +3,7 @@ use crate::db::agent_observatory::{
     advance_projection_cursor, projection_cursor, projection_health,
 };
 use crate::db::{LogBatchEntry, insert_logs_batch};
+use tokio::sync::watch;
 
 fn pool() -> (tempfile::TempDir, Arc<DbPool>) {
     let directory = tempfile::tempdir().unwrap();
@@ -11,48 +12,46 @@ fn pool() -> (tempfile::TempDir, Arc<DbPool>) {
     (directory, pool)
 }
 
-/// Deadline for waits on a background worker making progress.
+/// Block until the projector's own progress signal satisfies `ready`.
 ///
-/// Every `DbPool` in this test binary shares one process-wide SQLite write lock
-/// (`crate::db::pool::write_lock`), and each test pool's `init_pool` runs the
-/// full migration set — VACUUM, CREATE INDEX, ANALYZE — while holding it. Under
-/// full-suite parallelism a worker's cursor or health write therefore queues
-/// behind however many other tests are migrating, which is seconds, not
-/// milliseconds. `cargo nextest` gives each test its own process and never sees
-/// this contention; plain `cargo test` does, and the old 2s/5s deadlines flaked
-/// there.
-///
-/// These are liveness backstops for a genuinely stuck worker, not latency
-/// assertions — a passing run exits as soon as the condition holds, so the
-/// headroom is free. Anything that needs to assert *timing* must do it against a
-/// deliberately separated interval, the way the wake test uses `IDLE_POLL_MS`.
-const PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
+/// A projector cycle is not wall-clock bounded — it takes the process-wide
+/// SQLite write lock several times, and under full-suite parallelism that lock
+/// can hold one cycle for tens of seconds — so these tests wait on a real
+/// signal instead of polling against a deadline. Predicates must be monotonic
+/// over [`ProjectorProgress`]'s cumulative counters: the projector only yields
+/// when all of its select branches are pending, so it can run several cycles
+/// between two polls of the waiter and a "counter equals N exactly" predicate
+/// would be missable. `Err` means the task ended first, which is a real failure
+/// rather than a slow machine.
+async fn await_progress(
+    progress: &mut watch::Receiver<ProjectorProgress>,
+    expectation: &str,
+    ready: impl Fn(ProjectorProgress) -> bool,
+) -> ProjectorProgress {
+    loop {
+        let seen = *progress.borrow_and_update();
+        if ready(seen) {
+            return seen;
+        }
+        progress
+            .changed()
+            .await
+            .unwrap_or_else(|_| panic!("projector exited before {expectation}"));
+    }
+}
 
-/// Deadline for a cancelled worker to unwind. The same contention applies: an
-/// in-flight write may still be queued behind the shared write lock.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Poll interval high enough that the projector's fallback timer never fires
-/// during a test, so it runs its first cycle and then idles. Observing progress
-/// within `PROGRESS_TIMEOUT` therefore means something woke it, not that the
-/// timer came round.
+/// Fallback poll interval high enough that the projector's own timer never
+/// fires during a test, so it runs its first cycle and then idles. Progress
+/// observed after that therefore means something *woke* it rather than that the
+/// timer came round. Tests that need repeated cycles set a small interval
+/// instead.
 const IDLE_POLL_MS: u64 = 600_000;
 
-/// Reads `attempts` out of a projector health row.
-///
-/// `record_projection_health` bumps this on every health write, so it only ever
-/// climbs — which is the whole point. The projector's other health fields
-/// (`projected`, `oversized_first_rows`) are per-cycle snapshots, and
-/// `notify_projection_work` broadcasts on a **process-global** channel that every
-/// `insert_logs_batch` in this test binary rings. Any test can therefore drive
-/// any other test's projector through another cycle at any moment, overwriting a
-/// per-cycle value microseconds after it appears. Assert on monotone facts —
-/// this counter, and the durable cursors — never on a per-cycle snapshot.
-fn projection_attempts(health: &str) -> u64 {
+fn health_attempts(health: &str) -> u64 {
     serde_json::from_str::<serde_json::Value>(health)
-        .ok()
-        .and_then(|value| value.get("attempts").and_then(serde_json::Value::as_u64))
-        .unwrap_or_default()
+        .unwrap_or_else(|error| panic!("health is not JSON: {error}: {health}"))["attempts"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("health has no numeric attempts: {health}"))
 }
 
 #[test]
@@ -103,17 +102,19 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(PROGRESS_TIMEOUT, async {
-            loop {
-                if projection_cursor(&pool, "logs").unwrap() == "1" {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+        let (handle, mut progress) =
+            spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
+        let seen = await_progress(&mut progress, "the log row was projected", |p| {
+            p.projected >= 1
         })
-        .await
-        .unwrap();
+        .await;
+        // The single row is over `projector_page_bytes` but is the page's first
+        // row, so the guard counts it and projects it anyway. Both counters are
+        // cumulative, and no later cycle has a row to project, so these hold no
+        // matter how many cycles ran before this task was polled.
+        assert_eq!(seen.projected, 1);
+        assert_eq!(seen.oversized_first_rows, 1);
+        assert_eq!(projection_cursor(&pool, "logs").unwrap(), "1");
         for source in [
             "mcp_events",
             "hook_events",
@@ -122,34 +123,10 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         ] {
             assert_eq!(projection_cursor(&pool, source).unwrap(), "");
         }
-        // The cursor reaching "1" above is what proves the page-bytes guard does
-        // not stall on a first row bigger than the whole budget — with
-        // projector_page_bytes = 1 and a 16-byte row, a stalling guard never
-        // advances it. Health is only checked for *reporting* the counter;
-        // asserting the count itself would race the global wake broadcast (see
-        // `projection_attempts`).
-        // Wait for the health row to exist rather than reading straight after the
-        // cursor wait: the cursor is written during projection, health only at
-        // the end of the cycle. Existence is monotone, so this cannot flap.
-        let health = tokio::time::timeout(PROGRESS_TIMEOUT, async {
-            loop {
-                if let Some(health) = projection_health(&pool, "projector").unwrap() {
-                    return health;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("a completed cycle records health");
-        assert!(
-            health.contains("oversized_first_rows="),
-            "projector health must report the oversized-first-row counter: {health}"
-        );
+        let health = projection_health(&pool, "projector").unwrap().unwrap();
+        assert!(health.contains("\"status\":\"ok\""), "{health}");
         token.cancel();
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, handle)
-            .await
-            .unwrap()
-            .unwrap();
+        handle.await.unwrap();
     });
 }
 
@@ -167,17 +144,12 @@ fn projector_wakes_on_committed_log_ingest_before_fallback_poll() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(PROGRESS_TIMEOUT, async {
-            loop {
-                if projection_health(&pool, "projector").unwrap().is_some() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+        let (handle, mut progress) =
+            spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
+        await_progress(&mut progress, "the first cycle completed", |p| {
+            p.cycles >= 1
         })
-        .await
-        .unwrap();
+        .await;
 
         insert_logs_batch(
             &pool,
@@ -206,25 +178,23 @@ fn projector_wakes_on_committed_log_ingest_before_fallback_poll() {
         )
         .unwrap();
 
-        // Still proves the wake came from the committed ingest rather than the
-        // fallback poll: PROGRESS_TIMEOUT is an order of magnitude below
-        // IDLE_POLL_MS.
-        tokio::time::timeout(PROGRESS_TIMEOUT, async {
-            loop {
-                if projection_cursor(&pool, "logs").unwrap() == "1" {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        // This deadline *is* the assertion: it has to discriminate "woken by the
+        // commit notification" from "woken by the fallback poll", so a
+        // wall-clock bound is the correct mechanism here. It is sized for the
+        // gap between those two outcomes — 20s against a 600s fallback — not for
+        // how fast a cycle usually is.
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            await_progress(&mut progress, "the committed row was projected", |p| {
+                p.projected >= 1
+            }),
+        )
         .await
         .expect("committed ingest should wake projector without waiting for fallback poll");
+        assert_eq!(projection_cursor(&pool, "logs").unwrap(), "1");
 
         token.cancel();
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, handle)
-            .await
-            .unwrap()
-            .unwrap();
+        handle.await.unwrap();
     });
 }
 
@@ -268,7 +238,7 @@ fn enabled_git_worker_records_progress_and_shuts_down() {
         .unwrap();
     runtime.block_on(async {
         let handle = spawn_git_reconcile(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(PROGRESS_TIMEOUT, async {
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if !projection_cursor(&pool, "git").unwrap().is_empty() {
                     break;
@@ -279,7 +249,7 @@ fn enabled_git_worker_records_progress_and_shuts_down() {
         .await
         .unwrap();
         token.cancel();
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, handle)
+        tokio::time::timeout(Duration::from_secs(1), handle)
             .await
             .unwrap()
             .unwrap();
@@ -302,33 +272,37 @@ fn projector_failure_is_queryable_retries_without_advancing_and_stops_after_canc
         .build()
         .unwrap();
     runtime.block_on(async {
-        let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(PROGRESS_TIMEOUT, async {
-            loop {
-                let health = projection_health(&pool, "projector")
-                    .unwrap()
-                    .unwrap_or_default();
-                // `>= 2`, not `== 2`: attempts only climbs, so this latches once
-                // true. Pinning it to an exact value made the assertion true for
-                // one ~10ms retry window and false forever after.
-                if health.contains("\"status\":\"error\"") && projection_attempts(&health) >= 2 {
-                    assert!(health.contains("retry_safe=false"));
-                    assert!(health.contains("retry_delay_ms=0"));
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+        let (handle, mut progress) =
+            spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
+        // Two persisted health rows are two completed cycles, i.e. the failure
+        // was retried. Awaiting the projector's signal keeps that independent of
+        // how long a cycle takes under suite load.
+        await_progress(&mut progress, "two failing cycles were recorded", |p| {
+            p.health_records >= 2
         })
-        .await
-        .unwrap();
+        .await;
+
+        let health = projection_health(&pool, "projector").unwrap().unwrap();
+        assert!(health.contains("\"status\":\"error\""), "{health}");
+        assert!(health.contains("retry_safe=false"), "{health}");
+        assert!(health.contains("retry_delay_ms=0"), "{health}");
+        assert!(health_attempts(&health) >= 2, "{health}");
         assert_eq!(projection_cursor(&pool, "logs").unwrap(), "invalid");
+
         token.cancel();
-        tokio::time::timeout(SHUTDOWN_TIMEOUT, handle)
-            .await
-            .unwrap()
-            .unwrap();
-        let stopped = projection_health(&pool, "projector").unwrap();
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(projection_health(&pool, "projector").unwrap(), stopped);
+        handle.await.unwrap();
+        // The task has been joined, so its progress sender is dropped. A closed
+        // channel with no unseen update proves no further cycle ran after
+        // cancellation — the signal replaces a "sleep and re-read" check.
+        let after_cancel = *progress.borrow_and_update();
+        assert!(
+            progress.changed().await.is_err(),
+            "projector must not run another cycle after cancellation"
+        );
+        assert_eq!(*progress.borrow(), after_cancel);
+        assert_eq!(
+            health_attempts(&projection_health(&pool, "projector").unwrap().unwrap()),
+            after_cancel.health_records
+        );
     });
 }

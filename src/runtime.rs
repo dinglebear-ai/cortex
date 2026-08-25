@@ -511,11 +511,14 @@ impl RuntimeCore {
         let timeline_rollup = self.spawn_timeline_rollup_task(token.clone());
         let optimize = self.spawn_optimize_task(token.clone());
         let file_tail = self.spawn_file_tail_task(token.clone());
+        // The projector's per-cycle progress receiver is a test observation
+        // seam; the runtime only needs the join handle for shutdown.
         let agent_observatory_projector = agent_observatory::spawn_projector(
             token.clone(),
             Arc::clone(&self.pool),
             self.config.agent_observatory.clone(),
-        );
+        )
+        .map(|(task, _progress)| task);
         let agent_observatory_git = agent_observatory::spawn_git_reconcile(
             token.clone(),
             Arc::clone(&self.pool),
