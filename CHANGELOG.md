@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.15.0](https://github.com/dinglebear-ai/cortex/compare/v3.14.0...v3.15.0) (2026-08-25)
+
+
+### Added
+
+* **observatory:** add OTLP metrics, query services, and web foundation ([#202](https://github.com/dinglebear-ai/cortex/issues/202)) ([cf605af](https://github.com/dinglebear-ai/cortex/commit/cf605af84051aa9671d3af8bbb0d056ec7788d66))
+
+
+### Fixed
+
+* **ci:** unblock the merge gate — container probe and cargo-deny ([#205](https://github.com/dinglebear-ai/cortex/issues/205)) ([04166c4](https://github.com/dinglebear-ai/cortex/commit/04166c4e8e4b2cb593d8b1e5d7d29a5d4470ae03))
+* stop misclassifying SQLite pool timeouts as permanent failures ([#204](https://github.com/dinglebear-ai/cortex/issues/204)) ([1118d65](https://github.com/dinglebear-ai/cortex/commit/1118d658995035bb4ad17fe2daa28a7c518a6b40))
+
 ## [3.14.0](https://github.com/dinglebear-ai/cortex/compare/v3.13.2...v3.14.0) (2026-08-20)
 
 
