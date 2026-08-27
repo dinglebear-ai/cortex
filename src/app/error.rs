@@ -69,12 +69,8 @@ impl ServiceError {
                     return ServiceError::Busy("database_busy".to_string());
                 }
 
-                // Both pool-acquisition failures classify as `DatabaseTimeout`:
-                // from a caller's position they demand the same immediate
-                // action. They are not the same fault, though, so the
-                // permanent one says so here rather than being absorbed into
-                // the retry ladder unremarked.
                 if crate::db::is_pool_acquire_failure(&error) {
+                    tracing::error!(error = ?error, "database pool failed to yield a connection");
                     return ServiceError::DatabaseTimeout { source: error };
                 }
 

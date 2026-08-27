@@ -14,9 +14,9 @@
 //! pool back for the lanes enumerated in `config::UNPERMITTED_CONNECTION_LANES`
 //! that acquire a connection without one. That budget is only true while the
 //! lock is taken **before** the connection, which is what [`write_conn`] is
-//! for. The raw write lock is private, so a caller queued on it cannot also be
-//! sitting on a pooled connection. WAL mode
-//! plus `synchronous=NORMAL` is the standing durability trade-off.
+//! for. Graph projection uses a dedicated, non-pooled connection for its TEMP
+//! staging, so it cannot participate in a pool/write-lock cycle. WAL mode plus
+//! `synchronous=NORMAL` is the standing durability trade-off.
 
 use anyhow::Result;
 use r2d2::Pool;
@@ -54,15 +54,63 @@ pub(crate) fn is_pool_acquire_failure(err: &anyhow::Error) -> bool {
 static WRITE_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
 static WRITE_ADMISSION: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
 
-/// Admission gate shared by ordinary writers and the graph projector's
-/// connection-local staging passes.
-///
-/// Graph projection must borrow its connection before taking [`write_lock`]
-/// because its staging tables are TEMP tables. Taking this gate before either
-/// ordering prevents a lock-first writer from holding `write_lock` while it
-/// waits for the connection already held by the graph projector.
-pub(crate) fn write_admission() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+/// Admission gate used by ordinary lock-first writers.
+fn write_admission() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_ADMISSION.lock()
+}
+
+/// Dedicated non-pooled connection used for graph TEMP staging.
+pub(crate) struct GraphStagingConnection(Connection);
+
+impl std::ops::Deref for GraphStagingConnection {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for GraphStagingConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+pub(crate) fn graph_staging_conn(pool: &DbPool) -> Result<GraphStagingConnection> {
+    let (db_path, synchronous, cache_size, mmap_size, analysis_limit, busy_timeout): (
+        String,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+    ) = {
+        let conn = pool.get()?;
+        let db_path = conn.query_row(
+            "SELECT file FROM pragma_database_list WHERE name = 'main'",
+            [],
+            |row| row.get(0),
+        )?;
+        (
+            db_path,
+            conn.query_row("PRAGMA synchronous", [], |row| row.get(0))?,
+            conn.query_row("PRAGMA cache_size", [], |row| row.get(0))?,
+            conn.query_row("PRAGMA mmap_size", [], |row| row.get(0))?,
+            conn.query_row("PRAGMA analysis_limit", [], |row| row.get(0))?,
+            conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?,
+        )
+    };
+    anyhow::ensure!(
+        !db_path.is_empty(),
+        "graph staging requires a file-backed database"
+    );
+    let conn = Connection::open(db_path)?;
+    conn.pragma_update(None, "synchronous", synchronous)?;
+    conn.pragma_update(None, "cache_size", cache_size)?;
+    conn.pragma_update(None, "mmap_size", mmap_size)?;
+    conn.pragma_update(None, "analysis_limit", analysis_limit)?;
+    conn.pragma_update(None, "busy_timeout", busy_timeout)?;
+    Ok(GraphStagingConnection(conn))
 }
 
 /// Process-wide SQLite **write serialization** lock.
@@ -83,13 +131,19 @@ pub(crate) fn write_admission() -> parking_lot::ReentrantMutexGuard<'static, ()>
 /// That is what `config::PoolBudget` cannot account for: the budget assumes a
 /// connection is held only while work is being done. Pair the two through
 /// [`write_conn`] instead, which takes the admission gate and lock first. The
-/// raw lock is private; graph staging is the only narrow connection-first API.
+/// raw lock is private; graph staging uses a dedicated non-pooled connection.
 fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
 }
 
 /// Lock live graph tables after building connection-local TEMP staging.
-pub(crate) fn graph_staging_write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+///
+/// Requiring the opaque dedicated-connection type makes the connection-first
+/// exception explicit. Because this connection is outside r2d2, holding it
+/// while queued on the lock cannot starve a lock-first writer of pool capacity.
+pub(crate) fn graph_staging_write_lock(
+    _conn: &GraphStagingConnection,
+) -> parking_lot::ReentrantMutexGuard<'static, ()> {
     write_lock()
 }
 
@@ -145,8 +199,8 @@ impl std::fmt::Debug for WriteConn {
 /// and the guard is released if it expires. Request-scoped writers that must
 /// answer "busy" rather than queue want [`try_write_conn_for`] instead.
 ///
-/// The shared admission gate also covers graph projection's required
-/// connection-first TEMP staging, preventing a connection/lock wait cycle.
+/// Graph projection stages on a dedicated connection, so it cannot consume the
+/// pooled connection this lock-first path is waiting to acquire.
 pub fn write_conn(pool: &DbPool) -> Result<WriteConn> {
     let admission = write_admission();
     let guard = write_lock();
@@ -161,6 +215,8 @@ pub fn write_conn(pool: &DbPool) -> Result<WriteConn> {
 /// Why a bounded [`try_write_conn_for`] gave up.
 #[derive(Debug)]
 pub(crate) enum WriteConnBusy {
+    /// Another writer held admission for the whole budget.
+    Admission,
     /// Another writer still held the process-wide write lock when the budget
     /// expired.
     Lock,
@@ -181,7 +237,7 @@ pub(crate) fn try_write_conn_for(
     let started = Instant::now();
     let admission = WRITE_ADMISSION
         .try_lock_for(timeout)
-        .ok_or(WriteConnBusy::Lock)?;
+        .ok_or(WriteConnBusy::Admission)?;
 
     let remaining = timeout.saturating_sub(started.elapsed());
     let guard = WRITE_LOCK

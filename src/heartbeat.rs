@@ -559,6 +559,9 @@ fn acquire_write_conn(pool: &DbPool) -> Result<crate::db::WriteConn, HeartbeatIn
                 }
                 return Ok(conn);
             }
+            Err(crate::db::WriteConnBusy::Admission) => {
+                format!("writer admission still held after {attempt_timeout:?}")
+            }
             Err(crate::db::WriteConnBusy::Lock) => {
                 format!("write lock still held after {attempt_timeout:?}")
             }
