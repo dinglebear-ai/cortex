@@ -22,6 +22,21 @@ live_result() {
   live_event result "$(jq -cn --arg surface_id "$surface_id" --arg scenario "$scenario" --arg result "$result" --arg evidence "$evidence" --arg case_kind "$case_kind" --arg attempt_kind "$attempt_kind" --argjson retry_index "$retry_index" --argjson duration_ms "$duration_ms" '{surface_id:$surface_id,scenario:$scenario,result:$result,duration_ms:$duration_ms,evidence:$evidence,case_kind:$case_kind,attempt_kind:$attempt_kind,retry_index:$retry_index}')"
 }
 
+live_terminal_disposition() {
+  local capability="$1" disposition="$2" evidence="$3"
+  case "$disposition" in pass|fail|unsupported|not-authorized|platform-qualified|artifact-qualified|not-applicable) ;; *) live_die "invalid terminal disposition"; return;; esac
+  [[ "$capability" =~ ^[a-z0-9._-]+$ ]] || { live_die "invalid terminal capability"; return; }
+  [[ -f "$LIVE_RUN_ROOT/$evidence" && ! -L "$LIVE_RUN_ROOT/$evidence" ]] || { live_die "terminal disposition evidence missing"; return; }
+  live_event topology_disposition "$(jq -cn --arg capability "$capability" --arg disposition "$disposition" --arg evidence "$evidence" '{capability:$capability,disposition:$disposition,evidence:$evidence,mandatory:true}')"
+}
+
+live_summary_accepts_profile() {
+  local profile="$1" profiles="$2" summary="$3" mandatory
+  mandatory="$(jq -r --arg p "$profile" '.profiles[$p].mandatory' "$profiles")"
+  if [[ "$mandatory" == true ]]; then jq -e '.failed==0 and .qualified==0 and .total>0' "$summary" >/dev/null
+  else jq -e '.failed==0' "$summary" >/dev/null; fi
+}
+
 live_report() {
   local events json="${LIVE_RUN_ROOT}/summary.json" junit="${LIVE_RUN_ROOT}/junit.xml" tmp
   events="$(live_event_file)"
@@ -29,6 +44,11 @@ live_report() {
   jq -n --arg run_id "$LIVE_RUN_ID" '
     reduce inputs as $event ({run_id:$run_id,total:0,passed:0,failed:0,qualified:0,retries:0};
       if $event.kind == "docker_boundary_result_v1" then
+        .total += 1 |
+        .passed += (if $event.payload.disposition == "pass" then 1 else 0 end) |
+        .failed += (if $event.payload.disposition == "fail" then 1 else 0 end) |
+        .qualified += (if (["unsupported","not-authorized","platform-qualified","artifact-qualified","not-applicable"] | index($event.payload.disposition)) then 1 else 0 end)
+      elif $event.kind == "topology_disposition" then
         .total += 1 |
         .passed += (if $event.payload.disposition == "pass" then 1 else 0 end) |
         .failed += (if $event.payload.disposition == "fail" then 1 else 0 end) |
@@ -46,6 +66,7 @@ live_report() {
   { jq -r '"<?xml version=\"1.0\" encoding=\"UTF-8\"?>","<testsuite name=\"cortex-live\" tests=\"\(.total)\" failures=\"\(.failed)\" skipped=\"\(.qualified)\">"' "$json";
     jq -r 'select(.kind=="result" and .payload.attempt_kind=="first_attempt") | .payload | "  <testcase classname=\"\(.surface_id|@html)\" name=\"\(.case_kind|@html)\" time=\"\(.duration_ms/1000)\">"+(if .result=="fail" then "<failure message=\"scenario failed\"/>" elif .result!="pass" then "<skipped message=\"\(.result|@html)\"/>" else "" end)+"</testcase>"' "$events";
     jq -r 'select(.kind=="docker_boundary_result_v1") | .payload | "  <testcase classname=\"docker-boundary\" name=\"\(.candidate|@html)\" time=\"\(.duration_seconds)\">"+(if .disposition=="fail" then "<failure message=\"scenario failed\"/>" elif .disposition!="pass" then "<skipped message=\"\(.disposition|@html)\"/>" else "" end)+"</testcase>"' "$events";
+    jq -r 'select(.kind=="topology_disposition") | .payload | "  <testcase classname=\"topology\" name=\"\(.capability|@html)\" time=\"0\">"+(if .disposition=="fail" then "<failure message=\"scenario failed\"/>" elif .disposition!="pass" then "<skipped message=\"\(.disposition|@html)\"/>" else "" end)+"</testcase>"' "$events";
     printf '%s\n' '</testsuite>'; } >"$junit"
   chmod 600 "$junit"
   cat "$json"
