@@ -1,7 +1,7 @@
 ---
 title: "HTTP Endpoint Catalog (V1)"
 created: 2026-05-16
-updated: 2026-07-30
+updated: 2026-08-24
 ---
 
 # HTTP Endpoint Catalog (V1)
@@ -88,9 +88,9 @@ the non-loopback safety gate (§9) bars this combo at startup.
 | `GET /mcp`                                               | `stable`       | bearer-or-oauth †     | n/a        | configured allowlist       | —                   | 0.1.x      | `mcp/routes.rs`                 | RMCP requires `405 Method Not Allowed`; if auth is mounted, `401` is returned **first**.         |
 | `DELETE /mcp`                                            | `stable`       | bearer-or-oauth †     | n/a        | configured allowlist       | —                   | 0.1.x      | `mcp/routes.rs`                 | Same as `GET /mcp` — RMCP is stateless. `401` precedes `405` when auth is on.                    |
 | `GET /health`                                            | `stable`       | none                  | n/a        | configured allowlist       | —                   | 0.1.x      | `mcp/routes.rs::health`         | Lightweight DB ping + OTLP/ingest counters. Used by Docker `HEALTHCHECK`, compose, SWAG.         |
-| `POST /v1/logs`                                          | `experimental` | optional-bearer ‡     | 4 MiB      | (no CORS)                  | —                   | 0.11.x     | `otlp.rs::logs_handler`         | OTLP/HTTP log ingest (`ExportLogsServiceRequest` protobuf). Returns `200` on accept, `413+Retry-After: 86400` on oversize, `503 channel_full` on backpressure. |
-| `POST /v1/metrics`                                       | `experimental` | optional-bearer ‡     | 8 MiB      | (no CORS)                  | —                   | 3.14.x     | `otlp/metric_http.rs`           | OTLP/HTTP metric ingest with bounded normalization, idempotent persistence, and protobuf partial-success responses. |
-| `POST /v1/traces`                                        | `experimental` | optional-bearer ‡     | 8 MiB      | (no CORS)                  | —                   | 3.14.x     | `otlp/trace_http.rs`            | OTLP/HTTP trace ingest with bounded normalization, idempotent persistence, and protobuf partial-success responses.  |
+| `POST /v1/logs`                                          | `experimental` | optional-bearer ‡     | 4 MiB      | (no CORS)                  | —                   | 0.11.x     | `otlp.rs::logs_handler`         | OTLP/HTTP log ingest (`ExportLogsServiceRequest` protobuf). Returns `200` on accept, `413+Retry-After: 86400` on oversize, `503 channel_full` on backpressure (§13). |
+| `POST /v1/metrics`                                       | `experimental` | optional-bearer ‡     | 8 MiB      | (no CORS)                  | —                   | 3.14.x     | `otlp/metric_http.rs`           | OTLP/HTTP metric ingest with bounded normalization, idempotent persistence, and protobuf partial-success responses. Three distinct `503` backpressure/unavailable codes — see §13. |
+| `POST /v1/traces`                                        | `experimental` | optional-bearer ‡     | 8 MiB      | (no CORS)                  | —                   | 3.14.x     | `otlp/trace_http.rs`            | OTLP/HTTP trace ingest with bounded normalization, idempotent persistence, and protobuf partial-success responses. Two distinct `503` codes — see §13. |
 | `GET /.well-known/oauth-authorization-server`            | `stable`       | none                  | n/a        | configured allowlist       | —                   | OAuth GA   | `mcp/routes.rs` (lab-auth)      | OAuth 2.1 authorization-server metadata. Mounted **only** when `auth.mode = OAuth`.              |
 | `GET /.well-known/oauth-protected-resource`              | `stable`       | none                  | n/a        | configured allowlist       | —                   | OAuth GA   | `mcp/routes.rs` (lab-auth)      | OAuth 2.1 protected-resource metadata. Same condition.                                            |
 | `GET /mcp/.well-known/oauth-authorization-server`        | `stable`       | none                  | n/a        | configured allowlist       | —                   | OAuth GA   | `mcp/routes.rs`                 | Path-prefixed mirror of the AS discovery doc for clients that probe under `/mcp/`.               |
@@ -268,6 +268,9 @@ non-loopback) — see `agent-protocol.md` §2.
   `validate_auth_config`.
 - `/ws/agent` is listed with a pointer to the wire-level contract in
   `agent-protocol.md` — this file does not duplicate that contract.
+- Every `503` an OTLP handler can return appears in §13 with its `error`
+  code, its `retryable` value, and its `Retry-After` header (or the explicit
+  absence of one).
 
 ## 12. Surprise audit
 
@@ -292,6 +295,53 @@ quick read:
 - `/register` is a public, unauthenticated endpoint **by design** — OAuth
   2.0 Dynamic Client Registration is how MCP clients self-onboard. The
   `register_rpm` knob is the mitigation against abuse.
+
+## 13. Backpressure responses (`503`)
+
+The OTLP handlers answer `503 Service Unavailable` for six distinct
+conditions. All six carry a JSON body of the shape:
+
+```json
+{"error": "<code>", "retryable": <bool>}
+```
+
+`retryable` is present on **every** `503` this surface emits, and it — not the
+status code, and not the presence of `Retry-After` — is the discriminator a
+client should branch on. The codes are stable identifiers; the enum backing
+them is `otlp::error::OtlpError` in `src/otlp/error.rs`.
+
+| Route | `error` | `retryable` | `Retry-After` | Condition |
+| --- | --- | --- | --- | --- |
+| `POST /v1/logs` | `channel_full` | `true` | `1` | The ingest channel cannot accept the batch. Pre-flight capacity check, so the whole request is rejected — nothing was partially queued. |
+| `POST /v1/metrics` | `metric_ingest_unavailable` | `false` | — | Agent Observatory metric ingest is not configured on this process. Fixed for the process lifetime; retrying cannot help. |
+| `POST /v1/metrics` | `metric_storage_blocked` | `true` | `1` | The storage budget has write-blocked persistence (`storage.max_db_size_mb` / `min_free_disk_mb`). Clears when retention or the disk guardrail recovers space. |
+| `POST /v1/metrics` | `metric_storage_unavailable` | `true` | `1` | The DB connection pool did not yield a connection before its timeout; the points never reached SQLite. |
+| `POST /v1/traces` | `trace_ingest_unavailable` | `false` | — | Agent Observatory trace ingest is not configured on this process. Fixed for the process lifetime. |
+| `POST /v1/traces` | `trace_storage_unavailable` | `true` | `1` | The DB connection pool did not yield a connection before its timeout; the spans never reached SQLite. |
+
+Rules this table encodes:
+
+- **`Retry-After` is present exactly when `retryable` is `true`.** The two
+  never disagree. A `503` with no `Retry-After` is a permanent-for-this-process
+  condition and an exporter that keeps retrying it will never succeed.
+- **`retryable: false` is not an error in the request.** The payload was
+  well-formed; the receiver is simply not configured for that signal. It is a
+  `503` rather than a `404` because the route is mounted and would accept the
+  same payload on a process that has the signal enabled.
+- **Storage-budget write-block is reported differently per signal.**
+  `/v1/metrics` returns the `metric_storage_blocked` `503` above.
+  `/v1/traces` instead returns `200` with `rejected_spans` set in the OTLP
+  `ExportTracePartialSuccess` — a *permanent* rejection in OTLP terms, so the
+  exporter drops rather than retries. Only the pool-timeout case on
+  `/v1/traces` asks the exporter to retry.
+- **OTLP/HTTP exporters only retry `429`, `502`, `503`, and `504`.** That is
+  why a pool-acquisition timeout must not surface as `500`: a conforming
+  exporter would drop the batch permanently.
+
+The `/api/agent/heartbeat` surface has its own `503 storage_unavailable`,
+documented in [`heartbeat-telemetry.md`](heartbeat-telemetry.md) §10. It
+carries `Retry-After` for the same reason but is not part of the OTLP
+`retryable` contract above.
 
 ## Surface Parity Additions (2026-05-21)
 

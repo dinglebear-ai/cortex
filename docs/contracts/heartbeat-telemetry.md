@@ -1,7 +1,7 @@
 ---
 title: "Heartbeat Telemetry Contract (V1 Pre-Implementation)"
 created: 2026-05-24
-updated: 2026-07-30
+updated: 2026-08-24
 ---
 
 # Heartbeat Telemetry Contract (V1 Pre-Implementation)
@@ -748,12 +748,17 @@ planning to retired or stale API enablement flags.
 
 HTTP ingest errors:
 
-| HTTP | Error | Meaning |
-| --- | --- | --- |
-| 400 | `invalid_payload` | JSON is malformed, unknown fields are present, or required fields are missing. |
-| 401 | `unauthorized` | Missing or invalid bearer token. |
-| 413 | `payload_too_large` | Body exceeds 256 KiB. |
-| 503 | `storage_unavailable` | DB write path unavailable or backpressured. |
+| HTTP | Error | Headers | Meaning |
+| --- | --- | --- | --- |
+| 400 | `invalid_payload` | — | JSON is malformed, unknown fields are present, or required fields are missing. |
+| 401 | `unauthorized` | — | Missing or invalid bearer token. |
+| 413 | `payload_too_large` | — | Body exceeds 256 KiB. |
+| 503 | `storage_unavailable` | `Retry-After: 1` | The DB write path did not yield a connection within the bounded retry budget, so the heartbeat was never written. Transient contention, not a server fault — the agent should resend. |
+
+`Retry-After: 1` is the same floor the OTLP backpressure 503s use
+(`docs/contracts/http-endpoints.md` §13), so an agent does not need to know
+which endpoint it hit to know how long to wait. It is a floor, not a
+schedule: the agent's own backoff applies on top.
 
 MCP/action errors:
 

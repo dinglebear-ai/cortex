@@ -83,15 +83,23 @@ reconnect_initial_ms = 1000
 reconnect_max_ms = 30000
 
 # [enrichment]
-# Restrict extraction of the agent Docker identity marker
-# ([cortex-agent-docker-meta:...]) to trusted sender IPs. Each entry is a
-# full IPv4 dotted quad ("198.51.100.7", exact-host match) or a
-# dot-terminated partial quad ("100.64.0.", subnet-prefix match — the
-# trailing dot is required; "100.64.0" would match nothing). IPv6 sources
-# are not matchable by this gate. Empty (default) accepts the marker from
-# any sender for compatibility. Env: CORTEX_AGENT_DOCKER_SOURCE_PREFIXES
-# (comma-separated).
+# Allowlist of sender IPs trusted to assert the agent Docker identity marker
+# ([cortex-agent-docker-meta:...]). Each entry is a full IPv4 dotted quad
+# ("198.51.100.7", exact-host match), an IPv6 literal ("2001:db8::1",
+# exact-host match), or a dot-terminated partial IPv4 quad ("100.64.0.",
+# subnet-prefix match — the trailing dot is required; "100.64.0" would match
+# nothing). Env: CORTEX_AGENT_DOCKER_SOURCE_PREFIXES (comma-separated).
+#
+# FAIL-CLOSED: the marker rides the unauthenticated syslog body, and the
+# syslog port is reachable by the whole fleet. An empty list therefore
+# rejects the marker from EVERY sender — set this to the agent hosts'
+# source IPs to enable agent-docker identity extraction at all.
 # agent_docker_source_prefixes = ["198.51.100.1", "198.51.100."]
+#
+# Explicit opt-in to the pre-fail-closed behaviour: accept the marker from
+# ANY syslog sender. Only safe when every host that can reach the syslog
+# port is trusted. Env: CORTEX_AGENT_DOCKER_TRUST_ANY_SOURCE.
+# agent_docker_trust_any_source = false
 
 # Managed file-tail sources are runtime-managed in data/file-tails.json
 # (parent directory of [storage].db_path). Configure with:

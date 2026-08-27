@@ -278,7 +278,7 @@ its own table.
 | Variable | Required | Default | Sensitive | Description |
 | --- | --- | --- | --- | --- |
 | `CORTEX_DB_PATH` | no | `/data/cortex.db` | no | Path to SQLite database file |
-| `CORTEX_POOL_SIZE` | no | `8` | no | SQLite connection pool size (must be > 0); reads get `pool_size - 1` permits |
+| `CORTEX_POOL_SIZE` | no | `8` | no | SQLite connection pool size (must be >= 6); reads get `pool_size - 4` permits, the other 4 being reserved for the writer lanes that bypass the read semaphore |
 | `CORTEX_SQLITE_PAGE_CACHE_MB` | no | `128` | no | Total SQLite page-cache budget across the pool; divided by `pool_size` before `PRAGMA cache_size` |
 | `CORTEX_SQLITE_MMAP_MB` | no | `256` | no | Bounded SQLite mmap size; resident mapped pages may still count toward cgroup memory |
 | `CORTEX_HEAVY_READ_CONCURRENCY` | no | `1` | no | Shared service-layer limiter for SQLite-heavy reads |

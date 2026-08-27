@@ -2,8 +2,6 @@
 
 use super::{RepositoryRow, RepositoryWorktreeRow};
 use crate::db::pool::DbPool;
-#[cfg(test)]
-use crate::db::pool::write_lock;
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use rusqlite::TransactionBehavior;
@@ -384,8 +382,7 @@ pub fn reconcile_repository(
     observed_at: &str,
 ) -> Result<RepositoryReconcileResult> {
     validate_reconcile_repository(repository, worktrees, observed_at)?;
-    let _write_guard = write_lock();
-    let mut conn = pool.get().context("acquire database connection")?;
+    let mut conn = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let result = reconcile_repository_tx(&tx, repository, worktrees, observed_at)?;
     tx.commit()?;
@@ -498,8 +495,7 @@ pub fn mark_repository_removed(
     required(removed_at, "removed_at")?;
     chrono::DateTime::parse_from_rfc3339(removed_at)
         .with_context(|| format!("invalid removed_at: {removed_at}"))?;
-    let _write_guard = write_lock();
-    let conn = pool.get().context("acquire database connection")?;
+    let conn = crate::db::write_conn(pool).context("acquire database connection")?;
     Ok(conn.execute(
         "UPDATE repositories
             SET removed_at = COALESCE(removed_at, ?2),
@@ -515,8 +511,7 @@ pub fn mark_worktree_removed(pool: &DbPool, worktree_key: &str, removed_at: &str
     required(removed_at, "removed_at")?;
     chrono::DateTime::parse_from_rfc3339(removed_at)
         .with_context(|| format!("invalid removed_at: {removed_at}"))?;
-    let _write_guard = write_lock();
-    let conn = pool.get().context("acquire database connection")?;
+    let conn = crate::db::write_conn(pool).context("acquire database connection")?;
     Ok(conn.execute(
         "UPDATE repository_worktrees
             SET removed_at = COALESCE(removed_at, ?2),

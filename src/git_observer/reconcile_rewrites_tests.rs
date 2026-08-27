@@ -83,7 +83,9 @@ async fn rewind_rebase_and_detached_transitions_preserve_history_and_update_reac
     }
     let fixture = GitFixture::build().unwrap();
     let db_dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(db_dir.path().join("rewrites.db"))).unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(db_dir.path().join("rewrites.db"))).unwrap(),
+    );
 
     let initial = reconcile_one_repository(
         &pool,

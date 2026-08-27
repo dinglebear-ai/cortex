@@ -557,6 +557,11 @@ async fn serve_mcp() -> Result<()> {
         recovery_free_disk_mb = runtime.config.storage.recovery_free_disk_mb,
         cleanup_interval_secs = runtime.config.storage.cleanup_interval_secs,
         pool_size = runtime.config.storage.pool_size,
+        // The split, not just the total: a post-deploy comparison of pool
+        // pressure is uninterpretable without knowing how many of these
+        // connections the read semaphore was allowed to take.
+        pool_read_permits = runtime.config.storage.pool_budget().read_permits(),
+        pool_reserved_connections = runtime.config.storage.pool_budget().reserved(),
         wal_mode = runtime.config.storage.wal_mode,
         mcp_auth_enabled = runtime.config.mcp.api_token.is_some(),
         docker_ingest_enabled = runtime.config.docker_ingest.enabled,

@@ -218,6 +218,7 @@ pub(super) async fn flush_batch(
             let inserted_count = n.min(inserted_batch.len());
             summary.record_envelopes(&inserted_batch[..inserted_count]);
             context.observability.record_writer_flushed(n);
+            context.observability.clear_writer_retained();
             if *storage_blocked {
                 info!(
                     count = n,
@@ -277,6 +278,10 @@ pub(super) async fn flush_batch(
                 );
                 *batch = outcome.retained_entries;
                 tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+            } else {
+                // Nothing carried forward, so the next backlog must be counted
+                // from zero rather than against this one's high-water mark.
+                context.observability.clear_writer_retained();
             }
 
             if outcome.discarded_count > 0 {
@@ -297,6 +302,7 @@ pub(super) async fn flush_batch(
         }
         Err(e) => {
             context.observability.record_writer_discarded(count);
+            context.observability.clear_writer_retained();
             error!(
                 error = %e,
                 count,
@@ -427,7 +433,7 @@ fn retain_or_discard_entries(outcome: &mut FailedBatchOutcome, entries: Vec<Inge
 /// entries (UDP syslog, docker ingest, OTLP, file tails) means the rows are
 /// gone.
 fn is_retryable_write_error(err: &anyhow::Error) -> bool {
-    is_retryable_sqlite_error(err) || db::is_pool_timeout(err)
+    is_retryable_sqlite_error(err) || db::is_pool_acquire_failure(err)
 }
 
 fn is_retryable_sqlite_error(err: &anyhow::Error) -> bool {

@@ -27,8 +27,8 @@ use support::{
 use crate::agent_observatory::identity::{repository_key, worktree_key};
 use crate::db::DbPool;
 use crate::db::agent_observatory::{
-    RepositoryObservationInput, RepositoryObservationKind, RepositoryUpsert,
-    RepositoryWorktreeUpsert, reconcile_git_repository_snapshot_with,
+    GitRepositoryReconcileResult, RepositoryObservationInput, RepositoryObservationKind,
+    RepositoryUpsert, RepositoryWorktreeUpsert, reconcile_git_repository_snapshot_with,
 };
 use crate::git_observer::porcelain::{
     StatusSummary, WorktreeRecord, parse_status_porcelain_v2, parse_worktree_porcelain,
@@ -37,6 +37,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 struct WorktreeSnapshot {
@@ -394,7 +395,7 @@ fn observations(
 }
 
 pub(crate) async fn reconcile_one_repository(
-    pool: &DbPool,
+    pool: &Arc<DbPool>,
     repository_path: &Path,
     options: &ReconcileOptions,
     observed_at: &str,
@@ -404,8 +405,21 @@ pub(crate) async fn reconcile_one_repository(
         .await
 }
 
+/// Reconcile one repository: collect a Git snapshot, then persist it.
+///
+/// The Git half is genuinely async (subprocesses). The database half is
+/// blocking — `previous_worktrees` reads, and the reconcile plus its commit
+/// attribution take a pooled connection and the process-wide write lock — so it
+/// runs on `spawn_blocking` rather than on the async task, which would otherwise
+/// park a runtime worker for the whole write-lock wait. Same treatment the
+/// Agent Observatory projector got, and `docker_ingest::supervisor` before it
+/// (full-review PM8); the pool takes `Arc<DbPool>` for the same reason.
+///
+/// The reconcile and the attribution share one blocking hop: attribution reads
+/// the reconcile's own result, so splitting them would buy a second pool
+/// acquisition and nothing else.
 pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
-    pool: &DbPool,
+    pool: &Arc<DbPool>,
     repository_path: &Path,
     options: &ReconcileOptions,
     observed_at: &str,
@@ -428,8 +442,13 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
         Ok(snapshot) => snapshot,
         Err(warning) => return Ok(RepositoryReconcileReport::warning(warning)),
     };
-    let (repository_existed, previous) =
-        previous_worktrees(pool, &snapshot.repository.repository_key)?;
+    let (repository_existed, previous) = {
+        let pool = Arc::clone(pool);
+        let repository_key = snapshot.repository.repository_key.clone();
+        tokio::task::spawn_blocking(move || previous_worktrees(&pool, &repository_key))
+            .await
+            .context("previous-worktree lookup task failed")??
+    };
     let worktrees = snapshot
         .worktrees
         .iter()
@@ -444,25 +463,38 @@ pub(crate) async fn reconcile_one_repository_with_runner<R: GitCommandRunner>(
     let commit_inputs =
         commit_upserts(&commit_collection.commits, &commit_collection.reachability)?;
     let base_observations = observations(&snapshot, &commit_collection.transitions);
-    let result = reconcile_git_repository_snapshot_with(
-        pool,
-        &snapshot.repository,
-        &worktrees,
-        &commit_inputs,
-        &commit_collection.reachability,
-        observed_at,
-        |topology| {
-            let mut inputs = base_observations;
-            inputs.extend(lifecycle_observations(
-                repository_existed,
-                &previous,
-                topology,
-                observed_at,
-            )?);
-            Ok(inputs)
-        },
-    )?;
-    attribute_commit_transitions(pool, &commit_collection.transitions, &result);
+    let result = {
+        let pool = Arc::clone(pool);
+        let repository = snapshot.repository;
+        let observed_at = observed_at.to_string();
+        let lifecycle_observed_at = observed_at.clone();
+        let reachability = commit_collection.reachability;
+        let observed_transitions = commit_collection.transitions;
+        tokio::task::spawn_blocking(move || -> Result<GitRepositoryReconcileResult> {
+            let result = reconcile_git_repository_snapshot_with(
+                &pool,
+                &repository,
+                &worktrees,
+                &commit_inputs,
+                &reachability,
+                &observed_at,
+                |topology| {
+                    let mut inputs = base_observations;
+                    inputs.extend(lifecycle_observations(
+                        repository_existed,
+                        &previous,
+                        topology,
+                        &lifecycle_observed_at,
+                    )?);
+                    Ok(inputs)
+                },
+            )?;
+            attribute_commit_transitions(&pool, &observed_transitions, &result);
+            Ok(result)
+        })
+        .await
+        .context("git repository reconcile task failed")??
+    };
     Ok(RepositoryReconcileReport {
         topology: Some(result.topology),
         imported_commits: result.commits,

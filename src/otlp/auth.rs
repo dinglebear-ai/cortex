@@ -8,13 +8,12 @@ use std::time::{Duration, Instant};
 
 use axum::{
     http::{
-        HeaderMap, StatusCode,
+        HeaderMap,
         header::{AUTHORIZATION, USER_AGENT},
     },
-    response::{IntoResponse, Json},
+    response::IntoResponse,
 };
 use lru::LruCache;
-use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::mcp::AuthPolicy;
@@ -148,11 +147,7 @@ pub(super) fn otlp_auth_policy_label(policy: &AuthPolicy) -> &'static str {
 }
 
 pub(super) fn unauthorized() -> axum::response::Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({"error": "unauthorized"})),
-    )
-        .into_response()
+    super::error::OtlpError::Unauthorized.into_response()
 }
 
 #[cfg(test)]

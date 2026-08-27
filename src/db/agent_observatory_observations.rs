@@ -3,7 +3,7 @@
 use super::{RepositoryObservationKind, RepositoryObservationRow};
 use crate::agent_observatory::identity::event_key;
 #[cfg(test)]
-use crate::db::pool::{DbPool, write_lock};
+use crate::db::pool::DbPool;
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use rusqlite::TransactionBehavior;
@@ -205,8 +205,7 @@ pub fn record_repository_observations_if_changed(
     observed_at: &str,
 ) -> Result<Vec<RepositoryObservationRow>> {
     validate_repository_observations(repository_key, inputs, observed_at)?;
-    let _write_guard = write_lock();
-    let mut connection = pool.get().context("acquire database connection")?;
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let inserted =
         record_repository_observations_if_changed_tx(&tx, repository_key, inputs, observed_at)?;

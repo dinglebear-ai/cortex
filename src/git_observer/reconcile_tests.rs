@@ -34,7 +34,9 @@ async fn real_repository_reconcile_persists_topology_and_only_changed_observatio
     }
     let fixture = GitFixture::build().unwrap();
     let db_dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(db_dir.path().join("reconcile.db"))).unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(db_dir.path().join("reconcile.db"))).unwrap(),
+    );
 
     let first = reconcile_one_repository(
         &pool,
@@ -197,7 +199,9 @@ async fn command_failure_returns_health_warning_without_mutating_prior_state() {
     }
     let fixture = GitFixture::build().unwrap();
     let db_dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(db_dir.path().join("failure.db"))).unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(db_dir.path().join("failure.db"))).unwrap(),
+    );
     let initial = reconcile_one_repository(
         &pool,
         fixture.repository(),
@@ -246,7 +250,9 @@ async fn command_failure_returns_health_warning_without_mutating_prior_state() {
 #[test]
 fn reconcile_options_reject_empty_hostname_and_noncanonical_input_before_git() {
     let dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(dir.path().join("validation.db"))).unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(dir.path().join("validation.db"))).unwrap(),
+    );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let mut runner = FailOnStatusRunner::default();
     let error = runtime
@@ -276,7 +282,9 @@ async fn removed_and_reappeared_worktree_reuses_identity_and_preserves_run_evide
     }
     let fixture = GitFixture::build().unwrap();
     let db_dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(db_dir.path().join("lifecycle.db"))).unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(db_dir.path().join("lifecycle.db"))).unwrap(),
+    );
     let first_seen = "2026-08-03T16:00:00.000Z";
     let removed_at = "2026-08-03T16:01:00.000Z";
     let reappeared_at = "2026-08-03T16:03:00.000Z";

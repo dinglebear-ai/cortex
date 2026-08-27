@@ -10,7 +10,7 @@ use crate::artifact_evidence::{
     NormalizedArtifactEvidence,
 };
 
-use super::{DbPool, LogBatchEntry, insert_logs_batch_in_tx, write_lock};
+use super::{DbPool, LogBatchEntry, insert_logs_batch_in_tx};
 
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 500;
@@ -64,8 +64,7 @@ pub fn record_artifact_evidence(
     event: NormalizedArtifactEvidence,
 ) -> Result<ArtifactEvidenceAppendResult> {
     let canonical = serde_json::to_string(&event).context("serialize artifact evidence")?;
-    let mut conn = pool.get()?;
-    let _write_guard = write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     // Reserve the SQLite writer slot before the replay lookup. The process-local
     // write lock serializes Cortex writers in this process; IMMEDIATE also closes
     // the check-then-insert race when multiple Cortex processes point at the same

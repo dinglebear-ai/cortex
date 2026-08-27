@@ -12,7 +12,7 @@ fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
 }
 
 #[test]
-fn is_pool_timeout_detects_connection_acquisition_failures() {
+fn is_pool_acquire_failure_detects_connection_acquisition_failures() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("pool-timeout.db"));
     let pool = init_pool(&config).unwrap();
@@ -25,20 +25,72 @@ fn is_pool_timeout_detects_connection_acquisition_failures() {
             .expect_err("exhausted pool must time out"),
     );
 
-    assert!(is_pool_timeout(&timeout));
+    assert!(is_pool_acquire_failure(&timeout));
     // Still detected once the writer/service layers add context on top.
-    assert!(is_pool_timeout(&timeout.context("insert log batch")));
+    assert!(is_pool_acquire_failure(
+        &timeout.context("insert log batch")
+    ));
 }
 
 #[test]
-fn is_pool_timeout_ignores_sqlite_and_plain_errors() {
+fn is_pool_acquire_failure_ignores_sqlite_and_plain_errors() {
     let sqlite = anyhow::Error::new(rusqlite::Error::SqliteFailure(
         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
         Some("UNIQUE constraint failed: logs.id".to_string()),
     ));
 
-    assert!(!is_pool_timeout(&sqlite));
-    assert!(!is_pool_timeout(&anyhow::anyhow!("some other failure")));
+    assert!(!is_pool_acquire_failure(&sqlite));
+    assert!(!is_pool_acquire_failure(&anyhow::anyhow!(
+        "some other failure"
+    )));
+}
+
+/// A saturated pool and a database that cannot be opened at all both surface
+/// as `r2d2::Error`. They must not classify the same: retrying the second one
+/// on a transient ladder hides a permanent fault behind sustained backpressure,
+/// which is what the single `is_pool_timeout` predicate used to do.
+#[test]
+fn pool_acquire_failure_separates_saturation_from_connect_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("saturated.db"));
+    let pool = init_pool(&config).unwrap();
+    let _held = pool.get().unwrap();
+
+    let saturated = anyhow::Error::new(
+        pool.get_timeout(std::time::Duration::from_millis(50))
+            .expect_err("exhausted pool must time out"),
+    );
+    assert_eq!(
+        pool_acquire_failure(&saturated.context("read log page")),
+        Some(PoolAcquireFailure::Saturated),
+    );
+
+    // A pool pointed at an unopenable path records the connect error, which
+    // r2d2 appends to its fixed description.
+    let mut unopenable = test_storage_config(dir.path().join("missing-dir").join("nope.db"));
+    unopenable.pool_size = 1;
+    let manager = SqliteConnectionManager::file(&unopenable.db_path);
+    let broken = Pool::builder()
+        .max_size(1)
+        .connection_timeout(std::time::Duration::from_millis(100))
+        .thread_pool(shared_scheduled_thread_pool())
+        .build_unchecked(manager);
+    let error = anyhow::Error::new(
+        broken
+            .get_timeout(std::time::Duration::from_millis(100))
+            .expect_err("unopenable database must fail"),
+    );
+    assert!(is_pool_acquire_failure(&error));
+    assert!(
+        matches!(
+            pool_acquire_failure(&error),
+            Some(PoolAcquireFailure::ConnectFailed { .. })
+        ),
+        "expected ConnectFailed, got {:?}",
+        pool_acquire_failure(&error),
+    );
+
+    assert_eq!(pool_acquire_failure(&anyhow::anyhow!("unrelated")), None);
 }
 
 #[test]

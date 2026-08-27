@@ -331,11 +331,15 @@ identity). Mitigations in receiver enrichment
   overwrites keys already present in `metadata_json`, and
   `metadata_json.source_kind` is set from the receiver's constant, never
   from the payload.
-- Operators SHOULD set `agent_docker_source_prefixes` (config.toml
+- Operators MUST set `agent_docker_source_prefixes` (config.toml
   `[enrichment]`, env `CORTEX_AGENT_DOCKER_SOURCE_PREFIXES`, comma-separated
-  exact IPs or `10.0.0.`-style subnet prefixes) to restrict extraction to
-  the hosts that actually run the cortex agent. When unset, extraction is
-  accepted from any sender for compatibility.
+  exact IPs or `10.0.0.`-style subnet prefixes) to the hosts that actually
+  run the cortex agent. **The gate is fail-closed:** when the list is empty
+  the marker is rejected from every sender and no agent-docker identity is
+  extracted at all. Startup logs this at `ERROR`. Deployments that trust
+  every sender on the syslog port can opt back in to extract-from-anywhere
+  with `agent_docker_trust_any_source` / `CORTEX_AGENT_DOCKER_TRUST_ANY_SOURCE`,
+  which is also reported at `ERROR` on startup.
 - Each prefix entry must be a **full IP literal** (`198.51.100.7` or
   `2001:db8::1`, exact-host match) or a **dot-terminated partial IPv4
   quad** (`100.64.0.`, subnet-prefix match). A partial quad without its

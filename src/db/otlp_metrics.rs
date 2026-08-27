@@ -4,7 +4,7 @@ use anyhow::Result;
 use rusqlite::{Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::{DbPool, TRANSIENT_SQLITE_RETRY_DELAYS_MS, is_transient_sqlite_lock, write_lock};
+use super::{DbPool, TRANSIENT_SQLITE_RETRY_DELAYS_MS, is_transient_sqlite_lock};
 
 const MAX_JSON_BYTES: usize = 256 * 1024;
 const MAX_NAME_CHARS: usize = 512;
@@ -74,8 +74,7 @@ fn insert_once(pool: &DbPool, entries: &[OtelMetricPointInput]) -> Result<OtelMe
     if entries.is_empty() {
         return Ok(OtelMetricBatchResult::default());
     }
-    let mut conn = pool.get()?;
-    let _write_guard = write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
     let result = insert_in_tx(&tx, entries)?;
     tx.commit()?;

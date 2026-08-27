@@ -24,7 +24,7 @@ mod sql;
 mod tie_break;
 
 use crate::agent_observatory::identity::{actor_key, canonical_tool, event_key, run_key};
-use crate::db::pool::{DbPool, write_lock};
+use crate::db::pool::DbPool;
 use anyhow::{Context, Result, bail};
 use rusqlite::TransactionBehavior;
 use serde_json::Value;
@@ -235,8 +235,7 @@ fn write_inner(
         .as_ref()
         .map(|evidence| evidence_key(&durable_run_key, evidence));
 
-    let _write_guard = write_lock();
-    let mut connection = pool.get().context("acquire database connection")?;
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let refs = sql::resolve_run_refs(&tx, &input.run)?;
     let (mut run, run_changed) =

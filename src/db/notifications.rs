@@ -24,6 +24,47 @@ pub struct OutboxInsertParams {
     pub next_attempt_at: String,
 }
 
+/// Delivery attempts a row had already consumed *before* the current claim.
+///
+/// [`outbox_claim_pending`] increments the stored `attempt_count` column as it
+/// leases a row, and hands back the pre-increment value: that is the number the
+/// backoff tier and the dead-letter threshold are both defined in terms of.
+/// Carrying it as its own type rather than a bare integer is what keeps that
+/// meaning attached to the value — the write-back helpers accept no
+/// `AttemptCount`, so they structurally cannot consume a second attempt, and
+/// [`AttemptCount::consumed`] is the only route to the
+/// after-this-delivery number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AttemptCount(u8);
+
+impl AttemptCount {
+    /// A row that has never been claimed.
+    pub const NONE: Self = Self(0);
+
+    /// Narrow a stored `attempt_count` column into the retry counter's domain.
+    ///
+    /// The column is a SQLite INTEGER and keeps climbing for a row that is
+    /// reclaimed indefinitely. Every value at or above `u8::MAX` is equally far
+    /// past the dead-letter threshold, so clamping loses nothing.
+    pub fn from_stored(raw: i64) -> Self {
+        Self(u8::try_from(raw).unwrap_or(u8::MAX))
+    }
+
+    /// Attempts consumed once the current claim's delivery is counted.
+    ///
+    /// Saturating, not wrapping: release builds compile without
+    /// `overflow-checks`, so a bare `+ 1` on a clamped `u8::MAX` would wrap to
+    /// 0 and park the row permanently below the dead-letter threshold.
+    pub fn consumed(self) -> u8 {
+        self.0.saturating_add(1)
+    }
+
+    /// The backoff tier this claim's retry belongs to — the pre-claim count.
+    pub fn tier(self) -> u8 {
+        self.0
+    }
+}
+
 /// A row fetched from `notifications_outbox`.
 #[derive(Debug, Clone)]
 pub struct OutboxRow {
@@ -35,7 +76,7 @@ pub struct OutboxRow {
     pub title: String,
     pub body: String,
     pub apprise_urls_json: String,
-    pub attempt_count: i64,
+    pub attempt_count: AttemptCount,
 }
 
 /// A row from `notification_firings`.
@@ -106,9 +147,8 @@ pub const CLAIM_LEASE_SECS: i64 = 300;
 /// `idx_outbox_dedup_pending` unique partial index, letting the evaluator
 /// re-enqueue the same `dedup_key` while delivery is still in flight.
 ///
-/// `OutboxRow::attempt_count` is the count *before* this claim — the value the
-/// dispatcher's backoff tier and dead-letter threshold are defined in terms of.
-/// The write-back helpers below therefore do not increment it again.
+/// `OutboxRow::attempt_count` is an [`AttemptCount`]: the count *before* this
+/// claim. The write-back helpers below therefore do not increment it again.
 pub fn outbox_claim_pending(
     conn: &rusqlite::Connection,
     limit: i64,
@@ -140,7 +180,7 @@ pub fn outbox_claim_pending(
                 title: row.get(5)?,
                 body: row.get(6)?,
                 apprise_urls_json: row.get(7)?,
-                attempt_count: row.get(8)?,
+                attempt_count: AttemptCount::from_stored(row.get(8)?),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -153,8 +193,8 @@ pub fn outbox_claim_pending(
 
 /// Mark a row as sent.
 ///
-/// Does not touch `attempt_count`: [`outbox_claim_pending`] already consumed
-/// the attempt this write-back is reporting on.
+/// Takes no [`AttemptCount`]: [`outbox_claim_pending`] already consumed the
+/// attempt this write-back reports on.
 pub fn outbox_mark_sent(
     conn: &rusqlite::Connection,
     id: i64,
@@ -172,8 +212,8 @@ pub fn outbox_mark_sent(
 
 /// Mark a row as dead (exhausted retries).
 ///
-/// Does not touch `attempt_count`: [`outbox_claim_pending`] already consumed
-/// the attempt this write-back is reporting on.
+/// Takes no [`AttemptCount`]: [`outbox_claim_pending`] already consumed the
+/// attempt this write-back reports on.
 pub fn outbox_mark_dead(
     conn: &rusqlite::Connection,
     id: i64,
@@ -193,8 +233,8 @@ pub fn outbox_mark_dead(
 
 /// Mark a row as dropped (e.g. acked, deduplicated).
 ///
-/// Does not touch `attempt_count`: [`outbox_claim_pending`] already consumed
-/// the attempt this write-back is reporting on.
+/// Takes no [`AttemptCount`]: [`outbox_claim_pending`] already consumed the
+/// attempt this write-back reports on.
 pub fn outbox_mark_dropped(
     conn: &rusqlite::Connection,
     id: i64,
@@ -213,9 +253,9 @@ pub fn outbox_mark_dropped(
 /// Set next_attempt_at for an exponential-backoff retry.
 ///
 /// Overwrites the claim lease with the backoff deadline — which for the later
-/// tiers is longer than the lease, not shorter — and does not
-/// touch `attempt_count`: [`outbox_claim_pending`] already consumed the attempt
-/// this write-back is reporting on.
+/// tiers is longer than the lease, not shorter. Takes no [`AttemptCount`]:
+/// [`outbox_claim_pending`] already consumed the attempt this write-back
+/// reports on.
 pub fn outbox_schedule_retry(
     conn: &rusqlite::Connection,
     id: i64,
@@ -357,7 +397,7 @@ pub fn firings_recent(
 // ---------------------------------------------------------------------------
 // Backoff helper
 
-/// Compute `next_attempt_at` as an ISO8601 string given `attempt_count`.
+/// Compute `next_attempt_at` as an ISO8601 string for the given tier.
 ///
 /// Backoff schedule (capped at 30 minutes):
 ///   attempt 0 → now+1s
@@ -365,8 +405,8 @@ pub fn firings_recent(
 ///   attempt 2 → now+30s
 ///   attempt 3 → now+5min
 ///   attempt 4+ → now+30min
-pub fn backoff_next_attempt_at(attempt_count: u8) -> String {
-    let delay_secs: u64 = match attempt_count {
+pub fn backoff_next_attempt_at(attempt_count: AttemptCount) -> String {
+    let delay_secs: u64 = match attempt_count.tier() {
         0 => 1,
         1 => 5,
         2 => 30,

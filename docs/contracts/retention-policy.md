@@ -1,7 +1,7 @@
 ---
 title: "Retention & Eviction Policy"
 created: 2026-05-16
-updated: 2026-07-30
+updated: 2026-08-24
 ---
 
 # Retention & Eviction Policy
@@ -75,6 +75,8 @@ box). Operators who run on smaller hosts will commonly set
 | `docker_ingest_checkpoints` | **Never evicted.** One row per (Docker host, container); small. | n/a | n/a | n/a | n/a | n/a | `current-schema.sql` |
 | `poller_checkpoints` | **Never evicted.** One row per `(poller, instance)`; small. Survives across restarts (purpose of the table). | n/a | n/a | n/a | n/a | n/a | Epic C spec §4 ("Checkpoint Store") |
 | `transcript_sources`, `transcript_import_records`, `transcript_parse_errors` | **Never evicted.** Operational/audit tables for the AI transcript scanner. Small in steady state (one row per source / per import / per error). | n/a | n/a | n/a | n/a | n/a | `current-schema.sql` |
+| `host_heartbeats` | **14 days, hardcoded** (`src/runtime.rs::HEARTBEAT_RETENTION_DAYS`). Deleted oldest-first in `cleanup_chunk_size` chunks. | n/a | `purge_old_heartbeats` in `RuntimeCore::spawn_retention_task` | hourly (same 1 h ticker as the log purge) | **none — hardcoded `HEARTBEAT_RETENTION_DAYS = 14`** | n/a | `src/db/maintenance.rs::purge_old_heartbeats` |
+| `heartbeat_cpu`, `heartbeat_memory`, `heartbeat_disks`, `heartbeat_network`, `heartbeat_processes`, `heartbeat_containers` | Follows `host_heartbeats` — children are deleted in the **same transaction** as their parent, so the normal path never strands one. A separate orphan sweep exists as a repair path for legacy/residue rows; its cadence is **not** hourly, see §4.1. | n/a | `delete_heartbeat_chunk_where` (parent path) and `delete_orphan_heartbeat_children` (repair path) | parent: hourly; orphan sweep: see §4.1 | none | n/a | `src/db/maintenance.rs::HEARTBEAT_CHILD_TABLES` |
 | `agents` (Epic A) | **Never evicted.** Revoked rows are kept indefinitely as an audit trail (`state = Revoked`, both `token_hash` columns NULL). Approx 1 row per host ever onboarded; bounded by fleet size. | n/a | n/a | n/a | n/a | n/a | `docs/superpowers/specs/2026-05-16-agent-mode-design.md` §11 |
 | `host_metrics` (Epic A pre-create) | V1 drops writes (placeholder column). Once Epic D wires it, it follows `metrics_gauge` policy below. | n/a | n/a | n/a | n/a | n/a | Epic A spec §11 |
 | `metrics_gauge` (Epic D) | **Raw 14 days.** Rows older than 14 d are deleted by the rollup task once they have been folded into the 5-minute rollup. | 5-min rollup: 90 d; 1-h rollup: 365 d | `db::maintenance::rollup_metrics_gauge` (new in Epic D) | hourly rollup + daily prune | `CORTEX_METRICS_RAW_DAYS` / `_5M_DAYS` / `_1H_DAYS` (proposed; defaults are normative) | n/a | Epic D spec §6, "Retention" lines 219–222 |
@@ -108,6 +110,39 @@ cadences (see §3). They MUST acquire `MaintenanceHandles::permit` (the
 same single-writer semaphore the existing purge uses) before deleting from
 `logs` or `alert_state` — concurrent chunked DELETEs over the same table
 cause SQLite write-lock contention that stalls the batch writer.
+
+### 4.1 Orphan heartbeat-child sweep cadence
+
+Heartbeat child rows (§3) are deleted in the same transaction as their
+parent, both on the write path and in `delete_heartbeat_chunk_where`. Neither
+can strand a child, so **orphans are not a steady-state condition** — any
+that exist are legacy rows or residue from a manual repair.
+
+Finding them, however, means a full scan of all six child tables, because a
+`LIMIT`ed `DELETE ... WHERE NOT EXISTS` still scans the whole table before
+returning nothing when there are zero orphans. Running that on the hourly
+retention tick is pure waste. One production retention tick (~79 GB database,
+2026-08-24) spent 15m25s in this sweep, dominated by those scans.
+
+The sweep therefore runs on its own cadence, decided by the **caller** and
+passed in as `db::OrphanSweep`:
+
+| Caller | Cadence | Why |
+|---|---|---|
+| `RuntimeCore::spawn_retention_task` → `purge_old_heartbeats` | **First retention tick after start, then every 24th tick (daily).** `src/runtime.rs::ORPHAN_SWEEP_EVERY_N_TICKS = 24`, against the 1 h ticker. | The first-tick run clears any backlog left by a crash promptly; daily thereafter is enough for a condition that should never arise. Every other hourly tick passes `OrphanSweep::Skip` and reports orphan counts as zero. |
+| `db::maintenance::enforce_storage_budget_with_state` | **Unconditionally, once per triggered recovery** — before the trim loop, not inside it. | Orphan rows are free space, so reclaiming them is the cheapest way to recover before trimming live telemetry. It is hoisted out of the trim loop because `delete_orphan_heartbeat_children` already loops internally until no orphans remain; running it per iteration re-scanned all six tables on every pass. A failure here is logged and the trim continues — reclaiming orphans is an optimisation, and a transient pool timeout must not abort the trim that is meant to relieve a full disk. |
+
+The sweep itself is chunked and **does not hold the global write lock across
+the scan**: phase 1 identifies orphan rowids as a plain WAL read, and the
+write lock is taken only for a bounded `DELETE` of rowids already known.
+Chunks are clamped to 500 rowids per `DELETE` to stay under SQLite's bind-
+parameter ceiling regardless of `cleanup_chunk_size`.
+
+This split is safe only because `host_heartbeats.id` is `AUTOINCREMENT`:
+ids are never reissued, so a rowid seen as an orphan in phase 1 cannot have
+acquired a live parent by phase 2. If that column is ever rebuilt without
+`AUTOINCREMENT`, the sweep must revert to a single atomic
+`DELETE ... WHERE NOT EXISTS`.
 
 ---
 
@@ -367,6 +402,10 @@ Epic spec migrations is covered in §3:
 - `transcript_sources`, `transcript_import_records`,
   `transcript_parse_errors` — current schema
 - `agents`, `host_metrics` — Epic A
+- `host_heartbeats` and its six child tables (`heartbeat_cpu`,
+  `heartbeat_memory`, `heartbeat_disks`, `heartbeat_network`,
+  `heartbeat_processes`, `heartbeat_containers`) — current schema; the
+  orphan-sweep cadence for the children is in §4.1
 - `metrics_gauge`, `metrics_gauge_5m`, `metrics_gauge_1h`,
   `probe_results` — Epic D
 - `alert_state` — Epic E

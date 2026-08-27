@@ -68,6 +68,23 @@ services:
     # NET_BIND_SERVICE is only needed if the container itself binds port 514.
     # cap_add:
     #   - NET_BIND_SERVICE
+    logging:
+      driver: "json-file"
+      options:
+        # Overrides the shared anchor. Cortex's own stderr is the only record
+        # of why cortex itself misbehaved: it is never self-ingested into
+        # SQLite (src/agent/docker.rs refuses to forward the `cortex`
+        # container), so `retention_days` does not cover it and this ring is
+        # its entire lifetime.
+        #
+        # Size it for forensics, not for a quiet service. The volume spikes
+        # exactly during an incident, so a ring tuned for idle throughput
+        # collapses to minutes at the moment the logs matter most — the
+        # shared 30 MB default lost the history during the 2026-08-24 pool
+        # contention investigation.
+        max-size: "${CORTEX_LOG_MAX_SIZE:-200m}"
+        max-file: "${CORTEX_LOG_MAX_FILE:-10}"
+        compress: "true"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3100/health || exit 1"]
       interval: 30s

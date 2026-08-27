@@ -1,7 +1,7 @@
 ---
 title: "Runtime Lifecycle Contract (V1)"
 created: 2026-05-16
-updated: 2026-07-30
+updated: 2026-08-24
 ---
 
 # Runtime Lifecycle Contract (V1)
@@ -127,8 +127,9 @@ Body is JSON. **Field additions are always allowed** (additive minor change); re
     "writer_batches_flushed": <u64>,
     "writer_logs_written":    <u64>,
     "writer_flush_failures":  <u64>,
-    "writer_logs_retained":   <u64>,
-    "writer_logs_discarded":  <u64>,
+    "writer_logs_retained":         <u64>,
+    "writer_logs_retained_current": <usize>,
+    "writer_logs_discarded":        <u64>,
     "writer_storage_blocked": <bool>,
     // Last-event timestamps (RFC3339 millis UTC, nullable)
     "last_ingest_at":               "YYYY-MM-DDTHH:MM:SS.sssZ" | null,

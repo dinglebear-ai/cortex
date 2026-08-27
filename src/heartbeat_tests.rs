@@ -115,6 +115,18 @@ async fn post_json(
     token: Option<&str>,
     body: Value,
 ) -> (StatusCode, Value) {
+    let (status, _headers, value) = post_json_with_headers(app, uri, token, body).await;
+    (status, value)
+}
+
+/// As [`post_json`], but keeps the response headers — needed wherever the
+/// contract is a header rather than a body field (`Retry-After`).
+async fn post_json_with_headers(
+    app: Router,
+    uri: &str,
+    token: Option<&str>,
+    body: Value,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
     let mut builder = Request::builder()
         .method("POST")
         .uri(uri)
@@ -127,9 +139,10 @@ async fn post_json(
         .await
         .unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
-    (status, value)
+    (status, headers, value)
 }
 
 #[tokio::test]
@@ -581,7 +594,7 @@ fn contention_app(dir: &tempfile::TempDir) -> (Router, Arc<DbPool>) {
     (app, pool)
 }
 
-/// Holds the pool's only connection plus the process write lock on a
+/// Holds the process write lock plus the pool's only connection on a
 /// background thread, standing in for another ingest-side writer (the hourly
 /// retention purge, the syslog batch writer) occupying the single reserved
 /// writer slot. Blocks until the hold is established so the caller's request
@@ -594,13 +607,12 @@ fn hold_only_connection(
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
-        let _conn = pool
-            .get()
+        // Lock then connection, through the same helper every real writer uses:
+        // `WriteConn` returns the connection to the pool before it releases the
+        // lock, exactly as a real writer unwinds, so a waiting heartbeat can
+        // never deadlock behind it.
+        let _held = crate::db::write_conn(&pool)
             .expect("single-connection pool yields its connection to the holder");
-        // Declared second so it drops first: the write lock is always released
-        // before the connection returns to the pool, exactly as a real writer
-        // unwinds, so a waiting heartbeat can never deadlock behind it.
-        let _write_guard = crate::db::write_lock();
         let _ = ready_tx.send(());
         let _ = release_rx.recv_timeout(hold_for);
     });
@@ -622,8 +634,8 @@ async fn heartbeat_returns_busy_when_pool_contention_outlasts_the_retry_budget()
     // Far longer than the whole acquisition budget; released below.
     let (holder, release_tx) = hold_only_connection(Arc::clone(&pool), Duration::from_secs(30));
 
-    let (status, value) =
-        post_json(app, "/v1/heartbeats", Some("secret"), heartbeat_payload()).await;
+    let (status, headers, value) =
+        post_json_with_headers(app, "/v1/heartbeats", Some("secret"), heartbeat_payload()).await;
 
     let _ = release_tx.send(());
     holder.join().unwrap();
@@ -636,6 +648,14 @@ async fn heartbeat_returns_busy_when_pool_contention_outlasts_the_retry_budget()
     // The literal the heartbeat contract specifies for a backpressured write
     // path (docs/contracts/heartbeat-telemetry.md), not a generic "busy".
     assert_eq!(value["error"], "storage_unavailable");
+    // A 503 with no `Retry-After` leaves the agent to invent a delay. Every
+    // other transient-write-path 503 cortex emits names the same one-second
+    // floor; this one must too. See docs/contracts/heartbeat-telemetry.md §10.
+    assert_eq!(
+        headers.get(axum::http::header::RETRY_AFTER),
+        Some(&axum::http::HeaderValue::from_static("1")),
+        "storage_unavailable must tell the agent when to come back"
+    );
 }
 
 /// Contention shorter than the retry budget but longer than one attempt must

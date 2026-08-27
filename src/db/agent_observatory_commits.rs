@@ -2,8 +2,6 @@
 
 use super::{GitCommitRow, RepositoryObservationRow, RepositoryReconcileResult};
 use crate::db::pool::DbPool;
-#[cfg(test)]
-use crate::db::pool::write_lock;
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use rusqlite::TransactionBehavior;
@@ -170,8 +168,7 @@ pub fn reconcile_git_commits(
     if commits.is_empty() && reachability.is_empty() {
         return Ok(Vec::new());
     }
-    let _write_guard = write_lock();
-    let mut conn = pool.get().context("acquire database connection")?;
+    let mut conn = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let rows = reconcile_git_commits_tx(&tx, repository_key, commits, reachability, observed_at)?;
     tx.commit()?;

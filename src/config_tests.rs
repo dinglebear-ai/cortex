@@ -147,6 +147,112 @@ fn storage_page_cache_budget_is_divided_per_connection_without_hidden_floor() {
     assert_eq!(storage.sqlite_page_cache_kib_per_connection().unwrap(), -8);
 }
 
+/// The pool budget is a partition, not an approximation: no connection may be
+/// counted twice or left out. Pinned across the whole plausible range because
+/// the fallback for undersized pools is where an off-by-one would hide.
+#[test]
+fn pool_budget_partitions_every_connection() {
+    for pool_size in 0..=64u32 {
+        let budget = PoolBudget::for_pool_size(pool_size);
+        assert_eq!(
+            budget.read_permits() as u32 + budget.reserved(),
+            budget.pool_size(),
+            "pool_size {pool_size} is not fully partitioned"
+        );
+        assert!(
+            budget.read_permits() >= 1,
+            "pool_size {pool_size} left no read permits"
+        );
+    }
+}
+
+/// The reserve must equal the resident rows of `UNPERMITTED_CONNECTION_LANES`.
+///
+/// This is the drift guard the bug needed. The reservation was documented as
+/// "one connection for the writer" and stayed 1 while a dozen more writers were
+/// added, because nothing tied the number to the set of writers. Adding a
+/// resident lane to that table now moves the reserve, `MIN_POOL_SIZE`, and the
+/// config validation together.
+#[test]
+fn reserved_connections_equal_the_resident_lane_table() {
+    let resident: u32 = UNPERMITTED_CONNECTION_LANES
+        .iter()
+        .filter(|lane| matches!(lane.residency, LaneResidency::Resident))
+        .map(|lane| lane.connections)
+        .sum();
+    assert_eq!(RESERVED_UNPERMITTED_CONNECTIONS, resident);
+    assert_eq!(MIN_POOL_SIZE, resident + MIN_READ_PERMITS);
+    assert!(
+        UNPERMITTED_CONNECTION_LANES
+            .iter()
+            .all(|lane| lane.connections >= 1),
+        "a lane that can hold zero connections does not belong in the table"
+    );
+}
+
+/// Every declared lane cap must match the mechanism that enforces it. Only
+/// `docker_checkpoint_loads` has a constant to compare against; the rest are
+/// single supervised tasks or `Semaphore::new(1)` holders, asserted as 1 here so
+/// widening one without revisiting the budget fails.
+#[test]
+fn lane_caps_match_their_enforcing_mechanism() {
+    let cap = |name: &str| {
+        UNPERMITTED_CONNECTION_LANES
+            .iter()
+            .find(|lane| lane.name == name)
+            .unwrap_or_else(|| panic!("lane {name} missing from the table"))
+            .connections
+    };
+    assert_eq!(
+        cap("docker_checkpoint_loads"),
+        u32::try_from(crate::docker_ingest::MAX_CONCURRENT_CHECKPOINT_LOADS).unwrap()
+    );
+    for single in [
+        "ingest_batch_writer",
+        "maintenance_permit",
+        "notification_dispatcher_permit",
+        "agent_observatory_projector",
+        "agent_observatory_git_reconcile",
+    ] {
+        assert_eq!(
+            cap(single),
+            1,
+            "{single} is no longer a single-connection lane"
+        );
+    }
+}
+
+/// The shipped default must leave the readers a workable share after the
+/// reservation. `pool_size` is unchanged at 8; what changed is that 4 of those
+/// are now held back rather than 1.
+#[test]
+fn default_pool_size_satisfies_the_budget() {
+    let storage = StorageConfig::default();
+    assert_eq!(storage.pool_size, 8);
+    assert!(storage.pool_size >= MIN_POOL_SIZE);
+    let budget = storage.pool_budget();
+    assert_eq!(budget.reserved(), RESERVED_UNPERMITTED_CONNECTIONS);
+    assert_eq!(budget.reserved(), 4);
+    assert_eq!(budget.read_permits(), 4);
+    assert!(budget.read_permits() >= MIN_READ_PERMITS as usize);
+    validate_storage_config(&storage).expect("default storage config must validate");
+}
+
+#[test]
+fn storage_rejects_pool_too_small_for_the_reserved_lanes() {
+    let storage = StorageConfig {
+        pool_size: MIN_POOL_SIZE - 1,
+        ..StorageConfig::default()
+    };
+    let err = validate_storage_config(&storage).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("pool_size"), "wrong error: {message}");
+    assert!(
+        message.contains("ingest_batch_writer"),
+        "the error must name the lanes the reserve is for: {message}"
+    );
+}
+
 #[test]
 fn storage_rejects_sqlite_page_cache_overflow() {
     let storage = StorageConfig {

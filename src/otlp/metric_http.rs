@@ -4,11 +4,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::{
-        HeaderMap, HeaderValue, StatusCode,
-        header::{CONTENT_TYPE, RETRY_AFTER},
-    },
-    response::{IntoResponse, Json},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CONTENT_TYPE},
+    response::IntoResponse,
 };
 use bytes::Bytes;
 use opentelemetry_proto::tonic::collector::metrics::v1::{
@@ -16,7 +13,6 @@ use opentelemetry_proto::tonic::collector::metrics::v1::{
 };
 use parking_lot::Mutex;
 use prost::Message;
-use serde_json::json;
 
 use crate::{
     config::AgentObservatoryPrivacyConfig,
@@ -26,6 +22,7 @@ use crate::{
 use super::{
     OtlpState,
     auth::{is_authorized, unauthorized},
+    error::OtlpError,
     metrics::normalize_metric_with_privacy,
 };
 
@@ -97,18 +94,10 @@ pub(super) async fn metrics_handler(
         return unauthorized();
     }
     if !is_protobuf_content_type(&headers) {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Json(json!({"error": "unsupported_content_type"})),
-        )
-            .into_response();
+        return OtlpError::UnsupportedContentType.into_response();
     }
     let Some(ingest) = state.metric_ingest.clone() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "metric_ingest_unavailable"})),
-        )
-            .into_response();
+        return OtlpError::MetricIngestUnavailable.into_response();
     };
     let decoded =
         tokio::task::spawn_blocking(move || ExportMetricsServiceRequest::decode(body)).await;
@@ -124,11 +113,7 @@ pub(super) async fn metrics_handler(
                 .metrics_decode_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!(error = %error, source_ip = %peer, "OTLP /v1/metrics decode failed");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "decode_failed"})),
-            )
-                .into_response();
+            return OtlpError::DecodeFailed.into_response();
         }
         Err(error) => {
             state
@@ -140,11 +125,7 @@ pub(super) async fn metrics_handler(
                 .metrics_decode_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!(error = %error, "OTLP metric decode task panicked");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "internal"})),
-            )
-                .into_response();
+            return OtlpError::Internal.into_response();
         }
     };
 
@@ -205,12 +186,7 @@ pub(super) async fn metrics_handler(
             std::sync::atomic::Ordering::Relaxed,
         );
         tracing::warn!(source_ip = %peer, blocked, "OTLP metric persistence blocked by storage budget");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            [(RETRY_AFTER, HeaderValue::from_static("1"))],
-            Json(json!({"error": "metric_storage_blocked", "retryable": true})),
-        )
-            .into_response();
+        return OtlpError::MetricStorageBlocked.into_response();
     }
     let pool = Arc::clone(&ingest.pool);
     let persisted = tokio::task::spawn_blocking(move || {
@@ -233,25 +209,16 @@ pub(super) async fn metrics_handler(
             // Note the trace endpoint reports its storage-budget case
             // differently (200 with `rejected_spans`), so only this file has
             // that symmetry.
-            if crate::db::is_pool_timeout(&error) {
+            if crate::db::is_pool_acquire_failure(&error) {
                 tracing::warn!(
                     error = %error,
                     source_ip = %peer,
                     "OTLP metric persistence unavailable; asking exporter to retry"
                 );
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    [(RETRY_AFTER, HeaderValue::from_static("1"))],
-                    Json(json!({"error": "metric_storage_unavailable", "retryable": true})),
-                )
-                    .into_response();
+                return OtlpError::MetricStorageUnavailable.into_response();
             }
             tracing::error!(error = %error, source_ip = %peer, "OTLP metric persistence failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "metric_persistence_failed"})),
-            )
-                .into_response();
+            return OtlpError::MetricPersistenceFailed.into_response();
         }
         Err(error) => {
             state
@@ -259,11 +226,7 @@ pub(super) async fn metrics_handler(
                 .metrics_persistence_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!(error = %error, "OTLP metric persistence task panicked");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "internal"})),
-            )
-                .into_response();
+            return OtlpError::Internal.into_response();
         }
     };
     rejected += result.rejected;

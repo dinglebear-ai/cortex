@@ -118,10 +118,13 @@ pub(crate) fn process_chunk(
     exclude_patterns: &[String],
     notify_floor_rank: u8,
 ) -> Result<ChunkResult> {
-    let mut conn = pool.get()?;
-
     // --- Fetch rows ---
+    //
+    // Scoped so the read connection is back in the pool before the write phase
+    // queues on the process-wide write lock. Grouping below is pure CPU work on
+    // the fetched rows and needs no connection at all.
     let rows: Vec<ScanRow> = {
+        let conn = pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, severity, message, timestamp, hostname, app_name
              FROM logs
@@ -215,7 +218,7 @@ pub(crate) fn process_chunk(
     }
 
     // --- Write signatures and windows in a single transaction ---
-    let _write_guard = crate::db::write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
 
     for (hash, group) in &groups {

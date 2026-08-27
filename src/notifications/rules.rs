@@ -3,7 +3,7 @@
 //! Each function takes a slice of log rows and returns `OutboxInsertParams`
 //! for rows that match the rule. The evaluator calls these functions periodically.
 
-use crate::db::notifications::{OutboxInsertParams, backoff_next_attempt_at};
+use crate::db::notifications::{AttemptCount, OutboxInsertParams, backoff_next_attempt_at};
 use crate::notifications::apprise::escape_for_notification;
 
 /// A minimal log row used for rule evaluation.
@@ -39,7 +39,7 @@ pub fn evaluate_oom_kill(rows: &[LogRow], apprise_urls_json: &str) -> Vec<Outbox
                 title,
                 body,
                 apprise_urls_json: apprise_urls_json.to_string(),
-                next_attempt_at: backoff_next_attempt_at(0),
+                next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
             }
         })
         .collect()
@@ -93,7 +93,7 @@ pub fn evaluate_container_die_nonzero(
                 title,
                 body,
                 apprise_urls_json: apprise_urls_json.to_string(),
-                next_attempt_at: backoff_next_attempt_at(0),
+                next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
             })
         })
         .collect()
@@ -120,7 +120,7 @@ pub fn evaluate_fail2ban_ban(rows: &[LogRow], apprise_urls_json: &str) -> Vec<Ou
                 title,
                 body,
                 apprise_urls_json: apprise_urls_json.to_string(),
-                next_attempt_at: backoff_next_attempt_at(0),
+                next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
             }
         })
         .collect()
@@ -158,7 +158,7 @@ pub fn evaluate_authelia_mfa_fail(
                 title,
                 body,
                 apprise_urls_json: apprise_urls_json.to_string(),
-                next_attempt_at: backoff_next_attempt_at(0),
+                next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
             }
         })
         .collect()
@@ -208,7 +208,7 @@ pub fn evaluate_disk_fill(
         title,
         body,
         apprise_urls_json: apprise_urls_json.to_string(),
-        next_attempt_at: backoff_next_attempt_at(0),
+        next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
     })
 }
 
@@ -247,7 +247,7 @@ pub fn evaluate_ingest_queue_pressure(
         title,
         body,
         apprise_urls_json: apprise_urls_json.to_string(),
-        next_attempt_at: backoff_next_attempt_at(0),
+        next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
     })
 }
 
@@ -295,7 +295,7 @@ pub fn evaluate_ingest_silence(
         title,
         body,
         apprise_urls_json: apprise_urls_json.to_string(),
-        next_attempt_at: backoff_next_attempt_at(0),
+        next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
     })
 }
 
@@ -342,7 +342,7 @@ pub fn evaluate_heartbeat_silence(
         title,
         body,
         apprise_urls_json: apprise_urls_json.to_string(),
-        next_attempt_at: backoff_next_attempt_at(0),
+        next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
     }
 }
 
@@ -383,7 +383,7 @@ pub fn evaluate_stream_silence(
         title,
         body,
         apprise_urls_json: apprise_urls_json.to_string(),
-        next_attempt_at: backoff_next_attempt_at(0),
+        next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
     }
 }
 

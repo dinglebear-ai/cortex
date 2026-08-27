@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 
 use crate::db::graph;
 use crate::db::graph_resolver_projection::trust_to_graph;
-use crate::db::{DbPool, entity_resolution, write_lock};
+use crate::db::{DbPool, entity_resolution};
 use crate::inventory::schema::HomelabInventory;
 
 use self::sql::{
@@ -64,8 +64,7 @@ fn apply_projection_plan(
     before_apply: impl FnOnce(),
 ) -> Result<InventoryGraphStats> {
     before_apply();
-    let mut conn = pool.get().context("borrow sqlite connection")?;
-    let _guard = write_lock();
+    let mut conn = crate::db::write_conn(pool).context("borrow sqlite connection")?;
     let tx = conn
         .transaction()
         .context("start inventory graph transaction")?;
@@ -569,8 +568,7 @@ fn build_projection_plan(inventory: &HomelabInventory) -> InventoryProjectionPla
 }
 
 pub fn mark_inventory_projection_failed(pool: &DbPool, error: &str) -> Result<()> {
-    let conn = pool.get().context("borrow sqlite connection")?;
-    let _guard = write_lock();
+    let conn = crate::db::write_conn(pool).context("borrow sqlite connection")?;
     sql::mark_projection_degraded(&conn, error)
 }
 

@@ -1052,23 +1052,24 @@ pub fn refresh_graph_projection_incremental(pool: &DbPool) -> Result<GraphRebuil
     // ran (the CHECK constraint still allows the string for compat). Cheap
     // EXISTS; when found, purge the legacy topology and force a full rebuild
     // instead of merging deltas on top of a mixed-contract graph.
-    {
-        let mut conn = pool.get()?;
-        let legacy_rows: bool = conn.query_row(
+    let legacy_rows: bool = {
+        let conn = pool.get()?;
+        conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM graph_entities WHERE entity_type = 'service')",
             [],
             |row| row.get(0),
-        )?;
-        if legacy_rows {
-            tracing::warn!(
-                contract = crate::db::entity_resolution::vocab::GRAPH_PROJECTION_CONTRACT_V2,
-                "legacy service topology detected in graph projection; \
-                 cleaning and forcing a full rebuild"
-            );
-            graph_resolver_projection::cleanup_legacy_service_topology(&mut conn)?;
-            drop(conn);
-            return full_rebuild_locked(pool);
-        }
+        )?
+    };
+    if legacy_rows {
+        tracing::warn!(
+            contract = crate::db::entity_resolution::vocab::GRAPH_PROJECTION_CONTRACT_V2,
+            "legacy service topology detected in graph projection; \
+             cleaning and forcing a full rebuild"
+        );
+        // The probe connection is released above: the cleanup chunks its own
+        // lock-then-connection pairs and must not run on a held connection.
+        graph_resolver_projection::cleanup_legacy_service_topology(pool)?;
+        return full_rebuild_locked(pool);
     }
 
     let status = graph_projection_status(pool)?;
@@ -1174,6 +1175,11 @@ fn merge_graph_delta(
     runtime_ms: i64,
     chunk_count: i64,
 ) -> Result<GraphRebuildStats> {
+    // One of the two sanctioned raw `write_lock()` calls (see
+    // `db::lock_order_tests`). It cannot use `db::write_conn`: `conn` carries
+    // the caller's per-connection TEMP staging tables, built over a chunked
+    // scan that must not run under the write lock, so the lock is necessarily
+    // taken second and on a connection that is already in use.
     let _guard = write_lock();
     let tx = conn.transaction()?;
 
@@ -1430,8 +1436,7 @@ fn refresh_graph_projection_inner(pool: &DbPool, started: Instant) -> Result<Gra
 }
 
 fn mark_graph_projection_building(pool: &DbPool) -> Result<()> {
-    let conn = pool.get()?;
-    let _guard = write_lock();
+    let conn = crate::db::write_conn(pool)?;
     conn.execute(
         "UPDATE graph_projection_meta
          SET projection_status = 'building',
@@ -1469,9 +1474,8 @@ fn mark_graph_projection_progress(
 }
 
 fn mark_graph_projection_failed(pool: &DbPool, err: &anyhow::Error) -> Result<()> {
-    let conn = pool.get()?;
     let redacted = redact_error(&err.to_string());
-    let _guard = write_lock();
+    let conn = crate::db::write_conn(pool)?;
     conn.execute(
         "UPDATE graph_projection_meta
          SET projection_status = 'failed',
@@ -2965,6 +2969,8 @@ fn swap_graph_projection(
     let relationship_count = table_count(conn, "_graph_relationships_staging")?;
     let evidence_count = table_count(conn, "_graph_evidence_staging")?;
 
+    // Same exception as `merge_graph_delta`: the staging tables live on the
+    // caller's connection, so the lock is taken second by construction.
     let _guard = write_lock();
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM graph_relationship_evidence", [])?;

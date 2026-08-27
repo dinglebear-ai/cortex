@@ -720,6 +720,7 @@ fn transcript_forward_env_does_not_gate_local_sessions_watch_service() {
 /// dead or permission-denied daemon — a CI container, for instance — reported a
 /// probe error instead. Both are the same fact about the host.
 #[tokio::test]
+#[serial]
 async fn container_probe_reports_unreachable_when_docker_ps_fails() {
     let dir = tempfile::tempdir().unwrap();
     let fake_docker = dir.path().join("docker");
@@ -733,7 +734,17 @@ async fn container_probe_reports_unreachable_when_docker_ps_fails() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake_docker, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    crate::env::set_test_var("PATH", dir.path().to_str().unwrap());
+    // `PATH` overrides live in a process-global map that every subprocess spawn
+    // in this test binary resolves against, so this has to both prepend rather
+    // than replace and restore on drop. A bare, unrestored fixture directory
+    // outlives the test and leaves every later `sh`, `git`, or `docker` spawn
+    // in the binary resolving against a deleted temp dir. `cargo nextest` hides
+    // that behind one process per test; plain `cargo test` does not.
+    let mut search_path = vec![dir.path().to_path_buf()];
+    if let Some(existing) = crate::env::var_os("PATH") {
+        search_path.extend(std::env::split_paths(&existing));
+    }
+    let _path = EnvGuard::set("PATH", std::env::join_paths(search_path).unwrap());
 
     let output = LinuxContainerProbe.collect().await.expect(
         "a failing `docker ps` is an unreachable runtime, not a probe error — \

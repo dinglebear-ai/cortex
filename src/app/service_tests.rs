@@ -2307,6 +2307,37 @@ fn read_permits_reserve_a_writer_connection() {
 }
 
 /// full-review PH3/TH1: with every read permit held by slow MCP reads, the
+/// The read semaphore must be sized from `PoolBudget`, not from an independent
+/// formula that can drift away from the lane table it is supposed to reserve
+/// for.
+#[test]
+fn service_read_permits_come_from_the_pool_budget() {
+    for pool_size in [0u32, 1, 2, 4, 8, 16, 64] {
+        assert_eq!(
+            read_permits_for_pool(pool_size),
+            PoolBudget::for_pool_size(pool_size).read_permits(),
+            "pool_size {pool_size}"
+        );
+    }
+    // The shipped default: 8 connections, 4 reserved, 4 read permits.
+    assert_eq!(read_permits_for_pool(8), 4);
+}
+
+#[test]
+fn service_semaphore_is_constructed_with_the_budgeted_permits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut storage = StorageConfig::for_test(dir.path().join("permit-count.db"));
+    storage.pool_size = 8;
+    let pool = Arc::new(init_pool(&storage).unwrap());
+    let budget = storage.pool_budget();
+    let service = CortexService::new(pool, storage);
+    assert_eq!(
+        service.db_permits.available_permits(),
+        budget.read_permits()
+    );
+    assert_eq!(service.db_permits.available_permits(), 4);
+}
+
 /// batch-writer path (direct pool access, no service permit) must still reach
 /// a connection promptly. Before the permit reservation, 4 concurrent reads
 /// held all 4 pooled connections and the writer blocked up to the pool
@@ -2319,8 +2350,9 @@ async fn batch_writer_completes_under_saturated_read_permits() {
     let pool = Arc::new(init_pool(&storage).unwrap());
     let service = CortexService::new(Arc::clone(&pool), storage);
 
-    // Saturate every read permit (pool_size - 1 = 3) with reads that pin a
-    // pooled connection for longer than the writer's deadline below.
+    // Saturate every read permit with reads that pin a pooled connection for
+    // longer than the writer's deadline below. A 4-connection pool is below
+    // `MIN_POOL_SIZE`, so `PoolBudget` falls back to reserving 1 and issues 3.
     let mut readers = Vec::new();
     for _ in 0..3 {
         let svc = service.clone();

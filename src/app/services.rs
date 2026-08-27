@@ -61,7 +61,7 @@ use super::{ServiceError, ServiceResult};
 use crate::app::{correlate, heartbeat_flags, models, os_adapter, time};
 use crate::assessment::{GeminiAssessConfig, build_assessment_prompt, run_gemini_assessment};
 use crate::command_log::{self, CommandLogImportResult};
-use crate::config::StorageConfig;
+use crate::config::{PoolBudget, StorageConfig};
 use crate::db::{self, Bucket, ContextRef, DbPool, SearchParams, TimelineGroupBy};
 use crate::filetail::{FileTailRegistry, FileTailStatus};
 use crate::scanner;
@@ -166,15 +166,15 @@ pub struct CortexService {
 
 /// Number of read permits issued for a given r2d2 pool size.
 ///
-/// One connection is RESERVED for writers: the syslog batch writer (and other
-/// ingest-side writers) call `pool.get()` directly without holding a service
-/// permit, so issuing `pool_size` read permits let concurrent slow MCP reads
-/// hold every connection — the writer then blocked up to the pool timeout per
-/// flush, the ingest channel filled, and packets dropped (full-review PH3).
-/// `pool_size - 1` guarantees the writer can always reach a connection within
-/// its retry budget. Floor of 1 keeps single-connection test pools usable.
+/// Delegates to [`PoolBudget`], which is computed from
+/// `config::UNPERMITTED_CONNECTION_LANES` — the enumerated set of subsystems
+/// that call `DbPool::get()` without holding one of these permits. Reserving a
+/// single connection for "the writer" was accurate when there was one; by the
+/// time there were a dozen, readers could still hold `pool_size - 1`
+/// connections and every writer queued for the same last slot, which is what
+/// produced `permit_ms=0` alongside a 6s `pool.get()` timeout (syslog-mcp-0firx).
 fn read_permits_for_pool(pool_size: u32) -> usize {
-    (pool_size.saturating_sub(1)).max(1) as usize
+    PoolBudget::for_pool_size(pool_size).read_permits()
 }
 
 impl CortexService {

@@ -496,14 +496,23 @@ pub struct EnrichmentConfigToml {
     pub authelia_source_ip: Option<String>,
     /// Same gating, for AdGuard JSON tag classification.
     pub adguard_source_ip: Option<String>,
-    /// If non-empty, only extract the `[cortex-agent-docker-meta:…]` marker
-    /// into `metadata_json.agent_docker` when the entry's `source_ip` matches
-    /// one of these prefixes (same octet-boundary semantics as
+    /// Allowlist of sender IPs trusted to assert the
+    /// `[cortex-agent-docker-meta:…]` marker into
+    /// `metadata_json.agent_docker` (same octet-boundary semantics as
     /// `authelia_source_ip`). The marker rides the unauthenticated syslog
     /// body, so without this gate any port-1514 sender can forge agent
-    /// Docker identity. Empty (default) keeps extract-from-anywhere
-    /// compatibility behaviour.
+    /// Docker identity.
+    ///
+    /// Fail-closed: empty (the default) rejects the marker from every
+    /// sender. Set this to the agent hosts' source IPs to enable extraction,
+    /// or set `agent_docker_trust_any_source` to opt back in to accepting it
+    /// from anywhere.
     pub agent_docker_source_prefixes: Vec<String>,
+    /// Explicit opt-in to accepting the agent Docker marker from *any*
+    /// syslog sender, bypassing `agent_docker_source_prefixes`. Only safe
+    /// when every host that can reach the syslog port is trusted. Default
+    /// false.
+    pub agent_docker_trust_any_source: bool,
     /// Best-effort credential scrubbing on AI-source records. Default true.
     /// Set to false only if downstream consumers need raw prompt text and
     /// you trust every tailnet node.
@@ -523,6 +532,7 @@ impl Default for EnrichmentConfigToml {
             authelia_source_ip: None,
             adguard_source_ip: None,
             agent_docker_source_prefixes: Vec::new(),
+            agent_docker_trust_any_source: false,
             scrub_prompts: true,
             fts_merge_pages: 0,
         }
@@ -946,7 +956,13 @@ fn default_pool_size() -> u32 {
     // so the previous default of 4 (3 read permits) left too little headroom for
     // concurrent MCP reads + the batch writer. Incremental passes are short, but
     // the larger pool keeps a full reconcile from starving readers.
-    8
+    //
+    // How these 8 are divided is `PoolBudget`, not a convention: the
+    // `UNPERMITTED_CONNECTION_LANES` table reserves 4 and the read semaphore
+    // gets the rest. Note `sqlite_page_cache_mb` is a whole-pool budget divided
+    // by this number, so raising it shrinks per-connection cache instead of
+    // adding memory — retune the cache alongside any change here.
+    DEFAULT_POOL_SIZE
 }
 fn default_sqlite_page_cache_mb() -> u64 {
     128
@@ -1073,7 +1089,179 @@ impl Default for StorageConfig {
     }
 }
 
+/// Whether an unpermitted connection lane is always resident or only bursts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneResidency {
+    /// Always-on lane whose starvation loses data or stalls the control plane,
+    /// so the pool budget reserves a connection for it permanently.
+    Resident,
+    /// Lane that runs on a slow interval or only during a reconnect storm. It
+    /// is capped by its own semaphore and can queue behind resident lanes, so
+    /// it is enumerated but not reserved for.
+    Burst,
+}
+
+/// A subsystem that acquires a pooled connection **without** holding a
+/// `CortexService` read permit.
+///
+/// `connections` is not an estimate: each lane must enforce its own cap, and
+/// the cap named here has to match the mechanism that enforces it (a
+/// `Semaphore`, or the fact that the lane is a single supervised task).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnpermittedLane {
+    pub name: &'static str,
+    pub connections: u32,
+    pub residency: LaneResidency,
+}
+
+/// Every connection consumer that bypasses the service read semaphore.
+///
+/// This table, not a doc comment, is what the pool budget is computed from:
+/// `RESERVED_UNPERMITTED_CONNECTIONS` sums the `Resident` rows, `MIN_POOL_SIZE`
+/// is derived from that sum, and `validate_storage_config` rejects a pool too
+/// small to satisfy it. Adding a writer therefore moves the budget instead of
+/// silently eating the readers' share, which is how the previous single
+/// "reserved" connection came to be contended by a dozen writers.
+///
+/// A lane belongs here when it calls `DbPool::get()` outside
+/// `CortexService::run_db`. HTTP write handlers (heartbeat, OTLP traces and
+/// metrics) are deliberately absent: they are unbounded by construction, so no
+/// reservation could cover them. They bound themselves the other way, by
+/// answering a retryable 503 on pool exhaustion rather than queueing.
+pub const UNPERMITTED_CONNECTION_LANES: &[UnpermittedLane] = &[
+    // `receiver::writer` — one flush task; starving it drops rows whose
+    // `durable_ack` is `None` (UDP syslog, docker ingest, OTLP logs, file tails).
+    UnpermittedLane {
+        name: "ingest_batch_writer",
+        connections: 1,
+        residency: LaneResidency::Resident,
+    },
+    // `Runtime::maintenance_permit` — `Semaphore::new(1)`, shared by retention,
+    // storage trim, optimize, both rollups, error scan, graph refresh,
+    // inventory projection, notification evaluator and digest.
+    UnpermittedLane {
+        name: "maintenance_permit",
+        connections: 1,
+        residency: LaneResidency::Resident,
+    },
+    // `Runtime::dispatcher_permit` — `Semaphore::new(1)`.
+    UnpermittedLane {
+        name: "notification_dispatcher_permit",
+        connections: 1,
+        residency: LaneResidency::Resident,
+    },
+    // `runtime::agent_observatory::spawn_projector` — a single task, but it
+    // wakes on every projection notify, so it is resident in practice.
+    UnpermittedLane {
+        name: "agent_observatory_projector",
+        connections: 1,
+        residency: LaneResidency::Resident,
+    },
+    // `runtime::agent_observatory::spawn_git_reconcile` — single task on
+    // `git.reconcile_interval_secs`; between cycles it holds nothing.
+    UnpermittedLane {
+        name: "agent_observatory_git_reconcile",
+        connections: 1,
+        residency: LaneResidency::Burst,
+    },
+    // `docker_ingest::supervisor::MAX_CONCURRENT_CHECKPOINT_LOADS` — bounded at
+    // 2, and only contended while streams reconnect after a daemon restart.
+    UnpermittedLane {
+        name: "docker_checkpoint_loads",
+        connections: 2,
+        residency: LaneResidency::Burst,
+    },
+];
+
+const fn sum_resident_lane_connections() -> u32 {
+    let mut total = 0;
+    let mut index = 0;
+    while index < UNPERMITTED_CONNECTION_LANES.len() {
+        let lane = UNPERMITTED_CONNECTION_LANES[index];
+        if matches!(lane.residency, LaneResidency::Resident) {
+            total += lane.connections;
+        }
+        index += 1;
+    }
+    total
+}
+
+/// Connections held out of the read semaphore for the resident lanes above.
+pub const RESERVED_UNPERMITTED_CONNECTIONS: u32 = sum_resident_lane_connections();
+
+/// Fewest read permits the service layer is willing to run with. Below this the
+/// MCP/API read path serializes hard enough that the cure is worse than the
+/// contention it prevents.
+pub const MIN_READ_PERMITS: u32 = 2;
+
+/// Smallest `pool_size` that satisfies the budget.
+pub const MIN_POOL_SIZE: u32 = RESERVED_UNPERMITTED_CONNECTIONS + MIN_READ_PERMITS;
+
+const DEFAULT_POOL_SIZE: u32 = 8;
+
+// The shipped default must satisfy the budget it is measured against.
+const _: () = assert!(DEFAULT_POOL_SIZE >= MIN_POOL_SIZE);
+
+/// How `pool_size` connections are split between the service read semaphore and
+/// the lanes that bypass it.
+///
+/// The split is total by construction — `read_permits() + reserved() ==
+/// pool_size()` for every input — so a connection cannot be counted twice or
+/// left unassigned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolBudget {
+    pool_size: u32,
+    reserved: u32,
+    read_permits: u32,
+}
+
+impl PoolBudget {
+    /// Split `pool_size` into read permits and reserved writer connections.
+    ///
+    /// A pool at or above `MIN_POOL_SIZE` gets the full reservation. Anything
+    /// smaller is only reachable from tests and from a config that
+    /// `validate_storage_config` rejects, so it falls back to the historical
+    /// `pool_size - 1` split rather than starving reads to zero.
+    #[must_use]
+    pub const fn for_pool_size(pool_size: u32) -> Self {
+        let pool_size = if pool_size == 0 { 1 } else { pool_size };
+        let reserved = if pool_size >= MIN_POOL_SIZE {
+            RESERVED_UNPERMITTED_CONNECTIONS
+        } else if pool_size > 1 {
+            1
+        } else {
+            0
+        };
+        Self {
+            pool_size,
+            reserved,
+            read_permits: pool_size - reserved,
+        }
+    }
+
+    #[must_use]
+    pub const fn pool_size(&self) -> u32 {
+        self.pool_size
+    }
+
+    #[must_use]
+    pub const fn reserved(&self) -> u32 {
+        self.reserved
+    }
+
+    #[must_use]
+    pub const fn read_permits(&self) -> usize {
+        self.read_permits as usize
+    }
+}
+
 impl StorageConfig {
+    /// The read-permit / reserved-connection split for this pool size.
+    #[must_use]
+    pub fn pool_budget(&self) -> PoolBudget {
+        PoolBudget::for_pool_size(self.pool_size)
+    }
+
     pub fn sqlite_page_cache_kib_per_connection(&self) -> anyhow::Result<i64> {
         let pool_size = u64::from(self.pool_size.max(1));
         let total_kib = self
@@ -1362,6 +1550,10 @@ impl Config {
             "CORTEX_AGENT_DOCKER_SOURCE_PREFIXES",
             &mut config.enrichment.agent_docker_source_prefixes,
         );
+        env_override_bool(
+            "CORTEX_AGENT_DOCKER_TRUST_ANY_SOURCE",
+            &mut config.enrichment.agent_docker_trust_any_source,
+        )?;
         warn_invalid_agent_docker_prefixes(&config.enrichment.agent_docker_source_prefixes);
         env_override_bool("CORTEX_SCRUB_PROMPTS", &mut config.enrichment.scrub_prompts)?;
         env_override_parse(
@@ -2314,6 +2506,20 @@ fn validate_storage_config(storage: &StorageConfig) -> anyhow::Result<()> {
             "cleanup_chunk_size must be <= {} (larger values hold the write lock too long)",
             MAX_CLEANUP_CHUNK_SIZE
         ));
+    }
+
+    if storage.pool_size < MIN_POOL_SIZE {
+        let lanes = UNPERMITTED_CONNECTION_LANES
+            .iter()
+            .filter(|lane| matches!(lane.residency, LaneResidency::Resident))
+            .map(|lane| lane.name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "storage.pool_size must be at least {MIN_POOL_SIZE}: {RESERVED_UNPERMITTED_CONNECTIONS} \
+             connections are reserved for lanes that acquire a connection without a service read \
+             permit ({lanes}), leaving {MIN_READ_PERMITS} read permits"
+        );
     }
 
     if storage.sqlite_page_cache_mb == 0 {
