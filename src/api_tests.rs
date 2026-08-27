@@ -38,6 +38,46 @@ fn test_state(token: Option<String>) -> (ApiState, Arc<DbPool>, tempfile::TempDi
     test_state_with_policy(token, AuthPolicy::Mounted { auth_state: None })
 }
 
+#[tokio::test]
+async fn every_contract_api_method_path_is_actually_mounted() {
+    use crate::surfaces::{HttpMethod, api_bindings};
+    for binding in api_bindings() {
+        let (state, _, _dir) = test_state_with_admin(Some("secret".into()), "admin-secret");
+        let app = test_router(state);
+        let path = binding.path.replace("{id}", "contract-probe");
+        let method = match binding.method {
+            HttpMethod::Get => axum::http::Method::GET,
+            HttpMethod::Post => axum::http::Method::POST,
+        };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            response.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "{:?} {} is contracted but not mounted",
+            binding.method,
+            binding.path
+        );
+        assert_ne!(
+            response.status(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "{:?} {} has wrong mounted method",
+            binding.method,
+            binding.path
+        );
+    }
+}
+
 fn test_state_with_policy(
     token: Option<String>,
     auth_policy: AuthPolicy,

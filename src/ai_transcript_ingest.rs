@@ -94,8 +94,9 @@ impl AiTranscriptIngestState {
 }
 
 pub fn router(state: AiTranscriptIngestState) -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/v1/ai-transcripts", post(ingest_handler))
+        .contract_route("POST /v1/ai-transcripts", post(ingest_handler))
         .layer(RequestBodyLimitLayer::new(AI_TRANSCRIPT_BODY_LIMIT_BYTES))
         .with_state(state)
 }

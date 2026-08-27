@@ -87,8 +87,9 @@ impl ShellHistoryIngestState {
 }
 
 pub fn router(state: ShellHistoryIngestState) -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/v1/shell-history", post(ingest_handler))
+        .contract_route("POST /v1/shell-history", post(ingest_handler))
         .layer(RequestBodyLimitLayer::new(SHELL_HISTORY_BODY_LIMIT_BYTES))
         .with_state(state)
 }

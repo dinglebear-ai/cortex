@@ -20,6 +20,29 @@ fn mode_parse_accepts_single_binary_transport_commands() {
 }
 
 #[test]
+fn main_owned_operational_commands_are_in_surface_contract() {
+    let contract = cortex::surfaces::contract();
+    for command in ["serve", "mcp", "setup", "update", "doctor"] {
+        assert!(
+            contract
+                .entries
+                .iter()
+                .any(|entry| entry.kind == "cli" && entry.spelling == command),
+            "main-owned command {command} is missing from SurfaceContract"
+        );
+    }
+    for command in ["setup deploy", "doctor binary", "update config"] {
+        assert!(
+            contract
+                .entries
+                .iter()
+                .any(|entry| entry.kind == "cli" && entry.spelling == command),
+            "main-owned command path {command} is missing from SurfaceContract"
+        );
+    }
+}
+
+#[test]
 fn mode_parse_accepts_heartbeat_state_commands() {
     // Regression: state/correlate state are routed in
     // parse.rs + run.rs, but were missing from Mode::parse's top-level command

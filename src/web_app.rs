@@ -21,12 +21,13 @@ const NO_STORE: &str = "no-store";
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 pub fn router() -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/app", get(index))
-        .route("/app/", get(index))
-        .route("/app/investigate", get(index))
-        .route("/app/assets/{*path}", get(asset))
-        .route("/app/{*path}", get(index))
+        .contract_route("GET /app", get(index))
+        .contract_route("GET /app/", get(index))
+        .contract_route("GET /app/investigate", get(index))
+        .contract_route("GET /app/assets/{*path}", get(asset))
+        .contract_route("GET /app/{*path}", get(index))
 }
 
 async fn index() -> Response {

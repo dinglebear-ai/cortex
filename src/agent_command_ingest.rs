@@ -58,8 +58,9 @@ impl AgentCommandIngestState {
 }
 
 pub fn router(state: AgentCommandIngestState) -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/v1/agent-commands", post(ingest_handler))
+        .contract_route("POST /v1/agent-commands", post(ingest_handler))
         .layer(RequestBodyLimitLayer::new(AGENT_COMMAND_BODY_LIMIT_BYTES))
         .with_state(state)
 }
