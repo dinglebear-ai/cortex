@@ -74,14 +74,7 @@ impl ServiceError {
                 // action. They are not the same fault, though, so the
                 // permanent one says so here rather than being absorbed into
                 // the retry ladder unremarked.
-                if let Some(failure) = crate::db::pool_acquire_failure(&error) {
-                    if let crate::db::PoolAcquireFailure::ConnectFailed { detail } = &failure {
-                        tracing::error!(
-                            connect_error = %detail,
-                            "database connections cannot be established; \
-                             reporting as pool exhaustion, but retrying will not clear it"
-                        );
-                    }
+                if crate::db::is_pool_acquire_failure(&error) {
                     return ServiceError::DatabaseTimeout { source: error };
                 }
 

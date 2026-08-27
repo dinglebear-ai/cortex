@@ -54,8 +54,7 @@ const SLOW_DB_MS: u128 = 500;
 /// Run a blocking read-only DB operation on a pooled connection.
 ///
 /// Centralizes the `Arc::clone` + `spawn_blocking` + `pool.get()` boilerplate
-/// for operations that do not need a transaction (single reads or single
-/// auto-committed writes).
+/// for read-only operations that do not need a transaction.
 async fn db_read<F, T>(pool: &Arc<DbPool>, op: &'static str, f: F) -> Result<T>
 where
     F: FnOnce(&rusqlite::Connection) -> Result<T> + Send + 'static,
@@ -242,7 +241,7 @@ async fn dispatch_row(
 
     if is_dedup {
         let row_id = row.id;
-        db_read(pool, "notif.mark_dropped", move |conn| {
+        db_write(pool, "notif.mark_dropped", move |conn| {
             outbox_mark_dropped(conn, row_id, "dedup_suppressed")?;
             Ok(())
         })
@@ -270,7 +269,7 @@ async fn dispatch_row(
 
             if is_acked {
                 let row_id = row.id;
-                db_read(pool, "notif.mark_dropped", move |conn| {
+                db_write(pool, "notif.mark_dropped", move |conn| {
                     outbox_mark_dropped(conn, row_id, "error_signature_acked")?;
                     Ok(())
                 })
@@ -312,7 +311,7 @@ async fn dispatch_row(
             return Ok(RowOutcome::SemaphoreClosed);
         };
         let row_id = row.id;
-        db_read(pool, "notif.mark_dropped", move |conn| {
+        db_write(pool, "notif.mark_dropped", move |conn| {
             outbox_mark_dropped(conn, row_id, "no_apprise_urls")?;
             Ok(())
         })
@@ -461,7 +460,7 @@ async fn dispatch_row(
                 let next_at = backoff_next_attempt_at(attempt_count);
                 let next_at_log = next_at.clone();
                 let err_clone = error_msg.clone();
-                db_read(pool, "notif.schedule_retry", move |conn| {
+                db_write(pool, "notif.schedule_retry", move |conn| {
                     outbox_schedule_retry(conn, row_id, &next_at, &err_clone, None)?;
                     Ok(())
                 })

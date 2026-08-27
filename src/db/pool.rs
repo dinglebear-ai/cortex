@@ -9,13 +9,13 @@
 //! minutes on large DBs).
 //!
 //! Invariants: SQLite allows a single writer — callers serialize writes via
-//! `write_lock()`, and the service layer issues only
+//! the write-admission API, and the service layer issues only
 //! `config::PoolBudget::read_permits()` read permits, holding the rest of the
 //! pool back for the lanes enumerated in `config::UNPERMITTED_CONNECTION_LANES`
 //! that acquire a connection without one. That budget is only true while the
 //! lock is taken **before** the connection, which is what [`write_conn`] is
-//! for and what `db::lock_order_tests` enforces across the tree: a caller
-//! queued on the lock must not also be sitting on a pooled connection. WAL mode
+//! for. The raw write lock is private, so a caller queued on it cannot also be
+//! sitting on a pooled connection. WAL mode
 //! plus `synchronous=NORMAL` is the standing durability trade-off.
 
 use anyhow::Result;
@@ -24,82 +24,17 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use scheduled_thread_pool::ScheduledThreadPool;
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use crate::config::StorageConfig;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
-/// Why `DbPool::get()` failed to hand back a connection.
+/// True when `err` was caused by r2d2 failing to yield a pooled connection.
 ///
-/// r2d2 reports both of these as the same `Error` type, but they are not the
-/// same fault, and a caller that retries the second one forever turns a
-/// permanent failure into sustained backpressure. Splitting them here means a
-/// caller has to choose which it is reacting to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PoolAcquireFailure {
-    /// Every connection was checked out for the whole `connection_timeout`
-    /// window and no connect attempt failed. Pure backpressure: retrying later
-    /// is the correct response.
-    Saturated,
-    /// The pool recorded a connection-*establishment* failure while waiting —
-    /// an unopenable database file, a disk I/O error, a corrupt header. Retries
-    /// will keep failing until the underlying fault clears, so this must not be
-    /// reported to an operator as ordinary pool pressure.
-    ConnectFailed { detail: String },
-}
-
-/// r2d2 0.8's `Error::description`, which is the whole `Display` output when
-/// the pool has no recorded connect error. Not a message match for *detection*
-/// (see [`pool_acquire_failure`]) — only the marker that separates the fixed
-/// prefix from an appended inner error.
-const R2D2_TIMEOUT_DESCRIPTION: &str = "timed out waiting for connection";
-
-/// Classify a failure to acquire a pooled connection, or `None` if `err` was
-/// not one.
-///
-/// Detection matches the error *type*: r2d2 0.8 constructs `Error` at exactly
-/// two sites, both behind a `timed_out()` check, so the type is the
-/// discriminant. Do not detect on the message — `Display` writes the fixed
-/// description and then appends `": {inner}"` whenever the pool recorded a
-/// connection-establishment error, so it is a prefix, not a fixed string.
-///
-/// That suffix is, however, the only signal r2d2 0.8 exposes for *which* of the
-/// two failures happened: `Error` is a newtype over `Option<String>` with no
-/// accessor and no `source()`, so the presence of an appended inner error is
-/// what distinguishes [`PoolAcquireFailure::ConnectFailed`] from
-/// [`PoolAcquireFailure::Saturated`]. Detection stays structural; only the
-/// discrimination between the two reads the message, and misreading it can only
-/// mislabel a failure, never miss one.
-pub(crate) fn pool_acquire_failure(err: &anyhow::Error) -> Option<PoolAcquireFailure> {
-    let pool_error = err
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<r2d2::Error>())?;
-    let rendered = pool_error.to_string();
-    let detail = rendered
-        .strip_prefix(R2D2_TIMEOUT_DESCRIPTION)
-        .and_then(|suffix| suffix.strip_prefix(": "))
-        .map(str::trim)
-        .filter(|detail| !detail.is_empty());
-    Some(match detail {
-        Some(detail) => PoolAcquireFailure::ConnectFailed {
-            detail: detail.to_string(),
-        },
-        None => PoolAcquireFailure::Saturated,
-    })
-}
-
-/// True when `err` was caused by failing to acquire a pooled connection, for
-/// *either* reason in [`PoolAcquireFailure`].
-///
-/// Named for what it actually matches. The previous name, `is_pool_timeout`,
-/// promised a transient timeout and delivered "the pool did not yield a
-/// connection", so every caller that branched on it was treating a permanently
-/// unopenable database as backpressure without having decided to. Callers that
-/// need the distinction must call [`pool_acquire_failure`] instead; callers
-/// here have deliberately chosen to retry both, because from their position a
-/// permanent fault and sustained saturation demand the same immediate action
-/// (retain the batch, answer a retryable 503) and differ only in how long it
-/// takes to give up.
+/// This deliberately matches structurally rather than parsing r2d2's display
+/// text. Callers handle pool saturation and connection-establishment failures
+/// identically at this boundary: retain work or return retryable backpressure.
 ///
 /// A pool-acquisition failure produces an `r2d2::Error` and **no**
 /// `rusqlite::Error` anywhere in the chain — the statement never reached
@@ -113,10 +48,22 @@ pub(crate) fn pool_acquire_failure(err: &anyhow::Error) -> Option<PoolAcquireFai
 /// Deliberately NOT consulted by `db::ingest::is_transient_sqlite_lock` — see
 /// its doc for why.
 pub(crate) fn is_pool_acquire_failure(err: &anyhow::Error) -> bool {
-    pool_acquire_failure(err).is_some()
+    err.chain().any(|cause| cause.is::<r2d2::Error>())
 }
 
 static WRITE_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
+static WRITE_ADMISSION: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
+
+/// Admission gate shared by ordinary writers and the graph projector's
+/// connection-local staging passes.
+///
+/// Graph projection must borrow its connection before taking [`write_lock`]
+/// because its staging tables are TEMP tables. Taking this gate before either
+/// ordering prevents a lock-first writer from holding `write_lock` while it
+/// waits for the connection already held by the graph projector.
+pub(crate) fn write_admission() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+    WRITE_ADMISSION.lock()
+}
 
 /// Process-wide SQLite **write serialization** lock.
 ///
@@ -135,14 +82,20 @@ static WRITE_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex
 /// connection keeps that connection checked out and unusable for the whole wait.
 /// That is what `config::PoolBudget` cannot account for: the budget assumes a
 /// connection is held only while work is being done. Pair the two through
-/// [`write_conn`] instead, which takes the lock first; the test in
-/// `db::lock_order_tests` enforces the ordering across the tree.
-///
-/// The remaining direct callers are functions that receive an already-borrowed
-/// connection from a caller that is *using* it — see `db::lock_order_tests`
-/// for the enumerated set and why each one cannot take its connection second.
-pub(crate) fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+/// [`write_conn`] instead, which takes the admission gate and lock first. The
+/// raw lock is private; graph staging is the only narrow connection-first API.
+fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
     WRITE_LOCK.lock()
+}
+
+/// Lock live graph tables after building connection-local TEMP staging.
+pub(crate) fn graph_staging_write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+    write_lock()
+}
+
+#[cfg(test)]
+pub(crate) fn test_write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+    write_lock()
 }
 
 /// A pooled connection that was acquired **after** the process-wide write lock,
@@ -156,11 +109,12 @@ pub(crate) fn write_lock() -> parking_lot::ReentrantMutexGuard<'static, ()> {
 /// and to the resident lanes `config::UNPERMITTED_CONNECTION_LANES` budgets for.
 ///
 /// Field order is the drop order: `conn` returns to the pool before `_guard`
-/// releases the lock, so the connection is never handed to a waiting writer
-/// after that writer has already been let through.
+/// releases the lock, and `_guard` releases before `_admission` admits another
+/// writer.
 pub struct WriteConn {
     conn: r2d2::PooledConnection<SqliteConnectionManager>,
     _guard: parking_lot::ReentrantMutexGuard<'static, ()>,
+    _admission: parking_lot::ReentrantMutexGuard<'static, ()>,
 }
 
 impl std::ops::Deref for WriteConn {
@@ -191,20 +145,16 @@ impl std::fmt::Debug for WriteConn {
 /// and the guard is released if it expires. Request-scoped writers that must
 /// answer "busy" rather than queue want [`try_write_conn_for`] instead.
 ///
-/// Holding the lock across `pool.get()` cannot deadlock permanently. The two
-/// production sites enumerated in `db::lock_order_tests` still take the lock
-/// second, so one of them can hold a connection while queued behind a caller
-/// that holds the lock and is waiting for one — but `Pool::get` is
-/// `get_timeout(connection_timeout)`, so that resolves in bounded time with an
-/// error rather than a hang. The exposure is one connection per such site, and
-/// both are reached only from the graph projection under the single
-/// `maintenance_permit`, so they cannot stack.
+/// The shared admission gate also covers graph projection's required
+/// connection-first TEMP staging, preventing a connection/lock wait cycle.
 pub fn write_conn(pool: &DbPool) -> Result<WriteConn> {
+    let admission = write_admission();
     let guard = write_lock();
     let conn = pool.get()?;
     Ok(WriteConn {
         conn,
         _guard: guard,
+        _admission: admission,
     })
 }
 
@@ -221,20 +171,29 @@ pub(crate) enum WriteConnBusy {
 /// Bounded [`write_conn`] for request-scoped writers that must report
 /// backpressure instead of queueing behind an arbitrarily long write.
 ///
-/// Both waits are capped at `timeout`, and the lock guard is dropped before
-/// returning [`WriteConnBusy::Pool`] — so a caller that retries never sleeps
-/// while holding the lock, which would block every other writer in the process.
+/// Admission, lock, and pool acquisition share one total `timeout`. Guards are
+/// dropped before returning an error, so a caller that retries never sleeps
+/// while holding either writer gate.
 pub(crate) fn try_write_conn_for(
     pool: &DbPool,
     timeout: std::time::Duration,
 ) -> std::result::Result<WriteConn, WriteConnBusy> {
-    let guard = WRITE_LOCK
+    let started = Instant::now();
+    let admission = WRITE_ADMISSION
         .try_lock_for(timeout)
         .ok_or(WriteConnBusy::Lock)?;
-    match pool.get_timeout(timeout) {
+
+    let remaining = timeout.saturating_sub(started.elapsed());
+    let guard = WRITE_LOCK
+        .try_lock_for(remaining)
+        .ok_or(WriteConnBusy::Lock)?;
+
+    let remaining = timeout.saturating_sub(started.elapsed());
+    match pool.get_timeout(remaining) {
         Ok(conn) => Ok(WriteConn {
             conn,
             _guard: guard,
+            _admission: admission,
         }),
         Err(error) => {
             drop(guard);
