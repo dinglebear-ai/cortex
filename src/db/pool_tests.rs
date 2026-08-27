@@ -45,52 +45,32 @@ fn is_pool_acquire_failure_ignores_sqlite_and_plain_errors() {
     )));
 }
 
-/// A saturated pool and a database that cannot be opened at all both surface
-/// as `r2d2::Error`. They must not classify the same: retrying the second one
-/// on a transient ladder hides a permanent fault behind sustained backpressure,
-/// which is what the single `is_pool_timeout` predicate used to do.
 #[test]
-fn pool_acquire_failure_separates_saturation_from_connect_failure() {
+fn bounded_write_acquisition_uses_one_total_timeout_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let config = test_storage_config(dir.path().join("saturated.db"));
+    let config = test_storage_config(dir.path().join("bounded-write.db"));
     let pool = init_pool(&config).unwrap();
-    let _held = pool.get().unwrap();
+    let _only_connection = pool.get().unwrap();
 
-    let saturated = anyhow::Error::new(
-        pool.get_timeout(std::time::Duration::from_millis(50))
-            .expect_err("exhausted pool must time out"),
-    );
-    assert_eq!(
-        pool_acquire_failure(&saturated.context("read log page")),
-        Some(PoolAcquireFailure::Saturated),
-    );
+    let (admitted_tx, admitted_rx) = std::sync::mpsc::channel();
+    let blocker = std::thread::spawn(move || {
+        let _admission = write_admission();
+        admitted_tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    });
+    admitted_rx.recv().unwrap();
 
-    // A pool pointed at an unopenable path records the connect error, which
-    // r2d2 appends to its fixed description.
-    let mut unopenable = test_storage_config(dir.path().join("missing-dir").join("nope.db"));
-    unopenable.pool_size = 1;
-    let manager = SqliteConnectionManager::file(&unopenable.db_path);
-    let broken = Pool::builder()
-        .max_size(1)
-        .connection_timeout(std::time::Duration::from_millis(100))
-        .thread_pool(shared_scheduled_thread_pool())
-        .build_unchecked(manager);
-    let error = anyhow::Error::new(
-        broken
-            .get_timeout(std::time::Duration::from_millis(100))
-            .expect_err("unopenable database must fail"),
-    );
-    assert!(is_pool_acquire_failure(&error));
+    let timeout = std::time::Duration::from_millis(1_000);
+    let started = std::time::Instant::now();
+    let result = try_write_conn_for(&pool, timeout);
+    let elapsed = started.elapsed();
+
+    assert!(matches!(result, Err(WriteConnBusy::Pool(_))));
     assert!(
-        matches!(
-            pool_acquire_failure(&error),
-            Some(PoolAcquireFailure::ConnectFailed { .. })
-        ),
-        "expected ConnectFailed, got {:?}",
-        pool_acquire_failure(&error),
+        elapsed < std::time::Duration::from_millis(1_150),
+        "admission and pool waits exceeded one timeout budget: {elapsed:?}"
     );
-
-    assert_eq!(pool_acquire_failure(&anyhow::anyhow!("unrelated")), None);
+    blocker.join().unwrap();
 }
 
 #[test]

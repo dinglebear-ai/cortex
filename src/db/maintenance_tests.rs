@@ -515,7 +515,7 @@ fn orphan_child_sweep_scans_without_the_global_write_lock() {
     let released = std::sync::Arc::new(AtomicBool::new(false));
     let holder_released = std::sync::Arc::clone(&released);
     let holder = std::thread::spawn(move || {
-        let _write_guard = crate::db::write_lock();
+        let _write_guard = crate::db::pool::test_write_lock();
         ready_tx.send(()).unwrap();
         // Bounded so a regression fails the assertion instead of hanging.
         let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));

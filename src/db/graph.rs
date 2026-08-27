@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::graph_resolver_projection;
-use super::pool::{DbPool, write_lock};
+use super::pool::{DbPool, graph_staging_write_lock};
 
 const GRAPH_REBUILD_CHUNK_SIZE: i64 = 10_000;
 static GRAPH_REBUILD_LOCK: Mutex<()> = Mutex::new(());
@@ -1041,7 +1041,7 @@ fn full_rebuild_locked(pool: &DbPool) -> Result<GraphRebuildOutcome> {
 /// full DELETE-all swap. Falls back to a full rebuild when no usable prior
 /// projection exists. Safe to run while the server ingests: the long log scan
 /// builds into per-connection TEMP staging without the write lock; only the
-/// final merge transaction briefly takes [`write_lock`].
+/// final merge transaction briefly takes the graph staging write lock.
 pub fn refresh_graph_projection_incremental(pool: &DbPool) -> Result<GraphRebuildOutcome> {
     let Some(_rebuild_guard) = GRAPH_REBUILD_LOCK.try_lock() else {
         return Ok(GraphRebuildOutcome::AlreadyRunning);
@@ -1109,6 +1109,10 @@ fn project_graph_delta(
     after_log_id: i64,
     started: Instant,
 ) -> Result<GraphRebuildStats> {
+    // TEMP staging requires connection-first ordering. Enter the shared writer
+    // admission gate before borrowing that connection so a lock-first writer
+    // cannot form a lock/connection cycle with the final merge.
+    let _admission = crate::db::pool::write_admission();
     let mut conn = pool.get()?;
     create_graph_staging_tables(&conn)?;
 
@@ -1164,7 +1168,7 @@ fn project_graph_delta(
 
 /// Merge the delta staging tables into the live graph tables by natural key.
 ///
-/// Runs as a single transaction under [`write_lock`]. Staging row ids are local
+/// Runs as a single transaction under the graph staging write lock. Staging row ids are local
 /// to this delta, so they are remapped to live ids and each `relationship_key`
 /// is recomputed from final entity ids — keeping keys consistent with what the
 /// last full rebuild wrote (which copied staging ids verbatim, so live id ==
@@ -1175,12 +1179,9 @@ fn merge_graph_delta(
     runtime_ms: i64,
     chunk_count: i64,
 ) -> Result<GraphRebuildStats> {
-    // One of the two sanctioned raw `write_lock()` calls (see
-    // `db::lock_order_tests`). It cannot use `db::write_conn`: `conn` carries
-    // the caller's per-connection TEMP staging tables, built over a chunked
-    // scan that must not run under the write lock, so the lock is necessarily
-    // taken second and on a connection that is already in use.
-    let _guard = write_lock();
+    // This graph-only connection-first API is required because `conn` carries
+    // per-connection TEMP staging tables built before the short merge phase.
+    let _guard = graph_staging_write_lock();
     let tx = conn.transaction()?;
 
     // 1. Entities: upsert by (entity_type, canonical_key), widening seen window.
@@ -1389,6 +1390,9 @@ fn merge_graph_delta(
 }
 
 fn refresh_graph_projection_inner(pool: &DbPool, started: Instant) -> Result<GraphRebuildStats> {
+    // See `project_graph_delta`: the admission gate bridges the unavoidable
+    // connection-first TEMP-table pass with the normal lock-first writers.
+    let _admission = crate::db::pool::write_admission();
     let mut conn = pool.get()?;
     create_graph_staging_tables(&conn)?;
 
@@ -2971,7 +2975,7 @@ fn swap_graph_projection(
 
     // Same exception as `merge_graph_delta`: the staging tables live on the
     // caller's connection, so the lock is taken second by construction.
-    let _guard = write_lock();
+    let _guard = graph_staging_write_lock();
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM graph_relationship_evidence", [])?;
     tx.execute("DELETE FROM graph_relationships", [])?;
