@@ -28,7 +28,12 @@ live_report() {
   tmp="$(mktemp "${LIVE_RUN_ROOT}/.summary.XXXXXX")"
   jq -n --arg run_id "$LIVE_RUN_ID" '
     reduce inputs as $event ({run_id:$run_id,total:0,passed:0,failed:0,qualified:0,retries:0};
-      if $event.kind != "result" then . else
+      if $event.kind == "docker_boundary_result_v1" then
+        .total += 1 |
+        .passed += (if $event.payload.disposition == "pass" then 1 else 0 end) |
+        .failed += (if $event.payload.disposition == "fail" then 1 else 0 end) |
+        .qualified += (if (["unsupported","not-authorized","platform-qualified","artifact-qualified","not-applicable"] | index($event.payload.disposition)) then 1 else 0 end)
+      elif $event.kind != "result" then . else
         if $event.payload.attempt_kind == "diagnostic_retry" then .retries += 1 else
           .total += 1 |
           .passed += (if $event.payload.result == "pass" then 1 else 0 end) |
@@ -40,6 +45,7 @@ live_report() {
   chmod 600 "$tmp"; mv -f "$tmp" "$json"
   { jq -r '"<?xml version=\"1.0\" encoding=\"UTF-8\"?>","<testsuite name=\"cortex-live\" tests=\"\(.total)\" failures=\"\(.failed)\" skipped=\"\(.qualified)\">"' "$json";
     jq -r 'select(.kind=="result" and .payload.attempt_kind=="first_attempt") | .payload | "  <testcase classname=\"\(.surface_id|@html)\" name=\"\(.case_kind|@html)\" time=\"\(.duration_ms/1000)\">"+(if .result=="fail" then "<failure message=\"scenario failed\"/>" elif .result!="pass" then "<skipped message=\"\(.result|@html)\"/>" else "" end)+"</testcase>"' "$events";
+    jq -r 'select(.kind=="docker_boundary_result_v1") | .payload | "  <testcase classname=\"docker-boundary\" name=\"\(.candidate|@html)\" time=\"\(.duration_seconds)\">"+(if .disposition=="fail" then "<failure message=\"scenario failed\"/>" elif .disposition!="pass" then "<skipped message=\"\(.disposition|@html)\"/>" else "" end)+"</testcase>"' "$events";
     printf '%s\n' '</testsuite>'; } >"$junit"
   chmod 600 "$junit"
   cat "$json"
