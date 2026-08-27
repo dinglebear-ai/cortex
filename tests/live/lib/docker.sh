@@ -207,7 +207,9 @@ live_topology_start() {
   LIVE_TOXIPROXY_IMAGE="$(live_docker_image_id "$toxiproxy")"
   digest="${LIVE_CANDIDATE_IMAGE#sha256:}"
   LIVE_COMPOSE_PROJECT="$project"; LIVE_RESOURCE_PROVIDER="$provider"
-  export LIVE_COMPOSE_PROJECT LIVE_RESOURCE_PROVIDER LIVE_CANDIDATE_IMAGE LIVE_ORACLE_IMAGE LIVE_TOXIPROXY_IMAGE
+  LIVE_SERVER_INSTANCE_ID="${LIVE_RUN_ID}-candidate"
+  LIVE_DATABASE_FINGERPRINT="$(printf '%s' "${project}_state" | shasum -a 256 | awk '{print $1}')"
+  export LIVE_COMPOSE_PROJECT LIVE_RESOURCE_PROVIDER LIVE_CANDIDATE_IMAGE LIVE_ORACLE_IMAGE LIVE_TOXIPROXY_IMAGE LIVE_SERVER_INSTANCE_ID LIVE_DATABASE_FINGERPRINT
   live_topology_generate_secrets
   if live_compose_project_exists "$project"; then
     live_event topology_refused "$(jq -cn --arg project "$project" '{project:$project,reason:"compose-project-collision"}')"

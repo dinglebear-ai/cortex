@@ -903,6 +903,27 @@ async fn api_cookie_without_bearer_is_rejected() {
 
 // ── /api/version + force-bearer-on-loopback + schema_version cache ────────────
 
+#[test]
+fn version_info_serializes_optional_fleet_identity() {
+    let value = serde_json::to_value(VersionInfo {
+        version: "1.2.3",
+        git_sha: None,
+        schema_version: 48,
+        instance_id: Some("instance".into()),
+        deployment_id: Some("sha256:image".into()),
+        database_fingerprint: Some("db-fingerprint".into()),
+        compose_project: Some("project".into()),
+        compose_service: Some("candidate".into()),
+        compose_container: Some("project-candidate-1".into()),
+        fleet_allowlist: vec!["instance".into()],
+        capabilities: vec!["read".into(), "admin".into()],
+    })
+    .unwrap();
+    assert_eq!(value["instance_id"], "instance");
+    assert_eq!(value["compose_service"], "candidate");
+    assert_eq!(value["capabilities"], serde_json::json!(["read", "admin"]));
+}
+
 /// `/api/version` returns 200 with a well-formed payload when authenticated.
 /// Verifies the cached `version_info` is rendered, not re-queried.
 #[tokio::test]

@@ -91,6 +91,37 @@ pub struct VersionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_sha: Option<String>,
     pub schema_version: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_container: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fleet_allowlist: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+fn csv_env(name: &str) -> Vec<String> {
+    crate::env::var(name)
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Shared mutable state for the /api/* router.
@@ -176,6 +207,14 @@ impl ApiState {
             version: CRATE_VERSION,
             git_sha: GIT_SHA.map(str::to_string),
             schema_version,
+            instance_id: crate::env::var("CORTEX_INSTANCE_ID").ok(),
+            deployment_id: crate::env::var("CORTEX_DEPLOYMENT_ID").ok(),
+            database_fingerprint: crate::env::var("CORTEX_DATABASE_FINGERPRINT").ok(),
+            compose_project: crate::env::var("CORTEX_COMPOSE_PROJECT").ok(),
+            compose_service: crate::env::var("CORTEX_COMPOSE_SERVICE").ok(),
+            compose_container: crate::env::var("CORTEX_COMPOSE_CONTAINER").ok(),
+            fleet_allowlist: csv_env("CORTEX_FLEET_ALLOWLIST"),
+            capabilities: csv_env("CORTEX_CAPABILITIES"),
         });
         let maintenance_permit = service.maintenance_permit();
         Ok(Self {

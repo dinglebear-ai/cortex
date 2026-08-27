@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use super::{
     RuntimeCore, background_interval, build_auth_policy, mcp_static_token_active,
-    reject_unsafe_otlp_oauth_only_exposure, resolve_auth_path,
+    reject_unsafe_otlp_oauth_only_exposure, resolve_auth_path, retention_initial_delay_from,
 };
 use crate::config::{AuthConfig, AuthMode, Config, McpConfig, StorageConfig};
 use crate::mcp::AuthPolicy;
@@ -18,6 +18,38 @@ async fn background_interval_waits_full_period_before_first_tick() {
     assert!(
         started.elapsed() >= tokio::time::Duration::from_millis(20),
         "first tick should wait roughly one full period before firing"
+    );
+}
+
+#[test]
+fn retention_initial_delay_is_test_gated_and_bounded() {
+    assert_eq!(
+        retention_initial_delay_from(None, Some("1")).as_secs(),
+        3600
+    );
+    assert_eq!(
+        retention_initial_delay_from(Some("0"), Some("1")).as_secs(),
+        3600
+    );
+    assert_eq!(
+        retention_initial_delay_from(Some("1"), Some("1")).as_secs(),
+        1
+    );
+    assert_eq!(
+        retention_initial_delay_from(Some("1"), Some("60")).as_secs(),
+        60
+    );
+    assert_eq!(
+        retention_initial_delay_from(Some("1"), Some("0")).as_secs(),
+        3600
+    );
+    assert_eq!(
+        retention_initial_delay_from(Some("1"), Some("61")).as_secs(),
+        3600
+    );
+    assert_eq!(
+        retention_initial_delay_from(Some("1"), Some("invalid")).as_secs(),
+        3600
     );
 }
 

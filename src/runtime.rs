@@ -224,6 +224,33 @@ pub(crate) fn background_interval(period: tokio::time::Duration) -> tokio::time:
     interval
 }
 
+/// Initial retention delay. Production remains fixed at one hour. The live E2E
+/// harness may shorten only the first tick by setting both the explicit test
+/// mode gate and a bounded delay; the recurring cadence remains hourly.
+fn retention_initial_delay() -> tokio::time::Duration {
+    retention_initial_delay_from(
+        std::env::var("CORTEX_LIVE_TEST_MODE").ok().as_deref(),
+        std::env::var("CORTEX_LIVE_RETENTION_INITIAL_DELAY_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn retention_initial_delay_from(
+    test_mode: Option<&str>,
+    raw: Option<&str>,
+) -> tokio::time::Duration {
+    const PRODUCTION: u64 = 3600;
+    let seconds = if test_mode == Some("1") {
+        raw.and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| (1..=60).contains(value))
+            .unwrap_or(PRODUCTION)
+    } else {
+        PRODUCTION
+    };
+    tokio::time::Duration::from_secs(seconds)
+}
+
 /// Tags whose retention is hard-capped at 7 days regardless of the global
 /// `retention_days` setting. AdGuard query volume would otherwise dominate
 /// the FTS5 index at homelab volumes (50k+ DNS queries/day).
@@ -1015,7 +1042,11 @@ impl RuntimeCore {
         let fts_merge_pages = self.config.enrichment.fts_merge_pages;
         let cleanup_chunk_size = self.config.storage.cleanup_chunk_size;
         let handle = tokio::spawn(async move {
-            let mut interval = background_interval(tokio::time::Duration::from_secs(3600));
+            let period = tokio::time::Duration::from_secs(3600);
+            let mut interval = tokio::time::interval_at(
+                tokio::time::Instant::now() + retention_initial_delay(),
+                period,
+            );
             // Orphan child rows are rare by construction: both the write path
             // and `delete_heartbeat_chunk_where` delete children and parent
             // inside a single transaction, so neither can strand a child. Any
