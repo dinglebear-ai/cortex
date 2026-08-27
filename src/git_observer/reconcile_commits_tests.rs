@@ -111,7 +111,9 @@ async fn two_commit_fast_forward_imports_exact_commits_once_in_order() {
     }
     let fixture = GitFixture::build().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(dir.path().join("fast-forward.db"))).unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(dir.path().join("fast-forward.db"))).unwrap(),
+    );
     let initial = reconcile_one_repository(
         &pool,
         fixture.repository(),
@@ -186,10 +188,12 @@ async fn transcript_command_head_change_links_exact_commits_and_backfill_repairs
     }
     let fixture = GitFixture::build().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(
-        dir.path().join("agent-attribution.db"),
-    ))
-    .unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(
+            dir.path().join("agent-attribution.db"),
+        ))
+        .unwrap(),
+    );
     let initial = reconcile_one_repository(
         &pool,
         fixture.repository(),
@@ -303,7 +307,9 @@ async fn transition_cap_warns_without_advancing_head_or_importing_partial_commit
     }
     let fixture = GitFixture::build().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let pool = init_pool(&StorageConfig::for_test(dir.path().join("cap.db"))).unwrap();
+    let pool = std::sync::Arc::new(
+        init_pool(&StorageConfig::for_test(dir.path().join("cap.db"))).unwrap(),
+    );
     let initial = reconcile_one_repository(
         &pool,
         fixture.repository(),

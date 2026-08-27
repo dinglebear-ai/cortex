@@ -67,6 +67,12 @@ pub struct RuntimeObservability {
     writer_logs_written: AtomicU64,
     writer_flush_failures: AtomicU64,
     writer_logs_retained: AtomicU64,
+    /// Rows the writer is holding right now, awaiting a retry.
+    ///
+    /// This is a level, not a total. It exists so `writer_logs_retained` can
+    /// count each row once: the writer re-reports its whole retained batch on
+    /// every failed flush, and it retries roughly four times a second.
+    writer_logs_retained_current: AtomicUsize,
     writer_logs_discarded: AtomicU64,
     writer_storage_blocked: AtomicBool,
     last_ingest_at_ms: AtomicI64,
@@ -117,7 +123,10 @@ pub struct RuntimeObservabilitySnapshot {
     pub writer_batches_flushed: u64,
     pub writer_logs_written: u64,
     pub writer_flush_failures: u64,
+    /// Distinct rows the writer has ever had to hold back, counted once each.
     pub writer_logs_retained: u64,
+    /// Rows the writer is holding right now. Zero when the backlog is clear.
+    pub writer_logs_retained_current: usize,
     pub writer_logs_discarded: u64,
     pub writer_storage_blocked: bool,
     pub last_ingest_at: Option<String>,
@@ -322,13 +331,42 @@ impl RuntimeObservability {
         self.last_write_at_ms.store(now_millis(), Ordering::Relaxed);
     }
 
+    /// Record the writer's retained backlog after a failed flush.
+    ///
+    /// `retained` is the size of the **whole** retained batch, not the rows
+    /// newly added to it. The writer puts that batch back and retries it every
+    /// 250 ms, so adding `retained` outright made `writer_logs_retained` climb
+    /// by the backlog size several times a second — during a sustained outage
+    /// it reported millions of rows held when the real figure was a few
+    /// thousand, which is precisely the moment an operator reads it.
+    ///
+    /// Only the growth over the previous report is counted, so a row that sits
+    /// in the backlog for an hour is counted once. Rows that leave the backlog
+    /// (retried successfully, or discarded) lower the level without lowering
+    /// the total; if the backlog later grows past that point again the newly
+    /// added rows are counted, which is correct — they are different rows.
     pub fn record_writer_retained(&self, retained: usize, storage_blocked: bool) {
         self.writer_flush_failures.fetch_add(1, Ordering::Relaxed);
-        self.writer_logs_retained
-            .fetch_add(retained as u64, Ordering::Relaxed);
+        let previous = self
+            .writer_logs_retained_current
+            .swap(retained, Ordering::Relaxed);
+        self.writer_logs_retained.fetch_add(
+            u64::try_from(retained.saturating_sub(previous)).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
         self.writer_storage_blocked
             .store(storage_blocked, Ordering::Relaxed);
         self.touch_error();
+    }
+
+    /// The writer's retained batch is empty again.
+    ///
+    /// Must be called on every path that leaves the batch clear, otherwise the
+    /// next backlog is measured against a stale level and its first rows go
+    /// uncounted.
+    pub fn clear_writer_retained(&self) {
+        self.writer_logs_retained_current
+            .store(0, Ordering::Relaxed);
     }
 
     pub fn record_writer_discarded(&self, discarded: usize) {
@@ -409,6 +447,7 @@ impl RuntimeObservability {
             writer_logs_written: self.writer_logs_written.load(Ordering::Relaxed),
             writer_flush_failures: self.writer_flush_failures.load(Ordering::Relaxed),
             writer_logs_retained: self.writer_logs_retained.load(Ordering::Relaxed),
+            writer_logs_retained_current: self.writer_logs_retained_current.load(Ordering::Relaxed),
             writer_logs_discarded: self.writer_logs_discarded.load(Ordering::Relaxed),
             writer_storage_blocked: self.writer_storage_blocked.load(Ordering::Relaxed),
             last_ingest_at: millis_to_iso(self.last_ingest_at_ms.load(Ordering::Relaxed)),

@@ -154,7 +154,10 @@ fn stale_service_topology_cleanup_removes_old_canonical_rows() {
         .unwrap();
         tx.commit().unwrap();
     }
-    cleanup_legacy_service_topology(&mut conn).unwrap();
+    // Release the fixture connection: the cleanup takes its own per chunk.
+    drop(conn);
+    cleanup_legacy_service_topology(&pool).unwrap();
+    let conn = pool.get().unwrap();
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM graph_entities

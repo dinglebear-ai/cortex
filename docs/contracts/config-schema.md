@@ -58,7 +58,7 @@ For every row in §4:
 | TOML key | Env var | Type | Default | Sens. | Reload | Validation | plugin.json | Notes |
 |---|---|---|---|---|---|---|---|---|
 | `db_path` | `CORTEX_DB_PATH` | path | `/data/cortex.db` | public | restart-only | parent dir must exist when env is set | `data_dir` (parent) | See §2 for `/data/` rewrite rule |
-| `pool_size` | `CORTEX_POOL_SIZE` | u32 | `8` | tuning | restart-only | `> 0` | — | r2d2 pool size; reads get `pool_size - 1` permits so one connection remains available for ingest |
+| `pool_size` | `CORTEX_POOL_SIZE` | u32 | `8` | tuning | restart-only | `>= 6` | — | r2d2 pool size. `config::PoolBudget` splits it: 4 connections are reserved for the resident lanes in `UNPERMITTED_CONNECTION_LANES` (ingest batch writer, maintenance permit, notification dispatcher permit, Agent Observatory projector), and reads get the remaining `pool_size - 4` permits |
 | `sqlite_page_cache_mb` | `CORTEX_SQLITE_PAGE_CACHE_MB` | u64 | `128` | tuning | restart-only | `> 0`; derived KiB per connection must fit `i64` | — | Total SQLite page-cache budget across the pool; divided by `pool_size` before `PRAGMA cache_size` |
 | `sqlite_mmap_mb` | `CORTEX_SQLITE_MMAP_MB` | u64 | `256` | tuning | restart-only | derived bytes must fit `i64` | — | Bounded SQLite mmap size; resident pages may still count toward cgroup memory |
 | `heavy_read_concurrency` | `CORTEX_HEAVY_READ_CONCURRENCY` | usize | `1` | tuning | restart-only | `> 0` | — | Shared service-layer limiter for SQLite-heavy reads |

@@ -62,7 +62,7 @@ pub use read::{
     list_observatory_spans, list_observatory_worktrees,
 };
 
-use crate::db::pool::{DbPool, write_lock};
+use crate::db::pool::DbPool;
 use anyhow::{Context, Result};
 use rusqlite::TransactionBehavior;
 
@@ -101,20 +101,25 @@ pub(crate) fn advance_projection_cursor_in_tx(
 pub(crate) fn projection_cursor(pool: &DbPool, source_name: &str) -> Result<String> {
     use rusqlite::OptionalExtension;
 
-    let connection = pool.get().context("acquire database connection")?;
-    if let Some(cursor) = connection
-        .query_row(
-            "SELECT cursor_value FROM agent_projection_cursors
-              WHERE cursor_type = 'source' AND source_name = ?1",
-            [source_name],
-            |row| row.get(0),
-        )
-        .optional()?
+    // Read on a connection of its own and let it go: the common path finds the
+    // cursor and never needs the write lock, and the seeding path below must not
+    // queue on that lock while holding a connection.
     {
-        return Ok(cursor);
+        let connection = pool.get().context("acquire database connection")?;
+        if let Some(cursor) = connection
+            .query_row(
+                "SELECT cursor_value FROM agent_projection_cursors
+                  WHERE cursor_type = 'source' AND source_name = ?1",
+                [source_name],
+                |row| row.get(0),
+            )
+            .optional()?
+        {
+            return Ok(cursor);
+        }
     }
 
-    let _write_guard = write_lock();
+    let connection = crate::db::write_conn(pool).context("acquire database connection")?;
     connection.execute(
         "INSERT OR IGNORE INTO agent_projection_cursors
              (cursor_type, source_name, cursor_value) VALUES ('source', ?1, '')",
@@ -133,8 +138,7 @@ pub(crate) fn advance_projection_cursor(
     source_name: &str,
     cursor: &str,
 ) -> Result<()> {
-    let _write_guard = write_lock();
-    let mut connection = pool.get().context("acquire database connection")?;
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     advance_projection_cursor_in_tx(&tx, source_name, cursor)?;
     tx.commit()?;
@@ -147,8 +151,7 @@ pub(crate) fn record_projection_health(
     status: &str,
     detail: &str,
 ) -> Result<()> {
-    let _write_guard = write_lock();
-    let connection = pool.get().context("acquire database connection")?;
+    let connection = crate::db::write_conn(pool).context("acquire database connection")?;
     connection.execute(
         "INSERT INTO agent_projection_cursors (cursor_type, source_name, cursor_value)
          VALUES ('health', ?1, json_object('status', ?2, 'detail', ?3, 'attempts', 1))
@@ -191,8 +194,7 @@ where
 {
     queries::validate_reconcile_repository(repository, worktrees, observed_at)?;
     commits::validate_reconcile_git_commits(commits, reachability, observed_at)?;
-    let _write_guard = write_lock();
-    let mut connection = pool.get().context("acquire database connection")?;
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let topology = queries::reconcile_repository_tx(&tx, repository, worktrees, observed_at)?;
     let commits = commits::reconcile_git_commits_tx(

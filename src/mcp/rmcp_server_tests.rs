@@ -284,7 +284,9 @@ fn classify_tool_error_pins_every_variant() {
             ToolErrorClass::Retryable,
         ),
         (
-            anyhow::Error::new(E::DatabaseTimeout),
+            anyhow::Error::new(E::DatabaseTimeout {
+                source: anyhow::anyhow!("timed out waiting for connection"),
+            }),
             ToolErrorClass::Retryable,
         ),
         (

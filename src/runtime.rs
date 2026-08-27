@@ -266,20 +266,38 @@ impl RuntimeCore {
             authelia_source_ip: config.enrichment.authelia_source_ip.clone(),
             adguard_source_ip: config.enrichment.adguard_source_ip.clone(),
             agent_docker_source_prefixes: config.enrichment.agent_docker_source_prefixes.clone(),
+            agent_docker_trust_any_source: config.enrichment.agent_docker_trust_any_source,
             scrub_prompts: config.enrichment.scrub_prompts,
             api_token: config.mcp.api_token.0.clone(),
         };
-        // Unsafe-default guard (see `reject_unsafe_otlp_oauth_only_exposure`
-        // for the hard-fail sibling): with no source gate configured, any
-        // port-1514 sender can forge agent-docker identity metadata. Stdio
-        // query-only mode never ingests, so it stays quiet.
-        if !is_stdio && enrichment.agent_docker_source_prefixes.is_empty() {
-            tracing::warn!(
-                "agent_docker_source_prefixes is empty: agent-docker identity extraction is \
-                 unauthenticated and accepts the metadata marker from ANY syslog sender. Set \
-                 CORTEX_AGENT_DOCKER_SOURCE_PREFIXES (or [enrichment] \
-                 agent_docker_source_prefixes) to the agent hosts' source IPs to gate it"
-            );
+        // Source-gate posture report. The gate itself is fail-closed
+        // (`receiver::enrichment::agent_docker_source_trusted`), so an
+        // unconfigured gate is safe-but-disabled rather than wide open —
+        // which is exactly why it must be loud: the silent symptom is
+        // agent-docker identity never being attributed. Stdio query-only
+        // mode never ingests, so it stays quiet.
+        if !is_stdio {
+            if enrichment.agent_docker_trust_any_source {
+                tracing::error!(
+                    "CORTEX_AGENT_DOCKER_TRUST_ANY_SOURCE is enabled: the agent-docker identity \
+                     marker is accepted from ANY syslog sender, so any host that can reach the \
+                     syslog port can forge agent-docker identity. Unset it and list the agent \
+                     hosts' source IPs in CORTEX_AGENT_DOCKER_SOURCE_PREFIXES (or [enrichment] \
+                     agent_docker_source_prefixes) instead"
+                );
+            } else if enrichment.agent_docker_source_prefixes.is_empty() {
+                tracing::error!(
+                    "agent_docker_source_prefixes is empty: agent-docker identity extraction is \
+                     DISABLED and every [cortex-agent-docker-meta:...] marker will be rejected. \
+                     Set CORTEX_AGENT_DOCKER_SOURCE_PREFIXES (or [enrichment] \
+                     agent_docker_source_prefixes) to the agent hosts' source IPs to enable it"
+                );
+            } else {
+                tracing::info!(
+                    prefix_count = enrichment.agent_docker_source_prefixes.len(),
+                    "agent-docker identity source gate active"
+                );
+            }
         }
         let observability = Arc::new(RuntimeObservability::default());
         let ingest = crate::ingest::start_writer_from_receiver_config(

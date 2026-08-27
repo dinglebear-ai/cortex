@@ -463,7 +463,8 @@ the CEF `UNIFIdeviceName` gotcha). Receiver enrichment therefore scopes the
 merge: only the `agent_docker` object is taken from the payload, existing
 `metadata_json` keys (including a pre-existing `agent_docker`) are never
 overwritten, and `source_kind` is set from the receiver constant, not the
-payload. Operators SHOULD configure `agent_docker_source_prefixes`
-(`CORTEX_AGENT_DOCKER_SOURCE_PREFIXES`, comma-separated) to restrict
-extraction to hosts running the cortex agent; unset keeps
-extract-from-anywhere compatibility.
+payload. Operators MUST configure `agent_docker_source_prefixes`
+(`CORTEX_AGENT_DOCKER_SOURCE_PREFIXES`, comma-separated) with the hosts
+running the cortex agent. The gate is **fail-closed**: an empty list
+rejects the marker from every sender, so no `agent_docker` object is
+extracted until the allowlist names the agent hosts.

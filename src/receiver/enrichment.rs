@@ -44,14 +44,21 @@ pub struct EnrichmentConfig {
     pub authelia_source_ip: Option<String>,
     /// Same gating, for AdGuard.
     pub adguard_source_ip: Option<String>,
-    /// If non-empty, only extract the agent Docker metadata marker when the
-    /// entry's `source_ip` matches one of these prefixes (octet-boundary
-    /// semantics, see [`source_ip_matches`]). The marker rides the
-    /// unauthenticated syslog message body, so without this gate any
+    /// Allowlist of sender IPs whose agent Docker metadata marker is trusted
+    /// (octet-boundary semantics, see [`source_ip_matches`]). The marker rides
+    /// the unauthenticated syslog message body, so without this gate any
     /// port-1514 sender can forge agent-docker identity (same trust class as
-    /// the CEF `UNIFIdeviceName` gotcha). Empty keeps the legacy
-    /// extract-from-anywhere behaviour.
+    /// the CEF `UNIFIdeviceName` gotcha).
+    ///
+    /// **Fail-closed:** an empty list rejects the marker from every sender.
+    /// Extraction requires either a matching prefix here or an explicit
+    /// [`Self::agent_docker_trust_any_source`] opt-in.
     pub agent_docker_source_prefixes: Vec<String>,
+    /// Explicit opt-in to the pre-fail-closed behaviour: accept the agent
+    /// Docker marker from *any* syslog sender. Only safe when every host that
+    /// can reach the syslog port is trusted. Ignored when
+    /// [`Self::agent_docker_source_prefixes`] already admits the sender.
+    pub agent_docker_trust_any_source: bool,
     /// When `true`, redact known secret patterns from AI-source messages.
     pub scrub_prompts: bool,
     /// Optional API token value to add to the redaction set so a leaked token
@@ -246,6 +253,21 @@ pub(crate) fn agent_docker_gate_blocked_count() -> u64 {
     AGENT_DOCKER_GATE_BLOCKED_COUNT.load(Ordering::Relaxed)
 }
 
+/// Whether `entry`'s transport-observed `source_ip` is trusted to assert
+/// agent-docker identity.
+///
+/// Fail-closed: with no prefixes configured and no explicit
+/// `agent_docker_trust_any_source` opt-in, this returns `false` for every
+/// sender. `source_ip` is the only network-verified identity available here;
+/// everything else in the record is sender-controlled.
+fn agent_docker_source_trusted(entry: &LogBatchEntry, config: &EnrichmentConfig) -> bool {
+    config
+        .agent_docker_source_prefixes
+        .iter()
+        .any(|prefix| source_ip_matches(entry, Some(prefix)))
+        || config.agent_docker_trust_any_source
+}
+
 /// Extract the agent Docker metadata prefix from `message` into
 /// `metadata_json` and strip the marker from `message`. Malformed payloads
 /// leave the entry untouched — the raw line is still stored and searchable.
@@ -254,24 +276,25 @@ pub(crate) fn agent_docker_gate_blocked_count() -> u64 {
 /// the payload is sender-controlled. The merge is therefore scoped: only the
 /// `agent_docker` object is accepted, it never overwrites a key already
 /// present in `metadata_json`, and the denormalised `source_kind` is set
-/// from [`AGENT_DOCKER_SOURCE_KIND`] rather than the payload. When
-/// `agent_docker_source_prefixes` is configured, extraction is further
-/// restricted to entries whose `source_ip` matches one of the prefixes.
+/// from [`AGENT_DOCKER_SOURCE_KIND`] rather than the payload.
+///
+/// **The source gate is fail-closed.** Extraction requires the entry's
+/// `source_ip` to match an `agent_docker_source_prefixes` entry, or
+/// `agent_docker_trust_any_source` to be explicitly enabled. An unconfigured
+/// gate therefore rejects the marker rather than honouring it from every
+/// sender — the syslog port is reachable by the whole fleet, so an empty
+/// allowlist must mean "trust nobody", not "trust anybody".
 fn extract_agent_docker_metadata(entry: &mut LogBatchEntry, config: &EnrichmentConfig) {
     let Some(payload_start) = entry.message.strip_prefix(AGENT_DOCKER_META_MARKER) else {
         return;
     };
-    if !config.agent_docker_source_prefixes.is_empty()
-        && !config
-            .agent_docker_source_prefixes
-            .iter()
-            .any(|prefix| source_ip_matches(entry, Some(prefix)))
-    {
+    if !agent_docker_source_trusted(entry, config) {
         AGENT_DOCKER_GATE_BLOCKED_COUNT.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(
             source_ip = %entry.source_ip,
             hostname = %entry.hostname,
-            "agent-docker marker present but source_ip matched no configured prefix; \
+            gate_configured = !config.agent_docker_source_prefixes.is_empty(),
+            "agent-docker marker present but source_ip is not trusted by the source gate; \
              marker left in message, identity not extracted"
         );
         return;

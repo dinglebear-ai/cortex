@@ -150,8 +150,7 @@ impl CortexService {
         let actor_clone = actor_owned.clone();
         let hash_clone = hash.clone();
         self.run_db("ack_error.commit", move |pool| {
-            let mut conn = pool.get()?;
-            let _write_guard = crate::db::write_lock();
+            let mut conn = crate::db::write_conn(pool)?;
             let tx = conn.transaction()?;
             crate::db::error_signatures::record_ack_event(
                 &tx,
@@ -219,8 +218,7 @@ impl CortexService {
         let actor_clone = actor_owned.clone();
         let hash_clone = hash.clone();
         self.run_db("unack_error.commit", move |pool| {
-            let mut conn = pool.get()?;
-            let _write_guard = crate::db::write_lock();
+            let mut conn = crate::db::write_conn(pool)?;
             let tx = conn.transaction()?;
             crate::db::error_signatures::record_ack_event(
                 &tx,

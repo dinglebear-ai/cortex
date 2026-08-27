@@ -76,8 +76,7 @@ pub(crate) fn insert_hook_events_in_tx(
 /// the backfill service and the config-inventory collector CLI path, both of
 /// which own their own transaction boundary).
 pub fn insert_hook_events(pool: &DbPool, events: &[HookEventInsert]) -> Result<usize> {
-    let mut conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
     let inserted = insert_hook_events_in_tx(&tx, events)?;
     tx.commit()?;

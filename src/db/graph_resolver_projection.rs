@@ -20,7 +20,6 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::db::graph::{self, EntityMemo, EvidenceInput, GraphWalkEntity, LogGraphRow};
-use crate::db::write_lock;
 
 /// Bounded entity cap for service-topic walks (final result LIMIT).
 pub const GRAPH_SERVICE_TOPIC_ENTITY_CAP: usize = 250;
@@ -143,12 +142,16 @@ const LEGACY_TOPOLOGY_ENTITY_IDS: &str = "SELECT id FROM graph_entities
 /// resolver-owned `logical_service` / `service_instance` projection; old keys
 /// are deleted, never migrated.
 ///
-/// Deletes run in [`LEGACY_TOPOLOGY_CLEANUP_CHUNK`]-row chunks, committing
-/// and releasing [`write_lock`] between chunks so a large legacy projection
-/// never pins the writer. The phase order (evidence → relationships →
-/// aliases → entities) keeps every commit boundary referentially safe: a
-/// child row is always gone before its parent.
-pub fn cleanup_legacy_service_topology(conn: &mut rusqlite::Connection) -> Result<()> {
+/// Deletes run in [`LEGACY_TOPOLOGY_CLEANUP_CHUNK`]-row chunks, each taking the
+/// write lock and a pooled connection through `db::write_conn` and releasing
+/// both between chunks, so a large legacy projection never pins the writer.
+/// Takes the pool rather than a connection for exactly that reason: a
+/// caller-supplied connection would stay checked out across every chunk.
+///
+/// The phase order (evidence → relationships → aliases → entities) keeps every
+/// commit boundary referentially safe: a child row is always gone before its
+/// parent.
+pub fn cleanup_legacy_service_topology(pool: &crate::db::DbPool) -> Result<()> {
     // Same `src IN (…) OR dst IN (…)` shape for evidence and relationships:
     // an inner JOIN on both endpoints would skip relationships whose other
     // endpoint dangles, orphaning their evidence.
@@ -190,7 +193,11 @@ pub fn cleanup_legacy_service_topology(conn: &mut rusqlite::Connection) -> Resul
     for sql in &phases {
         loop {
             let deleted = {
-                let _guard = write_lock();
+                // Lock and connection are taken together, per chunk, and both
+                // released at the end of this block — the caller must not hand
+                // in a connection it is holding, or the release between chunks
+                // would be defeated for whichever of the two it kept.
+                let mut conn = crate::db::write_conn(pool)?;
                 let tx = conn.transaction()?;
                 let deleted = tx.execute(sql, [LEGACY_TOPOLOGY_CLEANUP_CHUNK])?;
                 tx.commit()?;

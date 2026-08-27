@@ -434,17 +434,25 @@ async fn heartbeat_handler(
                     .directive_for(&agent_os, &agent_arch, &agent_version);
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
-        // Losing the race for the pool's reserved writer slot is a "try again",
-        // not a server fault. 503 keeps the agent's own retry path in charge
-        // instead of recording a hard error against a healthy server.
-        // `acquire_write_conn` already logged the exhaustion.
+        // Losing the race for the write lock or a reserved writer connection is
+        // a "try again", not a server fault. 503 keeps the agent's own retry
+        // path in charge instead of recording a hard error against a healthy
+        // server. `acquire_write_conn` already logged the exhaustion.
         //
         // `storage_unavailable` is the literal specified by
         // docs/contracts/heartbeat-telemetry.md section 10 ("503 |
         // storage_unavailable | DB write path unavailable or backpressured").
         // It was documented but never emitted by any code path until now.
+        //
+        // `Retry-After` matches the OTLP backpressure 503s
+        // (`otlp::error::OtlpError::retry_after`): every 503 cortex emits for
+        // transient write-path contention names the same one-second floor, so
+        // an agent does not have to know which endpoint it hit to know how
+        // long to wait. One second is a floor, not a schedule — the agent's
+        // own backoff applies on top.
         Err(HeartbeatIngestError::PoolBusy { .. }) => (
             StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, HEARTBEAT_BUSY_RETRY_AFTER_SECONDS)],
             Json(json!({"error": "storage_unavailable"})),
         )
             .into_response(),
@@ -483,6 +491,9 @@ fn unauthorized() -> axum::response::Response {
         .into_response()
 }
 
+/// `Retry-After` sent with the `storage_unavailable` 503.
+const HEARTBEAT_BUSY_RETRY_AFTER_SECONDS: &str = "1";
+
 /// Backoff between heartbeat write-connection attempts; its length fixes the
 /// attempt count at [`HEARTBEAT_ACQUIRE_ATTEMPTS`].
 const HEARTBEAT_ACQUIRE_BACKOFF: [Duration; 2] =
@@ -500,70 +511,75 @@ const HEARTBEAT_ACQUIRE_ATTEMPTS: usize = HEARTBEAT_ACQUIRE_BACKOFF.len() + 1;
 /// budget (their total still spans three attempts plus backoff).
 const HEARTBEAT_ACQUIRE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
 
-type HeartbeatWriteConn = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
-
-/// Split so pool contention can be answered honestly instead of being
+/// Split so write-path contention can be answered honestly instead of being
 /// flattened into a generic 500.
 #[derive(Debug, thiserror::Error)]
 enum HeartbeatIngestError {
-    /// The pool yielded no connection within the bounded retry budget.
-    #[error("heartbeat write connection unavailable after {attempts} attempts: {source}")]
-    PoolBusy {
-        attempts: usize,
-        #[source]
-        source: r2d2::Error,
-    },
+    /// Neither the write lock nor a pooled connection came free within the
+    /// bounded retry budget.
+    #[error("heartbeat write path unavailable after {attempts} attempts: {detail}")]
+    PoolBusy { attempts: usize, detail: String },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
 
-/// Acquire the connection for a heartbeat write, retrying a bounded number of
-/// times with backoff.
+/// Acquire the write lock and then a connection for a heartbeat write, retrying
+/// a bounded number of times with backoff.
 ///
-/// One pool connection is reserved outside the service layer's read semaphore
-/// (see `app::services::read_permits_for_pool`), but every ingest-side writer
-/// shares that one slot. A heartbeat can therefore lose the race for it while
-/// another writer cycles through short holds — the hourly retention purge
-/// releases the write lock between chunks, so the slot frees repeatedly within
-/// a single request's budget. One un-retried attempt turns that transient loss
-/// into a dropped heartbeat; three attempts ride it out.
+/// Lock first, connection second — `db::write_conn`'s ordering, and for its
+/// reason: a heartbeat queued on the write lock must not be sitting on a pooled
+/// connection while it waits. Both waits are bounded here, because a heartbeat
+/// is a request-scoped writer that has to answer 503 rather than queue behind an
+/// arbitrarily long write (the 2026-08-24 orphan sweep held the lock 15m25s).
+/// `db::try_write_conn_for` drops the guard before returning, so the backoff
+/// sleep below never happens while holding the lock.
 ///
-/// Only the acquisition retries. Once a connection is in hand the transaction
-/// runs exactly once, so constraint and serialization failures still fail fast.
-fn acquire_write_conn(pool: &DbPool) -> Result<HeartbeatWriteConn, HeartbeatIngestError> {
+/// Every ingest-side writer shares the connections reserved outside the service
+/// layer's read semaphore (see `app::services::read_permits_for_pool`), and
+/// contention on either resource is usually transient — the hourly retention
+/// purge releases lock and connection between chunks, so both free repeatedly
+/// within a single request's budget. One un-retried attempt turns that
+/// transient loss into a dropped heartbeat; three attempts ride it out.
+///
+/// Only the acquisition retries. Once the pair is in hand the transaction runs
+/// exactly once, so constraint and serialization failures still fail fast.
+fn acquire_write_conn(pool: &DbPool) -> Result<crate::db::WriteConn, HeartbeatIngestError> {
     let attempt_timeout = pool
         .connection_timeout()
         .min(HEARTBEAT_ACQUIRE_ATTEMPT_TIMEOUT);
     let mut attempt = 0usize;
     loop {
-        let error = match pool.get_timeout(attempt_timeout) {
+        let detail = match crate::db::try_write_conn_for(pool, attempt_timeout) {
             Ok(conn) => {
                 if attempt > 0 {
                     tracing::warn!(
                         attempt = attempt + 1,
-                        "heartbeat write connection acquired after retry"
+                        "heartbeat write path acquired after retry"
                     );
                 }
                 return Ok(conn);
             }
-            Err(error) => error,
+            Err(crate::db::WriteConnBusy::Lock) => {
+                format!("write lock still held after {attempt_timeout:?}")
+            }
+            Err(crate::db::WriteConnBusy::Pool(error)) => error.to_string(),
         };
         let Some(backoff) = HEARTBEAT_ACQUIRE_BACKOFF.get(attempt) else {
             tracing::error!(
-                error = %error,
+                detail = %detail,
                 attempts = HEARTBEAT_ACQUIRE_ATTEMPTS,
-                "heartbeat write connection unavailable; reporting busy"
+                "heartbeat write path unavailable; reporting busy"
             );
             return Err(HeartbeatIngestError::PoolBusy {
                 attempts: HEARTBEAT_ACQUIRE_ATTEMPTS,
-                source: error,
+                detail,
             });
         };
         tracing::warn!(
-            error = %error,
+            detail = %detail,
             attempt = attempt + 1,
             retry_delay_ms = backoff.as_millis(),
-            "heartbeat write connection unavailable; retrying"
+            "heartbeat write path unavailable; retrying"
         );
         std::thread::sleep(*backoff);
         attempt += 1;
@@ -583,12 +599,13 @@ fn insert_heartbeat(
 }
 
 fn write_heartbeat(
-    conn: &mut HeartbeatWriteConn,
+    conn: &mut crate::db::WriteConn,
     request: HeartbeatRequest,
     source_ip: &str,
     received_at: String,
 ) -> anyhow::Result<HeartbeatIngestResponse> {
-    let _write_guard = crate::db::write_lock();
+    // The write lock is already held: `acquire_write_conn` took it before this
+    // connection was borrowed.
     let tx = conn.transaction()?;
     let metadata_json = heartbeat_metadata_json(&request)?;
 

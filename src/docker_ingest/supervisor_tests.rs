@@ -4,7 +4,9 @@ use std::{collections::HashMap, sync::Arc};
 use crate::config::{DockerHostConfig, DockerIngestConfig};
 use crate::db::{DockerCheckpoint, LogBatchEntry};
 use crate::docker_ingest::models::ContainerMeta;
-use crate::docker_ingest::supervisor::{MAX_CONCURRENT_CHECKPOINT_LOADS, checkpoint_load_permits};
+use crate::docker_ingest::supervisor::{
+    MAX_CONCURRENT_CHECKPOINT_LOADS, checkpoint_load_permits, under_checkpoint_permit,
+};
 use crate::observability::RuntimeObservability;
 
 use super::{
@@ -279,14 +281,24 @@ async fn prune_finished_tasks_removes_panicked_tasks_without_panicking() {
     assert!(tasks.is_empty());
 }
 
+/// The permits are a process-wide singleton, so two tests manipulating them
+/// concurrently would see each other's holds. `cargo test` runs the suite in
+/// one process (unlike `cargo nextest`), so they must be serialized. Async
+/// mutex because the guard is held across the awaits these tests are made of.
+static PERMIT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// The checkpoint-load gate is a shared, bounded singleton: every container
 /// stream draws from the same permits, so a reconnect storm cannot issue more
 /// than `MAX_CONCURRENT_CHECKPOINT_LOADS` simultaneous `pool.get()` calls.
 ///
-/// Scope: this pins the cap and the sharing. It does not exercise
-/// `follow_container_logs_once` itself, which needs a live Docker endpoint.
+/// Scope: this pins the cap and the sharing — that the semaphore is wired up
+/// as one shared gate with the intended size. It deliberately says nothing
+/// about how long a permit is held; see
+/// `checkpoint_permit_is_held_for_the_whole_load` for that, which is the
+/// property that actually bounds concurrency.
 #[tokio::test]
 async fn checkpoint_load_permits_are_shared_and_bounded() {
+    let _serialize = PERMIT_TEST_LOCK.lock().await;
     let permits = checkpoint_load_permits();
     assert!(
         std::sync::Arc::ptr_eq(&permits, &checkpoint_load_permits()),
@@ -313,5 +325,80 @@ async fn checkpoint_load_permits_are_shared_and_bounded() {
         checkpoint_load_permits().available_permits(),
         MAX_CONCURRENT_CHECKPOINT_LOADS,
         "permits must be returned when loads finish"
+    );
+}
+
+/// The cap only bounds anything if the permit is held for the **duration** of
+/// the load. Releasing it as soon as the load starts would let every
+/// reconnecting stream pile onto `pool.get()` simultaneously while the
+/// semaphore reported itself satisfied — the exact exhaustion the cap exists
+/// to prevent, with a green test suite over it.
+///
+/// So: occupy every permit but one, start a load that parks mid-flight, and
+/// assert the gate is empty *while the load is still running*. Nothing here
+/// sleeps or races a clock; the load parks on a channel and is released
+/// explicitly.
+#[tokio::test]
+async fn checkpoint_permit_is_held_for_the_whole_load() {
+    let _serialize = PERMIT_TEST_LOCK.lock().await;
+    let gate = checkpoint_load_permits();
+    assert_eq!(
+        gate.available_permits(),
+        MAX_CONCURRENT_CHECKPOINT_LOADS,
+        "gate must start idle"
+    );
+
+    // Leave exactly one permit for the load under test.
+    let mut held = Vec::new();
+    for _ in 0..MAX_CONCURRENT_CHECKPOINT_LOADS - 1 {
+        held.push(gate.clone().acquire_owned().await.unwrap());
+    }
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+    let load = tokio::spawn(under_checkpoint_permit(async move {
+        started_tx.send(()).expect("test still listening");
+        finish_rx.await.expect("release signal");
+    }));
+
+    started_rx.await.expect("load entered the guarded section");
+    assert_eq!(
+        gate.available_permits(),
+        0,
+        "the permit must stay held while the load runs, not be released at its start"
+    );
+    assert!(
+        gate.try_acquire().is_err(),
+        "a further load must wait rather than pile onto the pool"
+    );
+
+    finish_tx.send(()).expect("load still running");
+    load.await.expect("load task joins").expect("load succeeds");
+
+    assert_eq!(
+        gate.available_permits(),
+        1,
+        "the permit must be released once the load completes"
+    );
+    drop(held);
+    assert_eq!(gate.available_permits(), MAX_CONCURRENT_CHECKPOINT_LOADS);
+}
+
+/// A load that fails still returns its permit — otherwise a run of failing
+/// reconnects would drain the gate permanently and wedge checkpoint loading
+/// for the life of the process.
+#[tokio::test]
+async fn checkpoint_permit_is_released_when_the_load_fails() {
+    let _serialize = PERMIT_TEST_LOCK.lock().await;
+    let gate = checkpoint_load_permits();
+
+    let result: anyhow::Result<anyhow::Result<()>> =
+        under_checkpoint_permit(async { Err(anyhow::anyhow!("checkpoint load failed")) }).await;
+    assert!(result.expect("gate acquired").is_err());
+
+    assert_eq!(
+        gate.available_permits(),
+        MAX_CONCURRENT_CHECKPOINT_LOADS,
+        "a failed load must not leak its permit"
     );
 }

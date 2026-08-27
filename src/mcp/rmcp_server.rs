@@ -560,7 +560,7 @@ enum ToolErrorClass {
 fn classify_tool_error(error: &anyhow::Error) -> ToolErrorClass {
     match error.downcast_ref::<ServiceError>() {
         Some(ServiceError::InvalidInput(_)) => ToolErrorClass::InvalidParams,
-        Some(ServiceError::Busy(_)) | Some(ServiceError::DatabaseTimeout) => {
+        Some(ServiceError::Busy(_)) | Some(ServiceError::DatabaseTimeout { .. }) => {
             ToolErrorClass::Retryable
         }
         Some(ServiceError::NotFound(_)) | Some(ServiceError::RowNotFound) => {

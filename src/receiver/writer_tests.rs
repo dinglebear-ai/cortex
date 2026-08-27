@@ -92,6 +92,127 @@ async fn flush_batch_retains_entries_while_storage_is_write_blocked() {
     assert_eq!(observability.snapshot().writer_logs_retained, 1);
 }
 
+/// `writer_logs_retained` must count rows, not retries.
+///
+/// A write-blocked writer re-flushes the same retained batch roughly four
+/// times a second. Adding the whole batch size on every attempt made the
+/// counter climb without bound while the row count stayed flat — so during an
+/// outage, the one moment the metric is read, it reported an order-of-
+/// magnitude-wrong volume of held data.
+#[tokio::test]
+async fn writer_logs_retained_counts_each_row_once_across_retries() {
+    let (pool, mut storage, _dir) = test_pool();
+    let storage_state: Arc<Mutex<Option<db::StorageBudgetState>>> = Arc::new(Mutex::new(None));
+    let free_disk_mb = db::get_storage_metrics(&pool, &storage)
+        .unwrap()
+        .free_disk_bytes
+        .unwrap()
+        / 1_048_576;
+    storage.min_free_disk_mb = free_disk_mb + 1024;
+    storage.recovery_free_disk_mb = free_disk_mb + 2048;
+    *storage_state.lock() = Some(db::StorageBudgetState {
+        metrics: db::get_storage_metrics(&pool, &storage).unwrap(),
+        write_blocked: true,
+    });
+    let mut batch = envelope_batch(vec![make_entry("held one"), make_entry("held two")]);
+    let mut storage_blocked = false;
+    let mut summary = IngestSummary::default();
+    let observability = Arc::new(crate::observability::RuntimeObservability::default());
+    let context = WriterContext::new(
+        Arc::clone(&pool),
+        storage.clone(),
+        Arc::clone(&storage_state),
+        crate::receiver::enrichment::EnrichmentConfig::default(),
+        Arc::new(crate::enrich::EnrichmentPipeline::new()),
+        Arc::clone(&observability),
+    );
+
+    for _ in 0..5 {
+        flush_batch(&mut batch, &mut storage_blocked, &mut summary, &context).await;
+        assert_eq!(batch.len(), 2, "the same two rows stay retained");
+    }
+
+    let snapshot = observability.snapshot();
+    assert_eq!(
+        snapshot.writer_logs_retained, 2,
+        "two rows retained five times is two rows, not ten"
+    );
+    assert_eq!(
+        snapshot.writer_logs_retained_current, 2,
+        "the level reports what is actually held right now"
+    );
+    assert_eq!(
+        snapshot.writer_flush_failures, 5,
+        "the retries themselves are still counted, just not as rows"
+    );
+
+    // A row arriving mid-outage is new, and must be counted.
+    batch.push(crate::ingest::IngestEnvelope::best_effort(make_entry(
+        "held three",
+    )));
+    flush_batch(&mut batch, &mut storage_blocked, &mut summary, &context).await;
+    assert_eq!(observability.snapshot().writer_logs_retained, 3);
+}
+
+/// Once the backlog drains, the level must reset — otherwise the next outage's
+/// first rows are measured against the old high-water mark and go uncounted.
+#[tokio::test]
+async fn writer_retained_level_resets_when_the_backlog_drains() {
+    let (pool, mut storage, _dir) = test_pool();
+    let storage_state: Arc<Mutex<Option<db::StorageBudgetState>>> = Arc::new(Mutex::new(None));
+    let free_disk_mb = db::get_storage_metrics(&pool, &storage)
+        .unwrap()
+        .free_disk_bytes
+        .unwrap()
+        / 1_048_576;
+    let blocked_metrics = {
+        let mut blocked_storage = storage.clone();
+        blocked_storage.min_free_disk_mb = free_disk_mb + 1024;
+        blocked_storage.recovery_free_disk_mb = free_disk_mb + 2048;
+        db::get_storage_metrics(&pool, &blocked_storage).unwrap()
+    };
+    storage.min_free_disk_mb = free_disk_mb + 1024;
+    storage.recovery_free_disk_mb = free_disk_mb + 2048;
+    *storage_state.lock() = Some(db::StorageBudgetState {
+        metrics: blocked_metrics,
+        write_blocked: true,
+    });
+    let mut batch = envelope_batch(vec![make_entry("outage one a"), make_entry("outage one b")]);
+    let mut storage_blocked = false;
+    let mut summary = IngestSummary::default();
+    let observability = Arc::new(crate::observability::RuntimeObservability::default());
+    let context = WriterContext::new(
+        Arc::clone(&pool),
+        storage.clone(),
+        Arc::clone(&storage_state),
+        crate::receiver::enrichment::EnrichmentConfig::default(),
+        Arc::new(crate::enrich::EnrichmentPipeline::new()),
+        Arc::clone(&observability),
+    );
+
+    flush_batch(&mut batch, &mut storage_blocked, &mut summary, &context).await;
+    assert_eq!(observability.snapshot().writer_logs_retained, 2);
+
+    // Storage recovers and the backlog flushes.
+    storage_state.lock().as_mut().unwrap().write_blocked = false;
+    flush_batch(&mut batch, &mut storage_blocked, &mut summary, &context).await;
+    assert!(batch.is_empty());
+    assert_eq!(
+        observability.snapshot().writer_logs_retained_current,
+        0,
+        "a drained backlog must leave no level behind"
+    );
+
+    // A second, smaller outage: its one row is new and must be counted even
+    // though the previous backlog was larger.
+    storage_state.lock().as_mut().unwrap().write_blocked = true;
+    batch.push(crate::ingest::IngestEnvelope::best_effort(make_entry(
+        "outage two",
+    )));
+    flush_batch(&mut batch, &mut storage_blocked, &mut summary, &context).await;
+    assert_eq!(observability.snapshot().writer_logs_retained, 3);
+}
+
 #[tokio::test]
 async fn flush_batch_resumes_after_storage_recovers() {
     let (pool, storage, _dir) = test_pool();

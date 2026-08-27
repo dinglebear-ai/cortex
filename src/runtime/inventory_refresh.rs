@@ -118,10 +118,18 @@ pub fn spawn(
     }))
 }
 
+/// `elapsed_ms` on these lines covers both phases, and the two have completely
+/// different costs to the rest of the process: the SSH fan-out is long but
+/// holds no pooled connection and no permit, while the graph projection is
+/// short but holds both. A 76-second `elapsed_ms` during the 2026-08-24
+/// pool-contention incident could not be attributed to either from the logs
+/// alone, so both phases are timed separately here.
 async fn refresh_and_project(pool: &DbPool, maintenance_limiter: &Arc<Semaphore>) {
     let started = Instant::now();
     let config = crate::inventory::InventoryConfig::from_env();
-    match crate::inventory::refresh_inventory_with_inventory(config).await {
+    let refresh = crate::inventory::refresh_inventory_with_inventory(config).await;
+    let fan_out_ms = started.elapsed().as_millis();
+    match refresh {
         Ok(outcome) => {
             let report = outcome.report;
             let inventory = outcome.inventory;
@@ -130,6 +138,7 @@ async fn refresh_and_project(pool: &DbPool, maintenance_limiter: &Arc<Semaphore>
                     status = %report.status,
                     run_id = %report.run_id,
                     warnings = report.warnings.len(),
+                    fan_out_ms,
                     elapsed_ms = started.elapsed().as_millis(),
                     "inventory_refresh: cache refresh complete; graph projection disabled"
                 );
@@ -142,6 +151,7 @@ async fn refresh_and_project(pool: &DbPool, maintenance_limiter: &Arc<Semaphore>
             };
             let pool = pool.clone();
             let projection_pool = pool.clone();
+            let projection_started = Instant::now();
             let projection = tokio::task::spawn_blocking(move || {
                 crate::db::graph_inventory::project_inventory(&pool, &inventory)
             })
@@ -149,6 +159,12 @@ async fn refresh_and_project(pool: &DbPool, maintenance_limiter: &Arc<Semaphore>
             .unwrap_or_else(|error| {
                 Err(anyhow::Error::new(error).context("join graph projection task"))
             });
+            // The phase that holds a pooled connection, so it is the only part
+            // of `elapsed_ms` that contributes to pool pressure. It also covers
+            // the wait for the process-wide write lock, which
+            // `apply_projection_plan` queues for while already holding the
+            // connection.
+            let projection_ms = projection_started.elapsed().as_millis();
             match projection {
                 Ok(stats) => tracing::info!(
                     status = %report.status,
@@ -157,6 +173,8 @@ async fn refresh_and_project(pool: &DbPool, maintenance_limiter: &Arc<Semaphore>
                     graph_entities = stats.entity_count,
                     graph_relationships = stats.relationship_count,
                     graph_evidence = stats.evidence_count,
+                    fan_out_ms,
+                    projection_ms,
                     elapsed_ms = started.elapsed().as_millis(),
                     "inventory_refresh: cache refresh and graph projection complete"
                 ),
@@ -185,6 +203,8 @@ async fn refresh_and_project(pool: &DbPool, maintenance_limiter: &Arc<Semaphore>
                         status = %report.status,
                         run_id = %report.run_id,
                         warnings = report.warnings.len(),
+                        fan_out_ms,
+                        projection_ms,
                         elapsed_ms = started.elapsed().as_millis(),
                         "inventory_refresh: cache refresh complete but graph projection failed"
                     );
@@ -193,6 +213,7 @@ async fn refresh_and_project(pool: &DbPool, maintenance_limiter: &Arc<Semaphore>
         }
         Err(error) => tracing::warn!(
             %error,
+            fan_out_ms,
             elapsed_ms = started.elapsed().as_millis(),
             "inventory_refresh: cache refresh failed"
         ),

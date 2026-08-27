@@ -5,6 +5,7 @@ use super::*;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{
@@ -36,10 +37,59 @@ struct TestOtlpState {
     storage_state: Arc<Mutex<Option<StorageBudgetState>>>,
 }
 
+/// Pool-acquisition timeout for the exhaustion tests.
+///
+/// `init_pool` uses 6 s in production so the service layer's own 5 s semaphore
+/// fires first. The exhaustion tests hold the pool's only connection
+/// deliberately, so that timeout is spent entirely asleep — and the write path
+/// acquires more than once, so each test cost ~15 s of wall clock waiting for
+/// a connection that the test itself is refusing to release.
+///
+/// Nothing under test depends on the length of the wait: the handler
+/// classifies the same `r2d2::Error` either way. Matches
+/// `heartbeat_tests::TEST_POOL_TIMEOUT`, which solved this for the heartbeat
+/// contention tests first. Not shorter, because these run alongside the rest
+/// of the suite and the margin has to survive scheduling jitter on a saturated
+/// machine.
+const TEST_POOL_TIMEOUT: Duration = Duration::from_millis(400);
+
+/// A pool over an already-migrated database whose acquisition timeout is
+/// milliseconds rather than the production 6 s.
+fn short_timeout_pool(db_path: &std::path::Path, timeout: Duration) -> Arc<DbPool> {
+    let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
+    Arc::new(
+        r2d2::Pool::builder()
+            .max_size(1)
+            .connection_timeout(timeout)
+            .build(manager)
+            .expect("short-timeout test pool builds"),
+    )
+}
+
 fn state_with_token(token: Option<&str>) -> TestOtlpState {
+    build_test_state(token, None)
+}
+
+/// As [`state_with_token`], but the handler's pool gives up on acquisition
+/// after [`TEST_POOL_TIMEOUT`] instead of the production 6 s. For tests that
+/// starve the pool on purpose.
+fn state_with_short_pool_timeout() -> TestOtlpState {
+    build_test_state(None, Some(TEST_POOL_TIMEOUT))
+}
+
+fn build_test_state(token: Option<&str>, pool_timeout: Option<Duration>) -> TestOtlpState {
     let dir = tempfile::tempdir().unwrap();
-    let storage = StorageConfig::for_test(dir.path().join("otlp.db"));
-    let pool = Arc::new(init_pool(&storage).unwrap());
+    let db_path = dir.path().join("otlp.db");
+    let storage = StorageConfig::for_test(db_path.clone());
+    let pool = match pool_timeout {
+        // Migrate through the normal constructor, then drop that pool so it
+        // holds nothing against the short-timeout pool the handler will use.
+        Some(timeout) => {
+            drop(init_pool(&storage).unwrap());
+            short_timeout_pool(&db_path, timeout)
+        }
+        None => Arc::new(init_pool(&storage).unwrap()),
+    };
     let storage_state = Arc::new(Mutex::new(None));
     let (tx, _rx) = tokio::sync::mpsc::channel::<crate::db::LogBatchEntry>(10);
     let ingest = crate::ingest::IngestTx::from_sender_for_test(tx);
@@ -567,9 +617,9 @@ fn counters_default_to_zero() {
 /// conforming exporter drop the batch permanently.
 #[tokio::test]
 async fn metric_pool_exhaustion_returns_retryable_503_not_500() {
-    let test = state_with_token(None);
-    // `StorageConfig::for_test` builds a single-connection pool, so holding
-    // that connection reproduces production pool exhaustion exactly.
+    let test = state_with_short_pool_timeout();
+    // Single-connection pool, so holding that connection reproduces production
+    // pool exhaustion exactly — just without production's 6 s wait for it.
     let hog = test.pool.get().unwrap();
 
     let response = call_metrics(
@@ -596,7 +646,7 @@ async fn metric_pool_exhaustion_returns_retryable_503_not_500() {
 /// Same contract for the trace endpoint.
 #[tokio::test]
 async fn trace_pool_exhaustion_returns_retryable_503_not_500() {
-    let test = state_with_token(None);
+    let test = state_with_short_pool_timeout();
     let hog = test.pool.get().unwrap();
 
     let response = call_traces(

@@ -17,7 +17,9 @@ const SLOW_DB_MS: u128 = 5_000;
 
 use crate::config::NotificationsConfig;
 use crate::db::DbPool;
-use crate::db::notifications::{OutboxInsertParams, backoff_next_attempt_at, outbox_insert};
+use crate::db::notifications::{
+    AttemptCount, OutboxInsertParams, backoff_next_attempt_at, outbox_insert,
+};
 use crate::notifications::apprise::escape_for_notification;
 
 /// Summary for one host in the digest.
@@ -164,7 +166,7 @@ pub(crate) async fn run_digest(
             title,
             body,
             apprise_urls_json,
-            next_attempt_at: backoff_next_attempt_at(0),
+            next_attempt_at: backoff_next_attempt_at(AttemptCount::NONE),
         };
         outbox_insert(&conn, &params).map_err(anyhow::Error::from)?;
         tracing::info!(date = %today, "digest: daily digest queued");
@@ -214,7 +216,7 @@ enum DigestFailureAction {
 /// downcasts to `rusqlite::Error`: a rusqlite-only predicate would misread a
 /// 6s pool timeout as a permanent failure.
 fn is_retryable_digest_error(error: &anyhow::Error) -> bool {
-    crate::db::is_transient_sqlite_lock(error) || crate::db::is_pool_timeout(error)
+    crate::db::is_transient_sqlite_lock(error) || crate::db::is_pool_acquire_failure(error)
 }
 
 /// Decide whether a failed attempt keeps the day open or closes it.

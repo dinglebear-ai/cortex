@@ -24,7 +24,7 @@ pub use types::{
 // Test-only re-exports of private items accessed via `use super::*` in compose_tests.rs.
 #[cfg(test)]
 pub(crate) use docker::{
-    DockerUnavailableError, container_info_from_inspect, ss_output_has_listener,
+    DockerUnavailableError, container_info_from_inspect, docker_cli_error, ss_output_has_listener,
     systemd_status_from_output,
 };
 #[cfg(test)]

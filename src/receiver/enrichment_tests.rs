@@ -501,9 +501,19 @@ fn project_from_transcript_path_normalizes_decoded_claude_worktree_fallback() {
 
 // ---- agent docker identity metadata extraction ----
 
+/// The agent-docker source gate is fail-closed, so extraction tests must
+/// supply a gate that admits the `10.0.0.*` source IPs used by `entry()`.
+/// Tests covering the gate itself build their own config instead.
+fn agent_docker_cfg() -> EnrichmentConfig {
+    EnrichmentConfig {
+        agent_docker_source_prefixes: vec!["10.0.0.".to_string()],
+        ..EnrichmentConfig::default()
+    }
+}
+
 #[test]
 fn agent_docker_meta_prefix_is_extracted_into_metadata_json_and_stripped() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let meta = r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","image":"lscr.io/linuxserver/plex:latest","stream":"stdout"}}"#;
     let msg = format!("[cortex-agent-docker-meta:{meta}] Plex library scan");
     let e = entry("plex/plex/plex", &msg, "10.0.0.1:1234", "info");
@@ -519,7 +529,7 @@ fn agent_docker_meta_prefix_is_extracted_into_metadata_json_and_stripped() {
 
 #[test]
 fn agent_docker_lifecycle_metadata_becomes_a_canonical_docker_event() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let meta = r#"{"agent_docker":{"host":"nashost","container_id":"abcdef1234567890","container_name":"plex","compose_project":"plex","compose_service":"plex","image":"plex:latest","stream":"event","event_action":"die","exit_code":137}}"#;
     let msg = format!(
         "[cortex-agent-docker-meta:{meta}] docker container event: die container=plex exit_code=137"
@@ -538,7 +548,7 @@ fn agent_docker_lifecycle_metadata_becomes_a_canonical_docker_event() {
 
 #[test]
 fn sender_asserted_lifecycle_identity_cannot_spoof_transport_source_ip() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let meta = r#"{"agent_docker":{"host":"trusted-looking-host","container_id":"abc","container_name":"victim","stream":"event","event_action":"oom"}}"#;
     let msg =
         format!("[cortex-agent-docker-meta:{meta}] docker container event: oom container=victim");
@@ -552,7 +562,7 @@ fn sender_asserted_lifecycle_identity_cannot_spoof_transport_source_ip() {
 
 #[test]
 fn agent_docker_meta_prefix_merges_with_existing_metadata() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let meta = r#"{"source_kind":"agent-docker","agent_docker":{"host":"nashost","container_id":"abc","container_name":"plex","stream":"stdout"}}"#;
     let msg = format!("[cortex-agent-docker-meta:{meta}] hello");
     let mut e = entry("plex", &msg, "10.0.0.1:1234", "info");
@@ -568,7 +578,7 @@ fn agent_docker_meta_prefix_merges_with_existing_metadata() {
 
 #[test]
 fn malformed_agent_docker_meta_prefix_leaves_message_untouched() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let msg = "[cortex-agent-docker-meta:{not json] hello";
     let e = entry("plex", msg, "10.0.0.1:1234", "info");
     let out = enrich_entry(e, &cfg);
@@ -678,7 +688,7 @@ fn agent_docker_source_gate_matches_bracketed_ipv6_exact_entry() {
 
 #[test]
 fn agent_docker_meta_payload_cannot_overwrite_existing_metadata_keys() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     // Payload tries to smuggle extra top-level keys and clobber parser-set
     // metadata; only `agent_docker` may be taken, `source_kind` is set from
     // the receiver constant, and existing keys survive.
@@ -698,7 +708,7 @@ fn agent_docker_meta_payload_cannot_overwrite_existing_metadata_keys() {
 
 #[test]
 fn agent_docker_meta_overwrites_preexisting_source_kind_with_constant() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let meta = r#"{"agent_docker":{"host":"nashost","container_id":"abc","container_name":"plex","stream":"stdout"}}"#;
     let msg = format!("[cortex-agent-docker-meta:{meta}] hello");
     let mut e = entry("plex", &msg, "10.0.0.1:1234", "info");
@@ -715,7 +725,7 @@ fn agent_docker_meta_overwrites_preexisting_source_kind_with_constant() {
 
 #[test]
 fn agent_docker_meta_backs_out_when_merged_metadata_would_truncate() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let meta = r#"{"agent_docker":{"host":"nashost","container_id":"abc","container_name":"plex","stream":"stdout"}}"#;
     let msg = format!("[cortex-agent-docker-meta:{meta}] hello");
     // Pre-existing metadata large enough that the merged object exceeds the
@@ -740,7 +750,7 @@ fn agent_docker_meta_backs_out_when_merged_metadata_would_truncate() {
 
 #[test]
 fn agent_docker_meta_payload_cannot_replace_existing_agent_docker_object() {
-    let cfg = EnrichmentConfig::default();
+    let cfg = agent_docker_cfg();
     let meta = r#"{"agent_docker":{"host":"evil","container_id":"abc","container_name":"forged","stream":"stdout"}}"#;
     let msg = format!("[cortex-agent-docker-meta:{meta}] hello");
     let mut e = entry("plex", &msg, "10.0.0.1:1234", "info");
@@ -751,4 +761,52 @@ fn agent_docker_meta_payload_cannot_replace_existing_agent_docker_object() {
     let metadata: serde_json::Value =
         serde_json::from_str(out.metadata_json.as_deref().unwrap()).unwrap();
     assert_eq!(metadata["agent_docker"]["host"], "nashost");
+}
+
+#[test]
+// See comment on `agent_docker_meta_prefix_ignored_from_non_matching_source_ip`.
+#[serial(agent_docker_gate_blocked_counter)]
+fn agent_docker_marker_is_rejected_when_no_prefixes_are_configured() {
+    // Fail-closed default. An empty allowlist means "trust nobody": the gate
+    // must reject the marker rather than honour it from every sender. The
+    // syslog port is reachable by the whole fleet, so the inverse (an empty
+    // list accepting anyone) is a forgeable identity channel.
+    let cfg = EnrichmentConfig::default();
+    assert!(cfg.agent_docker_source_prefixes.is_empty());
+    assert!(!cfg.agent_docker_trust_any_source);
+
+    let meta = r#"{"agent_docker":{"host":"nashost","container_id":"abc","container_name":"plex","stream":"stdout"}}"#;
+    let msg = format!("[cortex-agent-docker-meta:{meta}] forged");
+
+    let before = agent_docker_gate_blocked_count();
+    let out = enrich_entry(entry("plex", &msg, "10.0.0.1:1234", "info"), &cfg);
+    assert_eq!(out.message, msg, "marker must stay in the message");
+    assert!(
+        out.metadata_json.is_none(),
+        "no identity may be extracted through an unconfigured gate"
+    );
+    assert_eq!(
+        agent_docker_gate_blocked_count(),
+        before + 1,
+        "rejection must be counted so operators can see the gate is closed"
+    );
+}
+
+#[test]
+fn agent_docker_trust_any_source_opt_in_restores_extraction() {
+    // The explicit escape hatch for deployments where every sender that can
+    // reach the syslog port is trusted. It must be opt-in and separate from
+    // the allowlist being empty.
+    let cfg = EnrichmentConfig {
+        agent_docker_trust_any_source: true,
+        ..EnrichmentConfig::default()
+    };
+    let meta = r#"{"agent_docker":{"host":"nashost","container_id":"abc","container_name":"plex","stream":"stdout"}}"#;
+    let msg = format!("[cortex-agent-docker-meta:{meta}] hello");
+    let out = enrich_entry(entry("plex", &msg, "203.0.113.9:1234", "info"), &cfg);
+    assert_eq!(out.message, "hello");
+    let metadata: serde_json::Value =
+        serde_json::from_str(out.metadata_json.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["agent_docker"]["container_name"], "plex");
+    assert_eq!(metadata["source_kind"], "agent-docker");
 }

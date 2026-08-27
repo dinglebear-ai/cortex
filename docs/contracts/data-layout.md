@@ -1,7 +1,7 @@
 ---
 title: "Data Directory Layout Contract (V1)"
 created: 2026-05-16
-updated: 2026-07-30
+updated: 2026-08-24
 ---
 
 # Data Directory Layout Contract (V1)
@@ -172,7 +172,7 @@ The data dir's footprint is governed by `[storage]` knobs (see `docs/contracts/c
 - **Minimum free disk floor**: `storage.min_free_disk_mb` (default `0`, disabled). When enabled and the filesystem's free space drops below this, the storage task blocks new writes until free space reaches `recovery_free_disk_mb`; it does not delete rows to chase external whole-filesystem pressure.
 - **Age-based purge**: `storage.retention_days` (default `90`). Hourly task deletes rows older than this regardless of size.
 - **AdGuard tag exception**: AdGuard query records (`adguard-allowed`, `adguard-query`, `adguard-rewrite`) are hard-capped at 7 days (`ADGUARD_RETENTION_DAYS` in `src/runtime.rs`) because their volume otherwise dominates the FTS5 index.
-- **Write-block on full**: if DB-size eviction cannot free enough space, or the free-disk guard is enabled and below threshold, `writer_storage_blocked` flips to `true` in `/health` and new writes are dropped (counters: `writer_logs_retained`, `writer_logs_discarded`).
+- **Write-block on full**: if DB-size eviction cannot free enough space, or the free-disk guard is enabled and below threshold, `writer_storage_blocked` flips to `true` in `/health` and new writes are dropped (counters: `writer_logs_retained`, `writer_logs_discarded`). `writer_logs_retained` counts **distinct rows**, each once — the writer re-flushes its whole retained batch every 250 ms while blocked, so a per-attempt total would climb by the backlog size several times a second and misreport the volume of held data by orders of magnitude. `writer_logs_retained_current` is the level: how many rows are held right now, back to `0` when the backlog drains.
 - **WAL growth**: SQLite's WAL grows during long transactions and shrinks on checkpoint. Cortex attempts bounded PASSIVE checkpoints after the WAL reaches `storage.wal_checkpoint_mb`; `cortex db checkpoint --mode truncate` forces a shrink when needed.
 
 There is no explicit cap on `auth.db` size — it stays small (sessions only) and is bounded operationally by user count + refresh-token TTL.

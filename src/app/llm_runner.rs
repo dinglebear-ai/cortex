@@ -6,10 +6,11 @@
 //! See `llm_invocations` (migration 37, `src/db/pool.rs`) for the audit
 //! schema and `[llm]` in `src/config.rs` for the tunables.
 //!
-//! Every audit write acquires `crate::db::write_lock()` before touching
-//! the connection, matching the standing single-writer invariant
-//! documented at the top of `src/db/pool.rs` — see the `write_start_row`/
-//! `write_finish_row_inner` bodies below.
+//! Every audit write goes through `crate::db::write_conn`, which takes the
+//! process-wide write lock and only then borrows a pooled connection, matching
+//! the standing single-writer invariant documented at the top of
+//! `src/db/pool.rs` — see the `write_start_row`/`write_finish_row_inner`
+//! bodies below.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -490,12 +491,14 @@ impl LlmRunner {
     // --- audit writers -----------------------------------------------
     //
     // Eng review fix (CRITICAL — architecture + performance reviewers):
-    // every write here MUST hold `crate::db::write_lock()` for the
+    // every write here MUST hold the process-wide write lock for the
     // duration of the `execute` call. Without it, every audit INSERT/
     // UPDATE races the syslog batch inserter, heartbeat, notifications,
     // and retention maintenance for SQLite's single write lock — the
     // exact hazard the invariant documented at the top of
-    // `src/db/pool.rs` exists to prevent.
+    // `src/db/pool.rs` exists to prevent. `crate::db::write_conn` takes
+    // that lock before it borrows the connection, so a writer queued
+    // behind a long write is not also holding one.
 
     async fn write_start_row(
         &self,
@@ -520,13 +523,10 @@ impl LlmRunner {
         let metadata_json = build_metadata_json(&spec.extra_metadata);
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let conn = pool.get()?;
-            // Serialize with every other writer in the process — see the
-            // module-level invariant note and `src/db/pool.rs`'s own
-            // doc comment on `write_lock()`. Reentrant, so this is safe
-            // even if a future caller nests it, but the guard here is
-            // scoped to just this INSERT.
-            let _write_guard = crate::db::write_lock();
+            // Serializes with every other writer in the process — see the
+            // module-level invariant note and `src/db/pool.rs`. Both the
+            // lock and the connection are scoped to just this INSERT.
+            let conn = crate::db::write_conn(&pool)?;
             let params = crate::db::llm_invocations::LlmInvocationInsertParams {
                 caller_surface,
                 action,
@@ -588,9 +588,8 @@ impl LlmRunner {
         let output_bytes = output_bytes.map(|b| b as i64);
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let conn = pool.get()?;
-            // Same write_lock() invariant as write_start_row above.
-            let _write_guard = crate::db::write_lock();
+            // Same lock-then-connection invariant as write_start_row above.
+            let conn = crate::db::write_conn(&pool)?;
             crate::db::llm_invocations::finish_llm_invocation(
                 &conn,
                 &id,

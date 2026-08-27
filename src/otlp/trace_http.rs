@@ -5,11 +5,8 @@ use std::sync::Arc;
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::{
-        HeaderMap, HeaderValue, StatusCode,
-        header::{CONTENT_TYPE, RETRY_AFTER},
-    },
-    response::{IntoResponse, Json},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CONTENT_TYPE},
+    response::IntoResponse,
 };
 use bytes::Bytes;
 use opentelemetry_proto::tonic::collector::trace::v1::{
@@ -17,13 +14,13 @@ use opentelemetry_proto::tonic::collector::trace::v1::{
 };
 use parking_lot::Mutex;
 use prost::Message;
-use serde_json::json;
 
 use crate::config::AgentObservatoryPrivacyConfig;
 use crate::db::{DbPool, StorageBudgetState};
 
 use super::OtlpState;
 use super::auth::{is_authorized, unauthorized};
+use super::error::OtlpError;
 use super::traces::normalize_span_with_privacy;
 
 /// Maximum spans accepted from one OTLP trace request.
@@ -60,20 +57,12 @@ pub(super) async fn traces_handler(
         return unauthorized();
     }
     if !is_protobuf_content_type(&headers) {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Json(json!({"error": "unsupported_content_type"})),
-        )
-            .into_response();
+        return OtlpError::UnsupportedContentType.into_response();
     }
 
     let Some(trace_ingest) = state.trace_ingest.clone() else {
         tracing::error!("OTLP trace ingest state is unavailable");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "trace_ingest_unavailable"})),
-        )
-            .into_response();
+        return OtlpError::TraceIngestUnavailable.into_response();
     };
 
     let decoded =
@@ -86,11 +75,7 @@ pub(super) async fn traces_handler(
                 .decode_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!(error = %err, source_ip = %peer, "OTLP /v1/traces decode failed");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "decode_failed"})),
-            )
-                .into_response();
+            return OtlpError::DecodeFailed.into_response();
         }
         Err(err) => {
             state
@@ -98,11 +83,7 @@ pub(super) async fn traces_handler(
                 .decode_errors
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!(error = %err, "OTLP trace decode task panicked");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "internal"})),
-            )
-                .into_response();
+            return OtlpError::Internal.into_response();
         }
     };
 
@@ -185,33 +166,20 @@ pub(super) async fn traces_handler(
             // above, which answers 200 with `rejected_spans` — a permanent
             // rejection in OTLP terms. Only the pool-timeout case asks the
             // exporter to retry; the two conditions are reported differently.
-            if crate::db::is_pool_timeout(&error) {
+            if crate::db::is_pool_acquire_failure(&error) {
                 tracing::warn!(
                     error = %error,
                     source_ip = %peer,
                     "OTLP trace persistence unavailable; asking exporter to retry"
                 );
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    [(RETRY_AFTER, HeaderValue::from_static("1"))],
-                    Json(json!({"error": "trace_storage_unavailable", "retryable": true})),
-                )
-                    .into_response();
+                return OtlpError::TraceStorageUnavailable.into_response();
             }
             tracing::error!(error = %error, source_ip = %peer, "OTLP trace persistence failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "trace_persistence_failed"})),
-            )
-                .into_response();
+            return OtlpError::TracePersistenceFailed.into_response();
         }
         Err(error) => {
             tracing::error!(error = %error, "OTLP trace persistence task panicked");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "internal"})),
-            )
-                .into_response();
+            return OtlpError::Internal.into_response();
         }
     };
 

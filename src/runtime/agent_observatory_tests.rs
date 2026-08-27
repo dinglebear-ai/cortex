@@ -4,9 +4,17 @@ use crate::db::agent_observatory::{
 };
 use crate::db::{LogBatchEntry, insert_logs_batch};
 
+/// More than one connection on purpose. `StorageConfig::for_test` defaults to
+/// `pool_size: 1`, which was survivable only while the projector ran its DB
+/// work on the same runtime thread as the test body — the two could never be
+/// in the pool at once. Now that each cycle runs on `spawn_blocking`, a test
+/// polling `projection_health` and a projector mid-cycle are genuinely
+/// concurrent, and on a one-connection pool they starve each other until one
+/// hits the r2d2 connection timeout.
 fn pool() -> (tempfile::TempDir, Arc<DbPool>) {
     let directory = tempfile::tempdir().unwrap();
-    let storage = crate::config::StorageConfig::for_test(directory.path().join("runtime.db"));
+    let mut storage = crate::config::StorageConfig::for_test(directory.path().join("runtime.db"));
+    storage.pool_size = 4;
     let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
     (directory, pool)
 }
@@ -54,18 +62,23 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         ..AgentObservatoryConfig::default()
     };
     let token = CancellationToken::new();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+    // Multi-threaded on purpose: the projector now hands each cycle to
+    // `spawn_blocking`, so progress needs a worker free to poll it while this
+    // test's own synchronous DB calls occupy a thread. On a current-thread
+    // runtime the two starve each other under suite load.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
         .build()
         .unwrap();
     runtime.block_on(async {
         let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if projection_cursor(&pool, "logs").unwrap() == "1" {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
@@ -78,27 +91,81 @@ fn enabled_projector_advances_durable_log_cursor_and_shuts_down() {
         ] {
             assert_eq!(projection_cursor(&pool, source).unwrap(), "");
         }
+        // Assert the field reaches the health row, not the value it held on one
+        // particular cycle. `oversized_first_rows=1` is true only for the cycle
+        // that projects the row: the next cycle finds the cursor advanced,
+        // counts zero, and overwrites the single health record. Polling for
+        // that value is a race against a window a few milliseconds wide, and
+        // the projector's own wake notification makes the overwrite immediate.
+        // The count itself is pinned deterministically by
+        // `projection_cycle_counts_an_oversized_first_row`, which calls the
+        // cycle directly.
+        //
         // Parallel DB tests share Cortex's process-wide SQLite write lock; under
         // suite load health persistence can legitimately queue behind other writers.
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if projection_health(&pool, "projector")
                     .unwrap()
-                    .is_some_and(|health| health.contains("oversized_first_rows=1"))
+                    .is_some_and(|health| health.contains("oversized_first_rows="))
                 {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
         .unwrap();
         token.cancel();
-        tokio::time::timeout(Duration::from_secs(1), handle)
+        tokio::time::timeout(Duration::from_secs(10), handle)
             .await
             .unwrap()
             .unwrap();
     });
+}
+
+/// A first row larger than the whole byte budget is projected anyway and
+/// counted, rather than stalling the cursor forever behind a row that can never
+/// fit. Calling the cycle directly makes this deterministic; observing it
+/// through the health row cannot be, because the next cycle overwrites it.
+#[test]
+fn projection_cycle_counts_an_oversized_first_row() {
+    let (_directory, pool) = pool();
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO logs
+            (timestamp, hostname, facility, severity, app_name, message, raw, received_at, source_ip)
+         VALUES (?1, 'test-host', 1, 6, 'unrelated', 'bounded test row', 'bounded test row', ?1, '127.0.0.1')",
+            ["2026-08-09T12:00:00.000Z"],
+        )
+        .unwrap();
+
+    let cycle = run_projection_cycle(
+        &pool,
+        ProjectionLimits {
+            page_rows: 500,
+            page_bytes: 1,
+        },
+    );
+
+    assert_eq!(cycle.oversized_first_rows, 1);
+    assert_eq!(cycle.projected, 1);
+    assert!(cycle.healthy);
+    assert!(!cycle.had_error);
+    assert_eq!(projection_cursor(&pool, "logs").unwrap(), "1");
+
+    // Drained: the next cycle finds nothing oversized, which is why the health
+    // row cannot be polled for the count above.
+    let drained = run_projection_cycle(
+        &pool,
+        ProjectionLimits {
+            page_rows: 500,
+            page_bytes: 1,
+        },
+    );
+    assert_eq!(drained.oversized_first_rows, 0);
+    assert_eq!(drained.projected, 0);
 }
 
 #[test]
@@ -110,18 +177,23 @@ fn projector_wakes_on_committed_log_ingest_before_fallback_poll() {
         ..AgentObservatoryConfig::default()
     };
     let token = CancellationToken::new();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+    // Multi-threaded on purpose: the projector now hands each cycle to
+    // `spawn_blocking`, so progress needs a worker free to poll it while this
+    // test's own synchronous DB calls occupy a thread. On a current-thread
+    // runtime the two starve each other under suite load.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
         .build()
         .unwrap();
     runtime.block_on(async {
         let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if projection_health(&pool, "projector").unwrap().is_some() {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
@@ -154,19 +226,19 @@ fn projector_wakes_on_committed_log_ingest_before_fallback_poll() {
         )
         .unwrap();
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if projection_cursor(&pool, "logs").unwrap() == "1" {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
         .expect("committed ingest should wake projector without waiting for fallback poll");
 
         token.cancel();
-        tokio::time::timeout(Duration::from_secs(1), handle)
+        tokio::time::timeout(Duration::from_secs(10), handle)
             .await
             .unwrap()
             .unwrap();
@@ -207,13 +279,18 @@ fn enabled_git_worker_records_progress_and_shuts_down() {
         ..AgentObservatoryConfig::default()
     };
     let token = CancellationToken::new();
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    // Multi-threaded on purpose: the projector now hands each cycle to
+    // `spawn_blocking`, so progress needs a worker free to poll it while this
+    // test's own synchronous DB calls occupy a thread. On a current-thread
+    // runtime the two starve each other under suite load.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()
         .unwrap();
     runtime.block_on(async {
         let handle = spawn_git_reconcile(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if !projection_cursor(&pool, "git").unwrap().is_empty() {
                     break;
@@ -224,7 +301,7 @@ fn enabled_git_worker_records_progress_and_shuts_down() {
         .await
         .unwrap();
         token.cancel();
-        tokio::time::timeout(Duration::from_secs(1), handle)
+        tokio::time::timeout(Duration::from_secs(10), handle)
             .await
             .unwrap()
             .unwrap();
@@ -242,13 +319,18 @@ fn projector_failure_is_queryable_retries_without_advancing_and_stops_after_canc
         ..AgentObservatoryConfig::default()
     };
     let token = CancellationToken::new();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+    // Multi-threaded on purpose: the projector now hands each cycle to
+    // `spawn_blocking`, so progress needs a worker free to poll it while this
+    // test's own synchronous DB calls occupy a thread. On a current-thread
+    // runtime the two starve each other under suite load.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
         .build()
         .unwrap();
     runtime.block_on(async {
         let handle = spawn_projector(token.clone(), Arc::clone(&pool), config).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let health = projection_health(&pool, "projector")
                     .unwrap()
@@ -258,14 +340,14 @@ fn projector_failure_is_queryable_retries_without_advancing_and_stops_after_canc
                     assert!(health.contains("retry_delay_ms=0"));
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
         .unwrap();
         assert_eq!(projection_cursor(&pool, "logs").unwrap(), "invalid");
         token.cancel();
-        tokio::time::timeout(Duration::from_secs(5), handle)
+        tokio::time::timeout(Duration::from_secs(15), handle)
             .await
             .unwrap()
             .unwrap();

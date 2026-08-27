@@ -1,7 +1,7 @@
 //! Durable Agent Observatory run-to-commit attribution relations.
 
 use super::EvidenceTrustLevel;
-use crate::db::pool::{DbPool, write_lock};
+use crate::db::pool::DbPool;
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -119,8 +119,7 @@ pub fn upsert_agent_run_commit(
     input: &AgentRunCommitUpsert,
 ) -> Result<AgentRunCommitRow> {
     validate(input)?;
-    let _guard = write_lock();
-    let mut connection = pool.get().context("acquire database connection")?;
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (run_key, commit_sha, commit_repository_id): (String, String, i64) = tx
         .query_row(

@@ -103,15 +103,13 @@ pub fn wal_checkpoint_complete(busy: i64, log_frames: i64, checkpointed_frames: 
 }
 
 pub fn db_incremental_vacuum(pool: &DbPool, pages: u32) -> Result<()> {
-    let conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let conn = crate::db::write_conn(pool)?;
     conn.execute_batch(&format!("PRAGMA incremental_vacuum({pages});"))?;
     Ok(())
 }
 
 pub fn db_full_vacuum(pool: &DbPool) -> Result<()> {
-    let conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let conn = crate::db::write_conn(pool)?;
     conn.execute_batch("VACUUM;")?;
     Ok(())
 }
@@ -165,8 +163,7 @@ pub fn insert_maintenance_job_with_result(
 ) -> Result<i64> {
     serde_json::from_str::<serde_json::Value>(result_json)
         .context("maintenance job result_json must be valid JSON")?;
-    let _guard = crate::db::write_lock();
-    let conn = pool.get()?;
+    let conn = crate::db::write_conn(pool)?;
     conn.execute(
         "INSERT INTO maintenance_jobs (kind, status, started_at, result_json)
          VALUES (?1, 'running', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?2)",
@@ -179,8 +176,7 @@ pub fn insert_maintenance_job_with_result(
 pub fn update_maintenance_job_progress(pool: &DbPool, id: i64, result_json: &str) -> Result<()> {
     serde_json::from_str::<serde_json::Value>(result_json)
         .context("maintenance job result_json must be valid JSON")?;
-    let _guard = crate::db::write_lock();
-    let conn = pool.get()?;
+    let conn = crate::db::write_conn(pool)?;
     let changed = conn.execute(
         "UPDATE maintenance_jobs SET result_json = ?2 WHERE id = ?1 AND status = 'running'",
         rusqlite::params![id, result_json],
@@ -570,9 +566,8 @@ fn fts_incremental_merge(pool: &DbPool, deleted_rows: usize, merge_pages: u32) {
     };
 
     for i in 0..iterations {
-        match pool.get() {
+        match crate::db::write_conn(pool) {
             Ok(conn) => {
-                let _write_guard = crate::db::write_lock();
                 match conn.execute(
                     "INSERT INTO logs_fts(logs_fts, rank) VALUES('merge', ?1)",
                     [pages],
@@ -600,7 +595,10 @@ fn fts_incremental_merge(pool: &DbPool, deleted_rows: usize, merge_pages: u32) {
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "FTS incremental merge: failed to get connection");
+                tracing::warn!(
+                    error = %e,
+                    "FTS incremental merge: failed to acquire the write lock and a connection"
+                );
                 return;
             }
         }
@@ -647,8 +645,7 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32, fts_merge_pages: u32) 
     // immediately (future timestamp) or retained forever (past timestamp).
     let mut total_deleted: usize = 0;
     loop {
-        let conn = pool.get()?;
-        let _write_guard = crate::db::write_lock();
+        let conn = crate::db::write_conn(pool)?;
         let chunk = conn.execute(
             "DELETE FROM logs WHERE id IN (
                  SELECT id FROM logs
@@ -780,8 +777,7 @@ pub fn purge_by_tag_window(
 
     let mut total_deleted: usize = 0;
     loop {
-        let conn = pool.get()?;
-        let _write_guard = crate::db::write_lock();
+        let conn = crate::db::write_conn(pool)?;
         let chunk = conn.execute(
             "DELETE FROM logs WHERE id IN (
                  SELECT id FROM logs
@@ -861,8 +857,7 @@ pub fn purge_old_llm_invocations(
 
     let mut total_deleted: usize = 0;
     loop {
-        let conn = pool.get()?;
-        let _write_guard = crate::db::write_lock();
+        let conn = crate::db::write_conn(pool)?;
         let chunk = conn.execute(
             "DELETE FROM llm_invocations WHERE id IN (
                  SELECT id FROM llm_invocations
@@ -947,7 +942,18 @@ fn delete_oldest_logs_chunk(
     chunk_size: usize,
     config: &StorageConfig,
 ) -> Result<DeletedChunk> {
-    let conn = pool.get()?;
+    // Lock first, then borrow — and hold both across the whole chunk. The
+    // protected-id set below is materialized into a TEMP table, which lives on
+    // the connection that created it, so the DELETE that reads it cannot run on
+    // a different connection. That rules out the usual split (read on one
+    // connection, release it, take the lock and a second connection), and
+    // blocking on the lock while holding the connection is the pin this
+    // ordering exists to prevent. The trade is one bounded err+ window scan
+    // per chunk under the lock. The recovery loop calls this once per chunk and
+    // both resources are released on return, so queued writers still get a
+    // window between chunks; and this is half the pre-PM3 cost, which ran the
+    // same scan twice per chunk under the lock.
+    let conn = crate::db::write_conn(pool)?;
 
     // Build the protected-id CTE + the deletable selection. When the floor is
     // disabled (window or cap == 0) we fall back to the original unfiltered
@@ -1043,7 +1049,6 @@ fn delete_oldest_logs_chunk(
              SELECT id FROM logs ORDER BY received_at ASC, id ASC LIMIT :chunk)
          RETURNING hostname"
     };
-    let _write_guard = crate::db::write_lock();
     let deleted_hostnames: Vec<String> = conn
         .prepare_cached(delete_sql)?
         .query_map(
@@ -1086,8 +1091,7 @@ fn delete_heartbeat_chunk_where(
     params: &[&str],
     chunk_size: usize,
 ) -> Result<usize> {
-    let mut conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
     tx.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS temp_heartbeat_delete_ids (
@@ -1246,8 +1250,7 @@ fn delete_orphan_heartbeat_children(pool: &DbPool, chunk_size: usize) -> Result<
                 let placeholders = std::iter::repeat_n("?", orphan_rowids.len())
                     .collect::<Vec<_>>()
                     .join(",");
-                let conn = pool.get()?;
-                let _write_guard = crate::db::write_lock();
+                let conn = crate::db::write_conn(pool)?;
                 conn.execute(
                     &format!("DELETE FROM {table} WHERE rowid IN ({placeholders})"),
                     rusqlite::params_from_iter(orphan_rowids.iter()),
@@ -1291,8 +1294,7 @@ fn delete_orphan_heartbeat_children(pool: &DbPool, chunk_size: usize) -> Result<
 /// holds one row per host, so the scan is bounded by host count (tens) rather
 /// than by heartbeat volume (millions), and the lock hold is negligible.
 pub fn delete_orphan_heartbeat_latest(pool: &DbPool) -> Result<usize> {
-    let conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let conn = crate::db::write_conn(pool)?;
     let deleted = conn.execute(
         "DELETE FROM host_heartbeats_latest
          WHERE NOT EXISTS (
@@ -1318,8 +1320,7 @@ fn reconcile_hosts(pool: &DbPool, hostnames: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    let mut conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
     for hostname in hostnames {
         // One query: count + timestamp bounds in a single pass over the index.
@@ -1416,8 +1417,7 @@ pub fn checkpoint_wal_and_incremental_vacuum(pool: &DbPool, config: &StorageConf
             tracing::warn!(error = %error, "WAL threshold checkpoint skipped (non-fatal)");
         }
     }
-    let conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let conn = crate::db::write_conn(pool)?;
     match conn.execute_batch("PRAGMA incremental_vacuum(1000);") {
         Err(e) => {
             tracing::warn!(error = %e, "incremental vacuum skipped (non-fatal)");

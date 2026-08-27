@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::StorageConfig;
 use crate::db::init_pool;
-use crate::db::notifications::outbox_insert;
+use crate::db::notifications::{AttemptCount, outbox_insert};
 
 fn open_test_db() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -59,9 +59,9 @@ fn open_test_db() -> rusqlite::Connection {
 
 #[test]
 fn backoff_schedule_is_increasing() {
-    let delays: Vec<_> = (0u8..5)
+    let delays: Vec<_> = (0i64..5)
         .map(|i| {
-            let s = backoff_next_attempt_at(i);
+            let s = backoff_next_attempt_at(AttemptCount::from_stored(i));
             chrono::DateTime::parse_from_rfc3339(&s).unwrap()
         })
         .collect();
@@ -203,7 +203,7 @@ fn dead_letter_after_max_retries() {
         .unwrap();
         let claimed = crate::db::notifications::outbox_claim_pending(&conn, 10).unwrap();
         assert_eq!(claimed.len(), 1, "row should be claimable each cycle");
-        let next_at = backoff_next_attempt_at(attempt);
+        let next_at = backoff_next_attempt_at(AttemptCount::from_stored(i64::from(attempt)));
         outbox_schedule_retry(&conn, id, &next_at, "timeout", None).unwrap();
     }
 
@@ -360,4 +360,124 @@ async fn dispatch_cycle_suppresses_old_firing_for_same_stream_outage() {
         .unwrap();
     assert_eq!(status, "dropped");
     assert_eq!(reason.as_deref(), Some("dedup_suppressed"));
+}
+
+/// Insert a due outbox row with the given dedup key and Apprise URL payload.
+fn insert_due_row(conn: &rusqlite::Connection, dedup_key: &str, apprise_urls_json: &str) {
+    outbox_insert(
+        conn,
+        &crate::db::notifications::OutboxInsertParams {
+            dedup_key: dedup_key.to_string(),
+            rule_id: "oom_kill".to_string(),
+            severity: "critical".to_string(),
+            hostname: "host1".to_string(),
+            title: "Title".to_string(),
+            body: "Body".to_string(),
+            apprise_urls_json: apprise_urls_json.to_string(),
+            next_attempt_at: "2000-01-01T00:00:00.000Z".to_string(),
+        },
+    )
+    .unwrap();
+}
+
+fn outbox_state(conn: &rusqlite::Connection, dedup_key: &str) -> (String, i64) {
+    conn.query_row(
+        "SELECT status, attempt_count FROM notifications_outbox WHERE dedup_key = ?1",
+        [dedup_key],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn dispatch_cycle_isolates_a_failing_row_instead_of_abandoning_the_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        init_pool(&StorageConfig::for_test(
+            dir.path().join("notifications.db"),
+        ))
+        .unwrap(),
+    );
+    let conn = pool.get().unwrap();
+    for key in ["burn-1", "burn-2", "burn-3"] {
+        insert_due_row(&conn, key, "[]");
+    }
+    // Deterministic mid-loop failure on the middle row only. `OF status`
+    // restricts the trigger to the write-back UPDATE, so the claim — which
+    // sets attempt_count and next_attempt_at — still succeeds for all three.
+    conn.execute_batch(
+        "CREATE TRIGGER fail_middle_row
+             BEFORE UPDATE OF status ON notifications_outbox
+             WHEN OLD.dedup_key = 'burn-2'
+         BEGIN
+             SELECT RAISE(ABORT, 'injected write-back failure');
+         END;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let dispatched = run_dispatch_cycle(
+        Arc::clone(&pool),
+        Arc::new(Semaphore::new(1)),
+        &AppriseClient::new("http://127.0.0.1:1"),
+        &NotificationsConfig::default(),
+    )
+    .await
+    .expect("one failing row must not fail the whole cycle");
+    assert_eq!(dispatched, 0);
+
+    let conn = pool.get().unwrap();
+
+    // The claim leased and charged an attempt to every row in the batch up
+    // front. A row after the failure must therefore still be processed in this
+    // same cycle — otherwise it has burnt an attempt, holds a 300s lease, and
+    // was never attempted even once.
+    assert_eq!(
+        outbox_state(&conn, "burn-3"),
+        ("dropped".to_string(), 1),
+        "rows after the failing one must be processed, not abandoned"
+    );
+    assert_eq!(outbox_state(&conn, "burn-1").0, "dropped");
+
+    // The failing row keeps its lease and is reclaimed when the lease expires.
+    assert_eq!(outbox_state(&conn, "burn-2"), ("pending".to_string(), 1));
+}
+
+#[tokio::test]
+async fn dispatch_cycle_dead_letters_a_row_whose_attempt_counter_saturated() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        init_pool(&StorageConfig::for_test(
+            dir.path().join("notifications.db"),
+        ))
+        .unwrap(),
+    );
+    let conn = pool.get().unwrap();
+    insert_due_row(&conn, "saturated", r#"["json://127.0.0.1:1/"]"#);
+    // Far past the u8 domain the retry counter is clamped into. A `+ 1` on the
+    // clamped u8::MAX wraps to 0 in release builds, which would leave this row
+    // below the dead-letter threshold forever.
+    conn.execute(
+        "UPDATE notifications_outbox SET attempt_count = ?1 WHERE dedup_key = 'saturated'",
+        [i64::from(u8::MAX) + 45],
+    )
+    .unwrap();
+    drop(conn);
+
+    let dispatched = run_dispatch_cycle(
+        Arc::clone(&pool),
+        Arc::new(Semaphore::new(1)),
+        &AppriseClient::new("http://127.0.0.1:1"),
+        &NotificationsConfig::default(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(dispatched, 0);
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        outbox_state(&conn, "saturated").0,
+        "dead",
+        "a saturated attempt counter must still dead-letter, not retry forever"
+    );
 }

@@ -144,3 +144,33 @@ review the exception every release and remove it when `lab-auth` or
 metadata because the current dependency graph includes transitive MCP/auth and
 platform-target duplication plus a pinned `lab-auth` git revision. Source
 allowlists, license policy, yanked crates, and advisory checks remain enforced.
+
+`npm audit` reports two unfixable `tmp` advisories in `tools/mcpb`,
+`GHSA-ph9p-34f9-6g65` (high) and `GHSA-52f5-9888-hmc6` (low). Both resolve
+through `@anthropic-ai/mcpb -> @inquirer/prompts -> @inquirer/editor ->
+external-editor -> tmp@0.0.33`. No upstream fix exists: `external-editor@3.1.0`
+is the latest release and is abandoned, every 3.x pins `tmp ^0.0.33` (exactly
+0.0.33 on a `0.0.x` range), and `@anthropic-ai/mcpb@2.1.2` is the latest mcpb
+and still pins `@inquirer/prompts ^6.0.1`. The only remaining route is a forced
+`overrides` block, which would swap the API surface underneath an abandoned
+package that the build never exercises.
+
+The accepted path is that `tmp` is loaded but never called. `scripts/build-mcpb.sh`
+invokes only `validate`, `pack` and `info`, and installs with
+`npm ci --ignore-scripts`. `@inquirer/prompts` eagerly requires `@inquirer/editor`,
+so `external-editor` and `tmp` are present in the loaded module graph rather than
+tree-shaken out — but `external-editor` reaches `tmp` only from
+`ExternalEditor.prototype.createTemporaryFile`, which runs only when the
+interactive `editor` prompt is constructed. `pack` imports `confirm` and `init`
+imports `confirm`/`input`/`select`; neither imports `editor`. Verified 2026-08-25
+by instrumenting `tmp`'s exported API and running a real `validate` + `pack` +
+`info` cycle: no `tmp` entry point was called.
+
+The owner is the cortex maintainer. Review every release and no later than
+2026-11-30. This exception becomes invalid — re-audit and fix rather than renew —
+if any of the following change: `build-mcpb.sh` (or any other caller) invokes an
+mcpb subcommand other than `validate`, `pack` or `info`, in particular the
+interactive `init`; mcpb introduces an `editor` prompt into a subcommand the
+build calls; the mcpb tool starts running in CI or ships inside the Docker
+image; or `@anthropic-ai/mcpb` moves past `@inquirer/prompts ^6`, at which point
+the advisory is fixed upstream and the exception should simply be deleted.

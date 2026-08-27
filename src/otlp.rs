@@ -24,14 +24,13 @@ use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER},
     middleware::{Next, from_fn},
-    response::{IntoResponse, Json},
+    response::IntoResponse,
     routing::post,
 };
 use bytes::Bytes;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use parking_lot::Mutex;
 use prost::Message;
-use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::config::AgentObservatoryPrivacyConfig;
@@ -40,6 +39,7 @@ use crate::ingest::IngestTx;
 
 mod auth;
 mod entries;
+mod error;
 mod metric_http;
 mod metrics;
 mod metrics_payload;
@@ -57,6 +57,7 @@ use auth::{
     unauthorized_diagnostics,
 };
 use entries::build_entries;
+use error::OtlpError;
 #[cfg(test)]
 use metric_http::MAX_METRIC_POINTS_PER_REQUEST;
 use metric_http::{MetricIngestState, metrics_handler};
@@ -207,20 +208,12 @@ async fn logs_handler(
         Ok(Err(err)) => {
             state.counters.decode_errors.fetch_add(1, Ordering::Relaxed);
             tracing::warn!(error = %err, source_ip = %peer, "OTLP /v1/logs decode failed");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "decode_failed", "message": err.to_string()})),
-            )
-                .into_response();
+            return OtlpError::DecodeFailed.into_response_with_message(err.to_string());
         }
         Err(err) => {
             state.counters.decode_errors.fetch_add(1, Ordering::Relaxed);
             tracing::error!(error = %err, "OTLP decode task panicked");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "internal"})),
-            )
-                .into_response();
+            return OtlpError::Internal.into_response();
         }
     };
 
@@ -239,11 +232,7 @@ async fn logs_handler(
             available = state.ingest.capacity(),
             "OTLP write channel insufficient capacity — returning 503 (no partial accept)"
         );
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "channel_full"})),
-        )
-            .into_response();
+        return OtlpError::ChannelFull.into_response();
     }
 
     // Capacity reservation is best-effort (concurrent senders may consume
@@ -258,22 +247,14 @@ async fn logs_handler(
                     source_ip = %peer,
                     "OTLP write channel filled mid-batch — returning 503"
                 );
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"error": "channel_full"})),
-                )
-                    .into_response();
+                return OtlpError::ChannelFull.into_response();
             }
             Err(crate::ingest::TrySendErr::Closed) => {
                 tracing::error!(
                     source_ip = %peer,
                     "OTLP write channel CLOSED — batch writer task is dead"
                 );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "writer_unavailable"})),
-                )
-                    .into_response();
+                return OtlpError::WriterUnavailable.into_response();
             }
         }
     }

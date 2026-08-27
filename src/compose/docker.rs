@@ -8,6 +8,37 @@ use super::types::{
     ContainerInfo, DockerInspect, ListenerInfo, MountInfo, PortInfo, SystemdStatus,
 };
 
+/// GNU `timeout` exits 127 when the program it was asked to run does not
+/// exist. Every inspector call is wrapped in `timeout`, so a missing binary
+/// arrives here as an ordinary non-zero exit rather than an exec error —
+/// which is why it has to be recognised by exit code.
+fn command_not_found(output: &std::process::Output) -> bool {
+    output.status.code() == Some(127)
+}
+
+/// Build the `docker_unavailable` error for a failed `docker` invocation,
+/// distinguishing "the CLI is not installed" from "the CLI ran and failed".
+/// The former is the common deployment case — the runtime image ships no
+/// docker client — and a generic "docker inspect failed" hides it behind
+/// whatever `timeout` happened to print.
+pub(crate) fn docker_cli_error(
+    action: &str,
+    output: &std::process::Output,
+) -> DockerUnavailableError {
+    if command_not_found(output) {
+        return DockerUnavailableError(
+            "`docker` CLI not found on PATH: cortex cannot introspect its own container. \
+             Provide a docker client in the runtime image and point DOCKER_HOST at a \
+             read-only docker-socket-proxy rather than bind-mounting the docker socket"
+                .to_string(),
+        );
+    }
+    DockerUnavailableError(format!(
+        "{action} failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CliDockerInspect;
 
@@ -22,11 +53,7 @@ impl DockerInspect for CliDockerInspect {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
             if !stderr.contains("no such object") && !stderr.contains("no such container") {
-                return Err(DockerUnavailableError(format!(
-                    "docker inspect failed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ))
-                .into());
+                return Err(docker_cli_error("docker inspect", &output).into());
             }
             return Ok(None);
         }
@@ -43,11 +70,7 @@ impl DockerInspect for CliDockerInspect {
         )
         .map_err(|e| DockerUnavailableError(format!("docker ps failed: {e}")))?;
         if !output.status.success() {
-            return Err(DockerUnavailableError(format!(
-                "docker ps failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-            .into());
+            return Err(docker_cli_error("docker ps", &output).into());
         }
         let names = String::from_utf8_lossy(&output.stdout);
         let mut found = Vec::new();
@@ -111,11 +134,7 @@ impl DockerInspect for CliDockerInspect {
         )
         .map_err(|e| DockerUnavailableError(format!("docker ps failed: {e}")))?;
         if !output.status.success() {
-            return Err(DockerUnavailableError(format!(
-                "docker ps failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-            .into());
+            return Err(docker_cli_error("docker ps", &output).into());
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut lines = stdout.lines();
@@ -166,6 +185,18 @@ pub(crate) fn systemd_status_from_output(
             unit: unit.into(),
             active: false,
         }));
+    }
+
+    // A host with no systemd at all — every container, cortex's own included
+    // — cannot be running a conflicting `cortex.service`. That is an answer to
+    // this probe, not a failure of it, so report "no unit" rather than raising
+    // an Error diagnostic that would keep `compose_doctor` red forever.
+    if command_not_found(output) {
+        tracing::debug!(
+            unit,
+            "systemctl not present; treating systemd ownership check as not applicable"
+        );
+        return Ok(None);
     }
 
     Err(anyhow!(

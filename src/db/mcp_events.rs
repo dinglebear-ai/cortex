@@ -147,8 +147,7 @@ pub(crate) fn insert_mcp_events_in_tx(
 /// Pool-acquiring wrapper for callers outside an existing transaction (e.g.
 /// the backfill service, which owns its own chunked transaction boundary).
 pub fn insert_mcp_events(pool: &DbPool, events: &[McpEventInsert]) -> Result<usize> {
-    let mut conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
     let inserted = insert_mcp_events_in_tx(&tx, events)?;
     tx.commit()?;

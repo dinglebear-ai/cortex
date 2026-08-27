@@ -21,11 +21,23 @@ pub enum ServiceError {
     #[error("{0}")]
     NotFound(String),
 
-    /// A SQLite / r2d2 pool timeout was detected. Semantic alias for `Busy`
+    /// `DbPool::get()` did not yield a connection. Semantic alias for `Busy`
     /// that lets callers distinguish pool starvation from other transient
     /// errors without downcasting `anyhow::Error`.
+    ///
+    /// Carries the originating error as `#[source]`. It used to be a unit
+    /// variant, which discarded the whole chain — including the `anyhow`
+    /// context naming the statement that failed and, when the pool recorded
+    /// one, the connection-establishment error that says the fault is
+    /// permanent rather than backpressure. During an incident that left a bare
+    /// "database timeout" with nothing to attribute it to. `Display` is
+    /// unchanged, so log lines and the API body keep their existing shape;
+    /// the detail arrives through `source()`.
     #[error("database timeout: pool did not yield a connection in time")]
-    DatabaseTimeout,
+    DatabaseTimeout {
+        #[source]
+        source: anyhow::Error,
+    },
 
     /// A uniqueness or foreign-key constraint was violated. `message`
     /// carries the human-readable detail from the DB error.
@@ -57,8 +69,20 @@ impl ServiceError {
                     return ServiceError::Busy("database_busy".to_string());
                 }
 
-                if crate::db::is_pool_timeout(&error) {
-                    return ServiceError::DatabaseTimeout;
+                // Both pool-acquisition failures classify as `DatabaseTimeout`:
+                // from a caller's position they demand the same immediate
+                // action. They are not the same fault, though, so the
+                // permanent one says so here rather than being absorbed into
+                // the retry ladder unremarked.
+                if let Some(failure) = crate::db::pool_acquire_failure(&error) {
+                    if let crate::db::PoolAcquireFailure::ConnectFailed { detail } = &failure {
+                        tracing::error!(
+                            connect_error = %detail,
+                            "database connections cannot be established; \
+                             reporting as pool exhaustion, but retrying will not clear it"
+                        );
+                    }
+                    return ServiceError::DatabaseTimeout { source: error };
                 }
 
                 ServiceError::Internal(error)

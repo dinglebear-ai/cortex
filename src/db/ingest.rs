@@ -50,8 +50,7 @@ fn insert_logs_batch_once<T>(pool: &DbPool, entries: &[T]) -> Result<usize>
 where
     T: Borrow<LogBatchEntry>,
 {
-    let mut conn = pool.get()?;
-    let _write_guard = crate::db::write_lock();
+    let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
     insert_logs_batch_in_tx_with_ids(&tx, entries, None)?;
     tx.commit()?;
@@ -173,7 +172,7 @@ where
 /// `connection_timeout` (6s), so the retry ladder here would block a thread for
 /// ~24s before giving up. Pool exhaustion is handled one layer up instead,
 /// where the batch writer retains the batch and retries on a later flush. Use
-/// `crate::db::is_pool_timeout` for that classification.
+/// `crate::db::is_pool_acquire_failure` for that classification.
 pub(crate) fn is_transient_sqlite_lock(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         matches!(

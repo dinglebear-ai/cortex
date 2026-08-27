@@ -3,9 +3,10 @@ mod notifications_db_tests {
     use rusqlite::Connection;
 
     use crate::db::notifications::{
-        FiringInsertParams, OutboxInsertParams, backoff_next_attempt_at, firings_insert,
-        firings_recent, firings_recent_dedup_check, outbox_claim_pending, outbox_insert,
-        outbox_mark_dead, outbox_mark_dropped, outbox_mark_sent, outbox_schedule_retry,
+        AttemptCount, FiringInsertParams, OutboxInsertParams, backoff_next_attempt_at,
+        firings_insert, firings_recent, firings_recent_dedup_check, outbox_claim_pending,
+        outbox_insert, outbox_mark_dead, outbox_mark_dropped, outbox_mark_sent,
+        outbox_schedule_retry,
     };
 
     fn in_memory_conn() -> Connection {
@@ -145,7 +146,11 @@ mod notifications_db_tests {
         expire_next_attempt(&conn);
 
         let first = outbox_claim_pending(&conn, 10).expect("first claim");
-        assert_eq!(first[0].attempt_count, 0, "first claim is attempt 0");
+        assert_eq!(
+            first[0].attempt_count,
+            AttemptCount::NONE,
+            "first claim is attempt 0"
+        );
 
         // Lease expiry: an abandoned in-flight row becomes claimable again so
         // a crash between delivery and write-back is not permanent loss.
@@ -153,7 +158,8 @@ mod notifications_db_tests {
         let second = outbox_claim_pending(&conn, 10).expect("second claim");
         assert_eq!(second.len(), 1, "expired lease must be reclaimable");
         assert_eq!(
-            second[0].attempt_count, 1,
+            second[0].attempt_count,
+            AttemptCount::from_stored(1),
             "each claim consumes one attempt so abandoned rows still dead-letter"
         );
 
@@ -414,7 +420,7 @@ mod notifications_db_tests {
         let expected_secs: &[u64] = &[1, 5, 30, 300, 1800, 1800, 1800, 1800];
         let now = chrono::Utc::now();
         for (i, &expected) in expected_secs.iter().enumerate() {
-            let s = backoff_next_attempt_at(i as u8);
+            let s = backoff_next_attempt_at(AttemptCount::from_stored(i as i64));
             let parsed = chrono::DateTime::parse_from_rfc3339(&s)
                 .unwrap_or_else(|_| panic!("attempt {i}: invalid ISO8601: {s}"));
             let actual_delay = (parsed.with_timezone(&chrono::Utc) - now).num_seconds();
@@ -424,5 +430,33 @@ mod notifications_db_tests {
                 "attempt {i}: expected ~{expected}s delay, got {actual_delay}s"
             );
         }
+    }
+
+    #[test]
+    fn attempt_count_saturates_instead_of_wrapping_past_u8_max() {
+        // Release builds compile without overflow-checks, so a bare `+ 1` on a
+        // clamped u8::MAX wraps to 0 and silently parks the row below every
+        // dead-letter threshold forever. It must saturate instead.
+        let maxed = AttemptCount::from_stored(i64::from(u8::MAX));
+        assert_eq!(maxed.consumed(), u8::MAX);
+        assert_eq!(maxed.tier(), u8::MAX);
+
+        // A stored counter driven past the u8 domain clamps rather than
+        // truncating into a small, below-threshold value.
+        let overflowed = AttemptCount::from_stored(i64::from(u8::MAX) + 1);
+        assert_eq!(overflowed, maxed);
+        assert_eq!(AttemptCount::from_stored(i64::MAX), maxed);
+
+        let default_max_retry_attempts: u8 = 8;
+        assert!(
+            maxed.consumed() >= default_max_retry_attempts,
+            "a saturated row must still clear the dead-letter threshold"
+        );
+    }
+
+    #[test]
+    fn attempt_count_none_is_the_first_backoff_tier() {
+        assert_eq!(AttemptCount::NONE.tier(), 0);
+        assert_eq!(AttemptCount::NONE.consumed(), 1);
     }
 }

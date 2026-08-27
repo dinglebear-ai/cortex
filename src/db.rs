@@ -2,6 +2,10 @@
 #[path = "db/agent_observatory_models_tests.rs"]
 mod agent_observatory_models_tests;
 
+#[cfg(test)]
+#[path = "db/lock_order_tests.rs"]
+mod lock_order_tests;
+
 pub mod agent_observatory;
 mod analytics;
 mod artifact_evidence;
@@ -119,11 +123,16 @@ pub use models::{
 };
 #[cfg(test)]
 pub use pool::KNOWN_SCHEMA_VERSION;
-pub(crate) use pool::is_pool_timeout;
+#[cfg(test)]
+pub(crate) use pool::write_lock;
 pub use pool::{
-    DbPool, backfill_inventory_stats, init_pool, inventory_backfill_complete,
+    DbPool, WriteConn, backfill_inventory_stats, init_pool, inventory_backfill_complete,
     read_schema_version_info, read_schema_version_info_conn, reconcile_interrupted_server_work,
-    write_lock,
+    write_conn,
+};
+pub(crate) use pool::{
+    PoolAcquireFailure, WriteConnBusy, is_pool_acquire_failure, pool_acquire_failure,
+    try_write_conn_for,
 };
 pub use queries::{
     RollupRefresh, SEVERITY_LEVELS, ai_session_rollup_status, correlate_session_graph,

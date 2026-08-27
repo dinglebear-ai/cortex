@@ -444,6 +444,55 @@ fn systemd_status_distinguishes_inactive_from_probe_failure() {
     assert!(failed.to_string().contains("probe failure") || failed.to_string().contains("failed"));
 }
 
+#[cfg(unix)]
+#[test]
+fn absent_systemctl_reports_no_unit_instead_of_a_probe_failure() {
+    // GNU `timeout` exits 127 when the program is missing. cortex runs inside
+    // a container with no systemd, so this is the ordinary case -- and a host
+    // with no systemd cannot be running a conflicting cortex.service. It must
+    // read as "no unit", not as an Error diagnostic that pins compose_doctor
+    // red permanently.
+    let absent = systemd_status_from_output(
+        "cortex.service",
+        &output_with_status(
+            127,
+            "",
+            "timeout: failed to run command 'systemctl': No such file or directory",
+        ),
+    )
+    .expect("absent systemctl must not be an error");
+    assert!(
+        absent.is_none(),
+        "a host without systemd reports no unit, not an inactive one"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn absent_docker_cli_is_reported_as_a_missing_binary() {
+    // The runtime image ships no docker client, so this is what
+    // compose_status actually hits. The message has to name the cause --
+    // a bare "docker inspect failed" sent this to a full investigation.
+    let output = output_with_status(
+        127,
+        "",
+        "timeout: failed to run command 'docker': No such file or directory",
+    );
+    let err = docker_cli_error("docker inspect", &output);
+    let msg = err.to_string();
+    assert!(msg.contains("not found on PATH"), "{msg}");
+    assert!(msg.contains("DOCKER_HOST"), "{msg}");
+
+    // A docker CLI that ran and failed keeps its own stderr.
+    let ran = output_with_status(1, "", "Cannot connect to the Docker daemon");
+    let ran_msg = docker_cli_error("docker inspect", &ran).to_string();
+    assert!(
+        ran_msg.contains("Cannot connect to the Docker daemon"),
+        "{ran_msg}"
+    );
+    assert!(!ran_msg.contains("not found on PATH"), "{ran_msg}");
+}
+
 #[test]
 fn docker_unavailable_code_uses_typed_error() {
     let err: anyhow::Error = DockerUnavailableError("daemon is down".into()).into();

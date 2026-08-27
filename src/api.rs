@@ -1777,11 +1777,25 @@ fn respond<T: serde::Serialize>(result: crate::app::ServiceResult<T>) -> axum::r
         Err(crate::app::ServiceError::NotFound(msg)) => {
             (StatusCode::NOT_FOUND, Json(json!({"error": msg}))).into_response()
         }
-        Err(crate::app::ServiceError::DatabaseTimeout) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "database_timeout"})),
-        )
-            .into_response(),
+        // Logged, not silent. This 503 fired repeatedly during the
+        // 2026-08-24 pool-contention incident and left no trace of its own:
+        // the only evidence was a caller-side 503 with no matching server
+        // line, so the exhaustion had to be inferred from unrelated `db op
+        // err` warnings. `pool_source` carries the chain the variant now
+        // preserves, which is where a connection-establishment failure (a
+        // permanent fault wearing a timeout's clothes) shows up.
+        Err(err @ crate::app::ServiceError::DatabaseTimeout { .. }) => {
+            tracing::error!(
+                error = %err,
+                pool_source = ?std::error::Error::source(&err),
+                "API request failed: connection pool did not yield a connection"
+            );
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": "database_timeout"})),
+            )
+                .into_response()
+        }
         Err(crate::app::ServiceError::ConstraintViolation { message }) => {
             tracing::warn!(error = %message, "Constraint violation in API request");
             (
