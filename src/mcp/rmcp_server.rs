@@ -123,11 +123,11 @@ impl ServerHandler for CortexRmcpServer {
                         tool = %tool_name,
                         error = %error,
                         error_class = "retryable",
-                        "MCP tool execution hit transient contention"
+                        "MCP tool execution is unavailable due to database contention or connection failure"
                     );
                     Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Action '{action}' is temporarily unavailable (database busy). \
-                         Retry shortly."
+                         Retry shortly; if the problem persists, check the server logs."
                     ))])
                     .into())
                 }

@@ -46,6 +46,93 @@ fn is_pool_acquire_failure_ignores_sqlite_and_plain_errors() {
 }
 
 #[test]
+fn pool_acquire_failure_detects_connection_establishment_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = SqliteConnectionManager::file(dir.path().join("missing").join("db.sqlite"));
+    let broken = Pool::builder()
+        .max_size(1)
+        .connection_timeout(std::time::Duration::from_millis(100))
+        .thread_pool(shared_scheduled_thread_pool())
+        .build_unchecked(manager);
+    let error = anyhow::Error::new(
+        broken
+            .get_timeout(std::time::Duration::from_millis(100))
+            .unwrap_err(),
+    );
+    assert!(is_pool_acquire_failure(&error));
+}
+
+#[test]
+fn graph_temp_staging_does_not_reserve_writer_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_storage_config(dir.path().join("graph-staging.db"));
+    config.pool_size = 1;
+    let pool = init_pool(&config).unwrap();
+    let graph_pool = pool.clone();
+    let (staged_tx, staged_rx) = std::sync::mpsc::channel();
+    let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+    let graph = std::thread::spawn(move || {
+        let conn = graph_staging_conn(&graph_pool).unwrap();
+        conn.execute_batch("CREATE TEMP TABLE staging_probe(id INTEGER);")
+            .unwrap();
+        staged_tx.send(()).unwrap();
+        finish_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let _lock = graph_staging_write_lock(&conn);
+        conn.execute("INSERT INTO staging_probe VALUES (1)", [])
+            .unwrap();
+        done_tx.send(()).unwrap();
+    });
+    staged_rx.recv().unwrap();
+
+    let writer = try_write_conn_for(&pool, std::time::Duration::from_secs(1))
+        .expect("ordinary writer must proceed during graph staging");
+    writer
+        .execute_batch("CREATE TABLE writer_probe(id INTEGER);")
+        .unwrap();
+    drop(writer);
+    finish_tx.send(()).unwrap();
+    done_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    graph.join().unwrap();
+}
+
+#[test]
+fn graph_staging_connection_inherits_pool_pragmas() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("graph-pragmas.db"));
+    let pool = init_pool(&config).unwrap();
+    let pooled = pool.get().unwrap();
+    let pragmas = [
+        "journal_mode",
+        "synchronous",
+        "cache_size",
+        "mmap_size",
+        "analysis_limit",
+        "busy_timeout",
+    ];
+    let expected: Vec<rusqlite::types::Value> = pragmas
+        .iter()
+        .map(|pragma| {
+            let sql = format!("PRAGMA {pragma}");
+            pooled.query_row(&sql, [], |row| row.get(0)).unwrap()
+        })
+        .collect();
+    drop(pooled);
+    let staging = graph_staging_conn(&pool).unwrap();
+
+    for (pragma, expected) in pragmas.into_iter().zip(expected) {
+        let sql = format!("PRAGMA {pragma}");
+        let actual: rusqlite::types::Value = staging.query_row(&sql, [], |row| row.get(0)).unwrap();
+        assert_eq!(actual, expected, "staging connection drifted for {pragma}");
+    }
+}
+
+#[test]
 fn bounded_write_acquisition_uses_one_total_timeout_budget() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("bounded-write.db"));
