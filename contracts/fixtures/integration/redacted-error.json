@@ -1,0 +1,1 @@
+{"kind":"cursor_expired","retryable":true,"display_text":"The stream cursor expired. Reconnect from the newest retained event.","correlation_id":"corr_example","recovery":{"action":"restart_stream"}}
