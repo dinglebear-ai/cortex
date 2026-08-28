@@ -871,6 +871,82 @@ async fn version_route_returns_payload_with_bearer() {
     );
 }
 
+#[tokio::test]
+async fn capabilities_advertise_bounded_polling_without_native_streams() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let (status, value) = get_json(test_router(state), "/api/capabilities", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["sessions"]["rendered_pages"], true);
+    assert_eq!(value["sessions"]["native_stream"], false);
+    assert_eq!(value["logs"]["native_stream"], false);
+    assert_eq!(value["sessions"]["polling"]["max_page_items"], 200);
+    assert_eq!(value["sessions"]["polling"]["max_page_bytes"], 262_144);
+}
+
+#[tokio::test]
+async fn rendered_session_pages_are_ordered_bounded_and_resumable() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    let mut newest_timestamp_first = entry(
+        "2026-08-28T00:00:02Z",
+        "devhost",
+        "info",
+        "assistant",
+        "transcript://codex",
+    );
+    newest_timestamp_first.ai_tool = Some("codex".into());
+    newest_timestamp_first.ai_project = Some("/repo".into());
+    newest_timestamp_first.ai_session_id = Some("session-1".into());
+    newest_timestamp_first.metadata_json =
+        Some(r#"{"event_kind":"assistant","content_scrubbed":true}"#.into());
+    let mut older_timestamp_second = newest_timestamp_first.clone();
+    older_timestamp_second.timestamp = "2026-08-28T00:00:01Z".into();
+    older_timestamp_second.message = "tool output [REDACTED]".into();
+    older_timestamp_second.metadata_json =
+        Some(r#"{"event_kind":"tool","content_scrubbed":true}"#.into());
+    older_timestamp_second.parse_error = Some("partial write recovered".into());
+    insert_logs_batch(&pool, &[newest_timestamp_first, older_timestamp_second]).unwrap();
+    let app = test_router(state);
+    let base = "/api/sessions/rendered?project=%2Frepo&tool=codex&session_id=session-1&host=devhost&limit=1";
+    let (status, first) = get_json(app.clone(), base, Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(first["delivery"], "polling");
+    assert_eq!(first["events"].as_array().unwrap().len(), 1);
+    assert_eq!(first["events"][0]["kind"], "assistant");
+    assert_eq!(first["has_more"], true);
+    let first_position = first["events"][0]["position"].as_i64().unwrap();
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let uri = format!("{base}&cursor={cursor}");
+    let (status, second) = get_json(app, &uri, Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(second["events"].as_array().unwrap().len(), 1);
+    assert!(second["events"][0]["position"].as_i64().unwrap() > first_position);
+    assert_eq!(second["events"][0]["kind"], "tool");
+    assert_eq!(second["events"][0]["redacted"], true);
+    assert_eq!(
+        second["events"][0]["parse_warning"],
+        "partial write recovered"
+    );
+    assert_eq!(second["has_more"], false);
+}
+
+#[tokio::test]
+async fn rendered_session_rejects_invalid_cursor_and_clamps_limit() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let base =
+        "/api/sessions/rendered?project=%2Frepo&tool=codex&session_id=session-1&host=devhost";
+    let (status, _) = get_json(
+        app.clone(),
+        &format!("{base}&cursor=not-a-cursor"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let (status, value) = get_json(app, &format!("{base}&limit=9999"), Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["limit_clamped_to"], 200);
+}
+
 /// CRITICAL (eng-review C1): even when the listener is bound to loopback and
 /// callers therefore *could* be unauthenticated under the MCP policy, the
 /// `/api/*` router MUST force `AuthPolicy::Mounted` and reject unauthenticated

@@ -118,6 +118,7 @@ mod mcp_backfill;
 mod mcp_events;
 mod mcp_incidents;
 mod rag;
+mod session_pages;
 mod skill_assessment;
 mod skill_backfill;
 mod skill_events;

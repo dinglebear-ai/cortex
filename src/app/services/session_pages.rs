@@ -1,0 +1,175 @@
+use super::*;
+use crate::app::models::{
+    RENDERED_SESSION_PAGE_MAX_BYTES, RENDERED_SESSION_PAGE_MAX_ITEMS,
+    RENDERED_SESSION_POLL_AFTER_MS, RenderedSessionEvent, RenderedSessionEventKind,
+    RenderedSessionPageRequest, RenderedSessionPageResponse,
+};
+
+const CURSOR_PREFIX: &str = "cortex-session-v1:";
+const MAX_EVENT_TEXT_BYTES: usize = 240 * 1024;
+
+impl CortexService {
+    pub async fn rendered_session_page(
+        &self,
+        req: RenderedSessionPageRequest,
+    ) -> ServiceResult<RenderedSessionPageResponse> {
+        validate_identity(&req)?;
+        let after_id = decode_cursor(req.cursor.as_deref())?;
+        let requested_limit = req.limit.unwrap_or(RENDERED_SESSION_PAGE_MAX_ITEMS);
+        let limit = requested_limit.clamp(1, RENDERED_SESSION_PAGE_MAX_ITEMS);
+        let limit_clamped_to = (requested_limit > limit).then_some(limit);
+        let params = db::RenderedSessionPageParams {
+            ai_project: req.project,
+            ai_tool: req.tool,
+            ai_session_id: req.session_id,
+            host: req.host,
+            after_id,
+            limit: limit + 1,
+        };
+        let rows = self
+            .run_db("rendered_session_page", move |pool| {
+                db::rendered_session_page(pool, &params)
+            })
+            .await?;
+
+        let count_truncated = rows.len() > limit as usize;
+        let mut events = Vec::with_capacity(rows.len().min(limit as usize));
+        let mut retained_bytes = 0usize;
+        let mut byte_truncated = false;
+        for row in rows.into_iter().take(limit as usize) {
+            let event = project_event(row);
+            let event_bytes = serde_json::to_vec(&event)
+                .map_err(|error| ServiceError::Internal(error.into()))?
+                .len();
+            if !events.is_empty()
+                && retained_bytes.saturating_add(event_bytes) > RENDERED_SESSION_PAGE_MAX_BYTES
+            {
+                byte_truncated = true;
+                break;
+            }
+            retained_bytes = retained_bytes.saturating_add(event_bytes);
+            events.push(event);
+        }
+        let high_watermark = events.last().map_or(after_id, |event| event.position);
+        Ok(RenderedSessionPageResponse {
+            contract_version: "1.0.0",
+            delivery: "polling",
+            events,
+            next_cursor: encode_cursor(high_watermark),
+            high_watermark,
+            has_more: count_truncated || byte_truncated,
+            truncated_by_bytes: byte_truncated,
+            limit_clamped_to,
+            poll_after_ms: RENDERED_SESSION_POLL_AFTER_MS,
+            max_page_items: RENDERED_SESSION_PAGE_MAX_ITEMS,
+            max_page_bytes: RENDERED_SESSION_PAGE_MAX_BYTES,
+        })
+    }
+}
+
+fn validate_identity(req: &RenderedSessionPageRequest) -> ServiceResult<()> {
+    for (name, value) in [
+        ("project", req.project.as_str()),
+        ("tool", req.tool.as_str()),
+        ("session_id", req.session_id.as_str()),
+        ("host", req.host.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(ServiceError::InvalidInput(format!(
+                "{name} must not be empty"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn decode_cursor(cursor: Option<&str>) -> ServiceResult<i64> {
+    let Some(cursor) = cursor else { return Ok(0) };
+    let value = cursor
+        .strip_prefix(CURSOR_PREFIX)
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| ServiceError::InvalidInput("invalid session cursor".to_string()))?;
+    Ok(value)
+}
+
+fn encode_cursor(position: i64) -> String {
+    format!("{CURSOR_PREFIX}{position}")
+}
+
+fn project_event(row: db::RenderedSessionEventRow) -> RenderedSessionEvent {
+    let metadata = row
+        .metadata_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+    let kind = metadata
+        .as_ref()
+        .and_then(event_kind_from_metadata)
+        .unwrap_or_else(|| event_kind_from_text(&row.message));
+    let redacted = metadata
+        .as_ref()
+        .and_then(|value| value.get("content_scrubbed"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        || row.message.contains("[REDACTED]");
+    let (text, text_truncated) = truncate_utf8(row.message, MAX_EVENT_TEXT_BYTES);
+    let parse_warning = match (row.parse_error, text_truncated) {
+        (Some(warning), true) => Some(format!("{warning}; rendered text truncated")),
+        (None, true) => Some("rendered text truncated".to_string()),
+        (warning, false) => warning,
+    };
+    RenderedSessionEvent {
+        position: row.id,
+        timestamp: row.timestamp,
+        kind,
+        text,
+        redacted,
+        parse_warning,
+    }
+}
+
+fn truncate_utf8(value: String, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value, false);
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    (format!("{}...[truncated]", &value[..boundary]), true)
+}
+
+fn event_kind_from_metadata(value: &serde_json::Value) -> Option<RenderedSessionEventKind> {
+    let kind = value
+        .get("event_kind")
+        .or_else(|| value.get("role"))
+        .or_else(|| value.get("type"))?
+        .as_str()?;
+    Some(match kind {
+        "user" => RenderedSessionEventKind::User,
+        "assistant" => RenderedSessionEventKind::Assistant,
+        "tool" | "tool_use" | "tool_result" | "function_call" | "function_call_output" => {
+            RenderedSessionEventKind::Tool
+        }
+        "hook" => RenderedSessionEventKind::Hook,
+        "reasoning" => RenderedSessionEventKind::Reasoning,
+        "status" | "event_msg" | "turn_context" => RenderedSessionEventKind::Status,
+        "error" => RenderedSessionEventKind::Error,
+        _ => RenderedSessionEventKind::Unknown,
+    })
+}
+
+fn event_kind_from_text(text: &str) -> RenderedSessionEventKind {
+    if text.starts_with("[tool_use ")
+        || text.starts_with("[function_call ")
+        || text.starts_with("[function_call_output ")
+    {
+        RenderedSessionEventKind::Tool
+    } else {
+        RenderedSessionEventKind::Unknown
+    }
+}
+
+#[cfg(test)]
+#[path = "session_pages_tests.rs"]
+mod tests;

@@ -38,6 +38,15 @@ Runtime MCP actions, routes, commands, variables, ports, and dependencies below
 remain the authoritative current inventory until those tasks are implemented
 and generated inventories are updated.
 
+## Palette session contract
+
+The runtime now exposes authenticated `GET /api/capabilities` and
+`GET /api/sessions/rendered`. Rendered session pages normalize semantic event
+kinds, redaction annotations, and parse warnings over a durable ascending
+`logs.id` cursor. Polls are bounded to 200 events and 256 KiB with an explicit
+2-second retry hint. Native log and session streams remain unsupported here;
+durable resumable SSE is owned by the separate streaming delivery slice.
+
 ## MCP tools
 
 cortex exposes one MCP tool named `cortex`. The required `action`

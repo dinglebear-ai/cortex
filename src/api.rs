@@ -40,8 +40,8 @@ use crate::app::{
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
     ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListMcpEventsRequest,
     ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
-    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, RequestActor,
-    SearchLogsRequest, SearchSessionsRequest, ServiceError, SilentHostsRequest,
+    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, RenderedSessionPageRequest,
+    RequestActor, SearchLogsRequest, SearchSessionsRequest, ServiceError, SilentHostsRequest,
     SimilarIncidentsRequest, TailLogsRequest, TimelineRequest, TopicCorrelateRequest,
     UnackErrorRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
 };
@@ -242,6 +242,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/correlate", get(correlate))
         .route("/api/stats", get(stats))
         .route("/api/version", get(version))
+        .route("/api/capabilities", get(capabilities))
         .merge(investigation::routes())
         // --- surface parity routes ---
         .route("/api/source-ips", get(source_ips))
@@ -292,6 +293,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/compose/doctor", get(compose_doctor))
         // --- ai session queries ---
         .route("/api/sessions", get(sessions))
+        .route("/api/sessions/rendered", get(rendered_session_page))
         .route("/api/sessions/search", get(ai_search))
         .route("/api/sessions/abuse", get(ai_abuse))
         .route("/api/sessions/correlate", get(ai_correlate))
@@ -572,6 +574,12 @@ async fn stats(State(state): State<ApiState>) -> impl IntoResponse {
 /// queried per request; `schema_version` is captured once at startup.
 async fn version(State(state): State<ApiState>) -> impl IntoResponse {
     Json((*state.version_info).clone()).into_response()
+}
+
+/// `GET /api/capabilities` — explicit transport support for typed clients.
+/// Native streams remain false until the durable SSE slice lands.
+async fn capabilities() -> impl IntoResponse {
+    Json(crate::app::capabilities()).into_response()
 }
 
 // ─── Surface parity routes ──────────────────────────────────────────────────
@@ -1547,6 +1555,13 @@ async fn sessions(
     Query(req): Query<ListSessionsRequest>,
 ) -> impl IntoResponse {
     respond(state.service.list_sessions(req).await)
+}
+
+async fn rendered_session_page(
+    State(state): State<ApiState>,
+    Query(req): Query<RenderedSessionPageRequest>,
+) -> impl IntoResponse {
+    respond(state.service.rendered_session_page(req).await)
 }
 
 async fn ai_search(

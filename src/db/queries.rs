@@ -30,8 +30,9 @@ use super::models::{
     AiRelatedLogsForAnchor, AiRelatedLogsParams, AiSessionEntry, AiToolInventoryEntry, DbStats,
     ErrorSummaryEntry, GraphRelatedLogEntry, IncidentEvidence, ListAiProjectsParams,
     ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult, LogEntry,
-    ResolvedTopicEntity, SearchAiSessionsParams, SearchAiSessionsResult, SearchParams,
-    SearchedAiSessionEntry, SessionGraphInputs, TopicGraphInputs,
+    RenderedSessionEventRow, RenderedSessionPageParams, ResolvedTopicEntity,
+    SearchAiSessionsParams, SearchAiSessionsResult, SearchParams, SearchedAiSessionEntry,
+    SessionGraphInputs, TopicGraphInputs,
 };
 use super::pool::DbPool;
 use super::queries_service_instances;
@@ -500,6 +501,47 @@ pub fn list_ai_sessions(
         return list_ai_sessions_from_rollup(pool, params);
     }
     list_ai_sessions_live(pool, params)
+}
+
+/// Read one stable session in durable insertion order. The extra row lets the
+/// service report truncation without an exact count or a deep OFFSET scan.
+pub fn rendered_session_page(
+    pool: &DbPool,
+    params: &RenderedSessionPageParams,
+) -> Result<Vec<RenderedSessionEventRow>> {
+    let conn = pool.get()?;
+    let fetch = params.limit.clamp(1, 201);
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, timestamp, message, metadata_json, parse_error
+         FROM logs
+         WHERE ai_project = ?1
+           AND ai_tool = ?2
+           AND ai_session_id = ?3
+           AND hostname = ?4
+           AND id > ?5
+         ORDER BY id ASC
+         LIMIT ?6",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            params.ai_project,
+            params.ai_tool,
+            params.ai_session_id,
+            params.host,
+            params.after_id,
+            fetch,
+        ],
+        |row| {
+            Ok(RenderedSessionEventRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                message: row.get(2)?,
+                metadata_json: row.get(3)?,
+                parse_error: row.get(4)?,
+            })
+        },
+    )?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Live aggregation over `logs`. This is the ground-truth implementation used

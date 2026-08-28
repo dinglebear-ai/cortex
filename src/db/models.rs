@@ -78,6 +78,25 @@ pub struct AiSessionEntry {
     pub event_count: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RenderedSessionEventRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub message: String,
+    pub metadata_json: Option<String>,
+    pub parse_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedSessionPageParams {
+    pub ai_project: String,
+    pub ai_tool: String,
+    pub ai_session_id: String,
+    pub host: String,
+    pub after_id: i64,
+    pub limit: u32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchAiSessionsParams {
     pub query: String,

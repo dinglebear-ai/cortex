@@ -58,6 +58,8 @@ pub struct AiTranscriptRecord {
     pub ai_project: Option<String>,
     pub ai_session_id: Option<String>,
     pub ai_transcript_path: String,
+    #[serde(default)]
+    pub event_kind: Option<String>,
     /// Scrubbed transcript message text (credential/token scrubbing happens
     /// agent-side before forwarding, same as the local scanner does today).
     pub message: String,
@@ -103,6 +105,11 @@ fn to_log_batch_entry(record: AiTranscriptRecord) -> LogBatchEntry {
         .timestamp
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     let source_ip = format!("agent-ai-transcript://{}", record.hostname);
+    let metadata_json = crate::ingest_metadata::bounded_metadata_json(serde_json::json!({
+        "source_type": "transcript",
+        "event_kind": record.event_kind.as_deref().unwrap_or("unknown"),
+        "content_scrubbed": true,
+    }));
     LogBatchEntry {
         timestamp,
         hostname: record.hostname,
@@ -118,7 +125,7 @@ fn to_log_batch_entry(record: AiTranscriptRecord) -> LogBatchEntry {
         ai_project: record.ai_project,
         ai_session_id: record.ai_session_id,
         ai_transcript_path: Some(record.ai_transcript_path),
-        metadata_json: None,
+        metadata_json: Some(metadata_json),
         http_status: None,
         auth_outcome: None,
         dns_blocked: None,

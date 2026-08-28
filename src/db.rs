@@ -113,9 +113,10 @@ pub use models::{
     CorrelatedSession, DbStats, DockerCheckpoint, ErrorSummaryEntry, GraphRelatedLogEntry,
     HostEntry, IncidentCluster, IncidentContextParams, IncidentContextResult, IncidentEvidence,
     ListAiProjectsParams, ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams,
-    ListAiToolsResult, LogBatchEntry, LogEntry, SearchAiSessionsParams, SearchAiSessionsResult,
-    SearchParams, SearchedAiSessionEntry, SessionGraphInputs, SeverityCount,
-    SimilarIncidentsParams, SimilarIncidentsResult, TopicGraphInputs,
+    ListAiToolsResult, LogBatchEntry, LogEntry, RenderedSessionEventRow, RenderedSessionPageParams,
+    SearchAiSessionsParams, SearchAiSessionsResult, SearchParams, SearchedAiSessionEntry,
+    SessionGraphInputs, SeverityCount, SimilarIncidentsParams, SimilarIncidentsResult,
+    TopicGraphInputs,
 };
 #[cfg(test)]
 pub use pool::KNOWN_SCHEMA_VERSION;
@@ -129,10 +130,10 @@ pub use queries::{
     RollupRefresh, SEVERITY_LEVELS, ai_session_rollup_status, correlate_session_graph,
     get_error_summary, get_stats, incident_context_summary, investigate_ai_incidents,
     list_ai_projects, list_ai_sessions, list_ai_tools, list_hosts, prune_timeline_rollup,
-    refresh_ai_session_rollup_if_stale, refresh_timeline_rollup, search_ai_abuse,
-    search_ai_anchors, search_ai_incidents, search_ai_related_logs, search_ai_sessions,
-    search_logs, severity_to_num, similar_incidents_clusters, tail_logs, timeline_rollup_status,
-    topic_correlate_inputs,
+    refresh_ai_session_rollup_if_stale, refresh_timeline_rollup, rendered_session_page,
+    search_ai_abuse, search_ai_anchors, search_ai_incidents, search_ai_related_logs,
+    search_ai_sessions, search_logs, severity_to_num, similar_incidents_clusters, tail_logs,
+    timeline_rollup_status, topic_correlate_inputs,
 };
 pub(crate) use skill_events::insert_skill_events_in_tx;
 pub use skill_events::{

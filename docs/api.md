@@ -24,13 +24,13 @@ updated: 2026-07-30
 
 ## Endpoint matrix
 
-64 routes total. Scope is `read` (mounted via `axum::routing::get`,
+66 routes total. Scope is `read` (mounted via `axum::routing::get`,
 hits read-side `db_permits`) or `admin` (POST + `MAINTENANCE_PERMIT`
 single-flight, audited via `tracing::warn!` before the service call).
 All responses are JSON; error bodies are `{"error": "<message>"}`
 unless a route documents a structured diagnostic body.
 
-### Syslog queries (7)
+### Core queries and discovery (9)
 
 These existed before the epic; bead `.1` only added `/api/version`.
 They are documented here for completeness because the CLI now routes
@@ -47,6 +47,7 @@ to them by default.
 | GET | `/api/correlate` | read | query: `reference_time` (REQUIRED, RFC 3339), `window_minutes?` (u32), `severity_min?`, `hostname?`, `source_ip?`, `query?`, `limit?` (u32) | `CorrelateEventsResponse { reference_time, window_minutes, window_from, window_to, severity_min, total_events, truncated, hosts_count, hosts: [CorrelatedHost] }` | 200, 400, 401, 503, 500 | Y | **Distinct from `/api/sessions/correlate`** — see disambiguation below. |
 | GET | `/api/stats` | read | (none) | `DbStats { total_logs, total_hosts, oldest_log?, newest_log?, logical_db_size_mb, physical_db_size_mb, free_disk_mb?, max_db_size_mb, min_free_disk_mb, write_blocked, phantom_fts_rows? }` | 200, 401, 503, 500 | Y | Hot path; no PRAGMA per request. `phantom_fts_rows` is `null` by default — its `COUNT(*) FROM logs_fts` scan is skipped to stay fast on large DBs; computed only via the opt-in diagnostic path. |
 | GET | `/api/version` | read | (none) | `VersionInfo { version, git_sha?, schema_version }` | 200, 401 | Y | **Cached at startup** — never touches SQLite per request (eng-review #A3). Returns 404 if older server lacks the route (see Versioning policy). |
+| GET | `/api/capabilities` | read | (none) | typed Cortex capability map | 200, 401 | Y | Advertises rendered-session polling with durable row-ID cursors, 200-item/256-KiB page caps, and a 2-second retry hint. Native log/session streams are explicitly `false` until their separate durable SSE slice lands. |
 
 ### Artifact ecosystem evidence (2) — W16
 
@@ -60,6 +61,7 @@ to them by default.
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/sessions` | read | query: `project?`, `tool?`, `hostname?`, `from?`, `to?`, `limit?` | `ListSessionsResponse { count, sessions: [AiSessionEntry] }` | 200, 400, 401, 503, 500 | Y | Inventory of indexed AI transcripts. |
+| GET | `/api/sessions/rendered` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`, `limit?` | `RenderedSessionPageResponse` (`delivery=polling`, semantic events, durable next cursor, high-water mark, truncation and retry metadata) | 200, 400, 401, 503, 500 | Y | Keyset pagination by persisted `logs.id`, ascending. Maximum 200 events and 256 KiB per page; oversized event text is UTF-8-safely truncated with a parse warning. Schema: `contracts/rendered-session-page.schema.json`. This is polling, not live tail or SSE. |
 | GET | `/api/sessions/search` | read | query: `query` (REQUIRED), `project?`, `tool?`, `from?`, `to?`, `limit?` (u32) | `SearchSessionsResponse { total_candidates, candidate_rows, candidate_cap, candidate_window_truncated, truncated, sessions: [SearchedSessionEntry], limit_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `limit` clamped at **100** — see Response size caps. |
 | GET | `/api/sessions/abuse` | read | query: `project?`, `tool?`, `from?`, `to?`, `limit?`, `before?` (u32), `after?` (u32), **`terms?`** (repeated key: `?terms=foo&terms=bar`) | `AbuseSearchResponse { terms, candidate_rows, candidate_cap, candidate_window_truncated, truncated, matches: [AbuseMatch], limit_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `limit` clamped at **500**. Decoded via `serde_qs::axum::QsQuery`, so `Vec<String>` is supported through repeated `terms=` keys (the CLI's `HttpClient` serializes the shared request type the same way). |
 | GET | `/api/sessions/correlate` | read | query: `project?`, `tool?`, `session_id?`, `ai_query?`, `log_query?`, `hostname?`, `source_ip?`, `app_name?`, `from?`, `to?`, `window_minutes?` (u32), `severity_min?`, `limit?` (u32), `events_per_anchor?` (u32) | `AiCorrelateResponse { window_minutes, severity_min, total_anchors, anchor_rows, anchor_limit, anchors_truncated, related_limit_per_anchor, total_related_events, anchors: [AiCorrelationAnchor], events_per_anchor_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `events_per_anchor` clamped at **50** — see Response size caps. Correlates AI transcript anchors against system logs. |
@@ -120,7 +122,7 @@ to them by default.
 | GET | `/api/graph/explain` | read | query: entity selector, `depth?` (clamped to 3), `beam_width?`, `max_chains?`, `evidence_sample_limit?`, `payload_budget?` | `GraphExplainResponse { resolved_entity, chains, narrative, open_questions, missing_evidence, next_queries, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Deterministic evidence-backed explanation; weak evidence becomes open questions, not causal claims. |
 | GET | `/api/graph/evidence` | read | query: `evidence_id` (REQUIRED, minimum 1), `payload_budget?` | `GraphEvidenceLookupResponse { evidence, relationship, src_entity, dst_entity, source_log_summary?, missing_source_reason?, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Proof lookup for one evidence row. Source summaries are redacted/truncated and exclude raw frames and raw metadata. |
 
-**Total: 64 routes** (current `src/api.rs` router surface, including syslog,
+**Total: 66 routes** (current `src/api.rs` router surface, including syslog,
 surface-parity, AI, graph, compose, notification, error-ack, and DB routes;
 includes the 3 hook routes above, added alongside the `ai_hook_events`
 subsystem).
@@ -143,10 +145,9 @@ startup. Two version-skew rules:
   routes added in later beads (`/api/db/vacuum`, `/api/sessions/prune-checkpoints`,
   etc.). The CLI maps that to a user-facing "upgrade the container or
   unset `CORTEX_USE_HTTP` to use direct DB" message.
-- **`/api/capabilities` is deferred.** No structured capability map ships
-  in v0.26. The version + schema_version pair plus 404 semantics cover the
-  current single-deployer use case; a capabilities endpoint can be added
-  without breaking existing clients when needed.
+- **`/api/capabilities` is additive and fail-closed.** Typed clients use it to
+  distinguish bounded polling from native streaming. This release advertises
+  rendered-session and log polling only; both native stream flags remain false.
 
 ---
 
