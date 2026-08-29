@@ -773,7 +773,9 @@ impl RuntimeCore {
                 let started = Instant::now();
                 match tokio::task::spawn_blocking(move || {
                     let _permit = permit;
-                    db::refresh_timeline_rollup(&pool)
+                    let folded = db::refresh_timeline_rollup(&pool)?;
+                    db::prune_expired_stream_lineage(&pool)?;
+                    Ok::<_, anyhow::Error>(folded)
                 })
                 .await
                 .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))

@@ -634,6 +634,14 @@ pub fn durable_stream_page(
     })
 }
 
+pub fn prune_expired_stream_lineage(pool: &DbPool) -> Result<usize> {
+    let conn = pool.get()?;
+    Ok(conn.execute(
+        "DELETE FROM stream_deleted_log_lineage WHERE deleted_at < unixepoch() - 900",
+        [],
+    )?)
+}
+
 /// Live aggregation over `logs`. This is the ground-truth implementation used
 /// for time-windowed queries and to (re)compute the rollup.
 pub fn list_ai_sessions_live(

@@ -334,6 +334,7 @@ async fn cross_principal_and_expired_cursors_are_rejected_before_streaming() {
             cursor: Some(other),
             ..request.clone()
         },
+        test_cursor_keys(),
     )
     .await;
     assert!(matches!(result, Err(StreamError::Forbidden(_))));
@@ -351,6 +352,7 @@ async fn cross_principal_and_expired_cursors_are_rejected_before_streaming() {
             cursor: Some(expired),
             ..request
         },
+        test_cursor_keys(),
     )
     .await;
     assert!(matches!(result, Err(StreamError::Expired)));
@@ -406,6 +408,7 @@ async fn retained_cursor_resumes_after_service_restart_and_gap_fails_closed() {
             cursor: Some(cursor.clone()),
             ..request.clone()
         },
+        test_cursor_keys(),
     )
     .await;
     assert!(
@@ -426,7 +429,155 @@ async fn retained_cursor_resumes_after_service_restart_and_gap_fails_closed() {
             cursor: Some(stale),
             ..request
         },
+        test_cursor_keys(),
     )
     .await;
     assert!(matches!(result, Err(StreamError::Gap { .. })));
+}
+
+#[test]
+fn resolved_cursor_keys_fail_closed_rotate_safely_and_accept_toml_only_key() {
+    assert!(CursorKeys::resolved(None, &[], false).is_err());
+    let first = CursorKeys::resolved(Some("first-secret"), &[], false).unwrap();
+    let cursor = encode_cursor_with_keys(7, "test:alice", "filters", 1234, &first);
+    let rotated = CursorKeys::resolved(
+        Some("second-secret"),
+        &["".into(), "first-secret".into()],
+        false,
+    )
+    .unwrap();
+    assert!(decode_cursor_with_keys(&cursor, &rotated).is_ok());
+    let retired = CursorKeys::resolved(Some("second-secret"), &[], false).unwrap();
+    assert!(decode_cursor_with_keys(&cursor, &retired).is_err());
+    let config: crate::config::Config =
+        toml::from_str("cursor_signing_key = 'toml-secret'\ncursor_previous_keys = ['old-secret']")
+            .unwrap();
+    assert_eq!(config.cursor_signing_key.as_deref(), Some("toml-secret"));
+    assert_eq!(config.cursor_previous_keys, ["old-secret"]);
+}
+
+#[tokio::test]
+async fn slow_client_stream_body_terminates_at_lease_deadline() {
+    use axum::response::IntoResponse;
+    let (service, _pool, _dir) = service();
+    let request = LogStreamRequest {
+        cursor: None,
+        host: None,
+        app: None,
+        severity: None,
+    };
+    let filters = fingerprint(&request).unwrap();
+    let params = db::DurableStreamParams {
+        limit: 2,
+        include_bounds: true,
+        ..Default::default()
+    };
+    let sse = build_stream(
+        service,
+        auth("alice"),
+        None,
+        filters,
+        params,
+        StreamContract {
+            event_name: "log",
+            cursor_keys: test_cursor_keys(),
+            connection_duration: Duration::from_millis(20),
+        },
+    )
+    .await
+    .unwrap();
+    let body = sse.into_response().into_body();
+    tokio::time::timeout(
+        Duration::from_millis(250),
+        axum::body::to_bytes(body, MAX_EVENT_BYTES * 2),
+    )
+    .await
+    .expect("stream body must close at its lease deadline")
+    .unwrap();
+}
+
+#[test]
+fn every_supported_log_filter_combination_uses_a_bounded_composite_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("filter-plans.db"));
+    let pool = crate::db::init_pool(&storage).unwrap();
+    let conn = pool.get().unwrap();
+    let cases = [
+        (
+            "hostname=?2 AND app_name=?3",
+            "idx_logs_stream_host_app_id",
+            vec!["h", "a"],
+        ),
+        (
+            "hostname=?2 AND severity=?3",
+            "idx_logs_stream_host_severity_id",
+            vec!["h", "info"],
+        ),
+        (
+            "app_name=?2 AND severity=?3",
+            "idx_logs_stream_app_severity_id",
+            vec!["a", "info"],
+        ),
+        (
+            "hostname=?2 AND app_name=?3 AND severity=?4",
+            "idx_logs_stream_host_app_severity_id",
+            vec!["h", "a", "info"],
+        ),
+    ];
+    for (filters, index, values) in cases {
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT id FROM logs WHERE id>?1 AND {filters} ORDER BY id LIMIT 101"
+        );
+        let mut params = vec![rusqlite::types::Value::Integer(0)];
+        params.extend(
+            values
+                .into_iter()
+                .map(|value| rusqlite::types::Value::Text(value.into())),
+        );
+        let details = conn
+            .prepare(&sql)
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" ");
+        assert!(
+            details.contains(index),
+            "{filters} did not use {index}: {details}"
+        );
+        assert!(
+            !details.contains("SCAN logs"),
+            "unbounded plan for {filters}: {details}"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_prunes_expired_lineage_without_deleting_live_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("lineage-prune.db"));
+    let pool = crate::db::init_pool(&storage).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO stream_deleted_log_lineage(id,hostname,severity,deleted_at) VALUES(1,'h','info',unixepoch()-901)", []).unwrap();
+    conn.execute("INSERT INTO logs(timestamp,hostname,severity,message,raw,source_ip) VALUES('2026-08-28T00:00:00Z','live','info','keep','keep','test')", []).unwrap();
+    drop(conn);
+    assert_eq!(crate::db::prune_expired_stream_lineage(&pool).unwrap(), 1);
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM stream_deleted_log_lineage",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
 }

@@ -84,6 +84,8 @@ fn test_state_full(
         auth_policy,
         false, // static_token_is_admin: read-only in tests
         crate::config::NotificationsConfig::default(),
+        crate::stream::CursorKeys::resolved(Some("api-test-key"), &[], true).unwrap(),
+        crate::api::resolved_integration_profile(&crate::config::Config::default()).unwrap(),
     )
     .expect("ApiState::new should succeed against a fresh pool")
     .with_isolated_maintenance_permit();
@@ -915,6 +917,34 @@ async fn runtime_integration_identity_matches_contract_and_mounted_routes() {
     assert_ne!(value["auth"]["credential_generation"], "secret");
 }
 
+#[test]
+fn integration_identity_is_stable_and_unique_for_resolved_instances() {
+    let first = crate::config::Config {
+        server_id: Some("instance-one".into()),
+        ..Default::default()
+    };
+    let first_id = crate::api::resolved_integration_profile(&first).unwrap()["server_id"].clone();
+    assert_eq!(
+        first_id,
+        crate::api::resolved_integration_profile(&first).unwrap()["server_id"]
+    );
+    let mut second = first;
+    second.server_id = Some("instance-two".into());
+    assert_ne!(
+        first_id,
+        crate::api::resolved_integration_profile(&second).unwrap()["server_id"]
+    );
+}
+
+#[test]
+fn external_integration_identity_fails_closed_without_unique_resolved_seed() {
+    let mut config = crate::config::Config::default();
+    config.mcp.host = "0.0.0.0".into();
+    assert!(crate::api::resolved_integration_profile(&config).is_err());
+    config.mcp.auth.public_url = Some("https://cortex.example.test".into());
+    assert!(crate::api::resolved_integration_profile(&config).is_ok());
+}
+
 #[tokio::test]
 async fn durable_stream_routes_require_auth_and_negotiate_sse() {
     let (state, _pool, _dir) = test_state(Some("secret".into()));
@@ -1392,6 +1422,8 @@ async fn cors_localhost_defaults_suppressed_on_external_bind() {
         AuthPolicy::Mounted { auth_state: None },
         false, // static_token_is_admin: read-only in tests
         crate::config::NotificationsConfig::default(),
+        crate::stream::CursorKeys::resolved(Some("api-test-key"), &[], false).unwrap(),
+        crate::api::resolved_integration_profile(&crate::config::Config::default()).unwrap(),
     )
     .unwrap()
     .with_isolated_maintenance_permit();

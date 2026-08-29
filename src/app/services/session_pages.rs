@@ -123,12 +123,17 @@ fn project_event(row: db::RenderedSessionEventRow) -> RenderedSessionEvent {
         .as_ref()
         .and_then(event_kind_from_metadata)
         .unwrap_or_else(|| event_kind_from_text(&row.message));
+    let mut metadata_was_redacted = false;
     if let Some(value) = &mut metadata {
+        let before = value.clone();
         crate::assessment::redact_json_value_strings(value);
+        metadata_was_redacted = *value != before;
     }
     let pattern_scrubbed = crate::receiver::enrichment::scrub_ai_message(&row.message, None);
     let scrubbed = crate::assessment::redact_secrets(&pattern_scrubbed);
-    let redacted = pattern_scrubbed != row.message
+    let mut redacted = pattern_scrubbed != row.message
+        || scrubbed != pattern_scrubbed
+        || metadata_was_redacted
         || metadata
             .as_ref()
             .and_then(|value| value.get("content_scrubbed"))
@@ -136,9 +141,11 @@ fn project_event(row: db::RenderedSessionEventRow) -> RenderedSessionEvent {
             .unwrap_or(false)
         || scrubbed.contains("[REDACTED]");
     let (text, text_truncated) = truncate_utf8(scrubbed, MAX_EVENT_TEXT_BYTES);
+    let parse_error_before = row.parse_error.clone();
     let parse_error = row
         .parse_error
         .map(|warning| crate::assessment::redact_secrets(&warning));
+    redacted |= parse_error.as_deref() != parse_error_before.as_deref();
     let parse_warning = match (parse_error, text_truncated) {
         (Some(warning), true) => Some(format!("{warning}; rendered text truncated")),
         (None, true) => Some("rendered text truncated".to_string()),

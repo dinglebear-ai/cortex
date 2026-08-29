@@ -546,6 +546,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.2",
  "hex",
+ "hmac",
  "hyper-util",
  "ipnet",
  "lab-auth",

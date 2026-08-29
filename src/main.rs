@@ -586,6 +586,13 @@ async fn serve_mcp() -> Result<()> {
             runtime.auth_policy().clone(),
             runtime.config.mcp.static_token_is_admin,
             runtime.config.notifications.clone(),
+            cortex::stream::CursorKeys::resolved(
+                runtime.config.cursor_signing_key.as_deref(),
+                &runtime.config.cursor_previous_keys,
+                cortex::config::mcp_bind_is_loopback(&runtime.config),
+            )
+            .map_err(|error| anyhow::anyhow!("invalid stream cursor configuration: {error:?}"))?,
+            api::resolved_integration_profile(&runtime.config)?,
         )?;
         app = app.merge(api::router(api_state)?);
         info!("Non-MCP API mounted under /api");

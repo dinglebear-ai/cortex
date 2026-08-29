@@ -50,3 +50,29 @@ fn projection_bounds_oversized_utf8_text() {
         Some("rendered text truncated")
     );
 }
+
+#[test]
+fn metadata_and_warning_redaction_make_page_flag_truthful() {
+    let metadata_only = project_event(db::RenderedSessionEventRow {
+        id: 1,
+        timestamp: "2026-08-28T00:00:00Z".into(),
+        message: "ordinary message".into(),
+        metadata_json: Some(r#"{"nested":"TOKEN=metadata-secret"}"#.into()),
+        parse_error: None,
+    });
+    assert!(metadata_only.redacted);
+    let warning_only = project_event(db::RenderedSessionEventRow {
+        id: 2,
+        timestamp: "2026-08-28T00:00:00Z".into(),
+        message: "ordinary message".into(),
+        metadata_json: None,
+        parse_error: Some("TOKEN=warning-secret".into()),
+    });
+    assert!(warning_only.redacted);
+    assert!(
+        !warning_only
+            .parse_warning
+            .unwrap()
+            .contains("warning-secret")
+    );
+}

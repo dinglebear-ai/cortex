@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 49;
+pub const KNOWN_SCHEMA_VERSION: i64 = 50;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3229,6 +3229,27 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              COMMIT;",
         )?;
         tracing::info!("Migration 49: durable stream retention lineage");
+    }
+
+    if !migration_applied(&conn, 50)? {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE INDEX idx_logs_stream_host_app_id ON logs(hostname,app_name,id);
+             CREATE INDEX idx_logs_stream_host_severity_id ON logs(hostname,severity,id);
+             CREATE INDEX idx_logs_stream_app_severity_id ON logs(app_name,severity,id);
+             CREATE INDEX idx_logs_stream_host_app_severity_id ON logs(hostname,app_name,severity,id);
+             CREATE INDEX idx_stream_deleted_lineage_host_id ON stream_deleted_log_lineage(hostname,id);
+             CREATE INDEX idx_stream_deleted_lineage_app_id ON stream_deleted_log_lineage(app_name,id);
+             CREATE INDEX idx_stream_deleted_lineage_severity_id ON stream_deleted_log_lineage(severity,id);
+             CREATE INDEX idx_stream_deleted_lineage_host_app_id ON stream_deleted_log_lineage(hostname,app_name,id);
+             CREATE INDEX idx_stream_deleted_lineage_host_severity_id ON stream_deleted_log_lineage(hostname,severity,id);
+             CREATE INDEX idx_stream_deleted_lineage_app_severity_id ON stream_deleted_log_lineage(app_name,severity,id);
+             CREATE INDEX idx_stream_deleted_lineage_host_app_severity_id ON stream_deleted_log_lineage(hostname,app_name,severity,id);
+             CREATE INDEX idx_stream_deleted_lineage_session_id ON stream_deleted_log_lineage(ai_project,ai_tool,ai_session_id,hostname,id);
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (50);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 50: indexed every durable stream filter shape");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
