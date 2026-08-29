@@ -24,7 +24,7 @@ updated: 2026-07-30
 
 ## Endpoint matrix
 
-74 routes total. Scope is `read` (mounted via `axum::routing::get`,
+75 routes total. Scope is `read` (mounted via `axum::routing::get`,
 hits read-side `db_permits`) or `admin`. Database maintenance and integrity
 checks share one process-wide maintenance gate; concurrent attempts receive a
 busy response. Admin mutations are audited before the service call.

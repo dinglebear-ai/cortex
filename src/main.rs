@@ -655,14 +655,17 @@ async fn serve_mcp() -> Result<()> {
     //    error_scan); wait up to 10 s for them to exit cleanly.
     // 2. Drain the ingest pipeline (batch writer flush) then checkpoint WAL.
     info!("HTTP server stopped; shutting down maintenance tasks");
-    maintenance
+    let maintenance_clean = maintenance
         .shutdown(std::time::Duration::from_secs(10))
         .await;
     info!("Maintenance tasks done; draining ingest pipeline");
-    runtime.shutdown(std::time::Duration::from_secs(5)).await;
+    let runtime_clean = runtime.shutdown(std::time::Duration::from_secs(5)).await;
 
     if fatal_shutdown.is_cancelled() {
         anyhow::bail!("fatal syslog listener failure");
+    }
+    if !maintenance_clean || !runtime_clean {
+        anyhow::bail!("unclean runtime shutdown");
     }
 
     Ok(())

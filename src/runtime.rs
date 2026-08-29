@@ -125,7 +125,7 @@ impl MaintenanceHandles {
     /// awaited with an explicit timeout rather than being abandoned immediately
     /// on `Drop`, and the pure-Rust tasks (purge, storage, error_scan) exit
     /// without abort.
-    pub async fn shutdown(self, timeout: std::time::Duration) {
+    pub async fn shutdown(self, timeout: std::time::Duration) -> bool {
         self.token.cancel();
         let all_handles: Vec<JoinHandle<()>> = [
             self.purge,
@@ -150,17 +150,35 @@ impl MaintenanceHandles {
         .chain(self.docker_ingest)
         .collect();
 
-        await_or_abort_tasks(all_handles, timeout).await;
+        await_or_abort_tasks(all_handles, timeout).await
     }
 }
 
-async fn await_or_abort_tasks(all_handles: Vec<JoinHandle<()>>, timeout: std::time::Duration) {
+async fn await_or_abort_tasks(
+    all_handles: Vec<JoinHandle<()>>,
+    timeout: std::time::Duration,
+) -> bool {
     let count = all_handles.len();
     let abort_handles: Vec<_> = all_handles.iter().map(JoinHandle::abort_handle).collect();
     let mut join_all = Box::pin(futures_util::future::join_all(all_handles));
     match tokio::time::timeout(timeout, &mut join_all).await {
-        Ok(_) => {
-            tracing::info!(tasks = count, "All maintenance tasks completed cleanly");
+        Ok(results) => {
+            let mut clean = true;
+            for result in results {
+                if let Err(error) = result {
+                    clean = false;
+                    tracing::error!(%error, "Maintenance task failed during shutdown");
+                }
+            }
+            if clean {
+                tracing::info!(tasks = count, "All maintenance tasks completed cleanly");
+            } else {
+                tracing::error!(
+                    tasks = count,
+                    "Maintenance task shutdown completed with failures"
+                );
+            }
+            clean
         }
         Err(_) => {
             tracing::warn!(
@@ -171,7 +189,14 @@ async fn await_or_abort_tasks(all_handles: Vec<JoinHandle<()>>, timeout: std::ti
             for handle in abort_handles {
                 handle.abort();
             }
-            let _ = join_all.await;
+            for result in join_all.await {
+                if let Err(error) = result
+                    && !error.is_cancelled()
+                {
+                    tracing::error!(%error, "Maintenance task failed while aborting shutdown");
+                }
+            }
+            false
         }
     }
 }
@@ -457,7 +482,7 @@ impl RuntimeCore {
     /// Signal the ingest pipeline to drain, wait up to `timeout` for the batch
     /// writer to flush, then checkpoint the WAL. Call this after the HTTP server
     /// has stopped accepting connections.
-    pub async fn shutdown(self, timeout: std::time::Duration) {
+    pub async fn shutdown(self, timeout: std::time::Duration) -> bool {
         let pool = Arc::clone(&self.pool);
         // Integrity workers use independently managed OS threads so runtime
         // teardown remains bounded. If one outlives the drain budget, skip the
@@ -468,14 +493,27 @@ impl RuntimeCore {
             tracing::warn!(
                 "Skipping shutdown WAL checkpoint because an integrity worker is still active"
             );
-            return;
+            return false;
         }
         match db::db_wal_checkpoint(&pool, "truncate") {
             Err(e) => {
                 tracing::warn!(error = %e, "WAL checkpoint on shutdown failed (non-fatal)");
+                false
             }
-            _ => {
+            Ok((busy, log_frames, checkpointed_frames))
+                if db::wal_checkpoint_complete(busy, log_frames, checkpointed_frames) =>
+            {
                 tracing::info!("WAL checkpoint completed on clean shutdown");
+                true
+            }
+            Ok((busy, log_frames, checkpointed_frames)) => {
+                tracing::warn!(
+                    busy,
+                    log_frames,
+                    checkpointed_frames,
+                    "WAL checkpoint incomplete on shutdown"
+                );
+                false
             }
         }
     }

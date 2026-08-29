@@ -445,7 +445,7 @@ async fn shutdown_timeout_aborts_and_joins_non_cooperative_tasks() {
         }
     });
     tokio::time::sleep(Duration::from_millis(15)).await;
-    super::await_or_abort_tasks(vec![handle], Duration::from_millis(1)).await;
+    assert!(!super::await_or_abort_tasks(vec![handle], Duration::from_millis(1)).await);
     let after_shutdown = progress.load(std::sync::atomic::Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(
@@ -453,6 +453,60 @@ async fn shutdown_timeout_aborts_and_joins_non_cooperative_tasks() {
         after_shutdown,
         "task continued after shutdown returned"
     );
+}
+
+#[tokio::test]
+async fn maintenance_shutdown_reports_panicked_and_cancelled_tasks_as_unclean() {
+    let panicked = tokio::spawn(async { panic!("injected maintenance panic") });
+    assert!(!super::await_or_abort_tasks(vec![panicked], Duration::from_secs(1)).await);
+
+    let cancelled = tokio::spawn(async { std::future::pending::<()>().await });
+    cancelled.abort();
+    assert!(!super::await_or_abort_tasks(vec![cancelled], Duration::from_secs(1)).await);
+
+    let clean = tokio::spawn(async {});
+    assert!(super::await_or_abort_tasks(vec![clean], Duration::from_secs(1)).await);
+}
+
+#[tokio::test]
+async fn runtime_shutdown_skips_checkpoint_when_integrity_drain_times_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut runtime = RuntimeCore::for_server(test_config(tmp.path(), loopback_mcp()))
+        .await
+        .unwrap();
+    let gate = Arc::new(std::sync::Barrier::new(2));
+    let worker_gate = Arc::clone(&gate);
+    runtime.service = runtime
+        .service
+        .clone()
+        .with_integrity_test_hook(Arc::new(move || {
+            worker_gate.wait();
+            Ok(vec!["ok".to_string()])
+        }));
+    let pool = Arc::clone(&runtime.pool);
+    let started = runtime
+        .service()
+        .db_integrity_start_background(true)
+        .await
+        .unwrap();
+
+    assert!(!runtime.shutdown(Duration::from_millis(5)).await);
+    gate.wait();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let job = crate::db::get_maintenance_job(&pool, started.job_id)
+                .unwrap()
+                .unwrap();
+            if job.status != "running" {
+                assert_eq!(job.status, "done");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

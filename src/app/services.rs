@@ -160,6 +160,11 @@ pub struct CortexService {
     /// Process-wide admission gate shared with runtime and REST maintenance.
     pub(super) maintenance_permit: Arc<Semaphore>,
     integrity_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    #[cfg(test)]
+    integrity_test_hook:
+        Option<Arc<dyn Fn() -> anyhow::Result<Vec<String>> + Send + Sync + 'static>>,
+    #[cfg(test)]
+    integrity_test_spawn_failure: bool,
     acquire_timeout: Duration,
     /// OS-level adapter for journalctl / systemd shell-outs.
     pub(super) os: Arc<dyn OsAdapter + Send + Sync>,
@@ -197,6 +202,10 @@ impl CortexService {
             heavy_read_permits: Arc::new(Semaphore::new(heavy_read_concurrency)),
             maintenance_permit: Arc::new(Semaphore::new(1)),
             integrity_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+            #[cfg(test)]
+            integrity_test_hook: None,
+            #[cfg(test)]
+            integrity_test_spawn_failure: false,
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
             os: Arc::new(SystemOsAdapter),
             file_tail_registry: None,
@@ -226,6 +235,8 @@ impl CortexService {
             heavy_read_permits: Arc::new(Semaphore::new(heavy_read_concurrency)),
             maintenance_permit: Arc::new(Semaphore::new(1)),
             integrity_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+            integrity_test_hook: None,
+            integrity_test_spawn_failure: false,
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
             os,
             file_tail_registry: None,
@@ -261,10 +272,9 @@ impl CortexService {
             .iter()
             .map(tokio::task::JoinHandle::abort_handle)
             .collect();
-        if tokio::time::timeout(timeout, futures_util::future::join_all(&mut tasks))
-            .await
-            .is_err()
-        {
+        let joined =
+            tokio::time::timeout(timeout, futures_util::future::join_all(&mut tasks)).await;
+        let Ok(results) = joined else {
             tracing::warn!(
                 timeout_secs = timeout.as_secs(),
                 "Integrity task drain timed out; aborting async wrappers"
@@ -274,8 +284,30 @@ impl CortexService {
             }
             let _ = futures_util::future::join_all(tasks).await;
             return false;
+        };
+        let mut clean = true;
+        for result in results {
+            if let Err(error) = result {
+                clean = false;
+                tracing::error!(%error, "Integrity completion task failed during drain");
+            }
         }
-        true
+        clean
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_integrity_test_hook(
+        mut self,
+        hook: Arc<dyn Fn() -> anyhow::Result<Vec<String>> + Send + Sync + 'static>,
+    ) -> Self {
+        self.integrity_test_hook = Some(hook);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_integrity_spawn_failure(mut self) -> Self {
+        self.integrity_test_spawn_failure = true;
+        self
     }
 
     pub(crate) fn with_llm_config(mut self, config: crate::config::LlmConfig) -> Self {

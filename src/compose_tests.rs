@@ -167,6 +167,22 @@ fn redacts_sensitive_lines() {
 }
 
 #[test]
+fn redacts_json_secrets_without_destroying_compose_config_shape() {
+    let input = r#"{"services":{"cortex":{"environment":{"CORTEX_TOKEN":"abc"},"volumes":[{"type":"bind","source":"/safe/backups","target":"/backups"}]}}}"#;
+    let redacted = redact_sensitive(input);
+    let value: serde_json::Value = serde_json::from_str(&redacted).unwrap();
+    assert_eq!(
+        value["services"]["cortex"]["environment"]["CORTEX_TOKEN"],
+        "[REDACTED]"
+    );
+    assert_eq!(
+        value["services"]["cortex"]["volumes"][0]["source"],
+        "/safe/backups"
+    );
+    assert!(!redacted.contains("abc"));
+}
+
+#[test]
 fn mcp_projection_omits_host_paths_and_image_ids() {
     let status = ComposeStatus {
         container_name: "cortex".into(),
@@ -1309,6 +1325,128 @@ fn dry_run_does_not_invoke_runner() {
     assert!(dry_run.dry_run);
     assert!(dry_run.command.ends_with(&["pull".into(), "cortex".into()]));
     assert_eq!(dry_run.preflight, "passed");
+}
+
+#[derive(Default)]
+struct RecordingRunner {
+    invocations: std::sync::Mutex<Vec<ComposeInvocation>>,
+    backup_source: PathBuf,
+}
+
+impl CommandRunner for RecordingRunner {
+    fn run(&self, invocation: &ComposeInvocation) -> Result<CommandOutput> {
+        self.invocations.lock().unwrap().push(invocation.clone());
+        let is_config =
+            invocation
+                .args
+                .ends_with(&["config".into(), "--format".into(), "json".into()]);
+        Ok(CommandOutput {
+            exit_status: Some(0),
+            stdout: if is_config {
+                serde_json::json!({
+                    "services": {
+                        "cortex": {"volumes": [{
+                            "type": "bind",
+                            "source": self.backup_source,
+                            "target": "/backups"
+                        }]}
+                    }
+                })
+                .to_string()
+            } else {
+                String::new()
+            },
+            stderr: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            timed_out: false,
+            timeout_cleanup: None,
+        })
+    }
+}
+
+#[test]
+fn compose_up_provisions_resolved_backup_bind_before_execution() {
+    let dir = tempfile::tempdir().unwrap();
+    let compose_file = dir.path().join("docker-compose.yml");
+    std::fs::write(&compose_file, "services: {cortex: {}}\n").unwrap();
+    let backup_source = dir.path().join("custom-backups");
+    let service = ComposeService::new(
+        FakeInspector::default(),
+        RecordingRunner {
+            invocations: Default::default(),
+            backup_source: backup_source.clone(),
+        },
+        ComposeDefaults::default(),
+    );
+    service
+        .run_mutation(
+            ComposeMutation::Up,
+            &ComposeTarget {
+                project_dir: Some(dir.path().to_path_buf()),
+                compose_file: Some(compose_file),
+                ..Default::default()
+            },
+            &MutationOptions::default(),
+        )
+        .unwrap();
+
+    assert!(backup_source.is_dir());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&backup_source)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+    let invocations = service.runner.invocations.lock().unwrap();
+    assert!(
+        invocations[0]
+            .args
+            .ends_with(&["config".into(), "--format".into(), "json".into()])
+    );
+    assert!(
+        invocations[1]
+            .args
+            .ends_with(&["up".into(), "-d".into(), "cortex".into()])
+    );
+}
+
+#[test]
+fn compose_up_dry_run_does_not_provision_backup_bind() {
+    let dir = tempfile::tempdir().unwrap();
+    let compose_file = dir.path().join("docker-compose.yml");
+    std::fs::write(&compose_file, "services: {cortex: {}}\n").unwrap();
+    let backup_source = dir.path().join("must-not-exist");
+    let service = ComposeService::new(
+        FakeInspector::default(),
+        RecordingRunner {
+            invocations: Default::default(),
+            backup_source: backup_source.clone(),
+        },
+        ComposeDefaults::default(),
+    );
+    service
+        .run_mutation(
+            ComposeMutation::Up,
+            &ComposeTarget {
+                project_dir: Some(dir.path().to_path_buf()),
+                compose_file: Some(compose_file),
+                ..Default::default()
+            },
+            &MutationOptions {
+                dry_run: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!backup_source.exists());
+    assert!(service.runner.invocations.lock().unwrap().is_empty());
 }
 
 #[test]

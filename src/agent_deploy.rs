@@ -797,7 +797,10 @@ fn ssh_run_with_stdin(host: &str, cmd: &str, input: &[u8]) -> io::Result<()> {
 fn render_env_file(env_pairs: &[(String, String)]) -> io::Result<String> {
     let mut body = String::new();
     for (key, value) in env_pairs {
-        if value.contains(['\n', '\r', '\'', '"', '\\']) || value.trim() != value {
+        if value.chars().any(char::is_control)
+            || value.contains(['\'', '"', '\\', '#'])
+            || value.trim() != value
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(

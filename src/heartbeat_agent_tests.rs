@@ -87,6 +87,7 @@ async fn unsupported_platform_emits_complete_host_only_heartbeat() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn linux_collector_constructs_probe_set_and_collects_core_proc_metrics() {
     let collector = HeartbeatCollector::linux();
     let payload = collector
@@ -111,6 +112,7 @@ async fn linux_collector_constructs_probe_set_and_collects_core_proc_metrics() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn linux_probe_collectors_read_proc_and_statvfs_successfully() {
     let cpu = LinuxCpuProbe.collect().await.unwrap();
     assert!(matches!(cpu, ProbeOutput::Cpu(_)));

@@ -300,6 +300,27 @@ jobs:
           CORTEX_TOKEN: ci-integration-token
         run: bash tests/test_live.sh
 
+  deployment-contract:
+    name: Container and Deployment Contracts
+    runs-on: ci-pool-system
+    timeout-minutes: 30
+    needs: [changes]
+    if: ${{ (needs.changes.outputs.rust == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.workflow == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Check Docker availability
+        run: docker info >/dev/null
+      - name: Build the exact PR image
+        run: docker build -f config/Dockerfile -t cortex:ci-release-smoke .
+      - name: Run exact-image container release smoke
+        run: bash scripts/container-release-smoke.sh cortex:ci-release-smoke
+      - name: Verify backup and recovery contract
+        run: bash scripts/test-backup-contract.sh cortex:ci-release-smoke
+      - name: Verify fresh Compose provisioning
+        run: bash scripts/test-compose-provisioning.sh
+      - name: Verify Docker env-file parser compatibility
+        run: bash scripts/test-agent-env-file.sh cortex:ci-release-smoke
+
   ci-gate:
     name: CI Gate
     runs-on: ci-pool-ops
@@ -316,6 +337,7 @@ jobs:
       - coverage
       - deny
       - mcp-integration
+      - deployment-contract
     steps:
       - name: Verify required jobs passed or were intentionally skipped
         run: |
@@ -338,6 +360,7 @@ jobs:
           require_success_or_skipped coverage "${{ needs.coverage.result }}"
           require_success_or_skipped deny "${{ needs.deny.result }}"
           require_success_or_skipped mcp-integration "${{ needs.mcp-integration.result }}"
+          require_success_or_skipped deployment-contract "${{ needs.deployment-contract.result }}"
 
   npm:
     name: npm launcher

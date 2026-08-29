@@ -708,13 +708,23 @@ fn parse_env_file_splits_on_first_equals_and_skips_blanks_and_comments() {
 
 #[test]
 fn render_env_file_rejects_values_with_cross_parser_ambiguity() {
-    for value in [" leading", "trailing ", "a\\b", "a\"b", "a'b", "a\nb"] {
+    for value in [
+        " leading",
+        "trailing ",
+        "a\\b",
+        "a\"b",
+        "a'b",
+        "a#b",
+        "a\nb",
+        "a\tb",
+        "a\0b",
+    ] {
         let error = render_env_file(&[("TOKEN".into(), value.into())]).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
     assert_eq!(
-        render_env_file(&[("TOKEN".into(), "spaces inside = are okay # too".into())]).unwrap(),
-        "TOKEN=spaces inside = are okay # too\n"
+        render_env_file(&[("TOKEN".into(), "spaces inside = are okay".into())]).unwrap(),
+        "TOKEN=spaces inside = are okay\n"
     );
 }
 

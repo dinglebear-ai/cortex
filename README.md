@@ -748,9 +748,15 @@ Manual Compose deployment expects an external Docker network named `cortex` unle
 ```bash
 docker network inspect cortex >/dev/null 2>&1 || docker network create cortex
 cp .env.example .env
+bash scripts/prepare-compose-dirs.sh
 docker compose up -d
 curl -fsS http://127.0.0.1:3100/health
 ```
+
+The preflight resolves the `/backups` bind with Docker Compose's own parser and
+creates the default or `CORTEX_BACKUP_DIR` override at mode `0700`. Compose is
+configured not to create this host path implicitly, preventing root-owned or
+overly permissive backup directories.
 
 The Compose files:
 

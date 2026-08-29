@@ -430,6 +430,113 @@ async fn supervisor_waits_for_durable_ack_before_checkpointing() {
 }
 
 #[tokio::test]
+async fn shutdown_checkpoints_only_complete_lines_before_partial_tail() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(8);
+    let ingest = IngestTx::from_envelope_sender_for_test(tx);
+    let log_path = temp.path().join("partial-restart.log");
+    tokio::fs::write(&log_path, b"complete\npartial")
+        .await
+        .unwrap();
+
+    let mut configured = source(
+        "partial-restart",
+        &log_path.to_string_lossy(),
+        "partial-restart",
+    );
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+
+    let first = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest.clone(),
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    first.reconcile().unwrap();
+    let complete = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(complete.entry.message, "complete");
+    complete.ack_success();
+
+    let report = first.shutdown(Duration::from_secs(2)).await;
+    assert!(!report.statuses[0].running);
+    assert_eq!(
+        registry
+            .get("partial-restart")
+            .unwrap()
+            .unwrap()
+            .checkpoint_offset,
+        Some(b"complete\n".len() as u64)
+    );
+
+    let mut writer = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&log_path)
+        .await
+        .unwrap();
+    writer.write_all(b"\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    let second = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    second.reconcile().unwrap();
+    let partial = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(partial.entry.message, "partial");
+    partial.ack_success();
+    second.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test]
+async fn shutdown_reports_checkpoint_persistence_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(4);
+    let ingest = IngestTx::from_envelope_sender_for_test(tx);
+    let log_path = temp.path().join("checkpoint-failure.log");
+    tokio::fs::write(&log_path, b"line\n").await.unwrap();
+    let mut configured = source(
+        "checkpoint-failure",
+        &log_path.to_string_lossy(),
+        "checkpoint-failure",
+    );
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().unwrap();
+    let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    envelope.ack_success();
+    registry.set_fail_checkpoint_writes(true);
+
+    let report = supervisor.shutdown(Duration::from_secs(2)).await;
+    assert!(!report.statuses[0].running);
+    assert!(
+        report.statuses[0].last_error.as_deref().is_some_and(
+            |error| error.contains("injected file-tail checkpoint persistence failure")
+        )
+    );
+}
+
+#[tokio::test]
 async fn supervisor_reconcile_stops_disabled_and_removed_sources() {
     let temp = tempfile::tempdir().unwrap();
     let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));

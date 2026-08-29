@@ -12,6 +12,8 @@ pub(crate) struct FileTailRegistry {
     mutation_lock: Mutex<()>,
     #[cfg(test)]
     write_count: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    fail_checkpoint_writes: std::sync::atomic::AtomicBool,
 }
 
 impl FileTailRegistry {
@@ -22,6 +24,8 @@ impl FileTailRegistry {
             mutation_lock: Mutex::new(()),
             #[cfg(test)]
             write_count: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_checkpoint_writes: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -124,6 +128,13 @@ impl FileTailRegistry {
         offset: u64,
         now: &str,
     ) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .fail_checkpoint_writes
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            anyhow::bail!("injected file-tail checkpoint persistence failure");
+        }
         let _guard = self.state_lock.lock();
         let mut sources = self.read_locked()?;
         let source = sources
@@ -165,6 +176,12 @@ impl FileTailRegistry {
     #[cfg(test)]
     pub(crate) fn write_count(&self) -> usize {
         self.write_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fail_checkpoint_writes(&self, fail: bool) {
+        self.fail_checkpoint_writes
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn restore_locked(&self, mut before: Vec<FileTailSource>) -> Result<()> {

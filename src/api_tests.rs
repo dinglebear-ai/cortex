@@ -16,9 +16,9 @@ use super::*;
 fn documented_rest_route_count_matches_router_registrations() {
     let source = include_str!("api.rs");
     let route_count = source.matches(".route(").count();
-    assert_eq!(route_count, 74, "update the documented API denominator");
-    assert!(include_str!("../docs/api.md").contains("74 routes total"));
-    assert!(include_str!("../docs/architecture.md").contains("(74 routes)"));
+    assert_eq!(route_count, 75, "update the documented API denominator");
+    assert!(include_str!("../docs/api.md").contains("75 routes total"));
+    assert!(include_str!("../docs/architecture.md").contains("(75 routes)"));
 }
 
 /// Build the router for a test, layering a `MockConnectInfo` so handlers

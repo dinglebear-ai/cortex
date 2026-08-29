@@ -103,41 +103,97 @@ impl CortexService {
             .await?;
 
         let pool = Arc::clone(&self.pool);
+        let worker_pool = Arc::clone(&pool);
+        #[cfg(test)]
+        let test_hook = self.integrity_test_hook.clone();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-        std::thread::Builder::new()
+        #[cfg(test)]
+        if self.integrity_test_spawn_failure {
+            let error = "injected integrity worker spawn failure";
+            let payload = serde_json::json!({ "error": error }).to_string();
+            db::finish_maintenance_job(&pool, job_id, "failed", &payload).map_err(
+                |finish_error| {
+                    ServiceError::Internal(anyhow::anyhow!(
+                        "{error}; additionally failed to mark job {job_id} failed: {finish_error}"
+                    ))
+                },
+            )?;
+            return Err(ServiceError::Internal(anyhow::anyhow!(error)));
+        }
+        let spawn_result = std::thread::Builder::new()
             .name(format!("cortex-integrity-{job_id}"))
             .spawn(move || {
                 let _permit = permit;
-                let (status, result_json) = match db::db_integrity_check(&pool, quick) {
-                    Ok(messages) => {
+                let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    #[cfg(test)]
+                    if let Some(hook) = test_hook {
+                        return hook();
+                    }
+                    db::db_integrity_check(&worker_pool, quick)
+                }));
+                let (status, result_json) = match checked {
+                    Err(payload) => {
+                        let detail = payload
+                            .downcast_ref::<&str>()
+                            .map(|value| (*value).to_string())
+                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic payload".to_string());
+                        (
+                            "failed",
+                            serde_json::json!({ "error": format!("integrity worker panicked: {detail}") })
+                                .to_string(),
+                        )
+                    }
+                    Ok(Ok(messages)) => {
                         let ok = messages.len() == 1
                             && messages.first().is_some_and(|value| value == "ok");
                         let payload = serde_json::json!({ "ok": ok, "messages": messages });
                         ("done", payload.to_string())
                     }
-                    Err(e) => (
+                    Ok(Err(e)) => (
                         "failed",
                         serde_json::json!({ "error": e.to_string() }).to_string(),
                     ),
                 };
-                if let Err(e) = db::finish_maintenance_job(&pool, job_id, status, &result_json) {
+                let completion = db::finish_maintenance_job(&worker_pool, job_id, status, &result_json)
+                    .map_err(|error| error.to_string());
+                if let Err(e) = &completion {
                     tracing::error!(job_id, error = %e, "failed to record integrity job result");
                 }
-                let _ = done_tx.send(());
-            })
-            .map_err(|error| {
-                ServiceError::Internal(anyhow::anyhow!("spawn integrity worker: {error}"))
-            })?;
+                let _ = done_tx.send(completion);
+            });
+        let worker = match spawn_result {
+            Ok(worker) => worker,
+            Err(error) => {
+                let message = format!("spawn integrity worker: {error}");
+                let payload = serde_json::json!({ "error": message }).to_string();
+                db::finish_maintenance_job(&pool, job_id, "failed", &payload).map_err(|finish_error| {
+                    ServiceError::Internal(anyhow::anyhow!(
+                        "{message}; additionally failed to mark job {job_id} failed: {finish_error}"
+                    ))
+                })?;
+                return Err(ServiceError::Internal(anyhow::anyhow!(message)));
+            }
+        };
+        drop(worker);
         // Tokio owns only this lightweight completion waiter. On a bounded
         // shutdown it can be aborted without making the runtime wait for the
         // independently managed OS thread; normal shutdown still joins it.
         let task = tokio::spawn(async move {
-            let _ = done_rx.await;
+            match done_rx.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    panic!("integrity worker could not persist terminal state: {error}")
+                }
+                Err(_) => panic!("integrity worker exited without reporting completion"),
+            }
         });
-        self.integrity_tasks
+        let mut integrity_tasks = self
+            .integrity_tasks
             .lock()
-            .expect("integrity task registry mutex poisoned")
-            .push(task);
+            .expect("integrity task registry mutex poisoned");
+        integrity_tasks.retain(|task| !task.is_finished());
+        integrity_tasks.push(task);
 
         Ok(DbIntegrityJobStarted {
             job_id,
