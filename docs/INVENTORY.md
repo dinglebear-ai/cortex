@@ -40,11 +40,14 @@ and generated inventories are updated.
 
 ## Palette session contract
 
-The runtime now exposes authenticated `GET /api/capabilities` and
-`GET /api/sessions/rendered`. Rendered session pages normalize semantic event
+The runtime now exposes authenticated `GET /api/capabilities`,
+`GET /api/sessions/rendered`, `GET /api/streams/logs`, and
+`GET /api/streams/sessions`. Rendered session pages normalize semantic event
 kinds, redaction annotations, and parse warnings over a durable ascending
 `logs.id` cursor. Polls are bounded to 200 events and 256 KiB with an explicit
-2-second retry hint. Native log and session streams remain unsupported here;
+2-second retry hint. Native log and session streams use principal- and
+filter-bound durable row-ID cursors, `Last-Event-ID` resume, typed retention
+gap/expiry/overload termination, and bounded replay batches;
 durable resumable SSE is owned by the separate streaming delivery slice.
 
 ## MCP tools

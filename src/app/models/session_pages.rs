@@ -66,12 +66,14 @@ pub struct SessionCapabilities {
     pub rendered_pages: bool,
     pub polling: PollingCapability,
     pub native_stream: bool,
+    pub stream: Option<StreamCapability>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LogCapabilities {
     pub polling: bool,
     pub native_stream: bool,
+    pub stream: Option<StreamCapability>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +83,15 @@ pub struct PollingCapability {
     pub max_page_items: u32,
     pub max_page_bytes: usize,
     pub poll_after_ms: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamCapability {
+    pub cursor: &'static str,
+    pub ordering: &'static str,
+    pub max_batch_items: u32,
+    pub max_batch_bytes: usize,
+    pub reconnect_budget_ms: u32,
 }
 
 pub fn capabilities() -> CortexCapabilities {
@@ -95,11 +106,23 @@ pub fn capabilities() -> CortexCapabilities {
                 max_page_bytes: RENDERED_SESSION_PAGE_MAX_BYTES,
                 poll_after_ms: RENDERED_SESSION_POLL_AFTER_MS,
             },
-            native_stream: false,
+            native_stream: true,
+            stream: Some(stream_capability()),
         },
         logs: LogCapabilities {
             polling: true,
-            native_stream: false,
+            native_stream: true,
+            stream: Some(stream_capability()),
         },
+    }
+}
+
+fn stream_capability() -> StreamCapability {
+    StreamCapability {
+        cursor: "principal_and_filter_bound_durable_log_row_id",
+        ordering: "position_ascending",
+        max_batch_items: 100,
+        max_batch_bytes: 128 * 1024,
+        reconnect_budget_ms: 5_000,
     }
 }

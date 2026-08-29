@@ -872,15 +872,32 @@ async fn version_route_returns_payload_with_bearer() {
 }
 
 #[tokio::test]
-async fn capabilities_advertise_bounded_polling_without_native_streams() {
+async fn capabilities_advertise_bounded_polling_and_native_streams() {
     let (state, _pool, _dir) = test_state(Some("secret".into()));
     let (status, value) = get_json(test_router(state), "/api/capabilities", Some("secret")).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(value["sessions"]["rendered_pages"], true);
-    assert_eq!(value["sessions"]["native_stream"], false);
-    assert_eq!(value["logs"]["native_stream"], false);
+    assert_eq!(value["sessions"]["native_stream"], true);
+    assert_eq!(value["logs"]["native_stream"], true);
+    assert_eq!(value["sessions"]["stream"]["max_batch_items"], 100);
+    assert_eq!(value["logs"]["stream"]["max_batch_bytes"], 131_072);
     assert_eq!(value["sessions"]["polling"]["max_page_items"], 200);
     assert_eq!(value["sessions"]["polling"]["max_page_bytes"], 262_144);
+}
+
+#[tokio::test]
+async fn durable_stream_routes_require_auth_and_negotiate_sse() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let response = get_response(app.clone(), "/api/streams/logs", None).await;
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    let response = get_response(app, "/api/streams/logs?host=devhost", Some("secret")).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
 }
 
 #[tokio::test]

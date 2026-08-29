@@ -1,0 +1,272 @@
+use super::*;
+
+fn auth(subject: &str) -> AuthContext {
+    AuthContext {
+        sub: subject.into(),
+        actor_key: None,
+        scopes: vec!["cortex:read".into()],
+        issuer: "test".into(),
+        via_session: false,
+        csrf_token: None,
+        email: None,
+    }
+}
+
+#[test]
+fn cursor_round_trip_binds_principal_filters_and_watermark() {
+    let encoded = encode_cursor(42, "issuer:alice", "filters", 1234);
+    let decoded = decode_cursor(&encoded).unwrap();
+    assert_eq!(decoded.position, 42);
+    assert_eq!(decoded.principal, "issuer:alice");
+    assert_eq!(decoded.filters, "filters");
+    assert_eq!(decoded.issued_at, 1234);
+}
+
+#[test]
+fn malformed_and_oversized_cursors_fail_closed() {
+    assert!(matches!(
+        decode_cursor("not-hex"),
+        Err(StreamError::Invalid(_))
+    ));
+    assert!(matches!(
+        decode_cursor(&"a".repeat(2049)),
+        Err(StreamError::Invalid(_))
+    ));
+}
+
+#[test]
+fn principal_identity_includes_issuer_and_subject() {
+    assert_eq!(principal_key(&auth("alice")), "test:alice");
+    assert_ne!(principal_key(&auth("alice")), principal_key(&auth("bob")));
+}
+
+#[test]
+fn event_payload_is_utf8_safe_and_bounded() {
+    let row = db::DurableStreamRow {
+        id: 1,
+        timestamp: "2026-08-28T00:00:00Z".into(),
+        hostname: "host".into(),
+        severity: "info".into(),
+        app_name: None,
+        message: "é".repeat(MAX_EVENT_BYTES),
+        metadata_json: None,
+        parse_error: None,
+    };
+    let payload = row_json(&row, "log");
+    assert!(payload.len() < MAX_EVENT_BYTES + 1024);
+    assert!(payload.contains("[truncated]"));
+}
+
+#[test]
+fn missing_scope_is_denied() {
+    let mut context = auth("alice");
+    context.scopes.clear();
+    assert!(matches!(
+        require_read_scope(&context),
+        Err(StreamError::Forbidden(_))
+    ));
+}
+
+#[test]
+fn cursor_is_not_part_of_filter_lineage() {
+    let mut first = LogStreamRequest {
+        cursor: None,
+        host: Some("h".into()),
+        app: None,
+        severity: None,
+    };
+    let expected = fingerprint(&first).unwrap();
+    first.cursor = Some("resume-token".into());
+    first.cursor = None;
+    assert_eq!(fingerprint(&first).unwrap(), expected);
+}
+
+#[test]
+fn durable_query_is_ordered_bounded_and_exposes_retention_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("stream.db"));
+    let pool = crate::db::init_pool(&storage).unwrap();
+    let make = |message: &str| crate::db::LogBatchEntry {
+        timestamp: "2026-08-28T00:00:00Z".into(),
+        hostname: "h".into(),
+        facility: None,
+        severity: "info".into(),
+        app_name: Some("app".into()),
+        process_id: None,
+        message: message.into(),
+        raw: message.into(),
+        source_ip: "test".into(),
+        docker_checkpoint: None,
+        ai_tool: None,
+        ai_project: None,
+        ai_session_id: None,
+        ai_transcript_path: None,
+        metadata_json: None,
+        http_status: None,
+        auth_outcome: None,
+        dns_blocked: None,
+        event_action: None,
+        parse_error: None,
+    };
+    crate::db::insert_logs_batch(&pool, &[make("one"), make("two"), make("three")]).unwrap();
+    let first = crate::db::durable_stream_page(
+        &pool,
+        &db::DurableStreamParams {
+            hostname: Some("h".into()),
+            limit: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        first
+            .rows
+            .iter()
+            .map(|row| row.message.as_str())
+            .collect::<Vec<_>>(),
+        ["one", "two"]
+    );
+    let first_id = first.rows[0].id;
+    pool.get()
+        .unwrap()
+        .execute("DELETE FROM logs WHERE id = ?1", [first_id])
+        .unwrap();
+    let retained = crate::db::durable_stream_page(
+        &pool,
+        &db::DurableStreamParams {
+            hostname: Some("h".into()),
+            after_id: first_id,
+            limit: 100,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(retained.minimum_watermark.unwrap() > first_id);
+    assert_eq!(retained.rows.len(), 2);
+}
+
+fn service() -> (
+    CortexService,
+    std::sync::Arc<crate::db::DbPool>,
+    tempfile::TempDir,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("service.db"));
+    let pool = std::sync::Arc::new(crate::db::init_pool(&storage).unwrap());
+    (CortexService::new(pool.clone(), storage), pool, dir)
+}
+
+#[tokio::test]
+async fn cross_principal_and_expired_cursors_are_rejected_before_streaming() {
+    let (service, _pool, _dir) = service();
+    let request = LogStreamRequest {
+        cursor: None,
+        host: None,
+        app: None,
+        severity: None,
+    };
+    let filters = fingerprint(&request).unwrap();
+    let other = encode_cursor(1, "test:bob", &filters, Utc::now().timestamp());
+    let result = log_stream(
+        service.clone(),
+        auth("alice"),
+        LogStreamRequest {
+            cursor: Some(other),
+            ..request.clone()
+        },
+    )
+    .await;
+    assert!(matches!(result, Err(StreamError::Forbidden(_))));
+
+    let expired = encode_cursor(
+        1,
+        "test:alice",
+        &filters,
+        Utc::now().timestamp() - CURSOR_TTL_SECS - 1,
+    );
+    let result = log_stream(
+        service,
+        auth("alice"),
+        LogStreamRequest {
+            cursor: Some(expired),
+            ..request
+        },
+    )
+    .await;
+    assert!(matches!(result, Err(StreamError::Expired)));
+}
+
+#[tokio::test]
+async fn retained_cursor_resumes_after_service_restart_and_gap_fails_closed() {
+    let (service, pool, _dir) = service();
+    let make = |message: &str| crate::db::LogBatchEntry {
+        timestamp: "2026-08-28T00:00:00Z".into(),
+        hostname: "h".into(),
+        facility: None,
+        severity: "info".into(),
+        app_name: None,
+        process_id: None,
+        message: message.into(),
+        raw: message.into(),
+        source_ip: "test".into(),
+        docker_checkpoint: None,
+        ai_tool: None,
+        ai_project: None,
+        ai_session_id: None,
+        ai_transcript_path: None,
+        metadata_json: None,
+        http_status: None,
+        auth_outcome: None,
+        dns_blocked: None,
+        event_action: None,
+        parse_error: None,
+    };
+    crate::db::insert_logs_batch(&pool, &[make("one"), make("two")]).unwrap();
+    let first_id: i64 = pool
+        .get()
+        .unwrap()
+        .query_row("SELECT MIN(id) FROM logs", [], |row| row.get(0))
+        .unwrap();
+    let request = LogStreamRequest {
+        cursor: None,
+        host: Some("h".into()),
+        app: None,
+        severity: None,
+    };
+    let filters = fingerprint(&request).unwrap();
+    let cursor = encode_cursor(first_id, "test:alice", &filters, Utc::now().timestamp());
+    let restarted = CortexService::new(
+        pool.clone(),
+        crate::config::StorageConfig::for_test(_dir.path().join("service.db")),
+    );
+    let result = log_stream(
+        restarted,
+        auth("alice"),
+        LogStreamRequest {
+            cursor: Some(cursor.clone()),
+            ..request.clone()
+        },
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "a retained committed watermark must survive service restart"
+    );
+    drop(result);
+
+    pool.get()
+        .unwrap()
+        .execute("DELETE FROM logs WHERE id = ?1", [first_id])
+        .unwrap();
+    let stale = encode_cursor(0, "test:alice", &filters, Utc::now().timestamp());
+    let result = log_stream(
+        service,
+        auth("alice"),
+        LogStreamRequest {
+            cursor: Some(stale),
+            ..request
+        },
+    )
+    .await;
+    assert!(matches!(result, Err(StreamError::Gap { .. })));
+}

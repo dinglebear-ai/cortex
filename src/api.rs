@@ -17,11 +17,12 @@ use std::sync::{Arc, OnceLock};
 
 use axum::{
     Router,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Extension, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
 };
+use lab_auth::AuthContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Semaphore;
@@ -243,6 +244,8 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/stats", get(stats))
         .route("/api/version", get(version))
         .route("/api/capabilities", get(capabilities))
+        .route("/api/streams/logs", get(log_stream))
+        .route("/api/streams/sessions", get(session_stream))
         .merge(investigation::routes())
         // --- surface parity routes ---
         .route("/api/source-ips", get(source_ips))
@@ -580,6 +583,42 @@ async fn version(State(state): State<ApiState>) -> impl IntoResponse {
 /// Native streams remain false until the durable SSE slice lands.
 async fn capabilities() -> impl IntoResponse {
     Json(crate::app::capabilities()).into_response()
+}
+
+async fn log_stream(
+    State(state): State<ApiState>,
+    Extension(auth): Extension<AuthContext>,
+    headers: HeaderMap,
+    Query(mut request): Query<crate::stream::LogStreamRequest>,
+) -> impl IntoResponse {
+    if request.cursor.is_none() {
+        request.cursor = last_event_id(&headers);
+    }
+    crate::stream::log_stream(state.service, auth, request)
+        .await
+        .into_response()
+}
+
+async fn session_stream(
+    State(state): State<ApiState>,
+    Extension(auth): Extension<AuthContext>,
+    headers: HeaderMap,
+    Query(mut request): Query<crate::stream::SessionStreamRequest>,
+) -> impl IntoResponse {
+    if request.cursor.is_none() {
+        request.cursor = last_event_id(&headers);
+    }
+    crate::stream::session_stream(state.service, auth, request)
+        .await
+        .into_response()
+}
+
+fn last_event_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 // ─── Surface parity routes ──────────────────────────────────────────────────

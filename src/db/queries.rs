@@ -28,11 +28,11 @@ use super::models::{
     AbuseIncident, AiAbuseMatch, AiAbuseParams, AiAbuseResult, AiCorrelateParams, AiIncidentParams,
     AiIncidentResult, AiInvestigateParams, AiInvestigateResult, AiProjectInventoryEntry,
     AiRelatedLogsForAnchor, AiRelatedLogsParams, AiSessionEntry, AiToolInventoryEntry, DbStats,
-    ErrorSummaryEntry, GraphRelatedLogEntry, IncidentEvidence, ListAiProjectsParams,
-    ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult, LogEntry,
-    RenderedSessionEventRow, RenderedSessionPageParams, ResolvedTopicEntity,
-    SearchAiSessionsParams, SearchAiSessionsResult, SearchParams, SearchedAiSessionEntry,
-    SessionGraphInputs, TopicGraphInputs,
+    DurableStreamPage, DurableStreamParams, DurableStreamRow, ErrorSummaryEntry,
+    GraphRelatedLogEntry, IncidentEvidence, ListAiProjectsParams, ListAiProjectsResult,
+    ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult, LogEntry, RenderedSessionEventRow,
+    RenderedSessionPageParams, ResolvedTopicEntity, SearchAiSessionsParams, SearchAiSessionsResult,
+    SearchParams, SearchedAiSessionEntry, SessionGraphInputs, TopicGraphInputs,
 };
 use super::pool::DbPool;
 use super::queries_service_instances;
@@ -542,6 +542,67 @@ pub fn rendered_session_page(
         },
     )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn durable_stream_page(
+    pool: &DbPool,
+    params: &DurableStreamParams,
+) -> Result<DurableStreamPage> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, timestamp, hostname, severity, app_name, message, metadata_json, parse_error
+         FROM logs WHERE (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
+           AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
+           AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)
+           AND id > ?7 AND (?8 IS NULL OR id <= ?8) ORDER BY id ASC LIMIT ?9",
+    )?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![
+                params.hostname,
+                params.app_name,
+                params.severity,
+                params.ai_project,
+                params.ai_tool,
+                params.ai_session_id,
+                params.after_id,
+                params.high_watermark,
+                params.limit.clamp(1, 101)
+            ],
+            |row| {
+                Ok(DurableStreamRow {
+                    id: row.get(0)?,
+                    timestamp: row.get(1)?,
+                    hostname: row.get(2)?,
+                    severity: row.get(3)?,
+                    app_name: row.get(4)?,
+                    message: row.get(5)?,
+                    metadata_json: row.get(6)?,
+                    parse_error: row.get(7)?,
+                })
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let (minimum_watermark, high_watermark) = conn.query_row(
+        "SELECT MIN(id), COALESCE(MAX(id), 0) FROM logs
+         WHERE (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
+           AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
+           AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)",
+        rusqlite::params![
+            params.hostname,
+            params.app_name,
+            params.severity,
+            params.ai_project,
+            params.ai_tool,
+            params.ai_session_id
+        ],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(DurableStreamPage {
+        rows,
+        minimum_watermark,
+        high_watermark,
+    })
 }
 
 /// Live aggregation over `logs`. This is the ground-truth implementation used
