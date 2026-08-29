@@ -378,6 +378,18 @@ fn fingerprint<T: Serialize>(value: &T) -> Result<String, StreamError> {
     let bytes = serde_json::to_vec(value).map_err(|_| StreamError::Invalid("invalid filters"))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
+fn cursor_mac(
+    position: i64,
+    principal: &str,
+    filters: &str,
+    issued_at: i64,
+    key: &[u8],
+) -> Hmac<Sha256> {
+    let body = format!("1\0{position}\0{principal}\0{filters}\0{issued_at}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts arbitrary key lengths");
+    mac.update(body.as_bytes());
+    mac
+}
 fn cursor_signature(
     position: i64,
     principal: &str,
@@ -385,10 +397,11 @@ fn cursor_signature(
     issued_at: i64,
     key: &[u8],
 ) -> String {
-    let body = format!("1\0{position}\0{principal}\0{filters}\0{issued_at}");
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts arbitrary key lengths");
-    mac.update(body.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    hex::encode(
+        cursor_mac(position, principal, filters, issued_at, key)
+            .finalize()
+            .into_bytes(),
+    )
 }
 pub(crate) fn encode_cursor_with_keys(
     position: i64,
@@ -417,23 +430,32 @@ fn decode_cursor_with_keys(value: &str, keys: &CursorKeys) -> Result<StreamCurso
     if cursor.version != 1 || cursor.position < 0 {
         return Err(StreamError::Invalid("invalid cursor"));
     }
-    let current = cursor_signature(
+    let tag = hex::decode(&cursor.signature)
+        .map_err(|_| StreamError::Invalid("cursor signature is invalid"))?;
+    if tag.len() != 32 {
+        return Err(StreamError::Invalid("cursor signature is invalid"));
+    }
+    let mut signature_ok = cursor_mac(
         cursor.position,
         &cursor.principal,
         &cursor.filters,
         cursor.issued_at,
         &keys.current,
-    );
-    let previous_ok = keys.previous.iter().any(|key| {
-        cursor_signature(
+    )
+    .verify_slice(&tag)
+    .is_ok();
+    for key in keys.previous.iter() {
+        signature_ok |= cursor_mac(
             cursor.position,
             &cursor.principal,
             &cursor.filters,
             cursor.issued_at,
             key,
-        ) == cursor.signature
-    });
-    if current != cursor.signature && !previous_ok {
+        )
+        .verify_slice(&tag)
+        .is_ok();
+    }
+    if !signature_ok {
         return Err(StreamError::Invalid("cursor signature is invalid"));
     }
     Ok(cursor)

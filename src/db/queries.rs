@@ -589,35 +589,17 @@ pub fn durable_stream_page(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let (minimum_watermark, high_watermark) = if params.include_bounds {
+        let (retained_sql, retained_values) = stream_bounds_sql("logs", params, false);
         let retained: (Option<i64>, i64) = conn.query_row(
-            "SELECT MIN(id), COALESCE(MAX(id), 0) FROM logs
-         WHERE (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
-           AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
-           AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)",
-            rusqlite::params![
-                params.hostname,
-                params.app_name,
-                params.severity,
-                params.ai_project,
-                params.ai_tool,
-                params.ai_session_id
-            ],
+            &retained_sql,
+            rusqlite::params_from_iter(retained_values.iter()),
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        let (deleted_sql, deleted_values) =
+            stream_bounds_sql("stream_deleted_log_lineage", params, true);
         let deleted: Option<i64> = conn.query_row(
-            "SELECT MAX(id) FROM stream_deleted_log_lineage
-             WHERE deleted_at >= unixepoch() - 900
-               AND (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
-               AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
-               AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)",
-            rusqlite::params![
-                params.hostname,
-                params.app_name,
-                params.severity,
-                params.ai_project,
-                params.ai_tool,
-                params.ai_session_id
-            ],
+            &deleted_sql,
+            rusqlite::params_from_iter(deleted_values.iter()),
             |row| row.get(0),
         )?;
         let floor = deleted
@@ -632,6 +614,72 @@ pub fn durable_stream_page(
         minimum_watermark,
         high_watermark,
     })
+}
+
+/// Build the initial retention-bound query from the exact supported filter
+/// shape. Nullable `(? IS NULL OR column = ?)` predicates make SQLite ignore
+/// the stream indexes, so every shape deliberately emits only direct equality
+/// predicates. Session streams are a separate, fully-qualified shape.
+pub(crate) fn stream_bounds_sql(
+    table: &str,
+    params: &DurableStreamParams,
+    deleted: bool,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let select = if deleted {
+        "SELECT MAX(id)"
+    } else if params.hostname.is_none()
+        && params.app_name.is_none()
+        && params.severity.is_none()
+        && params.ai_project.is_none()
+        && params.ai_tool.is_none()
+        && params.ai_session_id.is_none()
+    {
+        return (
+            format!(
+                "SELECT (SELECT id FROM {table} WHERE id >= 0 ORDER BY id ASC LIMIT 1), \
+                 COALESCE((SELECT id FROM {table} WHERE id >= 0 ORDER BY id DESC LIMIT 1), 0)"
+            ),
+            Vec::new(),
+        );
+    } else {
+        "SELECT MIN(id), COALESCE(MAX(id), 0)"
+    };
+    let mut sql = format!("{select} FROM {table}");
+    let mut values = Vec::new();
+    let mut predicates: Vec<&str> = Vec::new();
+
+    if deleted {
+        predicates.push("deleted_at >= unixepoch() - 900");
+    }
+    let mut direct = |column: &'static str, value: &Option<String>| {
+        if let Some(value) = value {
+            values.push(rusqlite::types::Value::Text(value.clone()));
+            predicates.push(column);
+        }
+    };
+    direct("hostname = ?", &params.hostname);
+    direct("app_name = ?", &params.app_name);
+    direct("severity = ?", &params.severity);
+    direct("ai_project = ?", &params.ai_project);
+    direct("ai_tool = ?", &params.ai_tool);
+    direct("ai_session_id = ?", &params.ai_session_id);
+
+    if !predicates.is_empty() {
+        sql.push_str(" WHERE ");
+        let mut parameter = 0usize;
+        for (index, predicate) in predicates.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(" AND ");
+            }
+            if *predicate == "deleted_at >= unixepoch() - 900" {
+                sql.push_str(predicate);
+            } else {
+                parameter += 1;
+                sql.push_str(&predicate.replace('?', &format!("?{parameter}")));
+            }
+        }
+    }
+    (sql, values)
 }
 
 pub fn prune_expired_stream_lineage(pool: &DbPool) -> Result<usize> {

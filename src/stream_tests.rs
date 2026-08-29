@@ -35,6 +35,20 @@ fn malformed_and_oversized_cursors_fail_closed() {
 }
 
 #[test]
+fn malformed_signature_hex_and_lengths_fail_closed() {
+    let encoded = encode_cursor(42, "issuer:alice", "filters", 1234);
+    let mut cursor: StreamCursor = serde_json::from_slice(&hex::decode(encoded).unwrap()).unwrap();
+    for signature in ["zz".to_owned(), "00".repeat(31), "00".repeat(33)] {
+        cursor.signature = signature;
+        let encoded = hex::encode(serde_json::to_vec(&cursor).unwrap());
+        assert!(matches!(
+            decode_cursor(&encoded),
+            Err(StreamError::Invalid("cursor signature is invalid"))
+        ));
+    }
+}
+
+#[test]
 fn principal_identity_includes_issuer_and_subject() {
     assert_eq!(principal_key(&auth("alice")), "test:alice");
     assert_ne!(principal_key(&auth("alice")), principal_key(&auth("bob")));
@@ -552,6 +566,89 @@ fn every_supported_log_filter_combination_uses_a_bounded_composite_index() {
             !details.contains("SCAN logs"),
             "unbounded plan for {filters}: {details}"
         );
+    }
+}
+
+#[test]
+fn production_bound_queries_use_indexes_on_populated_data_for_every_filter_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("bound-plans.db"));
+    let pool = crate::db::init_pool(&storage).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute_batch(
+        "BEGIN;
+         WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<2000)
+         INSERT INTO logs(timestamp,hostname,severity,app_name,message,raw,source_ip,
+                          ai_project,ai_tool,ai_session_id)
+         SELECT '2026-08-28T00:00:00Z', 'host-'||(x%5),
+                CASE x%3 WHEN 0 THEN 'info' WHEN 1 THEN 'warning' ELSE 'err' END,
+                'app-'||(x%7), 'm', 'm', 'test',
+                CASE WHEN x%11=0 THEN 'project' END,
+                CASE WHEN x%11=0 THEN 'tool' END,
+                CASE WHEN x%11=0 THEN 'session' END FROM n;
+         DELETE FROM logs WHERE id%13=0;
+         ANALYZE;
+         COMMIT;",
+    )
+    .unwrap();
+
+    let log_shapes = [
+        (None, None, None),
+        (Some("host-1"), None, None),
+        (None, Some("app-1"), None),
+        (None, None, Some("info")),
+        (Some("host-1"), Some("app-1"), None),
+        (Some("host-1"), None, Some("info")),
+        (None, Some("app-1"), Some("info")),
+        (Some("host-1"), Some("app-1"), Some("info")),
+    ];
+    let mut production_params = Vec::new();
+    for (host, app, severity) in log_shapes {
+        let params = db::DurableStreamParams {
+            hostname: host.map(str::to_owned),
+            app_name: app.map(str::to_owned),
+            severity: severity.map(str::to_owned),
+            include_bounds: true,
+            limit: 10,
+            ..Default::default()
+        };
+        assert_bound_plans_are_indexed(&conn, &params);
+        production_params.push(params);
+    }
+
+    let session = db::DurableStreamParams {
+        hostname: Some("host-1".into()),
+        ai_project: Some("project".into()),
+        ai_tool: Some("tool".into()),
+        ai_session_id: Some("session".into()),
+        include_bounds: true,
+        limit: 10,
+        ..Default::default()
+    };
+    assert_bound_plans_are_indexed(&conn, &session);
+    production_params.push(session);
+    drop(conn);
+    for params in production_params {
+        crate::db::durable_stream_page(&pool, &params).unwrap();
+    }
+}
+
+fn assert_bound_plans_are_indexed(conn: &rusqlite::Connection, params: &db::DurableStreamParams) {
+    for (table, deleted) in [("logs", false), ("stream_deleted_log_lineage", true)] {
+        let (sql, values) = crate::db::stream_bounds_sql(table, params, deleted);
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let plan = conn
+            .prepare(&explain)
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" ");
+        assert!(!plan.contains(&format!("SCAN {table}")), "{sql}: {plan}");
+        assert!(plan.contains(&format!("SEARCH {table}")), "{sql}: {plan}");
     }
 }
 

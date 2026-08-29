@@ -31,6 +31,8 @@ pub mod otlp_traces;
 mod pool;
 mod queries;
 pub(crate) use queries::page_agent_projection_logs;
+#[cfg(test)]
+pub(crate) use queries::stream_bounds_sql;
 mod queries_hosts;
 mod queries_service_instances;
 mod skill_events;
