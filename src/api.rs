@@ -250,6 +250,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/stats", get(stats))
         .route("/api/version", get(version))
         .route("/api/integration-profile", get(integration_profile))
+        .route("/v1/integration/identity", get(integration_profile))
         .route("/api/capabilities", get(capabilities))
         .route("/api/streams/logs", get(log_stream))
         .route("/api/streams/sessions", get(session_stream))

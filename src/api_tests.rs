@@ -917,6 +917,27 @@ async fn runtime_integration_identity_matches_contract_and_mounted_routes() {
     assert_ne!(value["auth"]["credential_generation"], "secret");
 }
 
+#[tokio::test]
+async fn palette_integration_identity_alias_matches_canonical_profile() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let (canonical_status, canonical) =
+        get_json(app.clone(), "/api/integration-profile", Some("secret")).await;
+    let (alias_status, alias) = get_json(app, "/v1/integration/identity", Some("secret")).await;
+
+    assert_eq!(canonical_status, axum::http::StatusCode::OK);
+    assert_eq!(alias_status, axum::http::StatusCode::OK);
+    assert_eq!(alias, canonical);
+}
+
+#[tokio::test]
+async fn palette_integration_identity_alias_requires_bearer_auth() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let (status, _) = get_json(test_router(state), "/v1/integration/identity", None).await;
+
+    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+}
+
 #[test]
 fn integration_identity_is_stable_and_unique_for_resolved_instances() {
     let first = crate::config::Config {
