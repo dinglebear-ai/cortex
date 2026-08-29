@@ -512,7 +512,7 @@ pub fn rendered_session_page(
     let conn = pool.get()?;
     let fetch = params.limit.clamp(1, 201);
     let mut stmt = conn.prepare_cached(
-        "SELECT id, timestamp, message, metadata_json, parse_error
+        "SELECT CAST(id AS INTEGER), timestamp, message, metadata_json, parse_error
          FROM logs
          WHERE ai_project = ?1
            AND ai_tool = ?2
@@ -549,55 +549,84 @@ pub fn durable_stream_page(
     params: &DurableStreamParams,
 ) -> Result<DurableStreamPage> {
     let conn = pool.get()?;
-    let mut stmt = conn.prepare_cached(
-        "SELECT id, timestamp, hostname, severity, app_name, message, metadata_json, parse_error
-         FROM logs WHERE (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
-           AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
-           AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)
-           AND id > ?7 AND (?8 IS NULL OR id <= ?8) ORDER BY id ASC LIMIT ?9",
-    )?;
+    let mut sql = String::from(
+        "SELECT CAST(id AS INTEGER),timestamp,hostname,severity,app_name,message,metadata_json,parse_error FROM logs WHERE id > ?1",
+    );
+    let mut values = vec![rusqlite::types::Value::Integer(params.after_id)];
+    let mut push_filter = |column: &str, value: &Option<String>| {
+        if let Some(value) = value {
+            values.push(rusqlite::types::Value::Text(value.clone()));
+            sql.push_str(&format!(" AND {column} = ?{}", values.len()));
+        }
+    };
+    push_filter("hostname", &params.hostname);
+    push_filter("app_name", &params.app_name);
+    push_filter("severity", &params.severity);
+    push_filter("ai_project", &params.ai_project);
+    push_filter("ai_tool", &params.ai_tool);
+    push_filter("ai_session_id", &params.ai_session_id);
+    if let Some(high) = params.high_watermark {
+        values.push(rusqlite::types::Value::Integer(high));
+        sql.push_str(&format!(" AND id <= ?{}", values.len()));
+    }
+    values.push(rusqlite::types::Value::Integer(i64::from(
+        params.limit.clamp(1, 101),
+    )));
+    sql.push_str(&format!(" ORDER BY id ASC LIMIT ?{}", values.len()));
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(
+        .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+            Ok(DurableStreamRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                hostname: row.get(2)?,
+                severity: row.get(3)?,
+                app_name: row.get(4)?,
+                message: row.get(5)?,
+                metadata_json: row.get(6)?,
+                parse_error: row.get(7)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let (minimum_watermark, high_watermark) = if params.include_bounds {
+        let retained: (Option<i64>, i64) = conn.query_row(
+            "SELECT MIN(id), COALESCE(MAX(id), 0) FROM logs
+         WHERE (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
+           AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
+           AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)",
             rusqlite::params![
                 params.hostname,
                 params.app_name,
                 params.severity,
                 params.ai_project,
                 params.ai_tool,
-                params.ai_session_id,
-                params.after_id,
-                params.high_watermark,
-                params.limit.clamp(1, 101)
+                params.ai_session_id
             ],
-            |row| {
-                Ok(DurableStreamRow {
-                    id: row.get(0)?,
-                    timestamp: row.get(1)?,
-                    hostname: row.get(2)?,
-                    severity: row.get(3)?,
-                    app_name: row.get(4)?,
-                    message: row.get(5)?,
-                    metadata_json: row.get(6)?,
-                    parse_error: row.get(7)?,
-                })
-            },
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let (minimum_watermark, high_watermark) = conn.query_row(
-        "SELECT MIN(id), COALESCE(MAX(id), 0) FROM logs
-         WHERE (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
-           AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
-           AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)",
-        rusqlite::params![
-            params.hostname,
-            params.app_name,
-            params.severity,
-            params.ai_project,
-            params.ai_tool,
-            params.ai_session_id
-        ],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let deleted: Option<i64> = conn.query_row(
+            "SELECT MAX(id) FROM stream_deleted_log_lineage
+             WHERE deleted_at >= unixepoch() - 900
+               AND (?1 IS NULL OR hostname = ?1) AND (?2 IS NULL OR app_name = ?2)
+               AND (?3 IS NULL OR severity = ?3) AND (?4 IS NULL OR ai_project = ?4)
+               AND (?5 IS NULL OR ai_tool = ?5) AND (?6 IS NULL OR ai_session_id = ?6)",
+            rusqlite::params![
+                params.hostname,
+                params.app_name,
+                params.severity,
+                params.ai_project,
+                params.ai_tool,
+                params.ai_session_id
+            ],
+            |row| row.get(0),
+        )?;
+        let floor = deleted
+            .map(|last_deleted| last_deleted.saturating_add(1))
+            .or(retained.0);
+        (floor, retained.1.max(deleted.unwrap_or(0)))
+    } else {
+        (None, params.high_watermark.unwrap_or(params.after_id))
+    };
     Ok(DurableStreamPage {
         rows,
         minimum_watermark,

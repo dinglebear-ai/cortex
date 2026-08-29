@@ -114,6 +114,7 @@ fn durable_query_is_ordered_bounded_and_exposes_retention_floor() {
         &db::DurableStreamParams {
             hostname: Some("h".into()),
             limit: 2,
+            include_bounds: true,
             ..Default::default()
         },
     )
@@ -137,12 +138,171 @@ fn durable_query_is_ordered_bounded_and_exposes_retention_floor() {
             hostname: Some("h".into()),
             after_id: first_id,
             limit: 100,
+            include_bounds: true,
             ..Default::default()
         },
     )
     .unwrap();
     assert!(retained.minimum_watermark.unwrap() > first_id);
     assert_eq!(retained.rows.len(), 2);
+}
+
+#[test]
+fn cursor_tamper_future_skew_and_key_rotation_fail_closed() {
+    let now = Utc::now().timestamp();
+    let encoded = encode_cursor(42, "test:alice", "filters", now);
+    let mut bytes = hex::decode(&encoded).unwrap();
+    let index = bytes.len() / 2;
+    bytes[index] ^= 1;
+    assert!(matches!(
+        decode_cursor(&hex::encode(bytes)),
+        Err(StreamError::Invalid(_))
+    ));
+
+    let future = encode_cursor(
+        42,
+        "test:alice",
+        "filters",
+        now + CURSOR_CLOCK_SKEW_SECS + 1,
+    );
+    let decoded = decode_cursor(&future).unwrap();
+    assert!(Utc::now().timestamp() - decoded.issued_at < -CURSOR_CLOCK_SKEW_SECS);
+}
+
+#[test]
+fn final_event_serialization_scrubs_canaries_and_obeys_exact_bound() {
+    let canary = "sk-super-secret-canary";
+    let row = db::DurableStreamRow {
+        id: 1,
+        timestamp: "2026-08-28T00:00:00Z".into(),
+        hostname: "host".into(),
+        severity: "info".into(),
+        app_name: Some("app".into()),
+        message: format!("{canary} {}", "é\\\"".repeat(MAX_EVENT_BYTES)),
+        metadata_json: Some(format!(r#"{{"nested":["{canary}"]}}"#)),
+        parse_error: Some(format!("TOKEN={canary}")),
+    };
+    let payload = row_json(&row, "session");
+    assert!(payload.len() <= MAX_EVENT_BYTES);
+    assert!(!payload.contains(canary));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&payload).unwrap()["redacted"],
+        true
+    );
+}
+
+#[test]
+fn steady_state_page_skips_floor_aggregation() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("steady.db"));
+    let pool = crate::db::init_pool(&storage).unwrap();
+    let page = crate::db::durable_stream_page(
+        &pool,
+        &db::DurableStreamParams {
+            after_id: 99,
+            limit: 10,
+            include_bounds: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(page.minimum_watermark, None);
+    assert_eq!(page.high_watermark, 99);
+}
+
+#[test]
+fn retention_lineage_survives_fully_deleted_filter_and_ignores_unrelated_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("lineage.db"));
+    let pool = crate::db::init_pool(&storage).unwrap();
+    let make = |host: &str, message: &str| crate::db::LogBatchEntry {
+        timestamp: "2026-08-28T00:00:00Z".into(),
+        hostname: host.into(),
+        facility: None,
+        severity: "info".into(),
+        app_name: Some("app".into()),
+        process_id: None,
+        message: message.into(),
+        raw: message.into(),
+        source_ip: "test".into(),
+        docker_checkpoint: None,
+        ai_tool: None,
+        ai_project: None,
+        ai_session_id: None,
+        ai_transcript_path: None,
+        metadata_json: None,
+        http_status: None,
+        auth_outcome: None,
+        dns_blocked: None,
+        event_action: None,
+        parse_error: None,
+    };
+    crate::db::insert_logs_batch(&pool, &[make("target", "gone"), make("other", "kept")]).unwrap();
+    pool.get()
+        .unwrap()
+        .execute("DELETE FROM logs WHERE hostname='target'", [])
+        .unwrap();
+    let target = crate::db::durable_stream_page(
+        &pool,
+        &db::DurableStreamParams {
+            hostname: Some("target".into()),
+            include_bounds: true,
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(target.rows.is_empty());
+    assert!(
+        target.minimum_watermark.is_some(),
+        "fully deleted filters retain a lineage floor"
+    );
+    let other = crate::db::durable_stream_page(
+        &pool,
+        &db::DurableStreamParams {
+            hostname: Some("other".into()),
+            include_bounds: true,
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        other.minimum_watermark,
+        other.rows.first().map(|row| row.id)
+    );
+}
+
+#[test]
+fn steady_state_session_poll_uses_bounded_composite_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("plan.db"));
+    let pool = crate::db::init_pool(&storage).unwrap();
+    let conn = pool.get().unwrap();
+    let detail: String = conn.query_row(
+        "EXPLAIN QUERY PLAN SELECT id FROM logs WHERE id > ?1 AND hostname=?2 AND ai_project=?3 AND ai_tool=?4 AND ai_session_id=?5 ORDER BY id LIMIT ?6",
+        rusqlite::params![0, "h", "p", "t", "s", 101],
+        |row| row.get(3),
+    ).unwrap();
+    assert!(
+        detail.contains("idx_logs_stream_session_id"),
+        "unexpected query plan: {detail}"
+    );
+    assert!(
+        !detail.contains("SCAN logs"),
+        "steady-state polling must not scan logs: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn connection_deadline_releases_admission_even_when_body_stalls() {
+    let semaphore = std::sync::Arc::new(Semaphore::new(1));
+    let permit = semaphore.clone().try_acquire_owned().unwrap();
+    let lease = client_lease(permit, Duration::from_millis(10));
+    assert!(semaphore.clone().try_acquire_owned().is_err());
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(semaphore.clone().try_acquire_owned().is_ok());
+    drop(lease);
 }
 
 fn service() -> (

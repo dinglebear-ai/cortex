@@ -205,6 +205,7 @@ pub use models::{
     PatternsResponse,
     ProjectContextRequest,
     ProjectContextResponse,
+    RENDERED_SESSION_PAGE_MAX_BYTES,
     RecordArtifactEvidenceResponse,
     RenderedSessionEvent,
     RenderedSessionEventKind,

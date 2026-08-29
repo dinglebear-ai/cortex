@@ -51,7 +51,7 @@ impl CortexService {
             events.push(event);
         }
         let high_watermark = events.last().map_or(after_id, |event| event.position);
-        Ok(RenderedSessionPageResponse {
+        let mut response = RenderedSessionPageResponse {
             contract_version: "1.0.0",
             delivery: "polling",
             events,
@@ -63,7 +63,24 @@ impl CortexService {
             poll_after_ms: RENDERED_SESSION_POLL_AFTER_MS,
             max_page_items: RENDERED_SESSION_PAGE_MAX_ITEMS,
             max_page_bytes: RENDERED_SESSION_PAGE_MAX_BYTES,
-        })
+        };
+        while serde_json::to_vec(&response)
+            .map_err(|error| ServiceError::Internal(error.into()))?
+            .len()
+            > RENDERED_SESSION_PAGE_MAX_BYTES
+        {
+            if response.events.pop().is_none() {
+                break;
+            }
+            response.has_more = true;
+            response.truncated_by_bytes = true;
+            response.high_watermark = response
+                .events
+                .last()
+                .map_or(after_id, |event| event.position);
+            response.next_cursor = encode_cursor(response.high_watermark);
+        }
+        Ok(response)
     }
 }
 
@@ -98,7 +115,7 @@ fn encode_cursor(position: i64) -> String {
 }
 
 fn project_event(row: db::RenderedSessionEventRow) -> RenderedSessionEvent {
-    let metadata = row
+    let mut metadata = row
         .metadata_json
         .as_deref()
         .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
@@ -106,14 +123,23 @@ fn project_event(row: db::RenderedSessionEventRow) -> RenderedSessionEvent {
         .as_ref()
         .and_then(event_kind_from_metadata)
         .unwrap_or_else(|| event_kind_from_text(&row.message));
-    let redacted = metadata
-        .as_ref()
-        .and_then(|value| value.get("content_scrubbed"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-        || row.message.contains("[REDACTED]");
-    let (text, text_truncated) = truncate_utf8(row.message, MAX_EVENT_TEXT_BYTES);
-    let parse_warning = match (row.parse_error, text_truncated) {
+    if let Some(value) = &mut metadata {
+        crate::assessment::redact_json_value_strings(value);
+    }
+    let pattern_scrubbed = crate::receiver::enrichment::scrub_ai_message(&row.message, None);
+    let scrubbed = crate::assessment::redact_secrets(&pattern_scrubbed);
+    let redacted = pattern_scrubbed != row.message
+        || metadata
+            .as_ref()
+            .and_then(|value| value.get("content_scrubbed"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        || scrubbed.contains("[REDACTED]");
+    let (text, text_truncated) = truncate_utf8(scrubbed, MAX_EVENT_TEXT_BYTES);
+    let parse_error = row
+        .parse_error
+        .map(|warning| crate::assessment::redact_secrets(&warning));
+    let parse_warning = match (parse_error, text_truncated) {
         (Some(warning), true) => Some(format!("{warning}; rendered text truncated")),
         (None, true) => Some("rendered text truncated".to_string()),
         (warning, false) => warning,

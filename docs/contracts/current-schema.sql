@@ -24,8 +24,9 @@
 --   not enable PRAGMA foreign_keys on pooled SQLite connections.
 --
 -- FTS5 trigger invariant (load-bearing — DO NOT regress)
---   `logs_fts` has an INSERT-only trigger by design. DELETE / UPDATE on
---   `logs` do NOT propagate to the FTS index. This is intentional: bulk
+--   `logs_fts` has no DELETE / UPDATE propagation trigger. The separate
+--   `logs_stream_retention_lineage` BEFORE DELETE trigger records only the
+--   bounded cursor-lineage fields and does not touch FTS. Bulk
 --   DELETE during retention purge and storage-budget enforcement would fire
 --   the trigger for every deleted row inside a single implicit transaction,
 --   holding the SQLite write lock long enough to starve the batch writer and
@@ -398,6 +399,23 @@ CREATE TABLE IF NOT EXISTS transcript_parse_errors (
     UNIQUE(source_id, line_no, error, record_preview)
 );
 
+-- ---------------------------------------------------------------------------
+-- 2.9 `stream_deleted_log_lineage` — short-lived resumable-stream tombstones
+-- Source: migration 49. Rows survive only for the 15-minute cursor lifetime
+-- and preserve the exact filter dimensions needed to detect fully-deleted
+-- streams without treating unrelated global-id gaps as retention gaps.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stream_deleted_log_lineage (
+    id            INTEGER PRIMARY KEY,
+    hostname      TEXT NOT NULL,
+    app_name      TEXT,
+    severity      TEXT NOT NULL,
+    ai_project    TEXT,
+    ai_tool       TEXT,
+    ai_session_id TEXT,
+    deleted_at    INTEGER NOT NULL
+);
+
 
 -- =============================================================================
 -- 3. Triggers
@@ -414,6 +432,14 @@ CREATE TABLE IF NOT EXISTS transcript_parse_errors (
 -- ---------------------------------------------------------------------------
 CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
     INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+END;
+
+CREATE TRIGGER IF NOT EXISTS logs_stream_retention_lineage BEFORE DELETE ON logs BEGIN
+    DELETE FROM stream_deleted_log_lineage WHERE deleted_at < unixepoch() - 900;
+    INSERT OR REPLACE INTO stream_deleted_log_lineage
+        (id,hostname,app_name,severity,ai_project,ai_tool,ai_session_id,deleted_at)
+    VALUES (OLD.id,OLD.hostname,OLD.app_name,OLD.severity,OLD.ai_project,
+            OLD.ai_tool,OLD.ai_session_id,unixepoch());
 END;
 
 
@@ -471,6 +497,16 @@ CREATE INDEX IF NOT EXISTS idx_logs_ai_transcript_path
     ON logs(ai_transcript_path)
     WHERE ai_transcript_path IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_stream_deleted_lineage_expiry
+    ON stream_deleted_log_lineage(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_logs_stream_host_id ON logs(hostname,id);
+CREATE INDEX IF NOT EXISTS idx_logs_stream_app_id ON logs(app_name,id);
+CREATE INDEX IF NOT EXISTS idx_logs_stream_severity_id ON logs(severity,id);
+CREATE INDEX IF NOT EXISTS idx_logs_stream_session_id
+    ON logs(ai_project,ai_tool,ai_session_id,hostname,id)
+    WHERE ai_project IS NOT NULL AND ai_tool IS NOT NULL
+      AND ai_session_id IS NOT NULL;
+
 
 -- ---------------------------------------------------------------------------
 -- 4.4 Migration 6 / 7 — transcript-tables indices
@@ -492,9 +528,10 @@ CREATE INDEX IF NOT EXISTS idx_transcript_parse_errors_seen
 -- These are not enforced by SQLite — they are enforced by application code
 -- and code-review. Violating any of them is a regression.
 --
---   I1. FTS5 INSERT-only trigger. `logs_ai` is the only trigger on `logs`.
---       Adding `AFTER DELETE` or `AFTER UPDATE` triggers reintroduces the
---       retention-purge starvation incident migration 1 was created to fix.
+--   I1. FTS5 remains INSERT-only. `logs_ai` is the only trigger that touches
+--       FTS. The bounded lineage BEFORE DELETE trigger must remain free of
+--       FTS writes; adding FTS DELETE/UPDATE propagation reintroduces the
+--       retention-purge starvation incident migration 1 fixed.
 --
 --   I2. `logs` is append-only in practice. There is no UPDATE codepath on
 --       this table. Background sweepers DELETE old rows; ingest INSERTs new

@@ -886,6 +886,36 @@ async fn capabilities_advertise_bounded_polling_and_native_streams() {
 }
 
 #[tokio::test]
+async fn runtime_integration_identity_matches_contract_and_mounted_routes() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let (status, value) = get_json(
+        test_router(state),
+        "/api/integration-profile",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["contract_version"], "1.0.0");
+    assert_eq!(value["product"], "cortex");
+    assert!(value["server_id"].as_str().unwrap().starts_with("cortex_"));
+    assert_eq!(value["api_version"]["major"], 1);
+    assert_eq!(value["streams"]["transport"], "sse");
+    assert_eq!(value["streams"]["resume"], "opaque_cursor");
+    assert_eq!(
+        value["route_support"],
+        serde_json::json!(["logs", "sessions", "fleet", "graph", "correlation"])
+    );
+    assert!(
+        value["auth"]["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|mode| mode == "static_bearer")
+    );
+    assert_ne!(value["auth"]["credential_generation"], "secret");
+}
+
+#[tokio::test]
 async fn durable_stream_routes_require_auth_and_negotiate_sse() {
     let (state, _pool, _dir) = test_state(Some("secret".into()));
     let app = test_router(state);

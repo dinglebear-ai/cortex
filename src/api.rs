@@ -243,6 +243,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/correlate", get(correlate))
         .route("/api/stats", get(stats))
         .route("/api/version", get(version))
+        .route("/api/integration-profile", get(integration_profile))
         .route("/api/capabilities", get(capabilities))
         .route("/api/streams/logs", get(log_stream))
         .route("/api/streams/sessions", get(session_stream))
@@ -577,6 +578,42 @@ async fn stats(State(state): State<ApiState>) -> impl IntoResponse {
 /// queried per request; `schema_version` is captured once at startup.
 async fn version(State(state): State<ApiState>) -> impl IntoResponse {
     Json((*state.version_info).clone()).into_response()
+}
+
+/// Runtime identity used by typed clients.  Every field is derived from the
+/// same mounted routes/auth configuration advertised by this process.
+async fn integration_profile(State(state): State<ApiState>) -> impl IntoResponse {
+    use sha2::{Digest, Sha256};
+    let seed = std::env::var("CORTEX_SERVER_ID").unwrap_or_else(|_| {
+        std::env::var("CORTEX_DB_PATH").unwrap_or_else(|_| "/data/cortex.db".into())
+    });
+    let server_id = if seed.starts_with("cortex_") && seed.len() >= 23 {
+        seed
+    } else {
+        format!("cortex_{:x}", Sha256::digest(seed.as_bytes()))
+    };
+    let oauth = std::env::var("CORTEX_AUTH_MODE").is_ok_and(|mode| mode == "oauth");
+    let public_url = std::env::var("CORTEX_PUBLIC_URL").ok();
+    let token_generation = state.config.api_token.as_deref().map_or_else(
+        || "none".to_string(),
+        |token| format!("{:x}", Sha256::digest(token.as_bytes()))[..16].to_string(),
+    );
+    let modes = if oauth {
+        serde_json::json!(["static_bearer", "oauth2"])
+    } else {
+        serde_json::json!(["static_bearer"])
+    };
+    Json(serde_json::json!({
+        "contract_version":"1.0.0", "product":"cortex", "server_id":server_id,
+        "product_version":state.version_info.version,
+        "api_version":{"major":1,"minor":0},
+        "route_support":["logs","sessions","fleet","graph","correlation"],
+        "auth":{"modes":modes,"issuer":public_url,"audience":public_url,
+            "token_endpoint_origin":public_url,"principal_cache_scope":"issuer+subject",
+            "credential_generation":token_generation},
+        "streams":{"transport":"sse","resume":"opaque_cursor"}
+    }))
+    .into_response()
 }
 
 /// `GET /api/capabilities` — explicit transport support for typed clients.
@@ -1598,9 +1635,65 @@ async fn sessions(
 
 async fn rendered_session_page(
     State(state): State<ApiState>,
-    Query(req): Query<RenderedSessionPageRequest>,
+    Extension(auth): Extension<AuthContext>,
+    headers: HeaderMap,
+    Query(mut req): Query<RenderedSessionPageRequest>,
 ) -> impl IntoResponse {
-    respond(state.service.rendered_session_page(req).await)
+    if req.cursor.is_none() {
+        req.cursor = last_event_id(&headers);
+    }
+    let filters = match crate::stream::session_filter_fingerprint(
+        &req.project,
+        &req.tool,
+        &req.session_id,
+        &req.host,
+    ) {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    let position = match req.cursor.as_deref() {
+        Some(value) => match crate::stream::decode_session_handoff(
+            value,
+            &auth,
+            &req.project,
+            &req.tool,
+            &req.session_id,
+            &req.host,
+        ) {
+            Ok(position) => position,
+            Err(error) => return error.into_response(),
+        },
+        None => 0,
+    };
+    req.cursor = Some(format!("cortex-session-v1:{position}"));
+    match state.service.rendered_session_page(req).await {
+        Ok(mut page) => {
+            page.next_cursor = crate::stream::encode_cursor(
+                page.high_watermark,
+                &crate::stream::principal(&auth),
+                &filters,
+                chrono::Utc::now().timestamp(),
+            );
+            while serde_json::to_vec(&page)
+                .is_ok_and(|bytes| bytes.len() > crate::app::RENDERED_SESSION_PAGE_MAX_BYTES)
+            {
+                if page.events.pop().is_none() {
+                    break;
+                }
+                page.has_more = true;
+                page.truncated_by_bytes = true;
+                page.high_watermark = page.events.last().map_or(position, |event| event.position);
+                page.next_cursor = crate::stream::encode_cursor(
+                    page.high_watermark,
+                    &crate::stream::principal(&auth),
+                    &filters,
+                    chrono::Utc::now().timestamp(),
+                );
+            }
+            Json(page).into_response()
+        }
+        Err(error) => respond::<()>(Err(error)),
+    }
 }
 
 async fn ai_search(

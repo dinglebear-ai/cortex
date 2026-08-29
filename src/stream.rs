@@ -13,8 +13,10 @@ pub const MAX_BATCH_ITEMS: u32 = 100;
 pub const MAX_BATCH_BYTES: usize = 128 * 1024;
 const MAX_EVENT_BYTES: usize = 64 * 1024;
 const CURSOR_TTL_SECS: i64 = 900;
+const CURSOR_CLOCK_SKEW_SECS: i64 = 30;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_CLIENTS: usize = 64;
+const MAX_CONNECTION_DURATION: Duration = Duration::from_secs(15 * 60);
 static CLIENTS: OnceLock<std::sync::Arc<Semaphore>> = OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -43,6 +45,7 @@ struct StreamCursor {
     principal: String,
     filters: String,
     issued_at: i64,
+    signature: String,
 }
 
 struct StreamState {
@@ -55,7 +58,20 @@ struct StreamState {
     pending: VecDeque<db::DurableStreamRow>,
     pending_bytes: usize,
     issued_at: i64,
-    _client_permit: OwnedSemaphorePermit,
+    _client_lease: ClientLease,
+}
+
+#[derive(Clone)]
+struct ClientLease(std::sync::Arc<std::sync::Mutex<Option<OwnedSemaphorePermit>>>);
+
+fn client_lease(permit: OwnedSemaphorePermit, duration: Duration) -> ClientLease {
+    let lease = ClientLease(std::sync::Arc::new(std::sync::Mutex::new(Some(permit))));
+    let expiry = lease.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(duration).await;
+        let _ = expiry.0.lock().expect("client lease mutex poisoned").take();
+    });
+    lease
 }
 
 pub async fn log_stream(
@@ -71,6 +87,7 @@ pub async fn log_stream(
         app_name: request.app,
         severity: request.severity,
         limit: MAX_BATCH_ITEMS + 1,
+        include_bounds: true,
         ..Default::default()
     };
     build_stream(service, auth, request.cursor, filters, params, "log").await
@@ -100,6 +117,7 @@ pub async fn session_stream(
         ai_tool: Some(request.tool),
         ai_session_id: Some(request.session_id),
         limit: MAX_BATCH_ITEMS + 1,
+        include_bounds: true,
         ..Default::default()
     };
     build_stream(service, auth, request.cursor, filters, params, "session").await
@@ -130,7 +148,8 @@ async fn build_stream(
         if cursor.filters != filters {
             return Err(StreamError::Invalid("cursor does not match stream filters"));
         }
-        if Utc::now().timestamp() - cursor.issued_at > CURSOR_TTL_SECS {
+        let age = Utc::now().timestamp() - cursor.issued_at;
+        if !(-CURSOR_CLOCK_SKEW_SECS..=CURSOR_TTL_SECS).contains(&age) {
             return Err(StreamError::Expired);
         }
     }
@@ -165,7 +184,7 @@ async fn build_stream(
         pending: VecDeque::new(),
         pending_bytes: 0,
         issued_at,
-        _client_permit: client_permit,
+        _client_lease: client_lease(client_permit, MAX_CONNECTION_DURATION),
     };
     let stream = async_stream::stream! {
         let mut state = state;
@@ -188,11 +207,14 @@ async fn build_stream(
             }
             state.params.after_id = state.position;
             state.params.high_watermark = None;
+            state.params.include_bounds = false;
             match state.service.durable_stream_page(state.params.clone()).await {
                 Ok(page) => {
                     let mut bytes = 0usize;
                     for row in page.rows.into_iter().take(MAX_BATCH_ITEMS as usize) {
-                        let size = row_json(&row, event_name).len();
+                        let data = row_json(&row, event_name);
+                        let cursor = encode_cursor(row.id, &state.principal, &state.filters, state.issued_at);
+                        let size = data.len() + cursor.len() + event_name.len() + 24;
                         if !state.pending.is_empty() && bytes.saturating_add(size) > MAX_BATCH_BYTES { break; }
                         bytes = bytes.saturating_add(size);
                         state.pending.push_back(row);
@@ -215,12 +237,37 @@ async fn build_stream(
 }
 
 fn row_json(row: &db::DurableStreamRow, kind: &str) -> String {
-    let (message, truncated) = truncate_utf8(&row.message, MAX_EVENT_BYTES);
-    serde_json::json!({"contractVersion":"1.0.0","kind":kind,"position":row.id,
+    let pattern_scrubbed = crate::receiver::enrichment::scrub_ai_message(&row.message, None);
+    let scrubbed = crate::assessment::redact_secrets(&pattern_scrubbed);
+    let was_redacted = pattern_scrubbed != row.message || scrubbed.contains("[REDACTED]");
+    let mut metadata = row
+        .metadata_json
+        .as_deref()
+        .and_then(|v| serde_json::from_str(v).ok());
+    if let Some(value) = &mut metadata {
+        crate::assessment::redact_json_value_strings(value);
+    }
+    let mut warning = row
+        .parse_error
+        .as_deref()
+        .map(crate::assessment::redact_secrets);
+    let mut budget = MAX_EVENT_BYTES;
+    loop {
+        let (message, truncated) = truncate_utf8(&scrubbed, budget);
+        let value = serde_json::json!({"contractVersion":"1.0.0","kind":kind,"position":row.id,
         "timestamp":row.timestamp,"host":row.hostname,"severity":row.severity,
-        "app":row.app_name,"message":message,"metadata":row.metadata_json,
-        "parseWarning":row.parse_error,"truncated":truncated})
-    .to_string()
+        "app":row.app_name,"message":message,"metadata":metadata,
+        "parseWarning":warning,"redacted":was_redacted,"truncated":truncated});
+        let serialized = value.to_string();
+        if serialized.len() <= MAX_EVENT_BYTES {
+            return serialized;
+        }
+        if budget == 0 {
+            warning = Some("event fields exceeded serialized byte bound".into());
+            return serde_json::json!({"contractVersion":"1.0.0","kind":kind,"position":row.id,"message":"","parseWarning":warning,"truncated":true}).to_string();
+        }
+        budget = budget.saturating_sub(serialized.len() - MAX_EVENT_BYTES + 32);
+    }
 }
 
 fn control_event(kind: &'static str, data: serde_json::Value) -> Event {
@@ -246,13 +293,35 @@ fn fingerprint<T: Serialize>(value: &T) -> Result<String, StreamError> {
     let bytes = serde_json::to_vec(value).map_err(|_| StreamError::Invalid("invalid filters"))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
-fn encode_cursor(position: i64, principal: &str, filters: &str, issued_at: i64) -> String {
+fn cursor_key() -> String {
+    std::env::var("CORTEX_CURSOR_SIGNING_KEY")
+        .or_else(|_| std::env::var("CORTEX_TOKEN"))
+        .or_else(|_| std::env::var("CORTEX_API_TOKEN"))
+        .unwrap_or_else(|_| "cortex-loopback-development-cursor-key".into())
+}
+fn cursor_signature(
+    position: i64,
+    principal: &str,
+    filters: &str,
+    issued_at: i64,
+    key: &str,
+) -> String {
+    let body = format!("1\0{position}\0{principal}\0{filters}\0{issued_at}\0{key}");
+    format!("{:x}", Sha256::digest(body.as_bytes()))
+}
+pub(crate) fn encode_cursor(
+    position: i64,
+    principal: &str,
+    filters: &str,
+    issued_at: i64,
+) -> String {
     let cursor = StreamCursor {
         version: 1,
         position,
         principal: principal.into(),
         filters: filters.into(),
         issued_at,
+        signature: cursor_signature(position, principal, filters, issued_at, &cursor_key()),
     };
     hex::encode(serde_json::to_vec(&cursor).expect("cursor is serializable"))
 }
@@ -266,7 +335,74 @@ fn decode_cursor(value: &str) -> Result<StreamCursor, StreamError> {
     if cursor.version != 1 || cursor.position < 0 {
         return Err(StreamError::Invalid("invalid cursor"));
     }
+    let current = cursor_signature(
+        cursor.position,
+        &cursor.principal,
+        &cursor.filters,
+        cursor.issued_at,
+        &cursor_key(),
+    );
+    let previous_ok = std::env::var("CORTEX_CURSOR_PREVIOUS_KEYS")
+        .ok()
+        .is_some_and(|keys| {
+            keys.split(',').any(|key| {
+                cursor_signature(
+                    cursor.position,
+                    &cursor.principal,
+                    &cursor.filters,
+                    cursor.issued_at,
+                    key.trim(),
+                ) == cursor.signature
+            })
+        });
+    if current != cursor.signature && !previous_ok {
+        return Err(StreamError::Invalid("cursor signature is invalid"));
+    }
     Ok(cursor)
+}
+
+pub(crate) fn session_filter_fingerprint(
+    project: &str,
+    tool: &str,
+    session_id: &str,
+    host: &str,
+) -> Result<String, StreamError> {
+    fingerprint(&SessionStreamRequest {
+        project: project.into(),
+        tool: tool.into(),
+        session_id: session_id.into(),
+        host: host.into(),
+        cursor: None,
+    })
+}
+
+pub(crate) fn principal(auth: &AuthContext) -> String {
+    principal_key(auth)
+}
+pub(crate) fn decode_session_handoff(
+    value: &str,
+    auth: &AuthContext,
+    project: &str,
+    tool: &str,
+    session_id: &str,
+    host: &str,
+) -> Result<i64, StreamError> {
+    let cursor = decode_cursor(value)?;
+    if cursor.principal != principal_key(auth) {
+        return Err(StreamError::Forbidden(
+            "cursor belongs to another principal",
+        ));
+    }
+    if cursor.filters != session_filter_fingerprint(project, tool, session_id, host)? {
+        return Err(StreamError::Invalid(
+            "cursor does not match session filters",
+        ));
+    }
+    let age = Utc::now().timestamp() - cursor.issued_at;
+    if !(-CURSOR_CLOCK_SKEW_SECS..=CURSOR_TTL_SECS).contains(&age) {
+        return Err(StreamError::Expired);
+    }
+    Ok(cursor.position)
 }
 fn truncate_utf8(value: &str, max: usize) -> (String, bool) {
     if value.len() <= max {

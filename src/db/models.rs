@@ -120,6 +120,9 @@ pub struct DurableStreamParams {
     pub ai_tool: Option<String>,
     pub ai_session_id: Option<String>,
     pub limit: u32,
+    /// Bounds are needed only during the initial snapshot/resume check.  The
+    /// steady-state poll path must remain one indexed keyset query.
+    pub include_bounds: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 48;
+pub const KNOWN_SCHEMA_VERSION: i64 = 49;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3190,6 +3190,45 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              COMMIT;",
         )?;
         tracing::info!("Migration 48: indexed terminal LLM invocation paging");
+    }
+
+    // Migration 49: retain filter-qualified deletion lineage for the cursor
+    // TTL so an entirely-deleted stream can distinguish a real retention gap
+    // from unrelated gaps in the global logs id sequence.
+    if !migration_applied(&conn, 49)? {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE stream_deleted_log_lineage (
+               id INTEGER PRIMARY KEY,
+               hostname TEXT NOT NULL,
+               app_name TEXT,
+               severity TEXT NOT NULL,
+               ai_project TEXT,
+               ai_tool TEXT,
+               ai_session_id TEXT,
+               deleted_at INTEGER NOT NULL
+             );
+             CREATE INDEX idx_stream_deleted_lineage_expiry
+               ON stream_deleted_log_lineage(deleted_at);
+             CREATE INDEX idx_logs_stream_host_id ON logs(hostname,id);
+             CREATE INDEX idx_logs_stream_app_id ON logs(app_name,id);
+             CREATE INDEX idx_logs_stream_severity_id ON logs(severity,id);
+             CREATE INDEX idx_logs_stream_session_id
+               ON logs(ai_project,ai_tool,ai_session_id,hostname,id)
+               WHERE ai_project IS NOT NULL AND ai_tool IS NOT NULL
+                 AND ai_session_id IS NOT NULL;
+             CREATE TRIGGER logs_stream_retention_lineage BEFORE DELETE ON logs
+             BEGIN
+               DELETE FROM stream_deleted_log_lineage WHERE deleted_at < unixepoch() - 900;
+               INSERT OR REPLACE INTO stream_deleted_log_lineage
+                 (id,hostname,app_name,severity,ai_project,ai_tool,ai_session_id,deleted_at)
+               VALUES (OLD.id,OLD.hostname,OLD.app_name,OLD.severity,OLD.ai_project,
+                       OLD.ai_tool,OLD.ai_session_id,unixepoch());
+             END;
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (49);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 49: durable stream retention lineage");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
