@@ -240,6 +240,7 @@ fn find_local_binary_prefers_installed_cortex_from_path() {
 fn deploy_agent_to_linux_host_runs_install_sequence_with_env_prefix() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("commands.log");
+    let stdin_log = dir.path().join("stdin.log");
     let local_binary = write_local_binary(dir.path());
     write_executable(
         &dir.path().join("ssh"),
@@ -247,6 +248,7 @@ fn deploy_agent_to_linux_host_runs_install_sequence_with_env_prefix() {
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
+  *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
   *) exit 0 ;;
 esac
 "#,
@@ -254,6 +256,7 @@ esac
     write_logging_scp(dir.path());
     let _path = prepend_path(dir.path());
     let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+    let _stdin_log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_STDIN", &stdin_log);
     let _syslog = EnvGuard::remove("CORTEX_SYSLOG_TARGET");
 
     let result = deploy_agent_to_host(
@@ -274,12 +277,14 @@ esac
     assert!(log.contains("mkdir -p ~/.local/bin"));
     assert!(log.contains("linux-host:.local/bin/cortex.new"));
     assert!(log.contains("mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex"));
-    assert!(log.contains("CORTEX_HEARTBEAT_TARGET='https://cortex.example.test:3100'"));
-    assert!(log.contains("CORTEX_HEARTBEAT_TOKEN='heartbeat token'"));
-    assert!(log.contains("CORTEX_AGENT_DOCKER='true'"));
-    assert!(log.contains("CORTEX_AGENT_JOURNALD='true'"));
-    assert!(log.contains("CORTEX_SYSLOG_TARGET='cortex.example.test:1514'"));
+    assert!(!log.contains("heartbeat token"));
     assert!(log.contains("~/.local/bin/cortex setup heartbeatagent install"));
+    let stdin = std::fs::read_to_string(stdin_log).unwrap_or_default();
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TARGET=https://cortex.example.test:3100"));
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TOKEN=heartbeat token"));
+    assert!(stdin.contains("CORTEX_AGENT_DOCKER=true"));
+    assert!(stdin.contains("CORTEX_AGENT_JOURNALD=true"));
+    assert!(stdin.contains("CORTEX_SYSLOG_TARGET=cortex.example.test:1514"));
 }
 
 #[test]
@@ -287,13 +292,15 @@ esac
 fn deploy_agent_to_linux_host_preserves_persisted_env_without_token_profile() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("commands.log");
+    let stdin_log = dir.path().join("stdin.log");
     let local_binary = write_local_binary(dir.path());
     write_executable(
         &dir.path().join("ssh"),
         r#"#!/bin/sh
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
-	case "$*" in
+case "$*" in
 	  *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
+	  *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
 	  *"heartbeat-agent.env"*)
 	    printf 'CORTEX_HEARTBEAT_TARGET=https://old.example\n'
 	    printf 'CORTEX_HEARTBEAT_TOKEN=preserved-token\n'
@@ -314,22 +321,22 @@ printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
     write_logging_scp(dir.path());
     let _path = prepend_path(dir.path());
     let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+    let _stdin_log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_STDIN", &stdin_log);
 
     let result = deploy_agent_to_host("linux-host", &local_binary, &AgentDeployConfig::default());
 
     assert!(result.ok, "{result:?}");
     let log = std::fs::read_to_string(log).unwrap();
-    assert!(log.contains("CORTEX_HEARTBEAT_TARGET='https://old.example'"));
-    assert!(log.contains("CORTEX_HEARTBEAT_TOKEN='preserved-token'"));
-    assert!(log.contains("CORTEX_AGENT_DOCKER='true'"));
-    assert!(log.contains("CORTEX_AGENT_JOURNALD='true'"));
-    assert!(log.contains("CORTEX_SYSLOG_TARGET='old-syslog.example:1514'"));
-    assert!(log.contains("CORTEX_AGENT_FILE_TAILS='/var/log/app.log:app'"));
-    assert!(log.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD='true'"));
-    assert!(!log.contains("CORTEX_AGENT_AI_TRANSCRIPTS='"));
-    assert!(log.contains("CORTEX_AGENT_COMMAND_FORWARD='true'"));
-    assert!(log.contains("CORTEX_AGENT_SHELL_HISTORY_FORWARD='true'"));
-    assert!(log.contains("CORTEX_AGENT_AUTO_UPDATE='false'"));
+    assert!(!log.contains("preserved-token"));
+    let stdin = std::fs::read_to_string(stdin_log).unwrap();
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TARGET=https://old.example"));
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TOKEN=preserved-token"));
+    assert!(stdin.contains("CORTEX_AGENT_DOCKER=true"));
+    assert!(stdin.contains("CORTEX_AGENT_JOURNALD=true"));
+    assert!(stdin.contains("CORTEX_SYSLOG_TARGET=old-syslog.example:1514"));
+    assert!(stdin.contains("CORTEX_AGENT_FILE_TAILS=/var/log/app.log:app"));
+    assert!(stdin.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true"));
+    assert!(!stdin.contains("CORTEX_AGENT_AI_TRANSCRIPTS="));
 }
 
 #[test]
@@ -472,7 +479,7 @@ esac
 
     assert!(!result.ok);
     assert!(!result.detail.contains("super secret token"));
-    assert!(result.detail.contains("CORTEX_HEARTBEAT_TOKEN=<redacted>"));
+    assert!(result.detail.contains("setup heartbeatagent install"));
 }
 
 #[test]
@@ -493,6 +500,7 @@ fn redact_secret_envs_redacts_custom_secret_keys() {
 fn deploy_agent_to_unraid_writes_persistent_env_and_docker_container() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("commands.log");
+    let stdin_log = dir.path().join("stdin.log");
     let local_binary = write_local_binary(dir.path());
     write_executable(
         &dir.path().join("ssh"),
@@ -500,6 +508,7 @@ fn deploy_agent_to_unraid_writes_persistent_env_and_docker_container() {
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
   *"/etc/unraid-version"*) printf 'yes\n'; exit 0 ;;
+  *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
   *) exit 0 ;;
 esac
 "#,
@@ -507,6 +516,7 @@ esac
     write_logging_scp(dir.path());
     let _path = prepend_path(dir.path());
     let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+    let _stdin_log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_STDIN", &stdin_log);
 
     let result = deploy_agent_to_host(
         "unraid-host",
@@ -523,10 +533,14 @@ esac
     assert!(result.ok, "{result:?}");
     let log = std::fs::read_to_string(log).unwrap();
     assert!(log.contains("heartbeat-agent.env"));
-    assert!(log.contains("CORTEX_HEARTBEAT_TARGET='https://cortex.example.test'"));
-    assert!(log.contains("CORTEX_HEARTBEAT_TOKEN='secret'"));
-    assert!(log.contains("CORTEX_AGENT_DOCKER='false'"));
-    assert!(log.contains("CORTEX_AGENT_JOURNALD='false'"));
+    assert!(!log.contains("CORTEX_HEARTBEAT_TOKEN"));
+    assert!(!log.contains("secret"));
+    let stdin = std::fs::read_to_string(stdin_log).unwrap_or_default();
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TARGET=https://cortex.example.test"));
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TOKEN=secret"));
+    assert!(stdin.contains("CORTEX_AGENT_DOCKER=false"));
+    assert!(stdin.contains("CORTEX_AGENT_JOURNALD=false"));
+    assert!(log.contains("--env-file /mnt/user/appdata/cortex/heartbeat-agent.env"));
     assert!(log.contains("docker rm -f cortex-heartbeat-agent"));
     assert!(log.contains("--restart unless-stopped"));
     assert!(log.contains("-v /var/run/docker.sock:/var/run/docker.sock"));
@@ -689,6 +703,18 @@ fn parse_env_file_splits_on_first_equals_and_skips_blanks_and_comments() {
             ("A".to_string(), "1".to_string()),
             ("B".to_string(), "x=y z".to_string()),
         ]
+    );
+}
+
+#[test]
+fn render_env_file_rejects_values_with_cross_parser_ambiguity() {
+    for value in [" leading", "trailing ", "a\\b", "a\"b", "a'b", "a\nb"] {
+        let error = render_env_file(&[("TOKEN".into(), value.into())]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    assert_eq!(
+        render_env_file(&[("TOKEN".into(), "spaces inside = are okay # too".into())]).unwrap(),
+        "TOKEN=spaces inside = are okay # too\n"
     );
 }
 

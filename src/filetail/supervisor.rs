@@ -27,6 +27,7 @@ pub(crate) use self::io::{
 };
 
 const FILE_TAIL_ROTATION_GRACE: Duration = Duration::from_millis(1000);
+const CHECKPOINT_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 pub(crate) struct FileTailSupervisor {
@@ -70,12 +71,26 @@ impl FileTailSupervisor {
         out
     }
 
-    pub(crate) fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self, timeout: Duration) {
         self.token.cancel();
-        let mut tasks = self.tasks.lock();
-        for (_, task) in tasks.drain() {
+        let tasks: Vec<_> = self.tasks.lock().drain().map(|(_, task)| task).collect();
+        let abort_handles: Vec<_> = tasks
+            .iter()
+            .map(|task| task.handle.abort_handle())
+            .collect();
+        let mut handles = Vec::with_capacity(tasks.len());
+        for task in tasks {
             task.status.lock().running = false;
-            task.handle.abort();
+            handles.push(task.handle);
+        }
+        if tokio::time::timeout(timeout, futures_util::future::join_all(&mut handles))
+            .await
+            .is_err()
+        {
+            for handle in abort_handles {
+                handle.abort();
+            }
+            let _ = futures_util::future::join_all(handles).await;
         }
     }
 
@@ -270,12 +285,33 @@ async fn tail_file_until_cancelled(
     let mut fingerprint = opened.fingerprint;
     let mut line = Vec::new();
     let mut pending_rotation_since: Option<Instant> = None;
+    let mut last_checkpoint_flush = Instant::now();
+    let mut checkpoint_dirty = false;
+    let mut checkpoint_time = now_iso();
     loop {
         tokio::select! {
-            _ = token.cancelled() => return Ok(()),
+            _ = token.cancelled() => {
+                if checkpoint_dirty {
+                    persist_checkpoint(
+                        Arc::clone(&registry), source.id.clone(), identity, position,
+                        checkpoint_time.clone(),
+                    ).await?;
+                    status.lock().last_checkpoint_at = Some(checkpoint_time.clone());
+                }
+                return Ok(())
+            },
             read = read_bounded_line(&mut reader, &mut line, max_line_bytes) => {
                 let read = read?;
                 if read.bytes_read == 0 {
+                    if checkpoint_dirty && last_checkpoint_flush.elapsed() >= CHECKPOINT_FLUSH_INTERVAL {
+                        persist_checkpoint(
+                            Arc::clone(&registry), source.id.clone(), identity, position,
+                            checkpoint_time.clone(),
+                        ).await?;
+                        checkpoint_dirty = false;
+                        last_checkpoint_flush = Instant::now();
+                        status.lock().last_checkpoint_at = Some(checkpoint_time.clone());
+                    }
                     if path_identity_changed(source, identity).await? {
                         let since = pending_rotation_since.get_or_insert_with(Instant::now);
                         if since.elapsed() < FILE_TAIL_ROTATION_GRACE {
@@ -331,11 +367,24 @@ async fn tail_file_until_cancelled(
                     status.blocked_on_writer_since = Some(now.clone());
                 }
                 ingest.send_durable(entry).await?;
-                registry.update_checkpoint(&source.id, identity.dev, identity.ino, position, &now)?;
+                checkpoint_time.clone_from(&now);
+                checkpoint_dirty = true;
+                let checkpoint_persisted = if last_checkpoint_flush.elapsed() >= CHECKPOINT_FLUSH_INTERVAL {
+                    persist_checkpoint(
+                        Arc::clone(&registry), source.id.clone(), identity, position, now.clone(),
+                    ).await?;
+                    checkpoint_dirty = false;
+                    last_checkpoint_flush = Instant::now();
+                    true
+                } else {
+                    false
+                };
                 line.clear();
                 let mut status = status.lock();
                 status.last_line_at = Some(now);
-                status.last_checkpoint_at = status.last_line_at.clone();
+                if checkpoint_persisted {
+                    status.last_checkpoint_at = status.last_line_at.clone();
+                }
                 status.blocked_on_writer_since = None;
                 status.last_error = if read.truncated {
                     Some(format!(
@@ -348,6 +397,21 @@ async fn tail_file_until_cancelled(
             }
         }
     }
+}
+
+async fn persist_checkpoint(
+    registry: Arc<FileTailRegistry>,
+    source_id: String,
+    identity: FileIdentity,
+    position: u64,
+    now: String,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        registry.update_checkpoint(&source_id, identity.dev, identity.ino, position, &now)
+    })
+    .await
+    .context("join file-tail checkpoint persistence")??;
+    Ok(())
 }
 
 struct PartialLineBeforeReopen<'a> {
@@ -380,6 +444,7 @@ async fn ingest_partial_line_before_reopen(partial: PartialLineBeforeReopen<'_>)
     )?;
     let mut status = partial.status.lock();
     status.last_line_at = Some(partial.now.to_string());
+    status.last_checkpoint_at = Some(partial.now.to_string());
     status.last_error = Some(format!(
         "ingested unterminated partial line before rotation/truncation for {}",
         partial.source.path

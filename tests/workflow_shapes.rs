@@ -152,10 +152,8 @@ fn workflows_default_to_read_only_github_token_permissions() {
         "the container release workflow must support controlled recovery for an existing release tag"
     );
     assert!(
-        docker
-            .contains(r#"smoke-command: docker run --rm --entrypoint cortex "$IMAGE_REF" --help"#)
-            && !docker.contains(r#"smoke-command: docker run --rm "$IMAGE_REF" --help"#),
-        "the container smoke test must invoke the cortex binary instead of treating --help as the executable"
+        docker.contains(r#"smoke-command: bash scripts/container-release-smoke.sh "$IMAGE_REF""#),
+        "container publication must run the exact-image live smoke harness"
     );
     assert!(
         !docker.contains("mcp-publisher")

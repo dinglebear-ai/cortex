@@ -12,6 +12,15 @@ use crate::mcp::AuthPolicy;
 
 use super::*;
 
+#[test]
+fn documented_rest_route_count_matches_router_registrations() {
+    let source = include_str!("api.rs");
+    let route_count = source.matches(".route(").count();
+    assert_eq!(route_count, 74, "update the documented API denominator");
+    assert!(include_str!("../docs/api.md").contains("74 routes total"));
+    assert!(include_str!("../docs/architecture.md").contains("(74 routes)"));
+}
+
 /// Build the router for a test, layering a `MockConnectInfo` so handlers
 /// extracting `ConnectInfo<SocketAddr>` (e.g. `ai_prune_checkpoints`) work
 /// under `tower::ServiceExt::oneshot`. Production wires `ConnectInfo` via

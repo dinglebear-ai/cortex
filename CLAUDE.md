@@ -285,7 +285,7 @@ RUST_LOG=info
 | `docker-compose.yml` | Production deployment (ports 1514, 3100) |
 | `docs/SETUP.md` | Setup guide (clone, build, configure, deploy, verify); per-host forwarder configs (rsyslog, UniFi, ATT router, WSL) live in README "Syslog Forwarder Setup" |
 | `src/db/queries.rs` | All SQL queries and FTS5 search implementation |
-| `src/mcp/actions.rs` | `ACTION_SPECS` — authoritative registry of all 56 MCP actions and their scopes |
+| `src/mcp/actions.rs` | `ACTION_SPECS` — authoritative registry of all 58 MCP actions and their scopes |
 | `src/mcp/tools.rs` | Single `cortex` tool with action dispatch |
 | `config/mcporter.json` | mcporter config (HTTP transport to localhost:3100) |
 | `config/systemd/` | `cortex-backup.service` / `.timer` — daily WAL-safe backup units |

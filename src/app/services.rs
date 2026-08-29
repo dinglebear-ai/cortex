@@ -157,6 +157,9 @@ pub struct CortexService {
     pub(super) storage: StorageConfig,
     db_permits: Arc<Semaphore>,
     pub(super) heavy_read_permits: Arc<Semaphore>,
+    /// Process-wide admission gate shared with runtime and REST maintenance.
+    pub(super) maintenance_permit: Arc<Semaphore>,
+    integrity_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     acquire_timeout: Duration,
     /// OS-level adapter for journalctl / systemd shell-outs.
     pub(super) os: Arc<dyn OsAdapter + Send + Sync>,
@@ -192,6 +195,8 @@ impl CortexService {
             storage,
             db_permits: Arc::new(Semaphore::new(permits)),
             heavy_read_permits: Arc::new(Semaphore::new(heavy_read_concurrency)),
+            maintenance_permit: Arc::new(Semaphore::new(1)),
+            integrity_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
             os: Arc::new(SystemOsAdapter),
             file_tail_registry: None,
@@ -219,6 +224,8 @@ impl CortexService {
             storage,
             db_permits: Arc::new(Semaphore::new(permits)),
             heavy_read_permits: Arc::new(Semaphore::new(heavy_read_concurrency)),
+            maintenance_permit: Arc::new(Semaphore::new(1)),
+            integrity_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
             os,
             file_tail_registry: None,
@@ -231,6 +238,44 @@ impl CortexService {
     pub(crate) fn with_file_tail_registry(mut self, registry: Arc<FileTailRegistry>) -> Self {
         self.file_tail_registry = Some(registry);
         self
+    }
+
+    pub(crate) fn with_maintenance_permit(mut self, permit: Arc<Semaphore>) -> Self {
+        self.maintenance_permit = permit;
+        self
+    }
+
+    pub(crate) fn maintenance_permit(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.maintenance_permit)
+    }
+
+    pub(crate) async fn drain_integrity_tasks(&self, timeout: std::time::Duration) -> bool {
+        let mut tasks = {
+            let mut tasks = self
+                .integrity_tasks
+                .lock()
+                .expect("integrity task registry mutex poisoned");
+            std::mem::take(&mut *tasks)
+        };
+        let abort_handles: Vec<_> = tasks
+            .iter()
+            .map(tokio::task::JoinHandle::abort_handle)
+            .collect();
+        if tokio::time::timeout(timeout, futures_util::future::join_all(&mut tasks))
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                timeout_secs = timeout.as_secs(),
+                "Integrity task drain timed out; aborting async wrappers"
+            );
+            for handle in abort_handles {
+                handle.abort();
+            }
+            let _ = futures_util::future::join_all(tasks).await;
+            return false;
+        }
+        true
     }
 
     pub(crate) fn with_llm_config(mut self, config: crate::config::LlmConfig) -> Self {

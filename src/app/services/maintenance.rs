@@ -64,6 +64,9 @@ impl CortexService {
     }
 
     pub async fn db_integrity(&self, quick: bool) -> ServiceResult<DbIntegrityResult> {
+        let _permit = Arc::clone(&self.maintenance_permit)
+            .try_acquire_owned()
+            .map_err(|_| ServiceError::Busy("db maintenance already in progress".to_string()))?;
         self.run_db("db_integrity", move |pool| {
             let messages = db::db_integrity_check(pool, quick)?;
             Ok(DbIntegrityResult {
@@ -79,8 +82,8 @@ impl CortexService {
     /// returns the job id IMMEDIATELY. The caller polls
     /// [`db_integrity_job_status`](Self::db_integrity_job_status).
     ///
-    /// The check runs on its OWN pooled connection in a detached
-    /// `tokio::spawn(spawn_blocking(...))` — deliberately NOT via `run_db` (which
+    /// The check runs on its OWN pooled connection in an independently managed
+    /// OS thread — deliberately NOT via `run_db` (which
     /// would hold a `db_permits` slot for the whole 147s and starve other reads)
     /// and NOT via the maintenance permit (which would serialize behind retention
     /// / optimize). `quick_check` is read-only, so it never blocks the ingest
@@ -90,6 +93,9 @@ impl CortexService {
         &self,
         quick: bool,
     ) -> ServiceResult<DbIntegrityJobStarted> {
+        let permit = Arc::clone(&self.maintenance_permit)
+            .try_acquire_owned()
+            .map_err(|_| ServiceError::Busy("db maintenance already in progress".to_string()))?;
         let job_id = self
             .run_db("db_integrity_start", move |pool| {
                 db::insert_maintenance_job(pool, "db_integrity")
@@ -97,32 +103,41 @@ impl CortexService {
             .await?;
 
         let pool = Arc::clone(&self.pool);
-        tokio::spawn(async move {
-            let check_pool = Arc::clone(&pool);
-            let outcome =
-                tokio::task::spawn_blocking(move || db::db_integrity_check(&check_pool, quick))
-                    .await;
-            let (status, result_json) = match outcome {
-                Ok(Ok(messages)) => {
-                    let ok =
-                        messages.len() == 1 && messages.first().is_some_and(|value| value == "ok");
-                    let payload = serde_json::json!({ "ok": ok, "messages": messages });
-                    ("done", payload.to_string())
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name(format!("cortex-integrity-{job_id}"))
+            .spawn(move || {
+                let _permit = permit;
+                let (status, result_json) = match db::db_integrity_check(&pool, quick) {
+                    Ok(messages) => {
+                        let ok = messages.len() == 1
+                            && messages.first().is_some_and(|value| value == "ok");
+                        let payload = serde_json::json!({ "ok": ok, "messages": messages });
+                        ("done", payload.to_string())
+                    }
+                    Err(e) => (
+                        "failed",
+                        serde_json::json!({ "error": e.to_string() }).to_string(),
+                    ),
+                };
+                if let Err(e) = db::finish_maintenance_job(&pool, job_id, status, &result_json) {
+                    tracing::error!(job_id, error = %e, "failed to record integrity job result");
                 }
-                Ok(Err(e)) => (
-                    "failed",
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
-                Err(e) => (
-                    "failed",
-                    serde_json::json!({ "error": format!("integrity task join error: {e}") })
-                        .to_string(),
-                ),
-            };
-            if let Err(e) = db::finish_maintenance_job(&pool, job_id, status, &result_json) {
-                tracing::error!(job_id, error = %e, "failed to record integrity job result");
-            }
+                let _ = done_tx.send(());
+            })
+            .map_err(|error| {
+                ServiceError::Internal(anyhow::anyhow!("spawn integrity worker: {error}"))
+            })?;
+        // Tokio owns only this lightweight completion waiter. On a bounded
+        // shutdown it can be aborted without making the runtime wait for the
+        // independently managed OS thread; normal shutdown still joins it.
+        let task = tokio::spawn(async move {
+            let _ = done_rx.await;
         });
+        self.integrity_tasks
+            .lock()
+            .expect("integrity task registry mutex poisoned")
+            .push(task);
 
         Ok(DbIntegrityJobStarted {
             job_id,

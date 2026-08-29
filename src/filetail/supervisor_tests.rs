@@ -1,4 +1,5 @@
 use std::os::unix::fs::MetadataExt;
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -115,7 +116,7 @@ async fn reconcile_restarts_task_when_source_definition_changes() {
             .path,
         second_path.to_string_lossy()
     );
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test]
@@ -153,7 +154,7 @@ async fn reconcile_does_not_restart_task_for_checkpoint_updates() {
             .path,
         log_path.to_string_lossy()
     );
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test]
@@ -207,7 +208,68 @@ async fn supervisor_ingests_appended_line_and_updates_checkpoint() {
     assert!(statuses[0].last_line_at.is_some());
 
     token.cancel();
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test]
+async fn supervisor_coalesces_checkpoint_writes_for_a_burst() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<LogBatchEntry>(256);
+    let ingest = IngestTx::from_sender_for_test(tx);
+    let token = tokio_util::sync::CancellationToken::new();
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        token.clone(),
+        8192,
+    );
+    let log_path = temp.path().join("burst.log");
+    tokio::fs::write(&log_path, b"").await.unwrap();
+    let mut configured = source("burst", &log_path.to_string_lossy(), "burst");
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+    let baseline_writes = registry.write_count();
+    supervisor.reconcile().unwrap();
+
+    let mut writer = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&log_path)
+        .await
+        .unwrap();
+    for index in 0..200 {
+        writer
+            .write_all(format!("burst-{index}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+    writer.flush().await.unwrap();
+
+    for _ in 0..200 {
+        tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let stored = registry.get("burst").unwrap().unwrap();
+            if stored.checkpoint_offset == Some(tokio::fs::metadata(&log_path).await.unwrap().len())
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        registry.write_count() - baseline_writes <= 4,
+        "checkpoint persistence scaled with line count"
+    );
+    token.cancel();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test]
@@ -253,7 +315,7 @@ async fn reconcile_initializes_start_at_end_checkpoint_before_returning() {
     assert_eq!(entry.message, "after reconcile");
 
     token.cancel();
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -303,7 +365,7 @@ async fn first_open_uses_checkpoint_snapshot_created_by_reconcile() {
     assert_eq!(entry.message, "after reconcile");
 
     token.cancel();
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test]
@@ -364,7 +426,7 @@ async fn supervisor_waits_for_durable_ack_before_checkpointing() {
     .unwrap();
 
     token.cancel();
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test]
@@ -404,7 +466,7 @@ async fn supervisor_reconcile_stops_disabled_and_removed_sources() {
     registry.remove("two").unwrap();
     supervisor.reconcile().unwrap();
     assert!(supervisor.running_source_for_test("two").is_none());
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test]
@@ -646,7 +708,7 @@ async fn supervisor_ingests_partial_eof_buffer_before_rotation() {
     .unwrap();
 
     token.cancel();
-    supervisor.shutdown();
+    supervisor.shutdown(Duration::from_secs(2)).await;
 }
 
 #[tokio::test]

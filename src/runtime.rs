@@ -57,6 +57,7 @@ pub struct RuntimeCore {
     otlp_counters: Arc<OtlpCounters>,
     auth_policy: AuthPolicy,
     observability: Arc<RuntimeObservability>,
+    fatal_shutdown: CancellationToken,
 }
 
 pub struct MaintenanceHandles {
@@ -149,25 +150,36 @@ impl MaintenanceHandles {
         .chain(self.docker_ingest)
         .collect();
 
-        let count = all_handles.len();
-        let join_all = futures_util::future::join_all(all_handles);
-        match tokio::time::timeout(timeout, join_all).await {
-            Ok(_) => {
-                tracing::info!(tasks = count, "All maintenance tasks completed cleanly");
+        await_or_abort_tasks(all_handles, timeout).await;
+    }
+}
+
+async fn await_or_abort_tasks(all_handles: Vec<JoinHandle<()>>, timeout: std::time::Duration) {
+    let count = all_handles.len();
+    let abort_handles: Vec<_> = all_handles.iter().map(JoinHandle::abort_handle).collect();
+    let mut join_all = Box::pin(futures_util::future::join_all(all_handles));
+    match tokio::time::timeout(timeout, &mut join_all).await {
+        Ok(_) => {
+            tracing::info!(tasks = count, "All maintenance tasks completed cleanly");
+        }
+        Err(_) => {
+            tracing::warn!(
+                tasks = count,
+                timeout_secs = timeout.as_secs(),
+                "Maintenance task shutdown timed out; aborting unfinished tasks"
+            );
+            for handle in abort_handles {
+                handle.abort();
             }
-            Err(_) => {
-                tracing::warn!(
-                    tasks = count,
-                    timeout_secs = timeout.as_secs(),
-                    "Maintenance task shutdown timed out; some tasks were abandoned"
-                );
-            }
+            let _ = join_all.await;
         }
     }
 }
 
 pub(crate) fn background_interval(period: tokio::time::Duration) -> tokio::time::Interval {
-    tokio::time::interval_at(tokio::time::Instant::now() + period, period)
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval
 }
 
 /// Tags whose retention is hard-capped at 7 days regardless of the global
@@ -317,8 +329,10 @@ impl RuntimeCore {
             CancellationToken::new(),
             config.receiver.max_message_size,
         );
+        let maintenance_permit = Arc::new(Semaphore::new(1));
         let mut service = CortexService::new(Arc::clone(&pool), config.storage.clone())
-            .with_llm_config(config.llm.clone());
+            .with_llm_config(config.llm.clone())
+            .with_maintenance_permit(Arc::clone(&maintenance_permit));
         if is_stdio {
             service = service.with_file_tail_registry(file_tail_registry);
         } else {
@@ -338,18 +352,27 @@ impl RuntimeCore {
             pool,
             storage_state,
             service,
-            maintenance_permit: Arc::new(Semaphore::new(1)),
+            maintenance_permit,
             dispatcher_permit: Arc::new(Semaphore::new(1)),
             ingest,
             file_tail_supervisor,
             otlp_counters: Arc::new(OtlpCounters::default()),
             auth_policy,
             observability,
+            fatal_shutdown: CancellationToken::new(),
         })
     }
 
     pub fn service(&self) -> CortexService {
         self.service.clone()
+    }
+
+    pub fn maintenance_permit(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.maintenance_permit)
+    }
+
+    pub fn fatal_shutdown_token(&self) -> CancellationToken {
+        self.fatal_shutdown.clone()
     }
 
     /// Shared SQLite pool — exposed for callers that need to read startup-time
@@ -436,7 +459,17 @@ impl RuntimeCore {
     /// has stopped accepting connections.
     pub async fn shutdown(self, timeout: std::time::Duration) {
         let pool = Arc::clone(&self.pool);
+        // Integrity workers use independently managed OS threads so runtime
+        // teardown remains bounded. If one outlives the drain budget, skip the
+        // shutdown checkpoint rather than contend with its live SQLite read.
+        let integrity_drained = self.service.drain_integrity_tasks(timeout).await;
         self.ingest.shutdown(timeout).await;
+        if !integrity_drained {
+            tracing::warn!(
+                "Skipping shutdown WAL checkpoint because an integrity worker is still active"
+            );
+            return;
+        }
         match db::db_wal_checkpoint(&pool, "truncate") {
             Err(e) => {
                 tracing::warn!(error = %e, "WAL checkpoint on shutdown failed (non-fatal)");
@@ -465,8 +498,9 @@ impl RuntimeCore {
         )
         .await?;
 
+        let fatal_shutdown = self.fatal_shutdown.clone();
         let monitor = tokio::spawn(async move {
-            tokio::select! {
+            let protocol = tokio::select! {
                 res = listener_handles.udp => {
                     match res {
                         Ok(()) => tracing::error!(
@@ -479,6 +513,7 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    "udp"
                 }
                 res = listener_handles.tcp => {
                     match res {
@@ -492,8 +527,14 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    "tcp"
                 }
-            }
+            };
+            tracing::error!(
+                protocol,
+                "fatal syslog listener failure; requesting graceful shutdown"
+            );
+            fatal_shutdown.cancel();
         });
         handles.syslog_monitor = Some(monitor);
         Ok(())
@@ -572,7 +613,7 @@ impl RuntimeCore {
                 tokio::select! {
                     biased;
                     _ = token.cancelled() => {
-                        supervisor.shutdown();
+                        supervisor.shutdown(std::time::Duration::from_secs(2)).await;
                         tracing::debug!("file_tail: cooperative shutdown");
                         break;
                     }

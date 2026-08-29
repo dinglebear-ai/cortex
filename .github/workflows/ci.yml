@@ -288,27 +288,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # tests/test_live.sh builds and runs a container, so it needs a reachable
-      # Docker daemon. Probe for one first and degrade loudly instead of failing
-      # the merge gate on a runner-provisioning problem.
-      #
-      # This job was silently skipped for a long time -- it only runs when the
-      # `test` job succeeds, and `test` was failing -- which is how the missing
-      # Docker access went unnoticed. Emitting a warning annotation keeps the
-      # gap visible on every PR rather than re-hiding it.
+      # Live qualification is a required release gate. Runner provisioning is
+      # part of that contract: missing Docker must fail closed.
       - name: Check Docker availability
-        id: docker
         run: |
-          set -uo pipefail
-          if docker info >/dev/null 2>&1; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=MCP integration tests skipped::No reachable Docker daemon on this runner, so tests/test_live.sh could not run. This is a runner-provisioning gap, not a code failure - the runner needs DOCKER_HOST pointed at the docker-socket-proxy and to join its network. Integration coverage is NOT being enforced on this PR."
-          fi
+          set -euo pipefail
+          docker info >/dev/null
 
       - name: Run integration tests
-        if: ${{ steps.docker.outputs.available == 'true' }}
         env:
           CORTEX_TOKEN: ci-integration-token
         run: bash tests/test_live.sh

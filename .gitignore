@@ -28,6 +28,7 @@ storage/
 .worktrees/
 .worktree/
 .full-review/
+.full-review-archive/
 .full-review-archive-*
 .bivvy
 

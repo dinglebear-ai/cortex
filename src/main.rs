@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use axum::Router;
 pub(crate) use cortex::env;
@@ -632,13 +632,22 @@ async fn serve_mcp() -> Result<()> {
     let mcp_bind = runtime.config.mcp.bind_addr();
     let listener = tokio::net::TcpListener::bind(&mcp_bind).await?;
     info!(bind = %mcp_bind, "MCP server listening");
+    let fatal_shutdown = runtime.fatal_shutdown_token();
+    let graceful_shutdown = fatal_shutdown.clone();
 
     // OTLP handler needs ConnectInfo<SocketAddr> for source_ip provenance.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move {
+        tokio::select! {
+            _ = shutdown_signal() => {},
+            _ = graceful_shutdown.cancelled() => {
+                tracing::error!("Fatal runtime condition requested shutdown");
+            }
+        }
+    })
     .await?;
 
     // HTTP connections are drained. Now drain in order:
@@ -651,6 +660,10 @@ async fn serve_mcp() -> Result<()> {
         .await;
     info!("Maintenance tasks done; draining ingest pipeline");
     runtime.shutdown(std::time::Duration::from_secs(5)).await;
+
+    if fatal_shutdown.is_cancelled() {
+        anyhow::bail!("fatal syslog listener failure");
+    }
 
     Ok(())
 }
@@ -1101,9 +1114,18 @@ fn parse_deploy_command(args: &[String]) -> Result<DeployCommand> {
                 i += 1;
                 agent_target = Some(required_arg(rest, i, "--target")?);
             }
-            "--heartbeat-token" if subcommand == "agent" => {
+            "--heartbeat-token" if subcommand == "agent" => anyhow::bail!(
+                "--heartbeat-token exposes credentials in process arguments; use --heartbeat-token-file PATH"
+            ),
+            "--heartbeat-token-file" if subcommand == "agent" => {
                 i += 1;
-                agent_token = Some(required_arg(rest, i, "--heartbeat-token")?);
+                let token_path = required_arg(rest, i, "--heartbeat-token-file")?;
+                agent_token = Some(
+                    std::fs::read_to_string(&token_path)
+                        .with_context(|| format!("read heartbeat token file {token_path}"))?
+                        .trim_end_matches(['\r', '\n'])
+                        .to_string(),
+                );
             }
             "--binary" if subcommand == "agent" => {
                 i += 1;

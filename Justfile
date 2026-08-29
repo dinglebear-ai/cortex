@@ -87,6 +87,7 @@ test-live:
 
 setup:
     cp -n .env.example .env || true
+    install -d -m 700 "${CORTEX_BACKUP_DIR:-${HOME}/.cortex/backups}"
 
 gen-token:
     openssl rand -hex 32

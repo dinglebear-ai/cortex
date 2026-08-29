@@ -584,6 +584,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-test",
  "url",
+ "windows-sys 0.61.2",
  "wiremock",
 ]
 

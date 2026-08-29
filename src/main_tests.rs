@@ -399,6 +399,8 @@ fn mode_parse_accepts_setup_doctor_namespace() {
 
 #[test]
 fn mode_parse_accepts_setup_deploy_namespace() {
+    let token_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(token_file.path(), "secret\n").unwrap();
     assert!(matches!(
         Mode::parse(vec![
             "setup".into(),
@@ -441,8 +443,8 @@ fn mode_parse_accepts_setup_deploy_namespace() {
             "nashost,devhost".into(),
             "--target".into(),
             "https://cortex.example.test".into(),
-            "--heartbeat-token".into(),
-            "secret".into(),
+            "--heartbeat-token-file".into(),
+            token_file.path().to_string_lossy().into_owned(),
             "--binary".into(),
             "/tmp/cortex".into(),
             "--docker".into(),
@@ -552,14 +554,17 @@ fn parse_deploy_agent_trims_and_drops_empty_hosts() {
 
 #[test]
 fn parse_deploy_agent_preserves_all_options() {
+    let token_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(token_file.path(), "secret\n").unwrap();
+    let token_path = token_file.path().to_string_lossy().into_owned();
     let command = super::parse_deploy_command(&[
         "agent".into(),
         "--hosts".into(),
         "nashost,devhost".into(),
         "--target".into(),
         "https://cortex.example.test".into(),
-        "--heartbeat-token".into(),
-        "secret".into(),
+        "--heartbeat-token-file".into(),
+        token_path,
         "--binary".into(),
         "/tmp/cortex".into(),
         "--docker".into(),
@@ -590,7 +595,7 @@ fn parse_deploy_agent_preserves_all_options() {
 
 #[test]
 fn parse_deploy_agent_reports_missing_option_values() {
-    for flag in ["--hosts", "--target", "--heartbeat-token", "--binary"] {
+    for flag in ["--hosts", "--target", "--heartbeat-token-file", "--binary"] {
         let err = super::parse_deploy_command(&["agent".into(), flag.into()]).unwrap_err();
         assert!(
             err.to_string().contains("requires a value"),

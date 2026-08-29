@@ -14,6 +14,7 @@
 #   0 */6 * * * cd /path/to/cortex && bash scripts/backup.sh
 
 set -euo pipefail
+umask 077
 
 DB_PATH="${CORTEX_DB_PATH:-./data/cortex.db}"
 BACKUP_DIR="${1:-./backups}"
@@ -30,6 +31,7 @@ AUTH_KEY_PATH="${AUTH_KEY_PATH:-${DB_DIR}/auth-jwt.pem}"
 
 # Ensure backup directory exists
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 
 if [[ ! -f "$DB_PATH" ]]; then
     echo "ERROR: Database not found at $DB_PATH"
@@ -40,6 +42,7 @@ fi
 # Escape single quotes in path to avoid breaking the .backup command syntax
 ESCAPED_BACKUP_FILE="${BACKUP_FILE//\'/\'\'}"
 sqlite3 "$DB_PATH" ".backup '${ESCAPED_BACKUP_FILE}'"
+chmod 600 "$BACKUP_FILE"
 
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
 echo "Backup complete: ${BACKUP_FILE} (${SIZE})"

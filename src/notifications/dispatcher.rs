@@ -292,8 +292,29 @@ async fn dispatch_row(
     // Phase 2: Deliver via Apprise — NO permit held during HTTP call.
     // ----------------------------------------------------------------
 
-    // Parse URLs from JSON
-    let urls: Vec<String> = serde_json::from_str(&row.apprise_urls_json).unwrap_or_default();
+    // Parse the destination snapshot fail-closed. Malformed persisted data
+    // must not be confused with the intentional `[]` compatibility case.
+    let urls: Vec<String> = match serde_json::from_str(&row.apprise_urls_json) {
+        Ok(urls) => urls,
+        Err(error) => {
+            tracing::error!(
+                rule_id = %row.rule_id,
+                error = %error,
+                "dispatcher: invalid persisted apprise routing; dropping notification"
+            );
+            let Ok(permit3) = Arc::clone(permit_sem).acquire_owned().await else {
+                return Ok(RowOutcome::SemaphoreClosed);
+            };
+            let row_id = row.id;
+            db_write(pool, "notif.mark_dropped", move |conn| {
+                outbox_mark_dropped(conn, row_id, "invalid_apprise_urls_json")?;
+                Ok(())
+            })
+            .await?;
+            drop(permit3);
+            return Ok(RowOutcome::Settled);
+        }
+    };
     // Override with config URLs if outbox has empty list (e.g. from error scanner)
     let effective_urls = if urls.is_empty() {
         cfg.apprise_urls.clone()

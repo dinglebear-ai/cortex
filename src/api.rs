@@ -13,7 +13,7 @@
 //! second line of defence behind the service-layer clamps.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -67,10 +67,11 @@ const GIT_SHA: Option<&str> = option_env!("GIT_SHA");
 /// design (eng-review C2/C3).
 pub const FULL_VACUUM_SIZE_GUARD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-/// Process-wide single-flight gate for the maintenance routes
+/// Process-wide single-flight gate for the maintenance routes.
 /// (`POST /api/db/vacuum`, `POST /api/db/checkpoint`,
 /// `POST /api/sessions/prune-checkpoints`). Held via `ApiState::maintenance_permit`,
-/// which clones the `Arc<Semaphore>` populated here at first call.
+/// The gate is created by `RuntimeCore`, stored by `CortexService`, and cloned
+/// into `ApiState`, so REST and background maintenance share one coordinator.
 ///
 /// **Dual-permit pattern (eng-review C2)**: this gate is SEPARATE from
 /// `CortexService::db_permits` (the read-worker pool). Handlers
@@ -81,19 +82,6 @@ pub const FULL_VACUUM_SIZE_GUARD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// whole handler call including response IO — see `ApiState::maintenance_permit`
 /// for the intentional "whole-op gate" rationale (bead 0p8r.19).
 ///
-/// **Process-wide invariant (bead 0p8r.18)**: a single `OnceLock` semaphore
-/// is shared across every `ApiState` constructed in this process. The
-/// invariant that vacuum/checkpoint cannot run concurrently relies on
-/// production wiring one ApiState per process (the standard `main::run_server`
-/// path satisfies this). Multiple ApiStates in one process would all see the
-/// same gate — safe. Tests opt out of the global via
-/// `ApiState::with_isolated_maintenance_permit`; see its doc for details.
-static SHARED_MAINTENANCE_PERMIT: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-fn shared_maintenance_permit() -> Arc<Semaphore> {
-    Arc::clone(SHARED_MAINTENANCE_PERMIT.get_or_init(|| Arc::new(Semaphore::new(1))))
-}
-
 /// Static snapshot of the server identity returned by `GET /api/version`.
 /// Built once at `ApiState` construction; `/api/version` is a hot read path
 /// for CLI health checks and must not touch SQLite per request (eng-review #A3).
@@ -108,11 +96,8 @@ pub struct VersionInfo {
 /// Shared mutable state for the /api/* router.
 ///
 /// **One-pool-per-process invariant (bead 0p8r.18)**: `ApiState::new` clones
-/// `maintenance_permit` from the process-wide [`SHARED_MAINTENANCE_PERMIT`]
-/// `OnceLock`, so every router/listener in the process serializes against
-/// the same single-flight gate. Constructing more than one `ApiState` in
-/// production is supported but they all share the same maintenance gate by
-/// design — vacuum cannot run twice concurrently per process.
+/// `maintenance_permit` from its `CortexService`, which production wires to
+/// the same gate used by runtime maintenance tasks.
 ///
 /// **Maintenance-permit lifetime (bead 0p8r.19)**: `db_vacuum`,
 /// `db_checkpoint`, and `prune_ai_checkpoints` hold the permit across the
@@ -192,6 +177,7 @@ impl ApiState {
             git_sha: GIT_SHA.map(str::to_string),
             schema_version,
         });
+        let maintenance_permit = service.maintenance_permit();
         Ok(Self {
             service,
             config,
@@ -201,7 +187,7 @@ impl ApiState {
             auth_policy,
             version_info,
             full_vacuum_size_guard_bytes: FULL_VACUUM_SIZE_GUARD_BYTES,
-            maintenance_permit: shared_maintenance_permit(),
+            maintenance_permit,
             static_token_is_admin,
             notifications_config,
             cursor_keys,

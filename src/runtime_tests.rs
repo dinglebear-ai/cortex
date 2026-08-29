@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use super::{
     RuntimeCore, background_interval, build_auth_policy, mcp_static_token_active,
@@ -337,6 +339,10 @@ async fn full_serve_mcp_router_chain_merges_without_panicking() {
         crate::api::resolved_integration_profile(&runtime.config).unwrap(),
     )
     .expect("ApiState::new should succeed against a fresh pool");
+    assert!(Arc::ptr_eq(
+        &api_state.maintenance_permit,
+        &runtime.maintenance_permit()
+    ));
 
     let app = crate::mcp::router(runtime.mcp_state())
         .merge(crate::api::router(api_state).expect("api::router requires CORTEX_API_TOKEN"))
@@ -426,6 +432,48 @@ async fn spawn_maintenance_tasks_constructs_expected_handles_and_shutdowns_clean
 
     handles.shutdown(std::time::Duration::from_secs(1)).await;
     runtime.shutdown(std::time::Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn shutdown_timeout_aborts_and_joins_non_cooperative_tasks() {
+    let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let task_progress = Arc::clone(&progress);
+    let handle = tokio::spawn(async move {
+        loop {
+            task_progress.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    super::await_or_abort_tasks(vec![handle], Duration::from_millis(1)).await;
+    let after_shutdown = progress.load(std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        progress.load(std::sync::atomic::Ordering::SeqCst),
+        after_shutdown,
+        "task continued after shutdown returned"
+    );
+}
+
+#[tokio::test]
+async fn background_intervals_skip_missed_ticks() {
+    let interval = super::background_interval(tokio::time::Duration::from_secs(60));
+    assert_eq!(
+        interval.missed_tick_behavior(),
+        tokio::time::MissedTickBehavior::Skip
+    );
+}
+
+#[tokio::test]
+async fn runtime_and_service_share_integrity_maintenance_admission() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runtime = RuntimeCore::for_server(test_config(tmp.path(), loopback_mcp()))
+        .await
+        .unwrap();
+    let gate = runtime.maintenance_permit();
+    let _held = Arc::clone(&gate).acquire_owned().await.unwrap();
+    let error = runtime.service().db_integrity(true).await.unwrap_err();
+    assert!(matches!(error, crate::app::ServiceError::Busy(_)));
 }
 
 #[tokio::test]

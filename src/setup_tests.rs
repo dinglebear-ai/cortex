@@ -339,6 +339,7 @@ fn filesystem_phase_repair_creates_private_runtime_directories() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join(".cortex");
     let data_dir = home.join("data");
+    let backup_dir = home.join("backups");
     let compose_dir = home.join("compose");
 
     let phase = filesystem_phase(SetupMode::Repair, &home, &data_dir, &compose_dir).unwrap();
@@ -346,14 +347,17 @@ fn filesystem_phase_repair_creates_private_runtime_directories() {
     assert_eq!(phase.status, SetupStatus::Ok);
     assert!(home.is_dir());
     assert!(data_dir.is_dir());
+    assert!(backup_dir.is_dir());
     assert!(compose_dir.is_dir());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let home_mode = std::fs::metadata(&home).unwrap().permissions().mode() & 0o777;
         let data_mode = std::fs::metadata(&data_dir).unwrap().permissions().mode() & 0o777;
+        let backup_mode = std::fs::metadata(&backup_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(home_mode, 0o700);
         assert_eq!(data_mode, 0o700);
+        assert_eq!(backup_mode, 0o700);
     }
 }
 

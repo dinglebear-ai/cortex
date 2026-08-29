@@ -1424,3 +1424,42 @@ fn process_runner_kills_term_ignoring_process_group() {
     assert!(cleanup.kill_sent);
     assert!(cleanup.reaped);
 }
+
+#[test]
+fn pipe_reader_surfaces_non_interrupted_read_failure() {
+    struct PrefixThenError(bool);
+    impl std::io::Read for PrefixThenError {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.0 {
+                Err(std::io::Error::other("injected pipe failure"))
+            } else {
+                self.0 = true;
+                buffer[..6].copy_from_slice(b"prefix");
+                Ok(6)
+            }
+        }
+    }
+
+    let target = std::sync::Arc::new(std::sync::Mutex::new((Vec::new(), false)));
+    let handle = super::runner::drain_pipe_for_test(
+        PrefixThenError(false),
+        std::sync::Arc::clone(&target),
+        1024,
+    );
+    let error = handle.join().unwrap().unwrap_err();
+    assert_eq!(error.to_string(), "injected pipe failure");
+    assert_eq!(target.lock().unwrap().0, b"prefix");
+}
+
+#[test]
+fn compose_host_allowlist_is_operator_configurable_with_safe_internal_default() {
+    for compose in [
+        include_str!("../docker-compose.yml"),
+        include_str!("../docker-compose.prod.yml"),
+    ] {
+        assert!(
+            compose
+                .contains("CORTEX_ALLOWED_HOSTS: \"cortex,cortex:3100,${CORTEX_ALLOWED_HOSTS:-}\"")
+        );
+    }
+}
