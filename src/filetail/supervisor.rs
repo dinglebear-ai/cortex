@@ -49,6 +49,7 @@ struct TailTask {
 pub(super) enum FailureKind {
     Registry,
     Open,
+    Io,
     Durability,
 }
 
@@ -56,12 +57,13 @@ pub(super) enum FailureKind {
 pub(super) struct ActiveFailures {
     pub(super) registry: Option<String>,
     pub(super) open: Option<String>,
+    pub(super) io: Option<String>,
     pub(super) durability: Option<String>,
 }
 
 impl ActiveFailures {
     pub(super) fn messages(&self) -> Vec<String> {
-        [&self.registry, &self.open, &self.durability]
+        [&self.registry, &self.open, &self.io, &self.durability]
             .into_iter()
             .filter_map(Clone::clone)
             .collect()

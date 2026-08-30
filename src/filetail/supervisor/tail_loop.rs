@@ -80,7 +80,7 @@ pub(super) async fn tail_file_loop(
             Err(err) => {
                 tracing::error!(source_id = %source.id, path = %source.path, error = %err, "file-tail source failed; retrying");
                 if shutdown_error.lock().messages().is_empty() {
-                    set_failure(&shutdown_error, FailureKind::Durability, err.to_string());
+                    set_failure(&shutdown_error, FailureKind::Io, err.to_string());
                 }
                 status.lock().last_error = Some(err.to_string());
                 tokio::select! {
@@ -110,6 +110,7 @@ async fn tail_file_until_cancelled(
     {
         Ok(opened) => {
             clear_failure(&shutdown_error, FailureKind::Open);
+            clear_failure(&shutdown_error, FailureKind::Io);
             opened
         }
         Err(error) => {
@@ -283,6 +284,7 @@ fn set_failure(active_failure: &Arc<Mutex<ActiveFailures>>, kind: FailureKind, m
     match kind {
         FailureKind::Registry => failures.registry = Some(message),
         FailureKind::Open => failures.open = Some(message),
+        FailureKind::Io => failures.io = Some(message),
         FailureKind::Durability => failures.durability = Some(message),
     }
 }
@@ -292,6 +294,7 @@ fn clear_failure(active_failure: &Arc<Mutex<ActiveFailures>>, recovered_kind: Fa
     match recovered_kind {
         FailureKind::Registry => failures.registry = None,
         FailureKind::Open => failures.open = None,
+        FailureKind::Io => failures.io = None,
         FailureKind::Durability => failures.durability = None,
     }
 }
