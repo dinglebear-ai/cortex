@@ -523,7 +523,7 @@ async fn maintenance_shutdown_is_unclean_when_file_tail_checkpoint_fails() {
 }
 
 #[tokio::test]
-async fn notification_wrapper_propagates_unexpected_exit_panic_and_forced_abort() {
+async fn notification_wrapper_propagates_unexpected_exit_and_panic_but_cancels_cleanly() {
     let token = tokio_util::sync::CancellationToken::new();
     let wrapper = super::spawn_notification_wrapper("test-exit", token, tokio::spawn(async {}));
     assert!(wrapper.await.unwrap_err().is_panic());
@@ -537,13 +537,26 @@ async fn notification_wrapper_propagates_unexpected_exit_panic_and_forced_abort(
     assert!(wrapper.await.unwrap_err().is_panic());
 
     let token = tokio_util::sync::CancellationToken::new();
+    let inner_token = token.clone();
     let wrapper = super::spawn_notification_wrapper(
         "test-abort",
         token.clone(),
-        tokio::spawn(std::future::pending()),
+        tokio::spawn(async move { inner_token.cancelled().await }),
     );
     token.cancel();
-    assert!(wrapper.await.unwrap_err().is_panic());
+    wrapper.await.unwrap();
+}
+
+#[tokio::test]
+async fn enabled_notification_maintenance_tasks_shutdown_cleanly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = test_config(tmp.path(), loopback_mcp());
+    config.notifications.enabled = true;
+    let runtime = RuntimeCore::for_server(config).await.unwrap();
+    let handles = runtime.spawn_maintenance_tasks();
+
+    assert!(handles.shutdown(Duration::from_secs(3)).await);
+    runtime.shutdown(Duration::from_secs(1)).await;
 }
 
 #[tokio::test]

@@ -33,6 +33,7 @@ pub(crate) struct FileTailSupervisor {
     ingest: IngestTx,
     token: CancellationToken,
     tasks: Arc<Mutex<HashMap<String, TailTask>>>,
+    reconcile_error: Arc<Mutex<Option<String>>>,
     max_line_bytes: usize,
 }
 
@@ -67,6 +68,7 @@ impl FileTailSupervisor {
             ingest,
             token,
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            reconcile_error: Arc::new(Mutex::new(None)),
             max_line_bytes,
         }
     }
@@ -78,6 +80,17 @@ impl FileTailSupervisor {
             .values()
             .map(|task| task.status.lock().clone())
             .collect();
+        if let Some(error) = self.reconcile_error.lock().clone() {
+            out.push(FileTailStatus {
+                id: "__supervisor__".to_string(),
+                running: false,
+                last_line_at: None,
+                last_read_at: None,
+                last_checkpoint_at: None,
+                blocked_on_writer_since: None,
+                last_error: Some(error),
+            });
+        }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }
@@ -130,6 +143,19 @@ impl FileTailSupervisor {
     }
 
     pub(crate) async fn reconcile(&self) -> Result<()> {
+        match self.reconcile_inner().await {
+            Ok(()) => {
+                *self.reconcile_error.lock() = None;
+                Ok(())
+            }
+            Err(error) => {
+                *self.reconcile_error.lock() = Some(error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    async fn reconcile_inner(&self) -> Result<()> {
         let sources = self.registry.list()?;
         let enabled: HashMap<String, FileTailSource> = sources
             .iter()

@@ -77,4 +77,8 @@ if docker run --rm --user 0:0 -e CORTEX_DB_PATH=/data/cortex.db \
 fi
 grep -Fq 'Refusing unsafe backup directory: filesystem root' "$test_root/root.err"
 
+# The backup script must remain portable to macOS hosts that do not provide
+# GNU realpath's -m/-- flags.
+! grep -Eq 'realpath[[:space:]]+-m|realpath.*--' /usr/local/libexec/cortex-backup.sh
+
 echo "Backup contents, isolation, recovery, and permission contract passed"

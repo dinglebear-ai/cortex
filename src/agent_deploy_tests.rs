@@ -279,6 +279,11 @@ esac
     assert!(log.contains("mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex"));
     assert!(!log.contains("heartbeat token"));
     assert!(log.contains("~/.local/bin/cortex setup heartbeatagent install"));
+    let env_position = log.find("cat > ~/.cortex/heartbeat-agent.env.new").unwrap();
+    let install_position = log
+        .find("CORTEX_SETUP_PRESERVE_HEARTBEAT_ENV=1 ~/.local/bin/cortex setup heartbeatagent install")
+        .unwrap();
+    assert!(env_position < install_position);
     let stdin = std::fs::read_to_string(stdin_log).unwrap_or_default();
     assert!(stdin.contains("CORTEX_HEARTBEAT_TARGET=https://cortex.example.test:3100"));
     assert!(stdin.contains("CORTEX_HEARTBEAT_TOKEN=heartbeat token"));
@@ -480,6 +485,53 @@ esac
     assert!(!result.ok);
     assert!(!result.detail.contains("super secret token"));
     assert!(result.detail.contains("setup heartbeatagent install"));
+}
+
+#[test]
+#[serial]
+fn deploy_agent_install_failure_leaves_new_env_ready_without_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("commands.log");
+    let stdin_log = dir.path().join("stdin.log");
+    let local_binary = write_local_binary(dir.path());
+    write_executable(
+        &dir.path().join("ssh"),
+        r#"#!/bin/sh
+printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
+case "$*" in
+  *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
+  *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
+  *"setup heartbeatagent install"*) exit 42 ;;
+  *) exit 0 ;;
+esac
+"#,
+    );
+    write_successful_scp(dir.path());
+    let _path = prepend_path(dir.path());
+    let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+    let _stdin_log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_STDIN", &stdin_log);
+
+    let result = deploy_agent_to_host(
+        "linux-host",
+        &local_binary,
+        &AgentDeployConfig {
+            target: Some("https://new.example.test:3100".to_string()),
+            token: Some("new-token".to_string()),
+            ..AgentDeployConfig::default()
+        },
+    );
+
+    assert!(!result.ok);
+    let log = std::fs::read_to_string(log).unwrap();
+    let env_position = log.find("cat > ~/.cortex/heartbeat-agent.env.new").unwrap();
+    let install_position = log
+        .find("CORTEX_SETUP_PRESERVE_HEARTBEAT_ENV=1 ~/.local/bin/cortex setup heartbeatagent install")
+        .unwrap();
+    assert!(env_position < install_position);
+    assert!(!log.contains("systemctl --user restart"));
+    let stdin = std::fs::read_to_string(stdin_log).unwrap();
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TARGET=https://new.example.test:3100"));
+    assert!(stdin.contains("CORTEX_HEARTBEAT_TOKEN=new-token"));
 }
 
 #[test]

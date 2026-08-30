@@ -1,4 +1,5 @@
 use std::os::unix::fs::MetadataExt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -29,6 +30,32 @@ fn source(id: &str, path: &str, tag: &str) -> FileTailSource {
         created_at: "2026-06-11T20:00:00Z".into(),
         updated_at: "2026-06-11T20:00:00Z".into(),
     }
+}
+
+#[tokio::test]
+async fn reconcile_failure_is_visible_until_a_successful_reconcile() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry_path = temp.path().join("file-tails.json");
+    std::fs::write(&registry_path, "not-json").unwrap();
+    let registry = Arc::new(FileTailRegistry::new(registry_path.clone()));
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let supervisor = FileTailSupervisor::new(
+        registry,
+        IngestTx::from_sender_for_test(tx),
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+
+    let error = supervisor.reconcile().await.unwrap_err();
+    assert!(error.to_string().contains("parse"));
+    let statuses = supervisor.statuses();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].id, "__supervisor__");
+    assert!(statuses[0].last_error.as_deref().unwrap().contains("parse"));
+
+    std::fs::write(registry_path, "[]").unwrap();
+    supervisor.reconcile().await.unwrap();
+    assert!(supervisor.statuses().is_empty());
 }
 
 #[test]

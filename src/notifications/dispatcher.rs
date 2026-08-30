@@ -38,6 +38,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::NotificationsConfig;
 use crate::db::DbPool;
@@ -544,6 +545,7 @@ pub(crate) fn spawn_dispatcher(
     pool: Arc<DbPool>,
     permit_sem: Arc<Semaphore>,
     cfg: NotificationsConfig,
+    token: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     if !cfg.enabled {
         return None;
@@ -554,7 +556,11 @@ pub(crate) fn spawn_dispatcher(
         let mut interval =
             crate::runtime::background_interval(tokio::time::Duration::from_secs(interval_secs));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             tracing::debug!("notification_dispatcher: cycle starting");
             match run_dispatch_cycle(Arc::clone(&pool), Arc::clone(&permit_sem), &apprise, &cfg)
                 .await

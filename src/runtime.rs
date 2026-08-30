@@ -108,13 +108,8 @@ impl MaintenanceHandles {
     ///   They break at the next tick and exit cleanly.
     ///
     /// - `notification_dispatcher`, `notification_evaluator`, `notification_digest`:
-    ///   the inner loop (owned by the notifications module) does NOT observe the
-    ///   token. The wrapper spawned here selects on cancellation and calls
-    ///   `inner.abort()` — this is still abort, not cooperative drain. The
-    ///   10 s timeout window lets the dispatcher finish its current outbound
-    ///   HTTP attempt (5 s connect timeout) before the hard abort fires.
-    ///   Full cooperative drain for these tasks requires wiring the token into
-    ///   the notifications spawn functions, deferred for a follow-up bead.
+    ///   fully cooperative between cycles. The wrapper still treats an inner
+    ///   exit or panic before cancellation as a maintenance-task failure.
     ///
     /// - `docker_ingest` tasks: collected via `docker_ingest::spawn_all` which
     ///   does not yet accept a `CancellationToken`. Cancelled via `join_all`
@@ -210,13 +205,9 @@ fn spawn_notification_wrapper(
         tokio::select! {
             biased;
             _ = token.cancelled() => {
-                inner.abort();
                 match inner.await {
-                    Err(error) if error.is_cancelled() => {
-                        panic!("notification {name} required forced abort during shutdown")
-                    }
                     Err(error) => panic!("notification {name} failed during shutdown: {error}"),
-                    Ok(()) => panic!("notification {name} exited unexpectedly during shutdown"),
+                    Ok(()) => tracing::debug!(task = name, "notification task stopped cleanly"),
                 }
             }
             result = &mut inner => match result {
@@ -951,6 +942,7 @@ impl RuntimeCore {
             Arc::clone(&self.pool),
             Arc::clone(&self.dispatcher_permit),
             self.config.notifications.clone(),
+            token.clone(),
         )?;
         Some(spawn_notification_wrapper("dispatcher", token, inner))
     }
@@ -960,6 +952,7 @@ impl RuntimeCore {
             Arc::clone(&self.pool),
             Arc::clone(&self.maintenance_permit),
             self.config.notifications.clone(),
+            token.clone(),
         )?;
         Some(spawn_notification_wrapper("evaluator", token, inner))
     }
@@ -969,6 +962,7 @@ impl RuntimeCore {
             Arc::clone(&self.pool),
             Arc::clone(&self.maintenance_permit),
             self.config.notifications.clone(),
+            token.clone(),
         )?;
         Some(spawn_notification_wrapper("digest", token, inner))
     }

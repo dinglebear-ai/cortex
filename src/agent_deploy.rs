@@ -349,12 +349,18 @@ fn run_deploy(host: &str, local_binary: &Path, config: &AgentDeployConfig) -> io
         host,
         "chmod +x ~/.local/bin/cortex.new && mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex",
     )?;
-    ssh_run(host, "~/.local/bin/cortex setup heartbeatagent install")?;
     let env_body = render_env_file(&env_pairs)?;
     ssh_run_with_stdin(
         host,
         "umask 077; mkdir -p ~/.cortex; cat > ~/.cortex/heartbeat-agent.env.new && chmod 600 ~/.cortex/heartbeat-agent.env.new && mv -f ~/.cortex/heartbeat-agent.env.new ~/.cortex/heartbeat-agent.env",
         env_body.as_bytes(),
+    )?;
+    // Install the unit only after the fully resolved environment is atomically
+    // in place. The setup command preserves an existing env file, so an
+    // interruption cannot start the agent once with generated defaults.
+    ssh_run(
+        host,
+        "CORTEX_SETUP_PRESERVE_HEARTBEAT_ENV=1 ~/.local/bin/cortex setup heartbeatagent install",
     )?;
     ssh_run(
         host,

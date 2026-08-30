@@ -18,7 +18,11 @@ umask 077
 
 DB_PATH="${CORTEX_DB_PATH:-./data/cortex.db}"
 BACKUP_DIR="${1:-./backups}"
-BACKUP_DIR="$(realpath -m -- "$BACKUP_DIR")"
+# `realpath -m --` is GNU-specific. Create the destination with the restrictive
+# process umask, then use POSIX `pwd -P` to resolve `.`/`..` and symlinks on both
+# macOS and Linux before changing permissions or writing any artifacts.
+mkdir -p "$BACKUP_DIR"
+BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd -P)"
 if [[ "$BACKUP_DIR" == "/" ]]; then
     echo "ERROR: Refusing unsafe backup directory: filesystem root" >&2
     exit 1
@@ -34,8 +38,7 @@ DB_DIR="$(dirname "$DB_PATH")"
 AUTH_DB_PATH="${AUTH_DB_PATH:-${DB_DIR}/auth.db}"
 AUTH_KEY_PATH="${AUTH_KEY_PATH:-${DB_DIR}/auth-jwt.pem}"
 
-# Ensure backup directory exists
-mkdir -p "$BACKUP_DIR"
+# Ensure backup directory permissions are private
 chmod 700 "$BACKUP_DIR"
 
 if [[ ! -f "$DB_PATH" ]]; then
