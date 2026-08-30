@@ -17,7 +17,7 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 | Area | What Cortex provides |
 | --- | --- |
 | Ingest | UDP/TCP syslog, OTLP/HTTP logs, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
-| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 43 sequential schema migrations |
+| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 50 sequential schema migrations |
 | Investigation | Search, filtering, context, timelines, patterns, anomaly comparison, cross-source correlation, recurring error signatures, deterministic incident bundles, and graph explanations |
 | Fleet intelligence | SSH and API inventory collectors, host state, service topology, container and route relationships, redacted evidence, and rebuildable graph projections |
 | AI operations | Claude, Codex, and Gemini session indexing; skill, MCP, and hook event extraction; incident clustering; and guarded local LLM assessments |
@@ -182,7 +182,7 @@ Cortex is one Rust binary with multiple operating modes. The same application an
           CLI       REST       MCP       Web workspace
 ```
 
-The daemon supervises its receivers and background services with cooperative cancellation. Shutdown drains HTTP requests, maintenance work, and ingest queues before checkpointing the WAL.
+The daemon supervises its receivers and background services with cooperative cancellation. Shutdown drains HTTP requests, gives maintenance tasks 10 seconds to finish before abort-and-join, gives ingest 5 seconds to flush, and then attempts a WAL checkpoint. Already-running blocking SQLite calls cannot be cancelled by Tokio.
 
 Background services include:
 
@@ -671,7 +671,7 @@ Cortex uses SQLite with:
 - Online backup support
 - Integrity checks, checkpoints, and vacuum workflows
 
-The current schema history contains 43 sequential migrations.
+The current schema history contains 50 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry.
 
 ### Authoritative and derived data
 
@@ -711,7 +711,7 @@ cortex db backup --help
 cortex db vacuum --help
 ```
 
-Maintenance operations are single-flight and separately limited from heavy read queries.
+Maintenance operations, including synchronous and background integrity checks, share one process-wide single-flight gate and are separately limited from heavy read queries. Concurrent attempts return a retryable busy response.
 
 ## Deployment and distribution
 
@@ -748,9 +748,15 @@ Manual Compose deployment expects an external Docker network named `cortex` unle
 ```bash
 docker network inspect cortex >/dev/null 2>&1 || docker network create cortex
 cp .env.example .env
+bash scripts/prepare-compose-dirs.sh
 docker compose up -d
 curl -fsS http://127.0.0.1:3100/health
 ```
+
+The preflight resolves the `/backups` bind with Docker Compose's own parser and
+creates the default or `CORTEX_BACKUP_DIR` override at mode `0700`. Compose is
+configured not to create this host path implicitly, preventing root-owned or
+overly permissive backup directories.
 
 The Compose files:
 

@@ -2,13 +2,19 @@ use std::{collections::VecDeque, convert::Infallible, sync::OnceLock, time::Dura
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use chrono::Utc;
-use hmac::{Hmac, Mac};
 use lab_auth::AuthContext;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{app::CortexService, db};
+
+mod cursor;
+#[cfg(test)]
+use cursor::{StreamCursor, decode_cursor, encode_cursor, test_cursor_keys};
+use cursor::{decode_cursor_with_keys, fingerprint, principal_key};
+pub(crate) use cursor::{
+    decode_session_handoff, encode_cursor_with_keys, principal, session_filter_fingerprint,
+};
 
 pub const MAX_BATCH_ITEMS: u32 = 100;
 pub const MAX_BATCH_BYTES: usize = 128 * 1024;
@@ -76,16 +82,6 @@ pub struct SessionStreamRequest {
     pub session_id: String,
     pub host: String,
     pub cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StreamCursor {
-    version: u8,
-    position: i64,
-    principal: String,
-    filters: String,
-    issued_at: i64,
-    signature: String,
 }
 
 struct StreamState {
@@ -371,155 +367,6 @@ fn require_read_scope(auth: &AuthContext) -> Result<(), StreamError> {
     }
 }
 
-fn principal_key(auth: &AuthContext) -> String {
-    format!("{}:{}", auth.issuer, auth.sub)
-}
-fn fingerprint<T: Serialize>(value: &T) -> Result<String, StreamError> {
-    let bytes = serde_json::to_vec(value).map_err(|_| StreamError::Invalid("invalid filters"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-fn cursor_mac(
-    position: i64,
-    principal: &str,
-    filters: &str,
-    issued_at: i64,
-    key: &[u8],
-) -> Hmac<Sha256> {
-    let body = format!("1\0{position}\0{principal}\0{filters}\0{issued_at}");
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts arbitrary key lengths");
-    mac.update(body.as_bytes());
-    mac
-}
-fn cursor_signature(
-    position: i64,
-    principal: &str,
-    filters: &str,
-    issued_at: i64,
-    key: &[u8],
-) -> String {
-    hex::encode(
-        cursor_mac(position, principal, filters, issued_at, key)
-            .finalize()
-            .into_bytes(),
-    )
-}
-pub(crate) fn encode_cursor_with_keys(
-    position: i64,
-    principal: &str,
-    filters: &str,
-    issued_at: i64,
-    keys: &CursorKeys,
-) -> String {
-    let cursor = StreamCursor {
-        version: 1,
-        position,
-        principal: principal.into(),
-        filters: filters.into(),
-        issued_at,
-        signature: cursor_signature(position, principal, filters, issued_at, &keys.current),
-    };
-    hex::encode(serde_json::to_vec(&cursor).expect("cursor is serializable"))
-}
-fn decode_cursor_with_keys(value: &str, keys: &CursorKeys) -> Result<StreamCursor, StreamError> {
-    if value.len() > 2048 {
-        return Err(StreamError::Invalid("invalid cursor"));
-    }
-    let bytes = hex::decode(value).map_err(|_| StreamError::Invalid("invalid cursor"))?;
-    let cursor: StreamCursor =
-        serde_json::from_slice(&bytes).map_err(|_| StreamError::Invalid("invalid cursor"))?;
-    if cursor.version != 1 || cursor.position < 0 {
-        return Err(StreamError::Invalid("invalid cursor"));
-    }
-    let tag = hex::decode(&cursor.signature)
-        .map_err(|_| StreamError::Invalid("cursor signature is invalid"))?;
-    if tag.len() != 32 {
-        return Err(StreamError::Invalid("cursor signature is invalid"));
-    }
-    let mut signature_ok = cursor_mac(
-        cursor.position,
-        &cursor.principal,
-        &cursor.filters,
-        cursor.issued_at,
-        &keys.current,
-    )
-    .verify_slice(&tag)
-    .is_ok();
-    for key in keys.previous.iter() {
-        signature_ok |= cursor_mac(
-            cursor.position,
-            &cursor.principal,
-            &cursor.filters,
-            cursor.issued_at,
-            key,
-        )
-        .verify_slice(&tag)
-        .is_ok();
-    }
-    if !signature_ok {
-        return Err(StreamError::Invalid("cursor signature is invalid"));
-    }
-    Ok(cursor)
-}
-
-#[cfg(test)]
-fn test_cursor_keys() -> CursorKeys {
-    CursorKeys::resolved(Some("test-only-cursor-key"), &[], true).unwrap()
-}
-
-#[cfg(test)]
-fn encode_cursor(position: i64, principal: &str, filters: &str, issued_at: i64) -> String {
-    encode_cursor_with_keys(position, principal, filters, issued_at, &test_cursor_keys())
-}
-
-#[cfg(test)]
-fn decode_cursor(value: &str) -> Result<StreamCursor, StreamError> {
-    decode_cursor_with_keys(value, &test_cursor_keys())
-}
-
-pub(crate) fn session_filter_fingerprint(
-    project: &str,
-    tool: &str,
-    session_id: &str,
-    host: &str,
-) -> Result<String, StreamError> {
-    fingerprint(&SessionStreamRequest {
-        project: project.into(),
-        tool: tool.into(),
-        session_id: session_id.into(),
-        host: host.into(),
-        cursor: None,
-    })
-}
-
-pub(crate) fn principal(auth: &AuthContext) -> String {
-    principal_key(auth)
-}
-pub(crate) fn decode_session_handoff(
-    value: &str,
-    auth: &AuthContext,
-    project: &str,
-    tool: &str,
-    session_id: &str,
-    host: &str,
-    keys: &CursorKeys,
-) -> Result<i64, StreamError> {
-    let cursor = decode_cursor_with_keys(value, keys)?;
-    if cursor.principal != principal_key(auth) {
-        return Err(StreamError::Forbidden(
-            "cursor belongs to another principal",
-        ));
-    }
-    if cursor.filters != session_filter_fingerprint(project, tool, session_id, host)? {
-        return Err(StreamError::Invalid(
-            "cursor does not match session filters",
-        ));
-    }
-    let age = Utc::now().timestamp() - cursor.issued_at;
-    if !(-CURSOR_CLOCK_SKEW_SECS..=CURSOR_TTL_SECS).contains(&age) {
-        return Err(StreamError::Expired);
-    }
-    Ok(cursor.position)
-}
 fn truncate_utf8(value: &str, max: usize) -> (String, bool) {
     if value.len() <= max {
         return (value.to_owned(), false);

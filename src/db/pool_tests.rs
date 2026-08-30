@@ -1,4 +1,11 @@
 use super::*;
+
+#[test]
+fn documented_schema_count_matches_known_version() {
+    assert_eq!(KNOWN_SCHEMA_VERSION, 50);
+    assert!(include_str!("../../README.md").contains("50 sequential schema migrations"));
+    assert!(include_str!("../../docs/architecture.md").contains("50 sequential migrations"));
+}
 use crate::config::StorageConfig;
 use crate::db::{
     ENTITY_TYPES, EVIDENCE_SOURCE_KINDS, LogBatchEntry, REASON_CODES, RELATIONSHIP_TYPES,

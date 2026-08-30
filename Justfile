@@ -57,12 +57,14 @@ docker-build:
     docker build -f config/Dockerfile -t cortex .
 
 up:
+    bash scripts/prepare-compose-dirs.sh
     docker compose up -d
 
 down:
     docker compose down
 
 restart:
+    bash scripts/prepare-compose-dirs.sh
     docker compose restart
 
 logs:
@@ -87,6 +89,7 @@ test-live:
 
 setup:
     cp -n .env.example .env || true
+    bash scripts/prepare-compose-dirs.sh
 
 gen-token:
     openssl rand -hex 32

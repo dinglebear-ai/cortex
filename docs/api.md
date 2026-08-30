@@ -24,9 +24,10 @@ updated: 2026-07-30
 
 ## Endpoint matrix
 
-66 routes total. Scope is `read` (mounted via `axum::routing::get`,
-hits read-side `db_permits`) or `admin` (POST + `MAINTENANCE_PERMIT`
-single-flight, audited via `tracing::warn!` before the service call).
+75 routes total. Scope is `read` (mounted via `axum::routing::get`,
+hits read-side `db_permits`) or `admin`. Database maintenance and integrity
+checks share one process-wide maintenance gate; concurrent attempts receive a
+busy response. Admin mutations are audited before the service call.
 All responses are JSON; error bodies are `{"error": "<message>"}`
 unless a route documents a structured diagnostic body.
 
@@ -102,8 +103,8 @@ to them by default.
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/db/status` | read | (none) | `DbMaintenanceStatus { db_path, page_count, freelist_count, page_size, logical_size_bytes, physical_size_bytes, wal_size_bytes?, shm_size_bytes?, sqlite_page_cache_mb, sqlite_page_cache_kib_per_connection, sqlite_mmap_mb, sqlite_mmap_bytes, heavy_read_concurrency, wal_checkpoint_mb, wal_checkpoint_threshold_bytes, cgroup_memory_status, cgroup_memory_max_bytes?, cgroup_memory_current_bytes?, cgroup_memory_peak_bytes?, auto_vacuum, journal_mode, integrity_ok?, integrity_messages: [String] }` | 200, 401, 503, 500 | Y | DIFFERENT shape from `/api/stats`: a maintenance-focused PRAGMA/cache/WAL/cgroup snapshot. Cgroup diagnostics expose a compact status plus numeric values only; cgroup file paths and read errors are not returned. Bypasses `MAINTENANCE_PERMIT`. |
-| GET | `/api/db/integrity` | read | query: `quick?` (bool — default `false` runs full `PRAGMA integrity_check`; `true` runs `PRAGMA quick_check`). `deny_unknown_fields`. | `DbIntegrityResult` | 200, 400, 401, 503, 500 | Y | Full check on a multi-GB DB can be slow but does NOT take `MAINTENANCE_PERMIT`. |
-| POST | `/api/db/integrity/background` | **admin** | query: `quick?` (bool). | `DbIntegrityJobStarted { job_id, status }` | 200, 400, 401, **403**, 500 | **N** | Requires the admin header. Starts a server-side background integrity job; poll `/api/db/integrity/jobs/{id}` for the outcome. |
+| GET | `/api/db/integrity` | read | query: `quick?` (bool — default `false` runs full `PRAGMA integrity_check`; `true` runs `PRAGMA quick_check`). `deny_unknown_fields`. | `DbIntegrityResult` | 200, 400, 401, 503, 500 | Y | Full check can scan a multi-GB DB. Single-flight with other maintenance; concurrent attempts return busy. |
+| POST | `/api/db/integrity/background` | **admin** | query: `quick?` (bool). | `DbIntegrityJobStarted { job_id, status }` | 200, 400, 401, **403**, 503, 500 | **N** | Requires the admin header. Starts one single-flight server-side background integrity job; poll `/api/db/integrity/jobs/{id}`. Concurrent maintenance is rejected. |
 | GET | `/api/db/integrity/jobs/{id}` | read | path: `id` (i64). | `MaintenanceJobStatus` | 200, 401, 404, 503, 500 | Y | Polls a background integrity job. |
 | POST | `/api/db/checkpoint` | **admin** | body: `{ "mode": "passive" \| "full" \| "restart" \| "truncate" }`. Validated handler-side BEFORE the service call (eng-review #A17). | `DbCheckpointResult { mode, busy, log_frames, checkpointed_frames, complete }` | 200, 400, 401, **403**, **409**, 500 | **N** | Requires the admin header. Single-flight via `MAINTENANCE_PERMIT`; 409 on contention. `caller_ip` audit-logged before service call. `passive` can return `complete=false` with 200 while active writers prevent a full drain; stricter modes still return 409 when incomplete. |
 | POST | `/api/db/vacuum` | **admin** | body: `{ "full": bool, "force"?: bool, "incremental_pages"?: u32 }`. `force` is `Option<bool>` so the size pre-flight only relaxes on explicit `"force": true`. | `DbVacuumResult` (incl. `after_physical_size_bytes`) | 200, 400, 401, **403**, **409**, 500 | **N** | Requires the admin header. Single-flight via `MAINTENANCE_PERMIT`. Size pre-flight: `full && !force` reads the LIVE `page_count * page_size` (no cached snapshot) on every call and returns 409 if logical size > **2 GB**. `caller_ip` audit-logged before service call. See "VACUUM on large DBs" below. |
@@ -125,7 +126,7 @@ to them by default.
 | GET | `/api/graph/explain` | read | query: entity selector, `depth?` (clamped to 3), `beam_width?`, `max_chains?`, `evidence_sample_limit?`, `payload_budget?` | `GraphExplainResponse { resolved_entity, chains, narrative, open_questions, missing_evidence, next_queries, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Deterministic evidence-backed explanation; weak evidence becomes open questions, not causal claims. |
 | GET | `/api/graph/evidence` | read | query: `evidence_id` (REQUIRED, minimum 1), `payload_budget?` | `GraphEvidenceLookupResponse { evidence, relationship, src_entity, dst_entity, source_log_summary?, missing_source_reason?, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Proof lookup for one evidence row. Source summaries are redacted/truncated and exclude raw frames and raw metadata. |
 
-**Total: 66 routes** (current `src/api.rs` router surface, including syslog,
+**Total: 71 routes** (current `src/api.rs` router surface, including syslog,
 surface-parity, AI, graph, compose, notification, error-ack, and DB routes;
 includes the 3 hook routes above, added alongside the `ai_hook_events`
 subsystem).

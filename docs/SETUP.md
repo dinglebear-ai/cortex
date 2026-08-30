@@ -110,8 +110,13 @@ just up
 Or manually:
 
 ```bash
+bash scripts/prepare-compose-dirs.sh
 docker compose up -d
 ```
+
+`prepare-compose-dirs.sh` resolves the configured `/backups` bind through
+Compose and creates it at mode `0700`; this is required because Compose is not
+allowed to silently create the host backup directory.
 
 Docker uses defaults and env vars exclusively -- `config.toml` is not copied into the image.
 

@@ -50,6 +50,7 @@ fn explicit_symlink_root_is_canonicalized_but_nested_symlink_is_skipped() {
     let real_root = outer.path().join("real-root");
     let external = outer.path().join("external/repository");
     fs::create_dir_all(&root).unwrap();
+    let root = canonical(&root);
     marker(&real_root.join("repository"));
     marker(&external);
     symlink(&real_root, outer.path().join("root-link")).unwrap();
@@ -79,7 +80,7 @@ fn explicit_symlink_root_is_canonicalized_but_nested_symlink_is_skipped() {
 #[test]
 fn ignored_directories_are_never_descended_into() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let root = canonical(dir.path());
     marker(&root.join("visible"));
     marker(&root.join("outer-repo"));
     marker(&root.join("outer-repo/.git/hidden"));
@@ -87,7 +88,7 @@ fn ignored_directories_are_never_descended_into() {
         marker(&root.join(ignored).join("hidden"));
     }
 
-    let result = discover_repositories(&[root.to_path_buf()], options(5, 20));
+    let result = discover_repositories(std::slice::from_ref(&root), options(5, 20));
     assert_eq!(
         result.repositories,
         vec![
@@ -101,12 +102,12 @@ fn ignored_directories_are_never_descended_into() {
 #[test]
 fn depth_limit_is_inclusive_and_reports_each_untraversed_directory() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let root = canonical(dir.path());
     marker(&root.join("one/two/accepted"));
     marker(&root.join("one/two/too-deep/repository"));
     marker(&root.join("other/middle/also-too-deep/repository"));
 
-    let result = discover_repositories(&[root.to_path_buf()], options(3, 20));
+    let result = discover_repositories(std::slice::from_ref(&root), options(3, 20));
     assert_eq!(
         result.repositories,
         vec![canonical(&root.join("one/two/accepted"))]
@@ -129,12 +130,12 @@ fn depth_limit_is_inclusive_and_reports_each_untraversed_directory() {
 #[test]
 fn repository_cap_returns_deterministic_prefix_and_one_warning() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let root = canonical(dir.path());
     for name in ["c-repo", "a-repo", "b-repo"] {
         marker(&root.join(name));
     }
 
-    let result = discover_repositories(&[root.to_path_buf()], options(2, 2));
+    let result = discover_repositories(std::slice::from_ref(&root), options(2, 2));
     assert_eq!(
         result.repositories,
         vec![
@@ -146,7 +147,7 @@ fn repository_cap_returns_deterministic_prefix_and_one_warning() {
         result.warnings,
         vec![DiscoveryWarning {
             kind: DiscoveryWarningKind::RepositoryLimitReached { limit: 2 },
-            path: canonical(root),
+            path: root,
         }]
     );
 }
@@ -184,7 +185,7 @@ fn permission_denied_directory_becomes_warning_without_losing_other_repositories
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let root = canonical(dir.path());
     marker(&root.join("visible"));
     let blocked = root.join("blocked");
     marker(&blocked.join("hidden"));
@@ -195,7 +196,7 @@ fn permission_denied_directory_becomes_warning_without_losing_other_repositories
         return;
     }
 
-    let result = discover_repositories(&[root.to_path_buf()], options(4, 10));
+    let result = discover_repositories(std::slice::from_ref(&root), options(4, 10));
     fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(result.repositories, vec![canonical(&root.join("visible"))]);
     assert_eq!(
@@ -215,14 +216,14 @@ fn symlinked_git_marker_is_not_accepted_as_repository() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let root = canonical(dir.path());
     let repository = root.join("repository");
     fs::create_dir_all(&repository).unwrap();
     let real_git = root.join("real-git");
     fs::create_dir_all(&real_git).unwrap();
     symlink(&real_git, repository.join(".git")).unwrap();
 
-    let result = discover_repositories(&[root.to_path_buf()], options(2, 10));
+    let result = discover_repositories(std::slice::from_ref(&root), options(2, 10));
     assert!(result.repositories.is_empty());
     assert_eq!(
         result.warnings,

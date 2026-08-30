@@ -285,8 +285,12 @@ fn classify_path_error(error: &anyhow::Error, result: &mut IndexResult) {
 
 fn reject_broad_scan_path(path: &Path) -> Result<()> {
     let canonical = path.canonicalize()?;
-    let home = crate::env::var_os("HOME").map(PathBuf::from);
-    let cwd = std::env::current_dir().ok();
+    let home = crate::env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|path| path.canonicalize().ok());
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|path| path.canonicalize().ok());
     if canonical == Path::new("/")
         || home.as_ref().is_some_and(|value| &canonical == value)
         || cwd.as_ref().is_some_and(|value| &canonical == value)
@@ -339,13 +343,21 @@ fn is_known_transcript_root(path: &Path) -> bool {
         home.join(".codex/worktrees"),
         home.join(".gemini/tmp"),
     ];
-    allowed
-        .iter()
-        .any(|root| path == root || path.starts_with(root))
+    allowed.iter().any(|root| {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        path == root || path.starts_with(root)
+    })
 }
 
 fn test_temp_path(path: &Path) -> bool {
-    cfg!(test) && path.starts_with(std::env::temp_dir())
+    if !cfg!(test) {
+        return false;
+    }
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp = temp_dir
+        .canonicalize()
+        .unwrap_or_else(|_| temp_dir.to_path_buf());
+    path.starts_with(canonical_temp)
 }
 
 pub fn index_roots(pool: &DbPool, root_override: Option<&Path>) -> Result<IndexResult> {
@@ -375,12 +387,14 @@ pub fn index_roots_with_options(
     let roots = match options.root_override.as_deref() {
         Some(path) => {
             let mut result = IndexResult::default();
-            if let Err(error) = validate_path(path).and_then(|_| reject_broad_scan_path(path)) {
-                classify_path_error(&error, &mut result);
-                record_file_error(&mut result, path, &error);
-                return Ok(result);
+            match validate_transcript_scan_path(path) {
+                Ok(canonical) => vec![canonical],
+                Err(error) => {
+                    classify_path_error(&error, &mut result);
+                    record_file_error(&mut result, path, &error);
+                    return Ok(result);
+                }
             }
-            vec![path.to_path_buf()]
         }
         None => default_roots(),
     };

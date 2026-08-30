@@ -90,7 +90,7 @@ For every row in §4:
 | `no_auth` | `NO_AUTH` or `CORTEX_NO_AUTH` | bool | `false` | public | restart-only | see §6 | `no_auth` | Disables service-local MCP auth; non-loopback binds also require `trusted_gateway_no_auth` |
 | `trusted_gateway_no_auth` | `CORTEX_TRUSTED_GATEWAY_NO_AUTH` | bool | `false` | public | restart-only | see §6 | — | Allows `no_auth` on non-loopback binds only when an upstream gateway enforces auth |
 | `api_token` | `CORTEX_TOKEN` (preferred), `CORTEX_API_TOKEN` (deprecated) | string | `None` | **secret** | restart-only | non-empty if set | `api_token` | Static Bearer token; deprecated env var logs a warning |
-| `allowed_hosts` | `CORTEX_ALLOWED_HOSTS` | csv list | `[]` | public | restart-only | — | — | Extra Host headers RMCP accepts |
+| `allowed_hosts` | `CORTEX_ALLOWED_HOSTS` | csv list | `[]` | public | restart-only | — | — | Extra Host headers RMCP accepts. Compose prepends `cortex,cortex:3100` and appends this operator value. |
 | `allowed_origins` | `CORTEX_ALLOWED_ORIGINS` | csv list | `[]` | public | restart-only | — | — | Extra browser Origins |
 
 ### `[mcp.auth]` — OAuth / JWT policy
@@ -339,7 +339,7 @@ The `cortex mcp` (stdio) entrypoint **bypasses** invariant (1) only, via `Config
 - `~/.cortex/.env` — operator-editable env file written by setup; loader rules in §2.
 - `~/.cortex/config.toml` — operator-editable TOML file (overlaid before env).
 - `.claude-plugin/plugin.json::userConfig` — plugin-managed subset that maps to env vars at setup time. The `plugin.json` column in §4 names the userConfig field that drives each row.
-- `docker-compose.yml` — references `CORTEX_UID`, `CORTEX_GID`, `CORTEX_FILE_TAIL_GROUP`, `CORTEX_RECEIVER_HOST_PORT`, `CORTEX_RECEIVER_PORT`, `CORTEX_PORT`, `CORTEX_DATA_VOLUME`, `CORTEX_VERSION`, `DOCKER_NETWORK` — these are **compose-level** vars, not server config; they shape the container, not the process inside it.
+- `docker-compose.yml` — references `CORTEX_UID`, `CORTEX_GID`, `CORTEX_FILE_TAIL_GROUP`, `CORTEX_RECEIVER_HOST_PORT`, `CORTEX_RECEIVER_PORT`, `CORTEX_PORT`, `CORTEX_DATA_VOLUME`, `CORTEX_BACKUP_DIR`, `CORTEX_VERSION`, `DOCKER_NETWORK` — these are **compose-level** vars, not server config; they shape the container, not the process inside it.
 - `docs/CONFIG.md` — narrative operator guide; should link **here** for the canonical table.
 - `docs/SETUP.md` — first-run procedure; references the secret files in `docs/contracts/data-layout.md`.
 - `docs/contracts/runtime-lifecycle.md` — what happens when validations above fail (exit codes).
