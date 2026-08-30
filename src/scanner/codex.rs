@@ -18,6 +18,7 @@ pub fn parse_line(
     let payload = payload(&value);
     let session_id = session_id_from_value(&value);
     let ai_project = extract_project(&value);
+    let event_kind = super::transcript_event_kind(&value);
     Ok(Some(ParsedTranscriptRecord {
         record_key: record_key_from_line(&value, line, line_no),
         timestamp: value
@@ -28,6 +29,7 @@ pub fn parse_line(
         message,
         session_id,
         ai_project,
+        event_kind,
         // `raw_value` is `Some` here (unlike the historical `None`) because
         // MCP event extraction (GH #104) needs the full `payload.arguments`/
         // `payload.output`/`payload.call_id` structure for `function_call`/

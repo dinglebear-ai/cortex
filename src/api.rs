@@ -17,11 +17,12 @@ use std::sync::{Arc, OnceLock};
 
 use axum::{
     Router,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Extension, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
 };
+use lab_auth::AuthContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Semaphore;
@@ -40,8 +41,8 @@ use crate::app::{
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
     ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListMcpEventsRequest,
     ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
-    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, RequestActor,
-    SearchLogsRequest, SearchSessionsRequest, ServiceError, SilentHostsRequest,
+    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, RenderedSessionPageRequest,
+    RequestActor, SearchLogsRequest, SearchSessionsRequest, ServiceError, SilentHostsRequest,
     SimilarIncidentsRequest, TailLogsRequest, TimelineRequest, TopicCorrelateRequest,
     UnackErrorRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
 };
@@ -165,6 +166,8 @@ pub struct ApiState {
     /// This mirrors MCP state so the REST admin endpoint has the same behavior
     /// as the `notifications_test` MCP action.
     pub notifications_config: NotificationsConfig,
+    pub cursor_keys: crate::stream::CursorKeys,
+    pub integration_profile: Arc<serde_json::Value>,
 }
 
 impl ApiState {
@@ -180,6 +183,8 @@ impl ApiState {
         auth_policy: AuthPolicy,
         static_token_is_admin: bool,
         notifications_config: NotificationsConfig,
+        cursor_keys: crate::stream::CursorKeys,
+        integration_profile: serde_json::Value,
     ) -> anyhow::Result<Self> {
         let schema_version = service.schema_version()?;
         let version_info = Arc::new(VersionInfo {
@@ -199,6 +204,8 @@ impl ApiState {
             maintenance_permit: shared_maintenance_permit(),
             static_token_is_admin,
             notifications_config,
+            cursor_keys,
+            integration_profile: Arc::new(integration_profile),
         })
     }
 
@@ -242,6 +249,11 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/correlate", get(correlate))
         .route("/api/stats", get(stats))
         .route("/api/version", get(version))
+        .route("/api/integration-profile", get(integration_profile))
+        .route("/v1/integration/identity", get(integration_profile))
+        .route("/api/capabilities", get(capabilities))
+        .route("/api/streams/logs", get(log_stream))
+        .route("/api/streams/sessions", get(session_stream))
         .merge(investigation::routes())
         // --- surface parity routes ---
         .route("/api/source-ips", get(source_ips))
@@ -292,6 +304,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/compose/doctor", get(compose_doctor))
         // --- ai session queries ---
         .route("/api/sessions", get(sessions))
+        .route("/api/sessions/rendered", get(rendered_session_page))
         .route("/api/sessions/search", get(ai_search))
         .route("/api/sessions/abuse", get(ai_abuse))
         .route("/api/sessions/correlate", get(ai_correlate))
@@ -350,6 +363,52 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
     let cors = cors_layer(state.cors_port, state.loopback_bind, &state.allowed_origins);
     let routes = routes.layer(cors).with_state(state);
     Ok(routes)
+}
+
+pub fn resolved_integration_profile(
+    config: &crate::config::Config,
+) -> anyhow::Result<serde_json::Value> {
+    use sha2::{Digest, Sha256};
+    let configured_seed = config
+        .server_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| config.mcp.auth.public_url.clone());
+    if configured_seed.is_none() && !crate::config::mcp_bind_is_loopback(config) {
+        anyhow::bail!("non-loopback integrations require CORTEX_SERVER_ID or CORTEX_PUBLIC_URL");
+    }
+    let seed = configured_seed.unwrap_or_else(|| {
+        format!(
+            "{}\0{}\0{}",
+            config.mcp.server_name,
+            config.mcp.bind_addr(),
+            config.storage.db_path.display()
+        )
+    });
+    let server_id = if seed.starts_with("cortex_") && seed.len() >= 23 {
+        seed
+    } else {
+        format!("cortex_{:x}", Sha256::digest(seed.as_bytes()))
+    };
+    let public_url = config.mcp.auth.public_url.clone();
+    let token_generation = config.api.api_token.as_deref().map_or_else(
+        || "none".to_string(),
+        |token| format!("{:x}", Sha256::digest(token.as_bytes()))[..16].to_string(),
+    );
+    let modes = if config.mcp.auth.mode == crate::config::AuthMode::OAuth {
+        serde_json::json!(["static_bearer", "oauth2"])
+    } else {
+        serde_json::json!(["static_bearer"])
+    };
+    Ok(serde_json::json!({
+        "contract_version":"1.0.0", "product":"cortex", "server_id":server_id,
+        "product_version":CRATE_VERSION, "api_version":{"major":1,"minor":0},
+        "route_support":["logs","sessions","fleet","graph","correlation"],
+        "auth":{"modes":modes,"issuer":public_url,"audience":public_url,
+            "token_endpoint_origin":public_url,"principal_cache_scope":"issuer+subject",
+            "credential_generation":token_generation},
+        "streams":{"transport":"sse","resume":"opaque_cursor"}
+    }))
 }
 
 async fn file_tails(
@@ -572,6 +631,54 @@ async fn stats(State(state): State<ApiState>) -> impl IntoResponse {
 /// queried per request; `schema_version` is captured once at startup.
 async fn version(State(state): State<ApiState>) -> impl IntoResponse {
     Json((*state.version_info).clone()).into_response()
+}
+
+/// Runtime identity used by typed clients.  Every field is derived from the
+/// same mounted routes/auth configuration advertised by this process.
+async fn integration_profile(State(state): State<ApiState>) -> impl IntoResponse {
+    Json((*state.integration_profile).clone()).into_response()
+}
+
+/// `GET /api/capabilities` — explicit transport support for typed clients.
+/// Native streams remain false until the durable SSE slice lands.
+async fn capabilities() -> impl IntoResponse {
+    Json(crate::app::capabilities()).into_response()
+}
+
+async fn log_stream(
+    State(state): State<ApiState>,
+    Extension(auth): Extension<AuthContext>,
+    headers: HeaderMap,
+    Query(mut request): Query<crate::stream::LogStreamRequest>,
+) -> impl IntoResponse {
+    if request.cursor.is_none() {
+        request.cursor = last_event_id(&headers);
+    }
+    crate::stream::log_stream(state.service, auth, request, state.cursor_keys)
+        .await
+        .into_response()
+}
+
+async fn session_stream(
+    State(state): State<ApiState>,
+    Extension(auth): Extension<AuthContext>,
+    headers: HeaderMap,
+    Query(mut request): Query<crate::stream::SessionStreamRequest>,
+) -> impl IntoResponse {
+    if request.cursor.is_none() {
+        request.cursor = last_event_id(&headers);
+    }
+    crate::stream::session_stream(state.service, auth, request, state.cursor_keys)
+        .await
+        .into_response()
+}
+
+fn last_event_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 // ─── Surface parity routes ──────────────────────────────────────────────────
@@ -1547,6 +1654,72 @@ async fn sessions(
     Query(req): Query<ListSessionsRequest>,
 ) -> impl IntoResponse {
     respond(state.service.list_sessions(req).await)
+}
+
+async fn rendered_session_page(
+    State(state): State<ApiState>,
+    Extension(auth): Extension<AuthContext>,
+    headers: HeaderMap,
+    Query(mut req): Query<RenderedSessionPageRequest>,
+) -> impl IntoResponse {
+    if req.cursor.is_none() {
+        req.cursor = last_event_id(&headers);
+    }
+    let filters = match crate::stream::session_filter_fingerprint(
+        &req.project,
+        &req.tool,
+        &req.session_id,
+        &req.host,
+    ) {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    let position = match req.cursor.as_deref() {
+        Some(value) => match crate::stream::decode_session_handoff(
+            value,
+            &auth,
+            &req.project,
+            &req.tool,
+            &req.session_id,
+            &req.host,
+            &state.cursor_keys,
+        ) {
+            Ok(position) => position,
+            Err(error) => return error.into_response(),
+        },
+        None => 0,
+    };
+    req.cursor = Some(format!("cortex-session-v1:{position}"));
+    match state.service.rendered_session_page(req).await {
+        Ok(mut page) => {
+            page.next_cursor = crate::stream::encode_cursor_with_keys(
+                page.high_watermark,
+                &crate::stream::principal(&auth),
+                &filters,
+                chrono::Utc::now().timestamp(),
+                &state.cursor_keys,
+            );
+            while serde_json::to_vec(&page)
+                .is_ok_and(|bytes| bytes.len() > crate::app::RENDERED_SESSION_PAGE_MAX_BYTES)
+            {
+                if page.events.pop().is_none() {
+                    break;
+                }
+                page.has_more = true;
+                page.truncated_by_bytes = true;
+                page.high_watermark = page.events.last().map_or(position, |event| event.position);
+                page.next_cursor = crate::stream::encode_cursor_with_keys(
+                    page.high_watermark,
+                    &crate::stream::principal(&auth),
+                    &filters,
+                    chrono::Utc::now().timestamp(),
+                    &state.cursor_keys,
+                );
+            }
+            Json(page).into_response()
+        }
+        Err(error) => respond::<()>(Err(error)),
+    }
 }
 
 async fn ai_search(

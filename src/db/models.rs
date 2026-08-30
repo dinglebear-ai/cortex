@@ -78,6 +78,60 @@ pub struct AiSessionEntry {
     pub event_count: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RenderedSessionEventRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub message: String,
+    pub metadata_json: Option<String>,
+    pub parse_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedSessionPageParams {
+    pub ai_project: String,
+    pub ai_tool: String,
+    pub ai_session_id: String,
+    pub host: String,
+    pub after_id: i64,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct DurableStreamRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub hostname: String,
+    pub severity: String,
+    pub app_name: Option<String>,
+    pub message: String,
+    pub metadata_json: Option<String>,
+    pub parse_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DurableStreamParams {
+    pub after_id: i64,
+    pub high_watermark: Option<i64>,
+    pub hostname: Option<String>,
+    pub app_name: Option<String>,
+    pub severity: Option<String>,
+    pub ai_project: Option<String>,
+    pub ai_tool: Option<String>,
+    pub ai_session_id: Option<String>,
+    pub limit: u32,
+    /// Bounds are needed only during the initial snapshot/resume check.  The
+    /// steady-state poll path must remain one indexed keyset query.
+    pub include_bounds: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DurableStreamPage {
+    pub rows: Vec<DurableStreamRow>,
+    pub minimum_watermark: Option<i64>,
+    pub high_watermark: i64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SearchAiSessionsParams {
     pub query: String,

@@ -164,6 +164,9 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     pub llm: LlmConfig,
     pub agent_observatory: AgentObservatoryConfig,
+    pub server_id: Option<String>,
+    pub cursor_signing_key: Secret,
+    pub cursor_previous_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1498,6 +1501,15 @@ impl Config {
             "CORTEX_ERR_FLOOR_PER_SOURCE_CAP",
             &mut config.storage.err_floor_per_source_cap,
         )?;
+        env_override_opt_str("CORTEX_SERVER_ID", &mut config.server_id);
+        env_override_opt_str(
+            "CORTEX_CURSOR_SIGNING_KEY",
+            &mut config.cursor_signing_key.0,
+        );
+        env_override_list(
+            "CORTEX_CURSOR_PREVIOUS_KEYS",
+            &mut config.cursor_previous_keys,
+        );
 
         // Auto-adjust recovery_db_size_mb if max_db_size_mb is raised but recovery
         // is still at the naive default (900MB). This prevents silent data loss

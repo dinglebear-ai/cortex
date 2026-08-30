@@ -46,6 +46,7 @@ pub mod runtime;
 pub mod scanner;
 pub mod setup;
 pub mod shell_history_ingest;
+pub mod stream;
 pub mod surfaces;
 pub mod update;
 pub mod web_app;

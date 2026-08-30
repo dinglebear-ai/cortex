@@ -31,6 +31,8 @@ pub mod otlp_traces;
 mod pool;
 mod queries;
 pub(crate) use queries::page_agent_projection_logs;
+#[cfg(test)]
+pub(crate) use queries::stream_bounds_sql;
 mod queries_hosts;
 mod queries_service_instances;
 mod skill_events;
@@ -110,12 +112,14 @@ pub use models::{
     AiInvestigateParams, AiProjectContext, AiProjectContextParams, AiProjectInventoryEntry,
     AiRelatedLogsForAnchor, AiRelatedLogsParams, AiRelatedWindow, AiSessionEntry,
     AiToolInventoryEntry, AiUsageBlock, AiUsageBlocksParams, AiUsageBlocksResult, AppLogCount,
-    CorrelatedSession, DbStats, DockerCheckpoint, ErrorSummaryEntry, GraphRelatedLogEntry,
-    HostEntry, IncidentCluster, IncidentContextParams, IncidentContextResult, IncidentEvidence,
-    ListAiProjectsParams, ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams,
-    ListAiToolsResult, LogBatchEntry, LogEntry, SearchAiSessionsParams, SearchAiSessionsResult,
-    SearchParams, SearchedAiSessionEntry, SessionGraphInputs, SeverityCount,
-    SimilarIncidentsParams, SimilarIncidentsResult, TopicGraphInputs,
+    CorrelatedSession, DbStats, DockerCheckpoint, DurableStreamPage, DurableStreamParams,
+    DurableStreamRow, ErrorSummaryEntry, GraphRelatedLogEntry, HostEntry, IncidentCluster,
+    IncidentContextParams, IncidentContextResult, IncidentEvidence, ListAiProjectsParams,
+    ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult,
+    LogBatchEntry, LogEntry, RenderedSessionEventRow, RenderedSessionPageParams,
+    SearchAiSessionsParams, SearchAiSessionsResult, SearchParams, SearchedAiSessionEntry,
+    SessionGraphInputs, SeverityCount, SimilarIncidentsParams, SimilarIncidentsResult,
+    TopicGraphInputs,
 };
 #[cfg(test)]
 pub use pool::KNOWN_SCHEMA_VERSION;
@@ -127,12 +131,12 @@ pub use pool::{
 pub(crate) use pool::{WriteConnBusy, is_pool_acquire_failure, try_write_conn_for};
 pub use queries::{
     RollupRefresh, SEVERITY_LEVELS, ai_session_rollup_status, correlate_session_graph,
-    get_error_summary, get_stats, incident_context_summary, investigate_ai_incidents,
-    list_ai_projects, list_ai_sessions, list_ai_tools, list_hosts, prune_timeline_rollup,
-    refresh_ai_session_rollup_if_stale, refresh_timeline_rollup, search_ai_abuse,
-    search_ai_anchors, search_ai_incidents, search_ai_related_logs, search_ai_sessions,
-    search_logs, severity_to_num, similar_incidents_clusters, tail_logs, timeline_rollup_status,
-    topic_correlate_inputs,
+    durable_stream_page, get_error_summary, get_stats, incident_context_summary,
+    investigate_ai_incidents, list_ai_projects, list_ai_sessions, list_ai_tools, list_hosts,
+    prune_expired_stream_lineage, prune_timeline_rollup, refresh_ai_session_rollup_if_stale,
+    refresh_timeline_rollup, rendered_session_page, search_ai_abuse, search_ai_anchors,
+    search_ai_incidents, search_ai_related_logs, search_ai_sessions, search_logs, severity_to_num,
+    similar_incidents_clusters, tail_logs, timeline_rollup_status, topic_correlate_inputs,
 };
 pub(crate) use skill_events::insert_skill_events_in_tx;
 pub use skill_events::{

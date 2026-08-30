@@ -154,8 +154,11 @@ tempfile = "3"
 regex = "1"
 sha2 = "0.10"
 getrandom = "0.4"
+hmac = "0.12"
 
 futures-util = "0.3"
+async-stream = "0.3"
+hex = "0.4"
 
 # HTTP client for Apprise notifications and CLI REST routing (bead 0p8r.5).
 # NOTE: default-features=false omits gzip/brotli/deflate decompression — fine

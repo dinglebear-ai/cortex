@@ -350,6 +350,7 @@ async fn scan_and_forward(
                     ai_project: parsed_record.ai_project,
                     ai_session_id: parsed_record.session_id,
                     ai_transcript_path: key.clone(),
+                    event_kind: Some(parsed_record.event_kind),
                     message: crate::receiver::enrichment::scrub_ai_message(
                         &parsed_record.message,
                         None,
@@ -406,6 +407,7 @@ async fn scan_and_forward(
                         ai_project,
                         ai_session_id,
                         ai_transcript_path: key.clone(),
+                        event_kind: Some(parsed.event_kind),
                         message: crate::receiver::enrichment::scrub_ai_message(
                             &parsed.message,
                             None,

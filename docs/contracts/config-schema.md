@@ -40,6 +40,14 @@ For every row in §4:
 
 ## 4. Schema — current loader (`src/config.rs`)
 
+### Top-level integration identity and cursor security
+
+| TOML key | Env var | Type | Default | Sens. | Reload | Validation | plugin.json | Notes |
+|---|---|---|---|---|---|---|---|---|
+| `server_id` | `CORTEX_SERVER_ID` | string | `None` | public | restart-only | non-empty values are hashed unless already a `cortex_` identity | — | Stable per-instance identity seed; OAuth `public_url`, then loopback bind + DB path are fallbacks |
+| `cursor_signing_key` | `CORTEX_CURSOR_SIGNING_KEY` | string | random only on loopback | **secret** | restart-only | required and non-empty on non-loopback binds | — | Current HMAC key for durable stream cursors |
+| `cursor_previous_keys` | `CORTEX_CURSOR_PREVIOUS_KEYS` | string[] / CSV | `[]` | **secret** | restart-only | empty entries ignored | — | Verification-only rotation keys; new cursors always use the current key |
+
 ### `[syslog]` — listener + ingest writer
 
 | TOML key | Env var | Type | Default | Sens. | Reload | Validation | plugin.json | Notes |

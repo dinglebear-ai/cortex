@@ -1124,8 +1124,8 @@ fn migration_44_applies_from_schema_43_and_is_idempotent() {
         })
         .unwrap();
     assert_eq!(
-        max_version, 48,
-        "schema 43 should upgrade to schema 48 (applying 44 through 48)"
+        max_version, KNOWN_SCHEMA_VERSION,
+        "schema 43 should upgrade to the current schema"
     );
     let marker_count: i64 = conn
         .query_row(
@@ -1657,7 +1657,7 @@ fn schema_43_fixture_upgrades_to_48_and_preserves_legacy_rows() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, 48);
+    assert_eq!(version, KNOWN_SCHEMA_VERSION);
 
     let legacy_log: (String, String, String) = conn
         .query_row(
@@ -4621,15 +4621,15 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
     let pool_45 = init_pool(&StorageConfig::for_test(db_path.clone())).unwrap();
     let conn_45 = pool_45.get().unwrap();
 
-    // Verify we're now at schema 48 (45 through 48 are applied automatically)
+    // Verify all later migrations are applied automatically.
     let schema_version_final: i64 = conn_45
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })
         .unwrap();
     assert_eq!(
-        schema_version_final, 48,
-        "should upgrade from schema 44 to schema 48 (applying 45 through 48)"
+        schema_version_final, KNOWN_SCHEMA_VERSION,
+        "should upgrade from schema 44 to the current schema"
     );
 
     // Verify all migration 45 tables now exist
@@ -4676,8 +4676,8 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
         })
         .unwrap();
     assert_eq!(
-        schema_version_again, 48,
-        "should remain at schema 48 after migrations 45 through 48"
+        schema_version_again, KNOWN_SCHEMA_VERSION,
+        "should remain at the current schema after reopen"
     );
 
     let cursor_count_again: i64 = conn_again
@@ -4729,7 +4729,10 @@ fn migration_45_fresh_database_applies_transactionally() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema_version, 48, "fresh database should be at schema 48");
+    assert_eq!(
+        schema_version, KNOWN_SCHEMA_VERSION,
+        "fresh database should be current"
+    );
 
     // Verify all migration 45 tables still exist (additive migrations preserve them)
     let tables: Vec<String> = conn

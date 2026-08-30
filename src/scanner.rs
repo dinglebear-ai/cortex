@@ -681,6 +681,7 @@ pub fn index_file_with_options(
                     "canonical_path": canonical,
                     "line_no": line_no,
                     "record_key": record_key,
+                    "event_kind": parsed.event_kind,
                     "content_scrubbed": true,
                 }));
                 let entry = LogBatchEntry {
@@ -1333,6 +1334,7 @@ fn index_gemini_file(
             "canonical_path": canonical,
             "record_index": record_index,
             "record_key": record_key,
+            "event_kind": record.event_kind,
             "content_scrubbed": true,
         }));
         let entry = LogBatchEntry {
@@ -1713,6 +1715,7 @@ pub(crate) struct ParsedTranscriptRecord {
     pub message: String,
     pub session_id: Option<String>,
     pub ai_project: Option<String>,
+    pub event_kind: String,
     /// The already-parsed raw JSON value for Claude transcript lines (`None`
     /// for Codex/Gemini, which don't need it — Codex's skill-tag scanner
     /// reads `message` directly; Gemini never produces skill events). Lets
@@ -1720,6 +1723,28 @@ pub(crate) struct ParsedTranscriptRecord {
     /// already did internally, instead of re-parsing `line_text` a second
     /// time (eng review Fix 1 — see Task 2).
     pub raw_value: Option<serde_json::Value>,
+}
+
+pub(crate) fn transcript_event_kind(value: &serde_json::Value) -> String {
+    let payload = value.get("payload").unwrap_or(value);
+    let kind = payload
+        .get("type")
+        .or_else(|| value.get("type"))
+        .or_else(|| payload.get("role"))
+        .or_else(|| value.get("role"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    match kind {
+        "user" | "human" => "user",
+        "assistant" => "assistant",
+        "tool" | "tool_use" | "tool_result" | "function_call" | "function_call_output" => "tool",
+        value if value.contains("hook") => "hook",
+        "reasoning" => "reasoning",
+        "error" => "error",
+        "event_msg" | "turn_context" | "session_meta" | "status" => "status",
+        _ => "unknown",
+    }
+    .to_string()
 }
 
 #[derive(Debug, Clone)]

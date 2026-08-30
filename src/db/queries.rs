@@ -28,10 +28,11 @@ use super::models::{
     AbuseIncident, AiAbuseMatch, AiAbuseParams, AiAbuseResult, AiCorrelateParams, AiIncidentParams,
     AiIncidentResult, AiInvestigateParams, AiInvestigateResult, AiProjectInventoryEntry,
     AiRelatedLogsForAnchor, AiRelatedLogsParams, AiSessionEntry, AiToolInventoryEntry, DbStats,
-    ErrorSummaryEntry, GraphRelatedLogEntry, IncidentEvidence, ListAiProjectsParams,
-    ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult, LogEntry,
-    ResolvedTopicEntity, SearchAiSessionsParams, SearchAiSessionsResult, SearchParams,
-    SearchedAiSessionEntry, SessionGraphInputs, TopicGraphInputs,
+    DurableStreamPage, DurableStreamParams, DurableStreamRow, ErrorSummaryEntry,
+    GraphRelatedLogEntry, IncidentEvidence, ListAiProjectsParams, ListAiProjectsResult,
+    ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult, LogEntry, RenderedSessionEventRow,
+    RenderedSessionPageParams, ResolvedTopicEntity, SearchAiSessionsParams, SearchAiSessionsResult,
+    SearchParams, SearchedAiSessionEntry, SessionGraphInputs, TopicGraphInputs,
 };
 use super::pool::DbPool;
 use super::queries_service_instances;
@@ -500,6 +501,193 @@ pub fn list_ai_sessions(
         return list_ai_sessions_from_rollup(pool, params);
     }
     list_ai_sessions_live(pool, params)
+}
+
+/// Read one stable session in durable insertion order. The extra row lets the
+/// service report truncation without an exact count or a deep OFFSET scan.
+pub fn rendered_session_page(
+    pool: &DbPool,
+    params: &RenderedSessionPageParams,
+) -> Result<Vec<RenderedSessionEventRow>> {
+    let conn = pool.get()?;
+    let fetch = params.limit.clamp(1, 201);
+    let mut stmt = conn.prepare_cached(
+        "SELECT CAST(id AS INTEGER), timestamp, message, metadata_json, parse_error
+         FROM logs
+         WHERE ai_project = ?1
+           AND ai_tool = ?2
+           AND ai_session_id = ?3
+           AND hostname = ?4
+           AND id > ?5
+         ORDER BY id ASC
+         LIMIT ?6",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            params.ai_project,
+            params.ai_tool,
+            params.ai_session_id,
+            params.host,
+            params.after_id,
+            fetch,
+        ],
+        |row| {
+            Ok(RenderedSessionEventRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                message: row.get(2)?,
+                metadata_json: row.get(3)?,
+                parse_error: row.get(4)?,
+            })
+        },
+    )?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn durable_stream_page(
+    pool: &DbPool,
+    params: &DurableStreamParams,
+) -> Result<DurableStreamPage> {
+    let conn = pool.get()?;
+    let mut sql = String::from(
+        "SELECT CAST(id AS INTEGER),timestamp,hostname,severity,app_name,message,metadata_json,parse_error FROM logs WHERE id > ?1",
+    );
+    let mut values = vec![rusqlite::types::Value::Integer(params.after_id)];
+    let mut push_filter = |column: &str, value: &Option<String>| {
+        if let Some(value) = value {
+            values.push(rusqlite::types::Value::Text(value.clone()));
+            sql.push_str(&format!(" AND {column} = ?{}", values.len()));
+        }
+    };
+    push_filter("hostname", &params.hostname);
+    push_filter("app_name", &params.app_name);
+    push_filter("severity", &params.severity);
+    push_filter("ai_project", &params.ai_project);
+    push_filter("ai_tool", &params.ai_tool);
+    push_filter("ai_session_id", &params.ai_session_id);
+    if let Some(high) = params.high_watermark {
+        values.push(rusqlite::types::Value::Integer(high));
+        sql.push_str(&format!(" AND id <= ?{}", values.len()));
+    }
+    values.push(rusqlite::types::Value::Integer(i64::from(
+        params.limit.clamp(1, 101),
+    )));
+    sql.push_str(&format!(" ORDER BY id ASC LIMIT ?{}", values.len()));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+            Ok(DurableStreamRow {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                hostname: row.get(2)?,
+                severity: row.get(3)?,
+                app_name: row.get(4)?,
+                message: row.get(5)?,
+                metadata_json: row.get(6)?,
+                parse_error: row.get(7)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let (minimum_watermark, high_watermark) = if params.include_bounds {
+        let (retained_sql, retained_values) = stream_bounds_sql("logs", params, false);
+        let retained: (Option<i64>, i64) = conn.query_row(
+            &retained_sql,
+            rusqlite::params_from_iter(retained_values.iter()),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let (deleted_sql, deleted_values) =
+            stream_bounds_sql("stream_deleted_log_lineage", params, true);
+        let deleted: Option<i64> = conn.query_row(
+            &deleted_sql,
+            rusqlite::params_from_iter(deleted_values.iter()),
+            |row| row.get(0),
+        )?;
+        let floor = deleted
+            .map(|last_deleted| last_deleted.saturating_add(1))
+            .or(retained.0);
+        (floor, retained.1.max(deleted.unwrap_or(0)))
+    } else {
+        (None, params.high_watermark.unwrap_or(params.after_id))
+    };
+    Ok(DurableStreamPage {
+        rows,
+        minimum_watermark,
+        high_watermark,
+    })
+}
+
+/// Build the initial retention-bound query from the exact supported filter
+/// shape. Nullable `(? IS NULL OR column = ?)` predicates make SQLite ignore
+/// the stream indexes, so every shape deliberately emits only direct equality
+/// predicates. Session streams are a separate, fully-qualified shape.
+pub(crate) fn stream_bounds_sql(
+    table: &str,
+    params: &DurableStreamParams,
+    deleted: bool,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let select = if deleted {
+        "SELECT MAX(id)"
+    } else if params.hostname.is_none()
+        && params.app_name.is_none()
+        && params.severity.is_none()
+        && params.ai_project.is_none()
+        && params.ai_tool.is_none()
+        && params.ai_session_id.is_none()
+    {
+        return (
+            format!(
+                "SELECT (SELECT id FROM {table} WHERE id >= 0 ORDER BY id ASC LIMIT 1), \
+                 COALESCE((SELECT id FROM {table} WHERE id >= 0 ORDER BY id DESC LIMIT 1), 0)"
+            ),
+            Vec::new(),
+        );
+    } else {
+        "SELECT MIN(id), COALESCE(MAX(id), 0)"
+    };
+    let mut sql = format!("{select} FROM {table}");
+    let mut values = Vec::new();
+    let mut predicates: Vec<&str> = Vec::new();
+
+    if deleted {
+        predicates.push("deleted_at >= unixepoch() - 900");
+    }
+    let mut direct = |column: &'static str, value: &Option<String>| {
+        if let Some(value) = value {
+            values.push(rusqlite::types::Value::Text(value.clone()));
+            predicates.push(column);
+        }
+    };
+    direct("hostname = ?", &params.hostname);
+    direct("app_name = ?", &params.app_name);
+    direct("severity = ?", &params.severity);
+    direct("ai_project = ?", &params.ai_project);
+    direct("ai_tool = ?", &params.ai_tool);
+    direct("ai_session_id = ?", &params.ai_session_id);
+
+    if !predicates.is_empty() {
+        sql.push_str(" WHERE ");
+        let mut parameter = 0usize;
+        for (index, predicate) in predicates.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(" AND ");
+            }
+            if *predicate == "deleted_at >= unixepoch() - 900" {
+                sql.push_str(predicate);
+            } else {
+                parameter += 1;
+                sql.push_str(&predicate.replace('?', &format!("?{parameter}")));
+            }
+        }
+    }
+    (sql, values)
+}
+
+pub fn prune_expired_stream_lineage(pool: &DbPool) -> Result<usize> {
+    let conn = pool.get()?;
+    Ok(conn.execute(
+        "DELETE FROM stream_deleted_log_lineage WHERE deleted_at < unixepoch() - 900",
+        [],
+    )?)
 }
 
 /// Live aggregation over `logs`. This is the ground-truth implementation used

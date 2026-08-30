@@ -33,6 +33,9 @@ fn test_config(tmp: &std::path::Path, mcp: McpConfig) -> Config {
         notifications: Default::default(),
         llm: Default::default(),
         agent_observatory: Default::default(),
+        server_id: None,
+        cursor_signing_key: crate::config::Secret(None),
+        cursor_previous_keys: Vec::new(),
     }
 }
 
@@ -321,6 +324,17 @@ async fn full_serve_mcp_router_chain_merges_without_panicking() {
         runtime.auth_policy().clone(),
         runtime.config.mcp.static_token_is_admin,
         runtime.config.notifications.clone(),
+        crate::stream::CursorKeys::resolved(
+            runtime
+                .config
+                .cursor_signing_key
+                .as_deref()
+                .or(Some("runtime-test-key")),
+            &runtime.config.cursor_previous_keys,
+            true,
+        )
+        .unwrap(),
+        crate::api::resolved_integration_profile(&runtime.config).unwrap(),
     )
     .expect("ApiState::new should succeed against a fresh pool");
 

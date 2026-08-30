@@ -21,6 +21,7 @@ mod watch_status;
 pub use correlate::severity_at_or_above;
 pub use error::{ServiceError, ServiceResult};
 pub use incident_findings::{ContributingFactor, FailureMode, IncidentFindings, PreventionHint};
+pub use models::capabilities;
 pub use models::{
     AbuseAssessRequest,
     AbuseAssessResponse,
@@ -204,7 +205,12 @@ pub use models::{
     PatternsResponse,
     ProjectContextRequest,
     ProjectContextResponse,
+    RENDERED_SESSION_PAGE_MAX_BYTES,
     RecordArtifactEvidenceResponse,
+    RenderedSessionEvent,
+    RenderedSessionEventKind,
+    RenderedSessionPageRequest,
+    RenderedSessionPageResponse,
     RequestActor,
     SearchLogsRequest,
     SearchLogsResponse,

@@ -84,6 +84,8 @@ fn test_state_full(
         auth_policy,
         false, // static_token_is_admin: read-only in tests
         crate::config::NotificationsConfig::default(),
+        crate::stream::CursorKeys::resolved(Some("api-test-key"), &[], true).unwrap(),
+        crate::api::resolved_integration_profile(&crate::config::Config::default()).unwrap(),
     )
     .expect("ApiState::new should succeed against a fresh pool")
     .with_isolated_maintenance_permit();
@@ -871,6 +873,178 @@ async fn version_route_returns_payload_with_bearer() {
     );
 }
 
+#[tokio::test]
+async fn capabilities_advertise_bounded_polling_and_native_streams() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let (status, value) = get_json(test_router(state), "/api/capabilities", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["sessions"]["rendered_pages"], true);
+    assert_eq!(value["sessions"]["native_stream"], true);
+    assert_eq!(value["logs"]["native_stream"], true);
+    assert_eq!(value["sessions"]["stream"]["max_batch_items"], 100);
+    assert_eq!(value["logs"]["stream"]["max_batch_bytes"], 131_072);
+    assert_eq!(value["sessions"]["polling"]["max_page_items"], 200);
+    assert_eq!(value["sessions"]["polling"]["max_page_bytes"], 262_144);
+}
+
+#[tokio::test]
+async fn runtime_integration_identity_matches_contract_and_mounted_routes() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let (status, value) = get_json(
+        test_router(state),
+        "/api/integration-profile",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["contract_version"], "1.0.0");
+    assert_eq!(value["product"], "cortex");
+    assert!(value["server_id"].as_str().unwrap().starts_with("cortex_"));
+    assert_eq!(value["api_version"]["major"], 1);
+    assert_eq!(value["streams"]["transport"], "sse");
+    assert_eq!(value["streams"]["resume"], "opaque_cursor");
+    assert_eq!(
+        value["route_support"],
+        serde_json::json!(["logs", "sessions", "fleet", "graph", "correlation"])
+    );
+    assert!(
+        value["auth"]["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|mode| mode == "static_bearer")
+    );
+    assert_ne!(value["auth"]["credential_generation"], "secret");
+}
+
+#[tokio::test]
+async fn palette_integration_identity_alias_matches_canonical_profile() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let (canonical_status, canonical) =
+        get_json(app.clone(), "/api/integration-profile", Some("secret")).await;
+    let (alias_status, alias) = get_json(app, "/v1/integration/identity", Some("secret")).await;
+
+    assert_eq!(canonical_status, axum::http::StatusCode::OK);
+    assert_eq!(alias_status, axum::http::StatusCode::OK);
+    assert_eq!(alias, canonical);
+}
+
+#[tokio::test]
+async fn palette_integration_identity_alias_requires_bearer_auth() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let (status, _) = get_json(test_router(state), "/v1/integration/identity", None).await;
+
+    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn integration_identity_is_stable_and_unique_for_resolved_instances() {
+    let first = crate::config::Config {
+        server_id: Some("instance-one".into()),
+        ..Default::default()
+    };
+    let first_id = crate::api::resolved_integration_profile(&first).unwrap()["server_id"].clone();
+    assert_eq!(
+        first_id,
+        crate::api::resolved_integration_profile(&first).unwrap()["server_id"]
+    );
+    let mut second = first;
+    second.server_id = Some("instance-two".into());
+    assert_ne!(
+        first_id,
+        crate::api::resolved_integration_profile(&second).unwrap()["server_id"]
+    );
+}
+
+#[test]
+fn external_integration_identity_fails_closed_without_unique_resolved_seed() {
+    let mut config = crate::config::Config::default();
+    config.mcp.host = "0.0.0.0".into();
+    assert!(crate::api::resolved_integration_profile(&config).is_err());
+    config.mcp.auth.public_url = Some("https://cortex.example.test".into());
+    assert!(crate::api::resolved_integration_profile(&config).is_ok());
+}
+
+#[tokio::test]
+async fn durable_stream_routes_require_auth_and_negotiate_sse() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let response = get_response(app.clone(), "/api/streams/logs", None).await;
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    let response = get_response(app, "/api/streams/logs?host=devhost", Some("secret")).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+}
+
+#[tokio::test]
+async fn rendered_session_pages_are_ordered_bounded_and_resumable() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    let mut newest_timestamp_first = entry(
+        "2026-08-28T00:00:02Z",
+        "devhost",
+        "info",
+        "assistant",
+        "transcript://codex",
+    );
+    newest_timestamp_first.ai_tool = Some("codex".into());
+    newest_timestamp_first.ai_project = Some("/repo".into());
+    newest_timestamp_first.ai_session_id = Some("session-1".into());
+    newest_timestamp_first.metadata_json =
+        Some(r#"{"event_kind":"assistant","content_scrubbed":true}"#.into());
+    let mut older_timestamp_second = newest_timestamp_first.clone();
+    older_timestamp_second.timestamp = "2026-08-28T00:00:01Z".into();
+    older_timestamp_second.message = "tool output [REDACTED]".into();
+    older_timestamp_second.metadata_json =
+        Some(r#"{"event_kind":"tool","content_scrubbed":true}"#.into());
+    older_timestamp_second.parse_error = Some("partial write recovered".into());
+    insert_logs_batch(&pool, &[newest_timestamp_first, older_timestamp_second]).unwrap();
+    let app = test_router(state);
+    let base = "/api/sessions/rendered?project=%2Frepo&tool=codex&session_id=session-1&host=devhost&limit=1";
+    let (status, first) = get_json(app.clone(), base, Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(first["delivery"], "polling");
+    assert_eq!(first["events"].as_array().unwrap().len(), 1);
+    assert_eq!(first["events"][0]["kind"], "assistant");
+    assert_eq!(first["has_more"], true);
+    let first_position = first["events"][0]["position"].as_i64().unwrap();
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let uri = format!("{base}&cursor={cursor}");
+    let (status, second) = get_json(app, &uri, Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(second["events"].as_array().unwrap().len(), 1);
+    assert!(second["events"][0]["position"].as_i64().unwrap() > first_position);
+    assert_eq!(second["events"][0]["kind"], "tool");
+    assert_eq!(second["events"][0]["redacted"], true);
+    assert_eq!(
+        second["events"][0]["parse_warning"],
+        "partial write recovered"
+    );
+    assert_eq!(second["has_more"], false);
+}
+
+#[tokio::test]
+async fn rendered_session_rejects_invalid_cursor_and_clamps_limit() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let base =
+        "/api/sessions/rendered?project=%2Frepo&tool=codex&session_id=session-1&host=devhost";
+    let (status, _) = get_json(
+        app.clone(),
+        &format!("{base}&cursor=not-a-cursor"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let (status, value) = get_json(app, &format!("{base}&limit=9999"), Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["limit_clamped_to"], 200);
+}
+
 /// CRITICAL (eng-review C1): even when the listener is bound to loopback and
 /// callers therefore *could* be unauthenticated under the MCP policy, the
 /// `/api/*` router MUST force `AuthPolicy::Mounted` and reject unauthenticated
@@ -1269,6 +1443,8 @@ async fn cors_localhost_defaults_suppressed_on_external_bind() {
         AuthPolicy::Mounted { auth_state: None },
         false, // static_token_is_admin: read-only in tests
         crate::config::NotificationsConfig::default(),
+        crate::stream::CursorKeys::resolved(Some("api-test-key"), &[], false).unwrap(),
+        crate::api::resolved_integration_profile(&crate::config::Config::default()).unwrap(),
     )
     .unwrap()
     .with_isolated_maintenance_permit();
