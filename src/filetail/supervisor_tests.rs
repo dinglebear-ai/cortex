@@ -682,6 +682,74 @@ async fn periodic_checkpoint_failure_clears_only_after_durable_recovery() {
 }
 
 #[tokio::test]
+async fn failed_durable_send_remains_unclean_after_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, rx) = tokio::sync::mpsc::channel::<LogBatchEntry>(1);
+    drop(rx);
+    let log_path = temp.path().join("failed-send.log");
+    tokio::fs::write(&log_path, b"line\n").await.unwrap();
+    let mut configured = source("failed-send", &log_path.to_string_lossy(), "failed-send");
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+    let supervisor = FileTailSupervisor::new(
+        registry,
+        IngestTx::from_sender_for_test(tx),
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while supervisor.statuses()[0].last_error.is_none() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Cross the retry/reopen boundary; opening the file must not clear the
+    // unresolved durable-send failure.
+    tokio::time::sleep(Duration::from_millis(5_250)).await;
+    assert!(!supervisor.shutdown(Duration::from_secs(2)).await.clean());
+}
+
+#[tokio::test]
+async fn transient_source_io_failure_clears_after_successful_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(4);
+    let log_path = temp.path().join("io-recovery.log");
+    tokio::fs::write(&log_path, b"").await.unwrap();
+    registry
+        .upsert(source("io-recovery", &log_path.to_string_lossy(), "io"))
+        .unwrap();
+    let supervisor = FileTailSupervisor::new(
+        registry,
+        IngestTx::from_envelope_sender_for_test(tx),
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().await.unwrap();
+    tokio::fs::remove_file(&log_path).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while supervisor.statuses()[0].last_error.is_none() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    tokio::fs::write(&log_path, b"recovered\n").await.unwrap();
+    let envelope = tokio::time::timeout(Duration::from_secs(7), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(envelope.entry.message, "recovered");
+    envelope.ack_success();
+    assert!(supervisor.shutdown(Duration::from_secs(2)).await.clean());
+}
+
+#[tokio::test]
 async fn supervisor_reconcile_stops_disabled_and_removed_sources() {
     let temp = tempfile::tempdir().unwrap();
     let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
