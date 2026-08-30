@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::ingest::IngestTx;
 
 use super::{
-    ActiveFailure, FailureKind, FileIdentity, file_tail_line_to_entry, now_iso, open_tail_file,
+    ActiveFailures, FailureKind, FileIdentity, file_tail_line_to_entry, now_iso, open_tail_file,
     path_identity_changed, read_bounded_line, reopen_if_rotated_or_truncated,
 };
 use crate::filetail::models::{FileTailSource, FileTailStatus};
@@ -24,7 +24,7 @@ pub(super) async fn tail_file_loop(
     ingest: IngestTx,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
-    shutdown_error: Arc<Mutex<Option<ActiveFailure>>>,
+    shutdown_error: Arc<Mutex<ActiveFailures>>,
     max_line_bytes: usize,
 ) {
     let source_id = initial_source.id.clone();
@@ -40,6 +40,7 @@ pub(super) async fn tail_file_loop(
                 source
             }
             Ok(_) => {
+                clear_failure(&shutdown_error, FailureKind::Registry);
                 status.lock().running = false;
                 return;
             }
@@ -78,7 +79,7 @@ pub(super) async fn tail_file_loop(
             }
             Err(err) => {
                 tracing::error!(source_id = %source.id, path = %source.path, error = %err, "file-tail source failed; retrying");
-                if shutdown_error.lock().is_none() {
+                if shutdown_error.lock().messages().is_empty() {
                     set_failure(&shutdown_error, FailureKind::Durability, err.to_string());
                 }
                 status.lock().last_error = Some(err.to_string());
@@ -100,7 +101,7 @@ async fn tail_file_until_cancelled(
     ingest: IngestTx,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
-    shutdown_error: Arc<Mutex<Option<ActiveFailure>>>,
+    shutdown_error: Arc<Mutex<ActiveFailures>>,
     max_line_bytes: usize,
 ) -> Result<()> {
     let opened = match open_tail_file(source, true)
@@ -263,7 +264,7 @@ async fn persist_checkpoint_tracked(
     identity: FileIdentity,
     position: u64,
     now: String,
-    active_failure: &Arc<Mutex<Option<ActiveFailure>>>,
+    active_failure: &Arc<Mutex<ActiveFailures>>,
 ) -> Result<()> {
     match persist_checkpoint(registry, source_id, identity, position, now).await {
         Ok(()) => {
@@ -277,21 +278,21 @@ async fn persist_checkpoint_tracked(
     }
 }
 
-fn set_failure(
-    active_failure: &Arc<Mutex<Option<ActiveFailure>>>,
-    kind: FailureKind,
-    message: String,
-) {
-    *active_failure.lock() = Some(ActiveFailure { kind, message });
+fn set_failure(active_failure: &Arc<Mutex<ActiveFailures>>, kind: FailureKind, message: String) {
+    let mut failures = active_failure.lock();
+    match kind {
+        FailureKind::Registry => failures.registry = Some(message),
+        FailureKind::Open => failures.open = Some(message),
+        FailureKind::Durability => failures.durability = Some(message),
+    }
 }
 
-fn clear_failure(active_failure: &Arc<Mutex<Option<ActiveFailure>>>, recovered_kind: FailureKind) {
-    let mut failure = active_failure.lock();
-    if failure
-        .as_ref()
-        .is_some_and(|failure| failure.kind == recovered_kind)
-    {
-        *failure = None;
+fn clear_failure(active_failure: &Arc<Mutex<ActiveFailures>>, recovered_kind: FailureKind) {
+    let mut failures = active_failure.lock();
+    match recovered_kind {
+        FailureKind::Registry => failures.registry = None,
+        FailureKind::Open => failures.open = None,
+        FailureKind::Durability => failures.durability = None,
     }
 }
 

@@ -41,21 +41,31 @@ struct TailTask {
     handle: JoinHandle<()>,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
-    shutdown_error: Arc<Mutex<Option<ActiveFailure>>>,
+    shutdown_error: Arc<Mutex<ActiveFailures>>,
     source: FileTailSource,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub(super) enum FailureKind {
     Registry,
     Open,
     Durability,
 }
 
-#[derive(Clone)]
-pub(super) struct ActiveFailure {
-    pub(super) kind: FailureKind,
-    pub(super) message: String,
+#[derive(Clone, Default)]
+pub(super) struct ActiveFailures {
+    pub(super) registry: Option<String>,
+    pub(super) open: Option<String>,
+    pub(super) durability: Option<String>,
+}
+
+impl ActiveFailures {
+    pub(super) fn messages(&self) -> Vec<String> {
+        [&self.registry, &self.open, &self.durability]
+            .into_iter()
+            .filter_map(Clone::clone)
+            .collect()
+    }
 }
 
 pub(crate) struct FileTailShutdown {
@@ -144,10 +154,8 @@ impl FileTailSupervisor {
                 }
             }
             .or_else(|| {
-                task.shutdown_error
-                    .lock()
-                    .clone()
-                    .map(|failure| failure.message)
+                let messages = task.shutdown_error.lock().messages();
+                (!messages.is_empty()).then(|| messages.join("; "))
             });
             let mut status = task.status.lock();
             status.running = false;
@@ -257,7 +265,7 @@ impl FileTailSupervisor {
             last_error: None,
         }));
         let task_status = Arc::clone(&status);
-        let shutdown_error = Arc::new(Mutex::new(None));
+        let shutdown_error = Arc::new(Mutex::new(ActiveFailures::default()));
         let task_shutdown_error = Arc::clone(&shutdown_error);
         let ingest = self.ingest.clone();
         let token = self.token.child_token();

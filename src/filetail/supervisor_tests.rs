@@ -609,6 +609,12 @@ async fn shutdown_reports_unresolved_periodic_checkpoint_failure() {
     .await
     .unwrap();
 
+    let replay = tokio::time::timeout(Duration::from_secs(7), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    replay.ack_success();
+
     let report = supervisor.shutdown(Duration::from_secs(2)).await;
     assert!(!report.clean());
 }
