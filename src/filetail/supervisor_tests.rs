@@ -750,6 +750,36 @@ async fn transient_source_io_failure_clears_after_successful_reopen() {
 }
 
 #[tokio::test]
+async fn unresolved_source_io_failure_remains_unclean_after_retry() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, _rx) = tokio::sync::mpsc::channel::<LogBatchEntry>(1);
+    let log_path = temp.path().join("io-failure.log");
+    tokio::fs::write(&log_path, b"").await.unwrap();
+    registry
+        .upsert(source("io-failure", &log_path.to_string_lossy(), "io"))
+        .unwrap();
+    let supervisor = FileTailSupervisor::new(
+        registry,
+        IngestTx::from_sender_for_test(tx),
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().await.unwrap();
+    tokio::fs::remove_file(&log_path).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while supervisor.statuses()[0].last_error.is_none() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(5_250)).await;
+    assert!(!supervisor.shutdown(Duration::from_secs(2)).await.clean());
+}
+
+#[tokio::test]
 async fn supervisor_reconcile_stops_disabled_and_removed_sources() {
     let temp = tempfile::tempdir().unwrap();
     let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
