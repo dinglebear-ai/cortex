@@ -171,6 +171,7 @@ async fn tail_file_until_cancelled(
                                 registry: &registry,
                                 ingest: &ingest,
                                 status: &status,
+                                active_failure: &shutdown_error,
                                 line: &line,
                                 identity,
                                 position,
@@ -212,7 +213,14 @@ async fn tail_file_until_cancelled(
                     status.last_read_at = Some(now.clone());
                     status.blocked_on_writer_since = Some(now.clone());
                 }
-                ingest.send_durable(entry).await?;
+                if let Err(error) = ingest.send_durable(entry).await {
+                    set_failure(
+                        &shutdown_error,
+                        FailureKind::Durability,
+                        error.to_string(),
+                    );
+                    return Err(error);
+                }
                 durable_position = position;
                 checkpoint_time.clone_from(&now);
                 checkpoint_dirty = true;
@@ -304,6 +312,7 @@ struct PartialLineBeforeReopen<'a> {
     registry: &'a FileTailRegistry,
     ingest: &'a IngestTx,
     status: &'a Mutex<FileTailStatus>,
+    active_failure: &'a Arc<Mutex<ActiveFailures>>,
     line: &'a [u8],
     identity: FileIdentity,
     position: u64,
@@ -316,17 +325,33 @@ async fn ingest_partial_line_before_reopen(partial: PartialLineBeforeReopen<'_>)
     if msg.is_empty() {
         return Ok(());
     }
-    partial
+    if let Err(error) = partial
         .ingest
         .send_durable(file_tail_line_to_entry(partial.source, msg, partial.now))
-        .await?;
-    partial.registry.update_checkpoint(
+        .await
+    {
+        set_failure(
+            partial.active_failure,
+            FailureKind::Durability,
+            error.to_string(),
+        );
+        return Err(error);
+    }
+    if let Err(error) = partial.registry.update_checkpoint(
         &partial.source.id,
         partial.identity.dev,
         partial.identity.ino,
         partial.position,
         partial.now,
-    )?;
+    ) {
+        set_failure(
+            partial.active_failure,
+            FailureKind::Durability,
+            error.to_string(),
+        );
+        return Err(error);
+    }
+    clear_failure(partial.active_failure, FailureKind::Durability);
     let mut status = partial.status.lock();
     status.last_line_at = Some(partial.now.to_string());
     status.last_checkpoint_at = Some(partial.now.to_string());
