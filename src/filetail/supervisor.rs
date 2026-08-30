@@ -41,8 +41,21 @@ struct TailTask {
     handle: JoinHandle<()>,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
-    shutdown_error: Arc<Mutex<Option<String>>>,
+    shutdown_error: Arc<Mutex<Option<ActiveFailure>>>,
     source: FileTailSource,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FailureKind {
+    Registry,
+    Open,
+    Durability,
+}
+
+#[derive(Clone)]
+pub(super) struct ActiveFailure {
+    pub(super) kind: FailureKind,
+    pub(super) message: String,
 }
 
 pub(crate) struct FileTailShutdown {
@@ -130,7 +143,12 @@ impl FileTailSupervisor {
                     ))
                 }
             }
-            .or_else(|| task.shutdown_error.lock().clone());
+            .or_else(|| {
+                task.shutdown_error
+                    .lock()
+                    .clone()
+                    .map(|failure| failure.message)
+            });
             let mut status = task.status.lock();
             status.running = false;
             if let Some(failure) = failure {

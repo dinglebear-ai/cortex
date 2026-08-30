@@ -614,6 +614,68 @@ async fn shutdown_reports_unresolved_periodic_checkpoint_failure() {
 }
 
 #[tokio::test]
+async fn periodic_checkpoint_failure_clears_only_after_durable_recovery() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(4);
+    let ingest = IngestTx::from_envelope_sender_for_test(tx);
+    let log_path = temp.path().join("checkpoint-recovery.log");
+    tokio::fs::write(&log_path, b"line\n").await.unwrap();
+    let mut configured = source(
+        "checkpoint-recovery",
+        &log_path.to_string_lossy(),
+        "recovery",
+    );
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().await.unwrap();
+    registry.set_fail_checkpoint_writes(true);
+    let first = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    first.ack_success();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while supervisor.statuses()[0].last_error.is_none() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    registry.set_fail_checkpoint_writes(false);
+    let replay = tokio::time::timeout(Duration::from_secs(7), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    replay.ack_success();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if registry
+                .get("checkpoint-recovery")
+                .unwrap()
+                .unwrap()
+                .checkpoint_offset
+                == Some(b"line\n".len() as u64)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(supervisor.shutdown(Duration::from_secs(2)).await.clean());
+}
+
+#[tokio::test]
 async fn supervisor_reconcile_stops_disabled_and_removed_sources() {
     let temp = tempfile::tempdir().unwrap();
     let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
