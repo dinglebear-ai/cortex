@@ -7,19 +7,24 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, Event, RecommendedWatcher, Watcher};
 use tokio::sync::mpsc;
 
 use crate::app::CortexService;
 use crate::scanner::{self, IndexResult};
 
+mod discovery;
 mod pending;
 mod target;
+#[cfg(test)]
+use discovery::collect_watch_dirs;
+use discovery::{
+    event_path_allowed, event_path_allowed_missing_ok, watch_directory_tree, watch_targets,
+};
 use pending::{PendingFiles, PendingState};
 use target::WatchTarget;
 
 const WATCH_EVENT_BUFFER: usize = 1024;
-const MAX_WATCH_DIRS: usize = 8192;
 const MAX_PENDING_FILES: usize = 4096;
 const OVERFLOW_RESCAN_LOOKBACK: Duration = Duration::from_secs(5 * 60);
 const OVERFLOW_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(60);
@@ -116,131 +121,6 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
     }
 }
 
-fn watch_targets(options: &WatchOptions) -> Result<Vec<WatchTarget>> {
-    if let Some(path) = &options.path {
-        let canonical = scanner::validate_transcript_scan_path(path)?;
-        if canonical.is_file() {
-            let parent = canonical.parent().map(Path::to_path_buf).ok_or_else(|| {
-                anyhow::anyhow!("transcript file has no parent: {}", canonical.display())
-            })?;
-            return Ok(vec![WatchTarget::File {
-                path: canonical,
-                parent,
-            }]);
-        }
-        return Ok(vec![WatchTarget::Directory(canonical)]);
-    }
-
-    scanner::default_transcript_roots()
-        .into_iter()
-        .filter(|path| path.exists())
-        .map(|path| scanner::validate_transcript_scan_path(&path).map(WatchTarget::Directory))
-        .collect()
-}
-
-fn watch_directory_tree(
-    watcher: &mut RecommendedWatcher,
-    root: &Path,
-    watched_dirs: &mut BTreeSet<PathBuf>,
-) -> Result<()> {
-    let dirs = collect_watch_dirs(root)?;
-    for dir in dirs {
-        if watched_dirs.contains(&dir) {
-            continue;
-        }
-        if watched_dirs.len() >= MAX_WATCH_DIRS {
-            anyhow::bail!(
-                "AI transcript watcher directory budget exceeded ({MAX_WATCH_DIRS}); use a narrower --path or raise system inotify limits"
-            );
-        }
-        match watcher.watch(&dir, RecursiveMode::NonRecursive) {
-            Ok(()) => {
-                watched_dirs.insert(dir);
-            }
-            Err(error) => anyhow::bail!(
-                "failed to watch AI transcript directory {}: {error}",
-                dir.display()
-            ),
-        }
-    }
-    Ok(())
-}
-
-fn collect_watch_dirs(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut dirs = Vec::new();
-    if root.is_file() {
-        if let Some(parent) = root.parent() {
-            collect_watch_dirs_inner(parent, &mut dirs, true)?;
-        }
-    } else {
-        collect_watch_dirs_inner(root, &mut dirs, true)?;
-    }
-    Ok(dirs)
-}
-
-fn collect_watch_dirs_inner(path: &Path, dirs: &mut Vec<PathBuf>, is_root: bool) -> Result<()> {
-    if dirs.len() >= MAX_WATCH_DIRS {
-        anyhow::bail!(
-            "AI transcript watcher directory budget exceeded ({MAX_WATCH_DIRS}) while scanning {}",
-            path.display()
-        );
-    }
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            if is_root && !is_transient_watch_error(&error) {
-                anyhow::bail!(
-                    "failed to inspect AI transcript watch path {}: {error}",
-                    path.display()
-                );
-            }
-            tracing::warn!(path = %path.display(), error = %error, "skipping unreadable AI transcript watch path");
-            return Ok(());
-        }
-    };
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    if metadata.is_file() {
-        return Ok(());
-    }
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-    if !scanner::should_descend_transcript_dir(path) {
-        return Ok(());
-    }
-
-    let read_dir = match std::fs::read_dir(path) {
-        Ok(read_dir) => read_dir,
-        Err(error) => {
-            if is_root && !is_transient_watch_error(&error) {
-                anyhow::bail!(
-                    "failed to read AI transcript watch directory {}: {error}",
-                    path.display()
-                );
-            }
-            tracing::warn!(path = %path.display(), error = %error, "skipping unreadable AI transcript watch directory");
-            return Ok(());
-        }
-    };
-    dirs.push(path.to_path_buf());
-    let mut entries = Vec::new();
-    for entry in read_dir {
-        match entry {
-            Ok(entry) => entries.push(entry.path()),
-            Err(error) => {
-                tracing::warn!(path = %path.display(), error = %error, "skipping unreadable AI transcript watch directory entry");
-            }
-        }
-    }
-    entries.sort();
-    for entry in entries {
-        collect_watch_dirs_inner(&entry, dirs, false)?;
-    }
-    Ok(())
-}
-
 fn handle_event(
     event: notify::Result<Event>,
     targets: &[WatchTarget],
@@ -294,15 +174,6 @@ fn handle_event(
     new_dirs
 }
 
-fn is_transient_watch_error(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::Other
-    )
-}
-
 async fn prune_missing_checkpoints(service: &CortexService, json: bool) -> bool {
     const PRUNE_LIMIT: u32 = 500;
     match service
@@ -335,30 +206,6 @@ async fn prune_missing_checkpoints(service: &CortexService, json: bool) -> bool 
             false
         }
     }
-}
-
-fn event_path_allowed(path: &Path, targets: &[WatchTarget]) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|error| {
-        tracing::warn!(
-            path = %path.display(),
-            error = %error,
-            "AI transcript event path canonicalization failed; using original path"
-        );
-        path.to_path_buf()
-    });
-    canonical_path_allowed(&canonical, targets)
-}
-
-fn event_path_allowed_missing_ok(path: &Path, targets: &[WatchTarget]) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    canonical_path_allowed(&canonical, targets)
-}
-
-fn canonical_path_allowed(canonical: &Path, targets: &[WatchTarget]) -> bool {
-    targets.iter().any(|target| match target {
-        WatchTarget::Directory(root) => canonical.starts_with(root),
-        WatchTarget::File { path, .. } => canonical == path,
-    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

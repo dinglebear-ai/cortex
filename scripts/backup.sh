@@ -18,6 +18,11 @@ umask 077
 
 DB_PATH="${CORTEX_DB_PATH:-./data/cortex.db}"
 BACKUP_DIR="${1:-./backups}"
+BACKUP_DIR="$(realpath -m -- "$BACKUP_DIR")"
+if [[ "$BACKUP_DIR" == "/" ]]; then
+    echo "ERROR: Refusing unsafe backup directory: filesystem root" >&2
+    exit 1
+fi
 TIMESTAMP=$(date -u +%Y-%m-%d-%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/syslog-${TIMESTAMP}.db"
 
@@ -78,9 +83,16 @@ else
     echo "Auth JWT key not found at ${AUTH_KEY_PATH}; skipping"
 fi
 
-# Prune backups older than 30 days
-find "$BACKUP_DIR" -name "syslog-*.db" -mtime +30 -delete 2>/dev/null || true
-find "$BACKUP_DIR" -name "auth-*.db" -mtime +30 -delete 2>/dev/null || true
-find "$BACKUP_DIR" -name "auth-jwt-*.pem" -mtime +30 -delete 2>/dev/null || true
+# Prune backups older than 30 days. Backup creation has already succeeded at
+# this point, but retention failure is still operationally significant: warn
+# for each failed class and return nonzero so schedulers can alert on it.
+prune_failed=0
+for pattern in "syslog-*.db" "auth-*.db" "auth-jwt-*.pem"; do
+    if ! find "$BACKUP_DIR" -name "$pattern" -mtime +30 -delete; then
+        echo "WARNING: Failed to prune old ${pattern} backups in ${BACKUP_DIR}" >&2
+        prune_failed=1
+    fi
+done
 REMAINING=$(find "$BACKUP_DIR" -name "syslog-*.db" | wc -l | tr -d ' ')
 echo "Retained ${REMAINING} syslog backup(s) in ${BACKUP_DIR}"
+exit "$prune_failed"

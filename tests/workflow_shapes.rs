@@ -81,7 +81,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "docker build -f config/Dockerfile -t cortex:ci-release-smoke .",
         "bash scripts/container-release-smoke.sh cortex:ci-release-smoke",
         "bash scripts/test-backup-contract.sh cortex:ci-release-smoke",
-        "bash scripts/test-compose-provisioning.sh",
+        "bash scripts/test-compose-provisioning.sh cortex:ci-release-smoke",
         "bash scripts/test-agent-env-file.sh cortex:ci-release-smoke",
     ] {
         assert!(

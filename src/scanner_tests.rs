@@ -139,6 +139,12 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
         1
     );
     std::fs::remove_file(&missing_file).unwrap();
+    let canonical_missing_file = missing_file
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join(missing_file.file_name().unwrap());
 
     let missing = list_checkpoints(
         &pool,
@@ -152,7 +158,7 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
     assert_eq!(missing.len(), 1);
     assert_eq!(
         missing[0].canonical_path,
-        missing_file.display().to_string()
+        canonical_missing_file.display().to_string()
     );
 
     let dry_run = prune_checkpoints(
@@ -192,7 +198,7 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(
         remaining[0].canonical_path,
-        present_file.display().to_string()
+        present_file.canonicalize().unwrap().display().to_string()
     );
 }
 
@@ -1072,7 +1078,10 @@ fn explicit_file_normalizes_current_dir_worktree_project() {
         },
     )
     .unwrap();
-    assert_eq!(search.sessions[0].ai_project, project.to_string_lossy());
+    assert_eq!(
+        search.sessions[0].ai_project,
+        project.canonicalize().unwrap().to_string_lossy()
+    );
 }
 
 #[test]

@@ -317,7 +317,7 @@ jobs:
       - name: Verify backup and recovery contract
         run: bash scripts/test-backup-contract.sh cortex:ci-release-smoke
       - name: Verify fresh Compose provisioning
-        run: bash scripts/test-compose-provisioning.sh
+        run: bash scripts/test-compose-provisioning.sh cortex:ci-release-smoke
       - name: Verify Docker env-file parser compatibility
         run: bash scripts/test-agent-env-file.sh cortex:ci-release-smoke
 

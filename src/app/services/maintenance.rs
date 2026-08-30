@@ -188,12 +188,34 @@ impl CortexService {
                 Err(_) => panic!("integrity worker exited without reporting completion"),
             }
         });
-        let mut integrity_tasks = self
-            .integrity_tasks
+        let completed = {
+            let mut integrity_tasks = self
+                .integrity_tasks
+                .lock()
+                .expect("integrity task registry mutex poisoned");
+            let mut completed = Vec::new();
+            let mut pending = Vec::new();
+            for existing in std::mem::take(&mut *integrity_tasks) {
+                if existing.is_finished() {
+                    completed.push(existing);
+                } else {
+                    pending.push(existing);
+                }
+            }
+            *integrity_tasks = pending;
+            completed
+        };
+        for completed_task in completed {
+            if let Err(error) = completed_task.await {
+                self.integrity_task_failed
+                    .store(true, std::sync::atomic::Ordering::Release);
+                tracing::error!(%error, "Integrity completion task failed before next job");
+            }
+        }
+        self.integrity_tasks
             .lock()
-            .expect("integrity task registry mutex poisoned");
-        integrity_tasks.retain(|task| !task.is_finished());
-        integrity_tasks.push(task);
+            .expect("integrity task registry mutex poisoned")
+            .push(task);
 
         Ok(DbIntegrityJobStarted {
             job_id,

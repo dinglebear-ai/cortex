@@ -5,7 +5,23 @@ image_ref=${1:?usage: container-release-smoke.sh IMAGE_REF}
 container="cortex-release-smoke-${GITHUB_RUN_ID:-local}-$$"
 marker="releasesmoke${GITHUB_RUN_ID:-local}$$"
 cleanup() {
-  docker rm -f "$container" >/dev/null 2>&1 || true
+  if docker rm -f "$container" >/dev/null 2>&1; then
+    return 0
+  fi
+  inspect_error="$(mktemp)"
+  if docker inspect "$container" >/dev/null 2>"$inspect_error"; then
+    rm -f "$inspect_error"
+    echo "ERROR: failed to remove release-smoke container ${container}" >&2
+    return 1
+  fi
+  if grep -Eq "No such (object|container): ${container}$" "$inspect_error"; then
+    rm -f "$inspect_error"
+    return 0
+  fi
+  cat "$inspect_error" >&2
+  rm -f "$inspect_error"
+  echo "ERROR: failed to remove release-smoke container ${container}" >&2
+  return 1
 }
 trap cleanup EXIT
 

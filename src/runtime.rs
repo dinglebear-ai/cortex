@@ -201,6 +201,32 @@ async fn await_or_abort_tasks(
     }
 }
 
+fn spawn_notification_wrapper(
+    name: &'static str,
+    token: CancellationToken,
+    mut inner: JoinHandle<()>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => {
+                inner.abort();
+                match inner.await {
+                    Err(error) if error.is_cancelled() => {
+                        panic!("notification {name} required forced abort during shutdown")
+                    }
+                    Err(error) => panic!("notification {name} failed during shutdown: {error}"),
+                    Ok(()) => panic!("notification {name} exited unexpectedly during shutdown"),
+                }
+            }
+            result = &mut inner => match result {
+                Ok(()) => panic!("notification {name} exited unexpectedly"),
+                Err(error) => panic!("notification {name} failed: {error}"),
+            }
+        }
+    })
+}
+
 pub(crate) fn background_interval(period: tokio::time::Duration) -> tokio::time::Interval {
     let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -365,7 +391,11 @@ impl RuntimeCore {
             let status_supervisor = file_tail_supervisor.clone();
             service = service.with_file_tail_control(
                 file_tail_registry,
-                Arc::new(move || reconcile_supervisor.reconcile()),
+                Arc::new(move || {
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(reconcile_supervisor.reconcile())
+                    })
+                }),
                 Arc::new(move || status_supervisor.statuses()),
             );
         }
@@ -488,10 +518,12 @@ impl RuntimeCore {
         // teardown remains bounded. If one outlives the drain budget, skip the
         // shutdown checkpoint rather than contend with its live SQLite read.
         let integrity_drained = self.service.drain_integrity_tasks(timeout).await;
-        self.ingest.shutdown(timeout).await;
-        if !integrity_drained {
+        let ingest_drained = self.ingest.shutdown(timeout).await;
+        if !integrity_drained || !ingest_drained {
             tracing::warn!(
-                "Skipping shutdown WAL checkpoint because an integrity worker is still active"
+                integrity_drained,
+                ingest_drained,
+                "Skipping shutdown WAL checkpoint because shutdown did not drain cleanly"
             );
             return false;
         }
@@ -643,7 +675,7 @@ impl RuntimeCore {
     fn spawn_file_tail_task(&self, token: CancellationToken) -> Option<JoinHandle<()>> {
         let supervisor = self.file_tail_supervisor.clone();
         Some(tokio::spawn(async move {
-            if let Err(err) = supervisor.reconcile() {
+            if let Err(err) = supervisor.reconcile().await {
                 tracing::warn!(error = %err, "initial file-tail reconcile failed");
             }
             let mut interval = background_interval(tokio::time::Duration::from_secs(30));
@@ -651,12 +683,13 @@ impl RuntimeCore {
                 tokio::select! {
                     biased;
                     _ = token.cancelled() => {
-                        supervisor.shutdown(std::time::Duration::from_secs(2)).await;
+                        let report = supervisor.shutdown(std::time::Duration::from_secs(2)).await;
+                        assert!(report.clean(), "file-tail shutdown was not clean");
                         tracing::debug!("file_tail: cooperative shutdown");
                         break;
                     }
                     _ = interval.tick() => {
-                        if let Err(err) = supervisor.reconcile() {
+                        if let Err(err) = supervisor.reconcile().await {
                             tracing::warn!(error = %err, "file-tail reconcile failed");
                         }
                     }
@@ -919,18 +952,7 @@ impl RuntimeCore {
             Arc::clone(&self.dispatcher_permit),
             self.config.notifications.clone(),
         )?;
-        // Wrap the inner handle so the cancellation token causes the task to
-        // be aborted when cooperative cancellation is signalled. The
-        // dispatcher's inner loop will see the abort as a JoinError, which is
-        // swallowed by the wrapper.
-        Some(tokio::spawn(async move {
-            let mut inner = inner;
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => { inner.abort(); let _ = inner.await; }
-                _ = &mut inner => {}
-            }
-        }))
+        Some(spawn_notification_wrapper("dispatcher", token, inner))
     }
 
     fn spawn_notification_evaluator(&self, token: CancellationToken) -> Option<JoinHandle<()>> {
@@ -939,14 +961,7 @@ impl RuntimeCore {
             Arc::clone(&self.maintenance_permit),
             self.config.notifications.clone(),
         )?;
-        Some(tokio::spawn(async move {
-            let mut inner = inner;
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => { inner.abort(); let _ = inner.await; }
-                _ = &mut inner => {}
-            }
-        }))
+        Some(spawn_notification_wrapper("evaluator", token, inner))
     }
 
     fn spawn_notification_digest(&self, token: CancellationToken) -> Option<JoinHandle<()>> {
@@ -955,14 +970,7 @@ impl RuntimeCore {
             Arc::clone(&self.maintenance_permit),
             self.config.notifications.clone(),
         )?;
-        Some(tokio::spawn(async move {
-            let mut inner = inner;
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => { inner.abort(); let _ = inner.await; }
-                _ = &mut inner => {}
-            }
-        }))
+        Some(spawn_notification_wrapper("digest", token, inner))
     }
 
     fn spawn_error_scan_task(&self, token: CancellationToken) -> Option<JoinHandle<()>> {

@@ -92,7 +92,7 @@ async fn reconcile_restarts_task_when_source_definition_changes() {
             "swag-access",
         ))
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     assert_eq!(
         supervisor
             .running_source_for_test("swag-access")
@@ -108,7 +108,7 @@ async fn reconcile_restarts_task_when_source_definition_changes() {
             "swag-access",
         ))
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     assert_eq!(
         supervisor
             .running_source_for_test("swag-access")
@@ -142,11 +142,11 @@ async fn reconcile_does_not_restart_task_for_checkpoint_updates() {
             "swag-access",
         ))
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     registry
         .update_checkpoint("swag-access", 1, 2, 3, "2026-06-11T20:01:00Z")
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     assert_eq!(
         supervisor
             .running_source_for_test("swag-access")
@@ -176,7 +176,7 @@ async fn supervisor_ingests_appended_line_and_updates_checkpoint() {
     let mut source = source("loop", &log_path.to_string_lossy(), "loop");
     source.start_at_end = false;
     registry.upsert(source).unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
 
     let mut writer = tokio::fs::OpenOptions::new()
         .append(true)
@@ -230,7 +230,7 @@ async fn supervisor_coalesces_checkpoint_writes_for_a_burst() {
     configured.start_at_end = false;
     registry.upsert(configured).unwrap();
     let baseline_writes = registry.write_count();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
 
     let mut writer = tokio::fs::OpenOptions::new()
         .append(true)
@@ -293,7 +293,7 @@ async fn reconcile_initializes_start_at_end_checkpoint_before_returning() {
     registry
         .upsert(source("loop", &log_path.to_string_lossy(), "loop"))
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     let initial = registry.get("loop").unwrap().unwrap();
     assert_eq!(
         initial.checkpoint_offset,
@@ -341,7 +341,7 @@ async fn first_open_uses_checkpoint_snapshot_created_by_reconcile() {
     registry
         .upsert(source("loop", &log_path.to_string_lossy(), "loop"))
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
 
     // A current-thread runtime guarantees the spawned task has not performed
     // its first open while this synchronous section runs. Replacing the
@@ -387,7 +387,7 @@ async fn supervisor_waits_for_durable_ack_before_checkpointing() {
     let mut src = source("loop", &log_path.to_string_lossy(), "loop");
     src.start_at_end = false;
     registry.upsert(src).unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
 
     let mut writer = tokio::fs::OpenOptions::new()
         .append(true)
@@ -454,7 +454,7 @@ async fn shutdown_checkpoints_only_complete_lines_before_partial_tail() {
         tokio_util::sync::CancellationToken::new(),
         8192,
     );
-    first.reconcile().unwrap();
+    first.reconcile().await.unwrap();
     let complete = tokio::time::timeout(Duration::from_secs(3), rx.recv())
         .await
         .unwrap()
@@ -487,7 +487,7 @@ async fn shutdown_checkpoints_only_complete_lines_before_partial_tail() {
         tokio_util::sync::CancellationToken::new(),
         8192,
     );
-    second.reconcile().unwrap();
+    second.reconcile().await.unwrap();
     let partial = tokio::time::timeout(Duration::from_secs(3), rx.recv())
         .await
         .unwrap()
@@ -519,7 +519,7 @@ async fn shutdown_reports_checkpoint_persistence_failure() {
         tokio_util::sync::CancellationToken::new(),
         8192,
     );
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
         .await
         .unwrap()
@@ -559,21 +559,99 @@ async fn supervisor_reconcile_stops_disabled_and_removed_sources() {
     registry
         .upsert(source("two", &second_path.to_string_lossy(), "two"))
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     assert!(supervisor.running_source_for_test("one").is_some());
     assert!(supervisor.running_source_for_test("two").is_some());
 
     registry
         .set_enabled("one", false, "2026-06-11T20:01:00Z")
         .unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     assert!(supervisor.running_source_for_test("one").is_none());
     assert!(supervisor.running_source_for_test("two").is_some());
 
     registry.remove("two").unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
     assert!(supervisor.running_source_for_test("two").is_none());
     supervisor.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test]
+async fn reconcile_flushes_dirty_checkpoint_before_replacing_task() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(4);
+    let ingest = IngestTx::from_envelope_sender_for_test(tx);
+    let log_path = temp.path().join("changed.log");
+    tokio::fs::write(&log_path, b"line\n").await.unwrap();
+    let mut configured = source("changed", &log_path.to_string_lossy(), "old-tag");
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().await.unwrap();
+    let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    envelope.ack_success();
+
+    let mut changed = registry.get("changed").unwrap().unwrap();
+    changed.tag = "new-tag".into();
+    registry.upsert(changed).unwrap();
+    supervisor.reconcile().await.unwrap();
+
+    assert_eq!(
+        registry.get("changed").unwrap().unwrap().checkpoint_offset,
+        Some(b"line\n".len() as u64)
+    );
+    assert_eq!(
+        supervisor.running_source_for_test("changed").unwrap().tag,
+        "new-tag"
+    );
+    supervisor.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test]
+async fn reconcile_surfaces_dirty_checkpoint_failure_before_replacement() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(4);
+    let ingest = IngestTx::from_envelope_sender_for_test(tx);
+    let log_path = temp.path().join("changed-failure.log");
+    tokio::fs::write(&log_path, b"line\n").await.unwrap();
+    let mut configured = source("changed-failure", &log_path.to_string_lossy(), "old-tag");
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().await.unwrap();
+    let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    envelope.ack_success();
+
+    let mut changed = registry.get("changed-failure").unwrap().unwrap();
+    changed.tag = "new-tag".into();
+    registry.upsert(changed).unwrap();
+    registry.set_fail_checkpoint_writes(true);
+    let error = supervisor.reconcile().await.unwrap_err();
+
+    assert!(error.to_string().contains("checkpoint persistence failure"));
+    assert!(
+        supervisor
+            .running_source_for_test("changed-failure")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -782,7 +860,7 @@ async fn supervisor_ingests_partial_eof_buffer_before_rotation() {
     let mut src = source("app", &log_path.to_string_lossy(), "app");
     src.start_at_end = false;
     registry.upsert(src).unwrap();
-    supervisor.reconcile().unwrap();
+    supervisor.reconcile().await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     tokio::fs::rename(&log_path, temp.path().join("app.log.1"))

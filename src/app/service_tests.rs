@@ -171,6 +171,22 @@ async fn background_integrity_blocking_worker_holds_permit_and_drain_is_bounded(
     assert_eq!(status.status, "done");
 }
 
+#[tokio::test]
+async fn completed_integrity_waiter_failure_is_retained_across_later_jobs() {
+    let (service, _pool, _dir) = test_service();
+    let failed = tokio::spawn(async { panic!("injected completion waiter failure") });
+    tokio::task::yield_now().await;
+    service.integrity_tasks.lock().unwrap().push(failed);
+
+    let started = service.db_integrity_start_background(true).await.unwrap();
+    let status = wait_for_integrity_job(&service, started.job_id).await;
+    assert_eq!(status.status, "done");
+    assert!(
+        !service.drain_integrity_tasks(Duration::from_secs(1)).await,
+        "a later successful job must not erase an earlier waiter failure"
+    );
+}
+
 fn refresh_graph_projection_for_test(pool: &DbPool) {
     let _guard = crate::db::graph::GRAPH_TEST_LOCK.lock();
     crate::db::graph::refresh_graph_projection(pool).unwrap();

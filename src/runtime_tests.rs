@@ -468,6 +468,97 @@ async fn maintenance_shutdown_reports_panicked_and_cancelled_tasks_as_unclean() 
     assert!(super::await_or_abort_tasks(vec![clean], Duration::from_secs(1)).await);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn maintenance_shutdown_is_unclean_when_file_tail_checkpoint_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = test_config(tmp.path(), loopback_mcp());
+    let registry = Arc::new(crate::filetail::FileTailRegistry::new(
+        crate::filetail::FileTailRegistry::path_from_storage_db(&config.storage.db_path),
+    ));
+    let log_path = tmp.path().join("runtime-tail.log");
+    tokio::fs::write(&log_path, b"runtime line\n")
+        .await
+        .unwrap();
+    registry
+        .upsert(crate::filetail::FileTailSource {
+            id: "runtime-tail".into(),
+            path: log_path.to_string_lossy().into_owned(),
+            tag: "runtime-tail".into(),
+            hostname: Some("runtime-test".into()),
+            facility: Some("local4".into()),
+            severity: "info".into(),
+            start_at_end: false,
+            enabled: true,
+            checkpoint_dev: None,
+            checkpoint_ino: None,
+            checkpoint_offset: None,
+            created_at: "2026-08-29T00:00:00Z".into(),
+            updated_at: "2026-08-29T00:00:00Z".into(),
+        })
+        .unwrap();
+    let runtime = RuntimeCore::for_server(config).await.unwrap();
+    let handles = runtime.spawn_maintenance_tasks();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if runtime
+                .file_tail_supervisor
+                .statuses()
+                .first()
+                .and_then(|status| status.last_line_at.as_ref())
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    runtime
+        .file_tail_supervisor
+        .fail_checkpoint_writes_for_test(true);
+
+    assert!(!handles.shutdown(Duration::from_secs(3)).await);
+    runtime.shutdown(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn notification_wrapper_propagates_unexpected_exit_panic_and_forced_abort() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let wrapper = super::spawn_notification_wrapper("test-exit", token, tokio::spawn(async {}));
+    assert!(wrapper.await.unwrap_err().is_panic());
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let wrapper = super::spawn_notification_wrapper(
+        "test-panic",
+        token,
+        tokio::spawn(async { panic!("inner panic") }),
+    );
+    assert!(wrapper.await.unwrap_err().is_panic());
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let wrapper = super::spawn_notification_wrapper(
+        "test-abort",
+        token.clone(),
+        tokio::spawn(std::future::pending()),
+    );
+    token.cancel();
+    assert!(wrapper.await.unwrap_err().is_panic());
+}
+
+#[tokio::test]
+async fn runtime_shutdown_skips_checkpoint_when_ingest_writer_does_not_drain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut runtime = RuntimeCore::for_server(test_config(tmp.path(), loopback_mcp()))
+        .await
+        .unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    runtime.ingest = crate::ingest::IngestTx::from_envelope_sender_for_test(tx)
+        .with_writer_handle_for_test(tokio::spawn(std::future::pending()));
+
+    assert!(!runtime.shutdown(Duration::ZERO).await);
+}
+
 #[tokio::test]
 async fn runtime_shutdown_skips_checkpoint_when_integrity_drain_times_out() {
     let tmp = tempfile::tempdir().unwrap();

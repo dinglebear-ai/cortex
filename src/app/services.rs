@@ -160,6 +160,7 @@ pub struct CortexService {
     /// Process-wide admission gate shared with runtime and REST maintenance.
     pub(super) maintenance_permit: Arc<Semaphore>,
     integrity_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    integrity_task_failed: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     integrity_test_hook:
         Option<Arc<dyn Fn() -> anyhow::Result<Vec<String>> + Send + Sync + 'static>>,
@@ -202,6 +203,7 @@ impl CortexService {
             heavy_read_permits: Arc::new(Semaphore::new(heavy_read_concurrency)),
             maintenance_permit: Arc::new(Semaphore::new(1)),
             integrity_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+            integrity_task_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(test)]
             integrity_test_hook: None,
             #[cfg(test)]
@@ -235,6 +237,7 @@ impl CortexService {
             heavy_read_permits: Arc::new(Semaphore::new(heavy_read_concurrency)),
             maintenance_permit: Arc::new(Semaphore::new(1)),
             integrity_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+            integrity_task_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             integrity_test_hook: None,
             integrity_test_spawn_failure: false,
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
@@ -283,12 +286,18 @@ impl CortexService {
                 handle.abort();
             }
             let _ = futures_util::future::join_all(tasks).await;
+            self.integrity_task_failed
+                .store(true, std::sync::atomic::Ordering::Release);
             return false;
         };
-        let mut clean = true;
+        let mut clean = !self
+            .integrity_task_failed
+            .load(std::sync::atomic::Ordering::Acquire);
         for result in results {
             if let Err(error) = result {
                 clean = false;
+                self.integrity_task_failed
+                    .store(true, std::sync::atomic::Ordering::Release);
                 tracing::error!(%error, "Integrity completion task failed during drain");
             }
         }
