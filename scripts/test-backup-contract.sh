@@ -79,6 +79,10 @@ grep -Fq 'Refusing unsafe backup directory: filesystem root' "$test_root/root.er
 
 # The backup script must remain portable to macOS hosts that do not provide
 # GNU realpath's -m/-- flags.
-! grep -Eq 'realpath[[:space:]]+-m|realpath.*--' /usr/local/libexec/cortex-backup.sh
+if docker run --rm --entrypoint sh "$image_ref" -c \
+  "sed '/^[[:space:]]*#/d' /usr/local/libexec/cortex-backup.sh | grep -Eq 'realpath[[:space:]]+-m|realpath.*--'"; then
+  echo "backup script uses GNU-only realpath flags" >&2
+  exit 1
+fi
 
 echo "Backup contents, isolation, recovery, and permission contract passed"

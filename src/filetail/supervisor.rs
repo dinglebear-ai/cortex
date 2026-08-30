@@ -41,18 +41,19 @@ struct TailTask {
     handle: JoinHandle<()>,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
+    shutdown_error: Arc<Mutex<Option<String>>>,
     source: FileTailSource,
 }
 
 pub(crate) struct FileTailShutdown {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) statuses: Vec<FileTailStatus>,
+    failures: Vec<String>,
 }
 
 impl FileTailShutdown {
     pub(crate) fn clean(&self) -> bool {
-        self.statuses
-            .iter()
-            .all(|status| status.last_error.is_none())
+        self.failures.is_empty()
     }
 }
 
@@ -107,6 +108,7 @@ impl FileTailSupervisor {
         }
         let deadline = tokio::time::Instant::now() + timeout;
         let mut stopped = Vec::new();
+        let mut failures = Vec::new();
         for mut task in tasks {
             let source_id = task.source.id.clone();
             let abort_handle = task.handle.abort_handle();
@@ -127,19 +129,22 @@ impl FileTailSupervisor {
                         "file-tail task shutdown timed out after {timeout:?}"
                     ))
                 }
-            };
+            }
+            .or_else(|| task.shutdown_error.lock().clone());
             let mut status = task.status.lock();
             status.running = false;
             if let Some(failure) = failure {
                 tracing::error!(source_id = %source_id, error = %failure, "file-tail shutdown failed");
+                failures.push(format!("{source_id}: {failure}"));
                 append_status_error(&mut status, failure);
-            } else if let Some(error) = status.last_error.as_deref() {
-                tracing::error!(source_id = %source_id, error, "file-tail task stopped with an error");
             }
             stopped.push(status.clone());
         }
         stopped.sort_by(|a, b| a.id.cmp(&b.id));
-        FileTailShutdown { statuses: stopped }
+        FileTailShutdown {
+            statuses: stopped,
+            failures,
+        }
     }
 
     pub(crate) async fn reconcile(&self) -> Result<()> {
@@ -181,17 +186,7 @@ impl FileTailSupervisor {
         };
         let retired = self.stop_tasks(retiring, Duration::from_secs(2)).await;
         if !retired.clean() {
-            let failures = retired
-                .statuses
-                .iter()
-                .filter_map(|status| {
-                    status
-                        .last_error
-                        .as_deref()
-                        .map(|error| format!("{}: {error}", status.id))
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
+            let failures = retired.failures.join("; ");
             anyhow::bail!("file-tail task drain failed during reconcile: {failures}");
         }
 
@@ -244,6 +239,8 @@ impl FileTailSupervisor {
             last_error: None,
         }));
         let task_status = Arc::clone(&status);
+        let shutdown_error = Arc::new(Mutex::new(None));
+        let task_shutdown_error = Arc::clone(&shutdown_error);
         let ingest = self.ingest.clone();
         let token = self.token.child_token();
         let task_token = token.clone();
@@ -256,6 +253,7 @@ impl FileTailSupervisor {
                 ingest,
                 token,
                 task_status,
+                task_shutdown_error,
                 max_line_bytes,
             )
             .await;
@@ -266,6 +264,7 @@ impl FileTailSupervisor {
                 handle,
                 token: task_token,
                 status,
+                shutdown_error,
                 source: task_source,
             },
         )

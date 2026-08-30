@@ -555,6 +555,7 @@ async fn shutdown_reports_checkpoint_persistence_failure() {
     registry.set_fail_checkpoint_writes(true);
 
     let report = supervisor.shutdown(Duration::from_secs(2)).await;
+    assert!(!report.clean());
     assert!(!report.statuses[0].running);
     assert!(
         report.statuses[0].last_error.as_deref().is_some_and(
@@ -921,6 +922,53 @@ async fn supervisor_ingests_partial_eof_buffer_before_rotation() {
 
     token.cancel();
     supervisor.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test]
+async fn truncated_line_status_does_not_fail_clean_shutdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(4);
+    let ingest = IngestTx::from_envelope_sender_for_test(tx);
+    let log_path = temp.path().join("oversized.log");
+    tokio::fs::write(&log_path, b"abcdef\n").await.unwrap();
+    let mut configured = source("oversized", &log_path.to_string_lossy(), "oversized");
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        tokio_util::sync::CancellationToken::new(),
+        3,
+    );
+    supervisor.reconcile().await.unwrap();
+
+    let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    envelope.ack_success();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if supervisor.statuses()[0].last_error.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let mut changed = registry.get("oversized").unwrap().unwrap();
+    changed.tag = "updated".into();
+    registry.upsert(changed).unwrap();
+    supervisor.reconcile().await.unwrap();
+    assert_eq!(
+        supervisor.running_source_for_test("oversized").unwrap().tag,
+        "updated"
+    );
+    let report = supervisor.shutdown(Duration::from_secs(2)).await;
+    assert!(report.clean());
 }
 
 #[tokio::test]

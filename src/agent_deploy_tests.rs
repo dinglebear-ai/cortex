@@ -535,6 +535,44 @@ esac
 }
 
 #[test]
+#[serial]
+fn deploy_agent_env_install_failure_never_starts_service() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("commands.log");
+    let local_binary = write_local_binary(dir.path());
+    write_executable(
+        &dir.path().join("ssh"),
+        r#"#!/bin/sh
+printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
+case "$*" in
+  *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
+  *"cat > ~/.cortex/heartbeat-agent.env.new"*) exit 42 ;;
+  *) exit 0 ;;
+esac
+"#,
+    );
+    write_successful_scp(dir.path());
+    let _path = prepend_path(dir.path());
+    let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+
+    let result = deploy_agent_to_host(
+        "linux-host",
+        &local_binary,
+        &AgentDeployConfig {
+            target: Some("https://new.example.test:3100".to_string()),
+            token: Some("new-token".to_string()),
+            ..AgentDeployConfig::default()
+        },
+    );
+
+    assert!(!result.ok);
+    let log = std::fs::read_to_string(log).unwrap();
+    assert!(log.contains("cat > ~/.cortex/heartbeat-agent.env.new"));
+    assert!(!log.contains("setup heartbeatagent install"));
+    assert!(!log.contains("systemctl --user restart"));
+}
+
+#[test]
 fn redact_secret_envs_redacts_custom_secret_keys() {
     let redacted =
         redact_secret_envs("PLEX_TOKEN='plex secret' API_KEY=apikey OTHER_SECRET='secret value'");

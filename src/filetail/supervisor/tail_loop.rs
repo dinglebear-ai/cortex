@@ -24,6 +24,7 @@ pub(super) async fn tail_file_loop(
     ingest: IngestTx,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
+    shutdown_error: Arc<Mutex<Option<String>>>,
     max_line_bytes: usize,
 ) {
     let source_id = initial_source.id.clone();
@@ -62,6 +63,7 @@ pub(super) async fn tail_file_loop(
             ingest.clone(),
             token.clone(),
             Arc::clone(&status),
+            Arc::clone(&shutdown_error),
             max_line_bytes,
         )
         .await
@@ -91,6 +93,7 @@ async fn tail_file_until_cancelled(
     ingest: IngestTx,
     token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
+    shutdown_error: Arc<Mutex<Option<String>>>,
     max_line_bytes: usize,
 ) -> Result<()> {
     let opened = open_tail_file(source, true)
@@ -112,10 +115,13 @@ async fn tail_file_until_cancelled(
         tokio::select! {
             _ = token.cancelled() => {
                 if checkpoint_dirty {
-                    persist_checkpoint(
+                    if let Err(error) = persist_checkpoint(
                         Arc::clone(&registry), source.id.clone(), identity, durable_position,
                         checkpoint_time.clone(),
-                    ).await?;
+                    ).await {
+                        *shutdown_error.lock() = Some(error.to_string());
+                        return Err(error);
+                    }
                     status.lock().last_checkpoint_at = Some(checkpoint_time.clone());
                 }
                 return Ok(())
