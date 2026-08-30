@@ -35,13 +35,17 @@ pub(super) async fn tail_file_loop(
             return;
         }
         let live_source = match registry.get(&source_id) {
-            Ok(Some(source)) if source.enabled => source,
+            Ok(Some(source)) if source.enabled => {
+                *shutdown_error.lock() = None;
+                source
+            }
             Ok(_) => {
                 status.lock().running = false;
                 return;
             }
             Err(err) => {
                 tracing::error!(source_id = %source_id, error = %err, "file-tail source reload failed; retrying");
+                *shutdown_error.lock() = Some(err.to_string());
                 status.lock().last_error = Some(err.to_string());
                 tokio::select! {
                     _ = token.cancelled() => {
@@ -74,6 +78,7 @@ pub(super) async fn tail_file_loop(
             }
             Err(err) => {
                 tracing::error!(source_id = %source.id, path = %source.path, error = %err, "file-tail source failed; retrying");
+                *shutdown_error.lock() = Some(err.to_string());
                 status.lock().last_error = Some(err.to_string());
                 tokio::select! {
                     _ = token.cancelled() => {
@@ -99,6 +104,9 @@ async fn tail_file_until_cancelled(
     let opened = open_tail_file(source, true)
         .await
         .with_context(|| format!("open {}", source.path))?;
+    // Reaching a validated open proves a previous retry failure recovered.
+    // Any later loop error will repopulate this before the retry delay.
+    *shutdown_error.lock() = None;
     let mut reader = BufReader::new(opened.file);
     let mut position = opened.position;
     // `position` includes bytes buffered from an unterminated line. Only the

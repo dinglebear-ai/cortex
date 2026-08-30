@@ -565,6 +565,55 @@ async fn shutdown_reports_checkpoint_persistence_failure() {
 }
 
 #[tokio::test]
+async fn shutdown_reports_unresolved_periodic_checkpoint_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::ingest::IngestEnvelope>(4);
+    let ingest = IngestTx::from_envelope_sender_for_test(tx);
+    let log_path = temp.path().join("periodic-checkpoint-failure.log");
+    tokio::fs::write(&log_path, b"line\n").await.unwrap();
+    let mut configured = source(
+        "periodic-checkpoint-failure",
+        &log_path.to_string_lossy(),
+        "periodic-checkpoint-failure",
+    );
+    configured.start_at_end = false;
+    registry.upsert(configured).unwrap();
+
+    let supervisor = FileTailSupervisor::new(
+        std::sync::Arc::clone(&registry),
+        ingest,
+        tokio_util::sync::CancellationToken::new(),
+        8192,
+    );
+    supervisor.reconcile().await.unwrap();
+    registry.set_fail_checkpoint_writes(true);
+    let envelope = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    envelope.ack_success();
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if supervisor.statuses()[0]
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("checkpoint persistence failure"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let report = supervisor.shutdown(Duration::from_secs(2)).await;
+    assert!(!report.clean());
+}
+
+#[tokio::test]
 async fn supervisor_reconcile_stops_disabled_and_removed_sources() {
     let temp = tempfile::tempdir().unwrap();
     let registry = std::sync::Arc::new(FileTailRegistry::new(temp.path().join("file-tails.json")));
