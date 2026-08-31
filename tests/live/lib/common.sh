@@ -10,6 +10,15 @@ live_require_tools() {
   return "$missing"
 }
 
+live_file_mode() {
+  local path="$1"
+  if stat -c '%a' "$path" >/dev/null 2>&1; then
+    stat -c '%a' "$path"
+  else
+    stat -f '%Lp' "$path"
+  fi
+}
+
 live_run_id() {
   local bytes
   bytes="$(openssl rand -hex 16)" || return 1

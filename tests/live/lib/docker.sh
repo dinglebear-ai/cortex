@@ -223,7 +223,21 @@ live_topology_start() {
     [[ "${CORTEX_LIVE_DIND_AUTHORIZED:-0}" == 1 ]] || { live_die 'linux-full topology requires CORTEX_LIVE_DIND_AUTHORIZED=1'; return 1; }
     compose_args+=(-f "$LIVE_PROJECT_ROOT/tests/live/profiles/linux-full/compose.yaml")
   fi
-  if ! docker compose "${compose_args[@]}" -p "$project" up -d --no-build --wait --wait-timeout 90; then
+  local -a compose_env=(env
+    "LIVE_ADMIN_TOKEN=$LIVE_ADMIN_TOKEN"
+    "LIVE_API_TOKEN=$LIVE_API_TOKEN"
+    "LIVE_CANDIDATE_IMAGE=$LIVE_CANDIDATE_IMAGE"
+    "LIVE_COMPOSE_PROJECT=$LIVE_COMPOSE_PROJECT"
+    "LIVE_CORTEX_TOKEN=$LIVE_CORTEX_TOKEN"
+    "LIVE_CURSOR_SIGNING_KEY=$LIVE_CURSOR_SIGNING_KEY"
+    "LIVE_DATABASE_FINGERPRINT=$LIVE_DATABASE_FINGERPRINT"
+    "LIVE_HTTP_PUBLISHED=${LIVE_HTTP_PUBLISHED:-0}"
+    "LIVE_ORACLE_IMAGE=$LIVE_ORACLE_IMAGE"
+    "LIVE_ORACLE_TOKEN=$LIVE_ORACLE_TOKEN"
+    "LIVE_RUN_ID=$LIVE_RUN_ID"
+    "LIVE_SERVER_INSTANCE_ID=$LIVE_SERVER_INSTANCE_ID"
+    "LIVE_TOXIPROXY_IMAGE=$LIVE_TOXIPROXY_IMAGE")
+  if ! live_timeout_process_tree 120 "${compose_env[@]}" docker compose "${compose_args[@]}" -p "$project" up -d --no-build --wait --wait-timeout 90; then
     live_diagnostics_once "$compose_file" "$project" compose-up-failed
     return 1
   fi

@@ -37,7 +37,10 @@ export LIVE_RUN_HOME="$LIVE_RUN_ROOT/home" LIVE_RUN_TMP="$LIVE_RUN_ROOT/tmp" LIV
 export LIVE_CLI_FIXTURE_BIN="$LIVE_PROJECT_ROOT/tests/live/fixtures/surfaces/bin"
 LIVE_CLI_PATH="$LIVE_CLI_FIXTURE_BIN:$(dirname "$binary"):/usr/bin:/bin:/usr/sbin:/sbin"
 LIVE_DOCKER_BIN="$(command -v docker)"
-LIVE_DOCKER_COMPOSE_BIN="$(command -v docker-compose)"
+LIVE_DOCKER_COMPOSE_BIN="$(command -v docker-compose || true)"
+if [[ -z "$LIVE_DOCKER_COMPOSE_BIN" ]]; then
+  LIVE_DOCKER_COMPOSE_BIN="$LIVE_CLI_FIXTURE_BIN/docker-compose-plugin"
+fi
 LIVE_CANDIDATE_ID="$(live_ingest_candidate_id)"
 export LIVE_CLI_PATH LIVE_DOCKER_BIN LIVE_DOCKER_COMPOSE_BIN LIVE_CANDIDATE_ID
 mkdir -p "$LIVE_RUN_HOME" "$LIVE_RUN_TMP"; chmod 700 "$LIVE_RUN_HOME" "$LIVE_RUN_TMP"

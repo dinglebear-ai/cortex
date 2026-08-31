@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Every Compose project is run-owned and cleanup-registered. Keep all lifecycle
+# operations non-interactive so unattended qualification can never block on a
+# provider reconciliation prompt.
+export COMPOSE_ASSUME_YES=true COMPOSE_MENU=false
 LIVE_PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; export LIVE_PROJECT_ROOT
 # shellcheck disable=SC1090
 for lib in common lock redact events command lease resources report artifacts contracts budgets wait diagnostics docker platform; do source "$LIVE_PROJECT_ROOT/tests/live/lib/$lib.sh"; done
@@ -38,11 +43,6 @@ if [[ -n "${LIVE_RUN_ROOT:-}" ]]; then
 else
   live_init_run "$runs_root" "${LIVE_RUN_ID_OVERRIDE:-}" >/dev/null
 fi
-live_contract_export "$LIVE_RUN_ROOT/surface-contract.json"
-live_run_manifest_write "$profile" "$provider" "$target" "$LIVE_SURFACE_CONTRACT"
-live_budget_start
-live_lease_write 180
-live_lease_heartbeat_start 180 30
 live_runner_cleanup() {
   local status=$? cleanup_provider="${LIVE_RESOURCE_PROVIDER:-$provider}" resource_file="$LIVE_RUN_ROOT/resources.jsonl"
   trap - HUP INT TERM EXIT
@@ -58,6 +58,11 @@ live_runner_cleanup() {
   exit "$status"
 }
 trap live_runner_cleanup HUP INT TERM EXIT
+live_contract_export "$LIVE_RUN_ROOT/surface-contract.json"
+live_run_manifest_write "$profile" "$provider" "$target" "$LIVE_SURFACE_CONTRACT"
+live_budget_start
+live_lease_write 180
+live_lease_heartbeat_start 180 30
 live_event run_started "$(jq -cn --arg profile "$profile" '{profile:$profile}')"
 case "$profile" in
   smoke)

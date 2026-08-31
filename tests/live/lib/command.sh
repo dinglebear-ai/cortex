@@ -45,6 +45,14 @@ live_timeout() {
   return "$status"
 }
 
+live_timeout_process_tree() {
+  local seconds="$1"; shift
+  local home="${LIVE_RUN_ROOT:?}/home" tmp="${LIVE_RUN_ROOT}/tmp"
+  live_secure_dir "$home"
+  live_secure_dir "$tmp"
+  live_timeout "$seconds" python3 "$LIVE_PROJECT_ROOT/tests/live/lib/session_exec.py" "$home" "$tmp" "$@"
+}
+
 live_run_bounded() {
   local seconds="$1" stdout="$2" stderr="$3"; shift 3
   [[ "$seconds" =~ ^[1-9][0-9]*$ ]] || { live_die "invalid timeout"; return; }

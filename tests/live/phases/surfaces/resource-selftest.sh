@@ -8,12 +8,13 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 export LIVE_RESOURCE_PROVIDER=docker-host:selftest LIVE_RUN_ID=cortex-e2e-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export LIVE_RUN_ROOT="$tmp/run"; mkdir -p "$LIVE_RUN_ROOT" "$tmp/bin"
 printf '{}\n' >"$LIVE_RUN_ROOT/run.json"; : >"$LIVE_RUN_ROOT/events.jsonl"
-state="$tmp/project-present"; touch "$state"; export SURFACE_SELFTEST_STATE="$state"
+state="$tmp/project-present"; touch "$state"
 cat >"$tmp/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == compose ]]; then rm -f "$SURFACE_SELFTEST_STATE"; exit 0; fi
-[[ -e "$SURFACE_SELFTEST_STATE" ]] && printf 'owned-resource\n'
+state="$(cd "$(dirname "$0")/.." && pwd)/project-present"
+if [[ "$1" == compose ]]; then rm -f "$state"; exit 0; fi
+[[ -e "$state" ]] && printf 'owned-resource\n'
 EOF
 chmod +x "$tmp/bin/docker"; export PATH="$tmp/bin:$PATH"
 compose="$tmp/compose.yaml"; printf 'services: {}\n' >"$compose"

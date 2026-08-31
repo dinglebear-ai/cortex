@@ -65,7 +65,7 @@ live_manifest_validate() {
   local file
   file="$(live_resource_file)"
   [[ -f "$file" && ! -L "$file" ]] || { live_die "missing or unsafe resource manifest"; return; }
-  [[ "$(stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file")" == "600" ]] || { live_die "resource manifest must be mode 0600"; return; }
+  [[ "$(live_file_mode "$file")" == "600" ]] || { live_die "resource manifest must be mode 0600"; return; }
   jq -e -n --arg run_id "$LIVE_RUN_ID" '
     def transition($old;$new):
       ($old==null and $new=="PLANNED") or ($old=="PLANNED" and $new=="CREATING") or
@@ -127,13 +127,13 @@ live_cleanup_resources() {
       cleanup=()
       while IFS= read -r argument; do cleanup+=("$argument"); done < <(jq -r '.[]' <<<"$argv")
     fi
-    if [[ "$state" == REMOVED ]] || live_timeout "$timeout" "${cleanup[@]}"; then
+    if [[ "$state" == REMOVED ]] || live_timeout_process_tree "$timeout" "${cleanup[@]}"; then
       if [[ "$state" != REMOVED ]]; then
         live_resource_transition "$key" "$kind" REMOVED "$provider" "$id" "$argv" "$digest" "$labels" "$verify_json" "$parent"
       fi
       verify=()
       while IFS= read -r argument; do verify+=("$argument"); done < <(jq -r '.[]' <<<"$verify_json")
-      if live_timeout "$timeout" "${verify[@]}"; then
+      if live_timeout_process_tree "$timeout" "${verify[@]}"; then
         live_resource_transition "$key" "$kind" VERIFIED "$provider" "$id" "$argv" "$digest" "$labels" "$verify_json" "$parent"
       else
         status=1; residue=1

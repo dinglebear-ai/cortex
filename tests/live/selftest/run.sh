@@ -20,7 +20,13 @@ live_manifest_seal "$contract"; live_contract_consume "$contract"
 live_run_manifest_write smoke daemon:test local "$contract"
 live_budget_start
 ok live_validate_run_id "$LIVE_RUN_ID"
-[[ "$(stat -f '%Lp' "$LIVE_RUN_ROOT" 2>/dev/null || stat -c '%a' "$LIVE_RUN_ROOT")" == 700 ]]
+[[ "$(live_file_mode "$LIVE_RUN_ROOT")" == 700 ]]
+tree_pid_file="$tmp/timeout-tree.pid"
+tree_status=0
+live_timeout_process_tree 1 sh -c 'sleep 300 & echo $! >"$1"; wait' _ "$tree_pid_file" || tree_status=$?
+ok test "$tree_status" -eq 124
+tree_child="$(cat "$tree_pid_file")"
+reject kill -0 "$tree_child"
 # Sealed run/target/capability manifests detect any mutation.
 cp "$LIVE_RUN_ROOT/target-manifest.json" "$tmp/target.good"
 chmod 600 "$LIVE_RUN_ROOT/target-manifest.json"; printf 'tamper\n' >>"$LIVE_RUN_ROOT/target-manifest.json"
@@ -210,6 +216,9 @@ kill -TERM "$child"; wait "$child" || true; grep -q TERM "$sigroot/seen"
 bash -c 'trap '\''echo INT >"$1/seen-int"; exit 130'\'' INT; kill -INT $$' _ "$sigroot" || true
 grep -q INT "$sigroot/seen-int"
 grep -q 'trap live_runner_cleanup HUP INT TERM EXIT' "$ROOT/tests/live/runner.sh"
+cleanup_trap_line="$(grep -n 'trap live_runner_cleanup HUP INT TERM EXIT' "$ROOT/tests/live/runner.sh" | cut -d: -f1)"
+contract_export_line="$(grep -n 'live_contract_export .*surface-contract.json' "$ROOT/tests/live/runner.sh" | cut -d: -f1)"
+[[ "$cleanup_trap_line" -lt "$contract_export_line" ]]
 
 # The explicit no-op profile succeeds concurrently without weakening smoke.
 noop_runs="$tmp/noop-runs"
