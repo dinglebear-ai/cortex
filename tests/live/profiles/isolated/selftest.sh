@@ -22,7 +22,7 @@ grep -q 'invalid provider port' "$root/tests/live/lib/docker.sh" || fail "missin
 
 export LIVE_COMPOSE_PROJECT=cortex-e2e-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LIVE_RUN_ID=cortex-e2e-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export LIVE_CANDIDATE_IMAGE=sha256:aaaaaaaa LIVE_ORACLE_IMAGE=sha256:bbbbbbbb LIVE_TOXIPROXY_IMAGE=sha256:cccccccc
-export LIVE_CORTEX_TOKEN=x LIVE_API_TOKEN=y LIVE_ADMIN_TOKEN=z LIVE_ORACLE_TOKEN=o
+export LIVE_CORTEX_TOKEN=x LIVE_API_TOKEN=y LIVE_ADMIN_TOKEN=z LIVE_ORACLE_TOKEN=o LIVE_CURSOR_SIGNING_KEY=cursor-signing-test-key
 export LIVE_SERVER_INSTANCE_ID=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa LIVE_DATABASE_FINGERPRINT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb LIVE_HTTP_PUBLISHED=127.0.0.1
 docker compose -f "$compose" config --quiet
 
