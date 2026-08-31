@@ -408,3 +408,46 @@ fn all_entries_record_transport_and_access() {
         }
     }
 }
+
+#[test]
+fn parity_groups_join_equivalent_transports_only() {
+    let export = contract::contract();
+    let search: Vec<_> = export
+        .entries
+        .iter()
+        .filter(|entry| entry.parity_group.as_deref() == Some("capability.search"))
+        .collect();
+    assert_eq!(search.len(), 3);
+    assert_eq!(
+        search
+            .iter()
+            .map(|entry| entry.kind)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["cli", "mcp", "rest"])
+    );
+
+    let mut groups = std::collections::BTreeMap::<&str, std::collections::BTreeSet<&str>>::new();
+    for entry in &export.entries {
+        if let Some(group) = entry.parity_group.as_deref() {
+            groups.entry(group).or_default().insert(entry.kind);
+        }
+    }
+    assert!(groups.values().all(|kinds| kinds.len() >= 2));
+}
+
+#[test]
+fn every_rest_binding_records_an_authorization_case() {
+    for entry in contract::contract()
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == "rest")
+    {
+        assert!(
+            entry
+                .required_cases
+                .contains(&RequiredCaseKind::Authorization),
+            "REST binding {} is mounted behind forced authentication",
+            entry.spelling
+        );
+    }
+}

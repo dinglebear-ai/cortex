@@ -33,7 +33,16 @@ jq -cn --argjson offered "$offered" --argjson accepted "$accepted" --argjson rej
   '{schema:"cortex-live-direct-concurrency-v1",offered:$offered,accepted:$accepted,rejected:$rejected,persisted:$persisted,lost_after_accept:$loss,duplicates:$duplicates,retries:0,lock_contention_exercised:true,cas_restart_generation:1,worker_failure:$worker_status,maintenance_failure:$maintenance_status,accounted:($persisted+$rejected+$loss),bounds:{workers:8,items_per_worker:200}}' >"$out/accounting.json"
 jq -e '.offered==.accepted+.rejected and .accepted==.persisted and .lost_after_accept==0 and .accounted==.offered and .duplicates==0 and .worker_failure==0 and .maintenance_failure==0 and .cas_restart_generation==1' "$out/accounting.json" >/dev/null
 jq -e '.accepted==1' "$out/recovery-producer.json" >/dev/null
-# Cancellation is a separate bounded process; its terminated attempt remains evidence, not a retry overwrite.
-python3 "$root/tests/live/phases/concurrency/producer.py" --port "$LIVE_SYSLOG_TCP_PORT" --prefix "$prefix-cancel" --count 200 --delay .05 >"$out/cancel.json" & cancel_pid=$!; sleep .1; kill -TERM "$cancel_pid" 2>/dev/null || true; wait "$cancel_pid" 2>/dev/null || true
-jq -cn '{schema:"cortex-live-attempt-v1",attempt_kind:"first_attempt",retry_index:0,result:"fail",failure:"injected cancellation",preserved:true}' >"$out/cancellation-first-attempt.json"
+# Cancellation is a separate observed attempt; its partial accounting remains
+# evidence and cannot be overwritten by a retry.
+python3 "$root/tests/live/phases/concurrency/producer.py" --port "$LIVE_SYSLOG_TCP_PORT" --prefix "$prefix-cancel" --count 200 --delay .05 --progress "$out/cancel.json" >/dev/null & cancel_pid=$!
+sleep .1
+kill -0 "$cancel_pid"
+kill -TERM "$cancel_pid"
+set +e; wait "$cancel_pid"; cancel_status=$?; set -e
+[[ "$cancel_status" == 143 ]]
+! kill -0 "$cancel_pid" 2>/dev/null
+jq -e '.interrupted==true and .attempted==(.accepted+.rejected) and .attempted>0 and .attempted<.offered' "$out/cancel.json" >/dev/null
+jq -cn --argjson status "$cancel_status" --slurpfile accounting "$out/cancel.json" \
+  '{schema:"cortex-live-attempt-v1",attempt_kind:"first_attempt",retry_index:0,result:"fail",failure:"injected cancellation",preserved:true,observed_exit:$status,partial_accounting:$accounting[0]}' >"$out/cancellation-first-attempt.json"
 echo 'direct concurrency run: PASS'

@@ -36,20 +36,22 @@ Run the hermetic foundation checks with:
 bash tests/live/selftest/run.sh
 ```
 
-Run a profile (scenario modules may add results before later epic waves):
+Run the portable pull-request smoke profile:
 
 ```bash
 bash tests/live/runner.sh --profile smoke
 ```
 
-Until the scenario waves populate all required outcomes, that command is
-expected to fail with an incomplete capability ledger. A zero exit status means
-both the scenario report and the complete authoritative ledger passed.
+Smoke is an imperative, portable subset with direct assertions for its ingest,
+REST, CLI, browser, lifecycle, and cleanup phases. It is not an owner in the
+authoritative SurfaceContract denominator. A zero exit means those smoke
+assertions and cleanup passed; complete denominator qualification requires the
+owner profiles and `tests/live/aggregate.sh`.
 
 `--profile noop` is an explicit non-mandatory orchestration check. It exports
 and seals the same authoritative contract and exercises setup/report/cleanup,
-but has no capability requirements; unlike `smoke`, it may succeed with zero
-results. `--legacy` writes a versioned `legacy_result` event explicitly isolated
+but has no capability requirements and may succeed with zero results. `--legacy`
+writes a versioned `legacy_result` event explicitly isolated
 from the capability ledger, so compatibility execution cannot fabricate modern
 surface coverage.
 

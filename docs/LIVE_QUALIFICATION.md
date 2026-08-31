@@ -30,18 +30,21 @@ are never selected by normal CI.
 
 Each run owns a mode-0700 directory below `LIVE_RUNS_ROOT`, a unique Compose
 project, exact container/network/volume identities, and synthetic tokens. The
-runner captures `summary.json`, `junit.xml`, `capability-ledger.jsonl`, cleanup
-and residual-state evidence. CI sanitizes and scans these files before upload;
+runner captures `summary.json`, `junit.xml`, `capability-ledger.jsonl`, and
+`cleanup-audit.json`; aggregate runs also emit `aggregate-qualification.json`.
+CI copies only this fixed schema-governed allowlist, then scans and caps it before upload;
 raw databases, WAL/auth stores, keys, environment dumps, and browser profiles
-are not artifacts. Detailed evidence is compressed and capped only after the
-scan, normally on failure or an explicit debug run.
+are never upload artifacts.
 
 ## Cancellation, troubleshooting, and recovery
 
 Every workflow has an independent `always()` janitor before artifact upload.
 The janitor reconciles only exact identities under the current lease/provider;
-it never deletes by a broad name or label query. Hard cancellation or runner
-eviction is covered by the scheduled lease sweeper.
+it never deletes by a broad name or label query. A normal cancellation runs the
+job's `always()` reconciliation. A hard runner eviction can make its local lease
+directory unavailable and therefore requires operator cleanup on the same
+provider using retained runner diagnostics; it is not claimed as automatically
+recoverable by a later GitHub-hosted runner.
 
 If a run fails, inspect `summary.json` first, then `junit.xml`, the capability
 ledger, and the residual-state report. `RESIDUE`, `CLEANUP_UNVERIFIED`, and

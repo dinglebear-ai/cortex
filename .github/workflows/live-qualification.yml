@@ -9,11 +9,6 @@ on:
         default: full
         type: choice
         options: [noop, smoke, full, storage, soak, isolated, agent, legacy-central-pull, mcp, auth, stateful, artifacts, notifications, security, upgrade, mutation, compose-isolated, fleet-read-only, fleet-mutating, docker-boundary-reduced, docker-boundary-full]
-      debug_artifacts:
-        description: "Retain capped sanitized detail artifacts on success"
-        required: false
-        default: false
-        type: boolean
   schedule:
     - cron: "17 5 * * 2" # resilience and storage
     - cron: "31 3 * * 6" # bounded soak
@@ -81,6 +76,11 @@ jobs:
       LIVE_AGENT_BOUNDARY_MODE: full
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Sweep expired aggregate leases
+        run: |
+          mkdir -p "$LIVE_RUNS_ROOT"
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
       - name: Build immutable qualification images once
         run: |
           docker build --pull=false -f config/Dockerfile -t cortex-live-candidate:aggregate .
@@ -100,6 +100,11 @@ jobs:
           (( ${#runs[@]} == 7 ))
           LIVE_AGGREGATE_OUTPUT="$LIVE_RUNS_ROOT/aggregate-qualification.json" \
             bash tests/live/aggregate.sh "${runs[0]}/surface-contract.json" "${runs[@]}"
+      - name: Reconcile aggregate leases after success, failure, or cancellation
+        if: always()
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
       - name: Sanitize aggregate evidence
         if: always()
         run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload-aggregate

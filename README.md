@@ -865,7 +865,7 @@ just validate-plugin
 cargo xtask pre-push
 ```
 
-`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request profile. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, MCP calls, CLI and REST parity, and managed file-tail behavior in a run-owned topology. Specialist and scheduled profiles are documented in [the live qualification guide](docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
+`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
 
 CI gates include:
 

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 const CORE_PROFILES: &[&str] = &["full"];
 const FULL_PROFILE: &[&str] = &["full"];
@@ -397,6 +398,7 @@ fn entry(
     let profiles = profiles_for(kind, &spelling, mutation);
     let platforms = platforms_for(kind, &spelling);
     let required_cases = required_cases_for(&spelling, access);
+    let parity_group = parity_key(kind, &spelling);
     SurfaceContractEntry {
         scenario_id: None,
         id,
@@ -408,11 +410,30 @@ fn entry(
         mutation,
         profiles,
         platforms,
-        parity_group: matches!(kind, "cli" | "mcp" | "rest").then(|| format!("capability.{token}")),
+        parity_group,
         required_cases,
         allowed_dispositions: &[ProfileDisposition::PendingScenario],
         cleanup,
     }
+}
+
+fn parity_key(kind: &str, spelling: &str) -> Option<String> {
+    let raw = match kind {
+        "mcp" => spelling.replace('_', "-"),
+        "cli" => spelling.replace([' ', '_'], "-"),
+        "rest" => spelling.strip_prefix("/api/")?.replace(['/', '_'], "-"),
+        _ => return None,
+    };
+    let canonical = match raw.as_str() {
+        "sessions-search" => "search-sessions",
+        "sessions-correlate" => "ai-correlate",
+        "sessions-blocks" => "usage-blocks",
+        "sessions-context" => "project-context",
+        "sessions-tools" => "list-ai-tools",
+        "sessions-projects" => "list-ai-projects",
+        other => other,
+    };
+    Some(format!("capability.{canonical}"))
 }
 
 /// Deterministic, versioned runtime inventory used by the live qualification
@@ -472,6 +493,22 @@ pub fn contract() -> SurfaceContractExport {
     }
     for (name, access, mutation) in INGEST_SURFACES {
         entries.push(entry("ingest", (*name).into(), None, *access, *mutation));
+    }
+    let parity_counts = entries
+        .iter()
+        .filter_map(|entry| entry.parity_group.as_ref())
+        .fold(BTreeMap::<String, usize>::new(), |mut counts, group| {
+            *counts.entry(group.clone()).or_default() += 1;
+            counts
+        });
+    for entry in &mut entries {
+        if entry
+            .parity_group
+            .as_ref()
+            .is_some_and(|group| parity_counts.get(group).copied().unwrap_or_default() < 2)
+        {
+            entry.parity_group = None;
+        }
     }
     entries.sort_by(|a, b| a.id.cmp(&b.id));
     SurfaceContractExport {

@@ -32,13 +32,21 @@ rm -rf -- "$destination"
 mkdir -p -- "$destination"
 [[ -d "$source_root" && ! -L "$source_root" ]] || { printf '{"status":"no-run-directory"}\n' >"$destination/no-run.json"; exit 0; }
 
+for run_dir in "$source_root"/cortex-e2e-*; do
+  [[ -d "$run_dir" ]] || continue
+  if [[ -f "$run_dir/summary.json" && ! -f "$run_dir/cleanup-audit.json" ]]; then
+    echo "completed run is missing cleanup-audit.json: $(basename "$run_dir")" >&2
+    exit 1
+  fi
+done
+
 # Copy only schema-governed, already-redacted evidence. Raw databases, WAL,
 # auth stores, private keys, browser profiles, and arbitrary logs never enter
 # the upload tree.
 while IFS= read -r -d '' file; do
   relative="${file#"$source_root"/}"
   case "$(basename "$file")" in
-    summary.json|junit.xml|capability-ledger.jsonl|cleanup-ledger.jsonl|residual-state.json|run.json|budget.json)
+    summary.json|junit.xml|capability-ledger.jsonl|cleanup-audit.json|aggregate-qualification.json|run-manifest.json|budget-metrics.json)
       mkdir -p "$destination/$(dirname "$relative")"
       cp "$file" "$destination/$relative"
       ;;
@@ -50,7 +58,7 @@ import pathlib, re, sys
 root = pathlib.Path(sys.argv[1])
 patterns = [
     re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
-    re.compile(rb'(?i)(?:authorization|token|secret|password)\s*[=:]\s*["\x27]?[A-Za-z0-9_./+\-=]{12,}'),
+    re.compile(rb'(?i)(?:authorization|token|secret|password)"?\s*[=:]\s*["\x27]?[A-Za-z0-9_./+\-=]{12,}'),
 ]
 total = 0
 for path in root.rglob('*'):

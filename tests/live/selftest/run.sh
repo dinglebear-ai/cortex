@@ -143,6 +143,18 @@ set +e
 live_run_bounded 1 "$LIVE_RUN_ROOT/artifacts/slow.out" "$LIVE_RUN_ROOT/artifacts/slow.err" sleep 3; timed_status=$?
 set -e
 [[ "$timed_status" == 124 ]]
+grandchild_pid_file="$LIVE_RUN_ROOT/artifacts/grandchild.pid"
+set +e
+live_run_bounded 1 "$LIVE_RUN_ROOT/artifacts/tree.out" "$LIVE_RUN_ROOT/artifacts/tree.err" \
+  bash -c 'bash -c '\''trap "" TERM; echo "$BASHPID" >"$1"; while :; do sleep 1; done'\'' _ "$1" & wait' _ "$grandchild_pid_file"
+tree_status=$?
+set -e
+[[ "$tree_status" == 124 ]]
+grandchild_pid="$(cat "$grandchild_pid_file")"
+if kill -0 "$grandchild_pid" 2>/dev/null; then
+  echo 'bounded command left a TERM-ignoring grandchild alive' >&2
+  exit 1
+fi
 # Expanded by the intentionally isolated child shell.
 # shellcheck disable=SC2016
 ok live_run_bounded 2 "$LIVE_RUN_ROOT/artifacts/env.out" "$LIVE_RUN_ROOT/artifacts/env.err" sh -c 'test -z "${CORTEX_TOKEN:-}" && test "$HOME" = "$LIVE_RUN_ROOT/home" && test -d "$TMPDIR"'
@@ -212,6 +224,7 @@ legacy_events="$(find "$noop_runs" -name events.jsonl -type f -exec grep -l 'leg
 [[ -n "$legacy_events" ]] && jq -e 'select(.kind=="legacy_result" and .payload.schema=="cortex-live-legacy-result-v1" and .payload.isolated_from_capability_ledger==true and .payload.result=="pass")' "$legacy_events" >/dev/null
 
 bash "$ROOT/tests/live/phases/artifacts/selftest.sh"
+bash "$ROOT/tests/live/selftest/artifact-upload.sh"
 bash "$ROOT/tests/live/lib/aggregate-selftest.sh"
 
 printf 'live foundation self-tests: %d passed\n' "$passes"

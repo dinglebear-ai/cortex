@@ -58,10 +58,12 @@ just test-live
 # or: bash tests/live/run-profile.sh smoke
 ```
 
-The registry-derived suite covers live UDP/TCP/OTLP ingest, every MCP action,
-every REST route, the CLI tree, browser workspace, admin/auth negatives, and
-cleanup. `scripts/smoke-test.sh` and `tests/test_live.sh` are thin compatibility
-wrappers. See `docs/LIVE_QUALIFICATION.md` for specialist profiles and cadence.
+Smoke covers live UDP/TCP/OTLP ingest plus its portable REST, CLI, browser,
+admin/auth-negative, lifecycle, and cleanup assertions. Run `just live-mcp` for
+the registry-derived every-action MCP qualification. Complete CLI/API/MCP and
+owner-profile coverage is established by the aggregate suite, not smoke alone.
+`scripts/smoke-test.sh` and `tests/test_live.sh` are thin compatibility wrappers.
+See `docs/LIVE_QUALIFICATION.md` for specialist profiles and cadence.
 When seeding is enabled, the smoke scripts import
 `tests/fixtures/ai-session-smoke.jsonl` and assert that `sessions`,
 `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, and `project_context` can retrieve real AI transcript

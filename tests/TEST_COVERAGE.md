@@ -6,10 +6,12 @@ wrappers only. The runner starts real Cortex, oracle, proxy, browser, agent, and
 protocol clients as required by each profile. Direct database fixtures count as
 setup and never as proof of an ingest route.
 
-The surface contract includes UDP and TCP syslog, OTLP, managed file-tail,
-host-local agent and legacy central-pull ingestion; MCP, REST, CLI parity and
-browser surfaces; and package/upgrade operations. Unit coverage remains
-available through `just coverage` (`cargo llvm-cov`).
+The surface contract denominator includes UDP and TCP syslog, OTLP, managed
+file-tail, host-local agent and legacy central-pull ingestion plus MCP, REST,
+and CLI surfaces. Browser, artifact, and upgrade behavior are scenario
+capabilities layered on those transport entries; they are not separate surface
+kinds in the generated inventory. Unit coverage remains available through
+`just coverage` (`cargo llvm-cov`).
 
 Every required surface must record exactly one first-attempt semantic outcome
 and evidence. Missing, duplicate, skipped, unsupported, qualified, or
