@@ -48,7 +48,7 @@ fn coverage_docs_use_cortex_names_and_current_smoke_scope() {
         "UDP",
         "TCP",
         "file-tail",
-        "CLI parity",
+        "CLI surfaces",
         "REST",
         "host-local agent",
         "cargo llvm-cov",

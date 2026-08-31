@@ -398,7 +398,7 @@ fn entry(
     let profiles = profiles_for(kind, &spelling, mutation);
     let platforms = platforms_for(kind, &spelling);
     let required_cases = required_cases_for(&spelling, access);
-    let parity_group = parity_key(kind, &spelling);
+    let parity_group = parity_key(kind, &spelling, method);
     SurfaceContractEntry {
         scenario_id: None,
         id,
@@ -417,23 +417,60 @@ fn entry(
     }
 }
 
-fn parity_key(kind: &str, spelling: &str) -> Option<String> {
+fn parity_key(kind: &str, spelling: &str, method: Option<HttpMethod>) -> Option<String> {
+    if kind == "rest" && spelling == "/api/artifact-evidence" && method == Some(HttpMethod::Post) {
+        return Some("capability.artifact-evidence-record".into());
+    }
     let raw = match kind {
         "mcp" => spelling.replace('_', "-"),
         "cli" => spelling.replace([' ', '_'], "-"),
         "rest" => spelling.strip_prefix("/api/")?.replace(['/', '_'], "-"),
         _ => return None,
     };
-    let canonical = match raw.as_str() {
+    Some(format!("capability.{}", canonical_parity_capability(&raw)))
+}
+
+fn canonical_parity_capability(raw: &str) -> &str {
+    match raw {
+        "hosts-sources" => "source-ips",
+        "hosts-silent" => "silent-hosts",
         "sessions-search" => "search-sessions",
         "sessions-correlate" => "ai-correlate",
         "sessions-blocks" => "usage-blocks",
         "sessions-context" => "project-context",
         "sessions-tools" => "list-ai-tools",
         "sessions-projects" => "list-ai-projects",
+        "sessions-incidents" => "abuse-incidents",
+        "sessions-investigate" => "abuse-investigate",
+        "sessions-llminvocations" | "sessions-llm-invocations" => "llm-invocations",
+        "sessions-skills" => "skill-events",
+        "sessions-skillincidents" | "sessions-skill-incidents" => "skill-incidents",
+        "sessions-skillinvestigate" | "sessions-skill-investigate" => "skill-investigate",
+        "sessions-mcpevents" | "sessions-mcp-events" => "mcp-events",
+        "sessions-mcpincidents" | "sessions-mcp-incidents" => "mcp-incidents",
+        "sessions-mcpinvestigate" | "sessions-mcp-investigate" => "mcp-investigate",
+        "sessions-hookevents" | "sessions-hooks" => "hook-events",
+        "sessions-hookincidents" | "sessions-hook-incidents" => "hook-incidents",
+        "sessions-hookinvestigate" | "sessions-hook-investigate" => "hook-investigate",
+        "analysis-errors" => "errors",
+        "analysis-patterns" => "patterns",
+        "analysis-anomalies" => "anomalies",
+        "analysis-compare" => "compare",
+        "state-host" => "host-state",
+        "state-fleet" => "fleet-state",
+        "state-clockskew" => "clock-skew",
+        "alerts-signatures-list" | "errors-unaddressed" => "unaddressed-errors",
+        "alerts-signatures-ack" | "errors-ack" => "ack-error",
+        "alerts-signatures-unack" | "errors-unack" => "unack-error",
+        "alerts-notifications-recent" | "notifications-recent" => "notifications-recent",
+        "alerts-notifications-test" | "notifications-test" => "notifications-test",
+        "correlate-events" => "correlate",
+        "correlate-state" => "correlate-state",
+        "correlate-topic" => "topic-correlate",
+        "stats-summary" => "stats",
+        "stats-ingestrate" => "ingest-rate",
         other => other,
-    };
-    Some(format!("capability.{canonical}"))
+    }
 }
 
 /// Deterministic, versioned runtime inventory used by the live qualification

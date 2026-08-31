@@ -15,8 +15,9 @@ skip.
 | Scheduled | `stateful` (resilience), `storage`, `soak` | storage 20–30 minutes; soak 2–6 hours |
 | Explicit opt-in | `fleet-read-only`, `fleet-mutating` (provider) | target-specific |
 
-Run `just live-smoke` locally. Other stable recipes use `live-<profile>` with
-hyphens converted to underscores. `just live-selftest` checks workflow shape,
+Run `just live-smoke` locally. Use `just live <profile>` for an exact profile;
+`just --list` shows shorter stable aliases such as `live-artifact`,
+`live-compose`, `live-fleet`, and `live-provider`. `just live-selftest` checks workflow shape,
 documentation generation, wrappers, manifests, redaction, cleanup, and result
 contracts without contacting a deployed Cortex.
 
@@ -30,9 +31,10 @@ are never selected by normal CI.
 
 Each run owns a mode-0700 directory below `LIVE_RUNS_ROOT`, a unique Compose
 project, exact container/network/volume identities, and synthetic tokens. The
-runner captures `summary.json`, `junit.xml`, `capability-ledger.jsonl`, and
-`cleanup-audit.json`; aggregate runs also emit `aggregate-qualification.json`.
-CI copies only this fixed schema-governed allowlist, then scans and caps it before upload;
+runner captures `summary.json`, `junit.xml`, `capability-ledger.jsonl`,
+`cleanup-audit.json`, `run-manifest.json`, and `budget-metrics.json`; aggregate
+runs also emit `aggregate-qualification.json`. CI copies only these seven
+schema-governed basenames, then scans and caps them before upload;
 raw databases, WAL/auth stores, keys, environment dumps, and browser profiles
 are never upload artifacts.
 
@@ -47,7 +49,7 @@ provider using retained runner diagnostics; it is not claimed as automatically
 recoverable by a later GitHub-hosted runner.
 
 If a run fails, inspect `summary.json` first, then `junit.xml`, the capability
-ledger, and the residual-state report. `RESIDUE`, `CLEANUP_UNVERIFIED`, and
+ledger, and `cleanup-audit.json`. `RESIDUE`, `CLEANUP_UNVERIFIED`, and
 `MANUAL_RECONCILIATION_REQUIRED` are failures. To retry cleanup safely:
 
 ```bash

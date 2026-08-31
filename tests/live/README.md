@@ -5,8 +5,9 @@ creates a unique mode-0700 run directory, exports the authoritative compiled
 Rust `SurfaceContract`, seals run/target/contract manifests, writes
 concurrency-safe JSONL events, captures only redacted allowlisted artifacts,
 and emits `summary.json`, `junit.xml`, and a machine-readable
-`capability-ledger.jsonl`. Every external command is bounded and starts with an
-empty, run-local environment.
+`capability-ledger.jsonl`. Scenario commands routed through
+`live_run_bounded` start with an empty, run-local environment and have an
+enforced timeout.
 
 The ledger is fail-closed. Every required surface/case in the selected profile
 must have one unique `first_attempt` outcome of `pass` or `fail`; skipped,

@@ -412,19 +412,37 @@ fn all_entries_record_transport_and_access() {
 #[test]
 fn parity_groups_join_equivalent_transports_only() {
     let export = contract::contract();
-    let search: Vec<_> = export
-        .entries
-        .iter()
-        .filter(|entry| entry.parity_group.as_deref() == Some("capability.search"))
-        .collect();
-    assert_eq!(search.len(), 3);
-    assert_eq!(
-        search
+    let expected_kinds = std::collections::BTreeSet::from(["cli", "mcp", "rest"]);
+    for capability in [
+        "search",
+        "host-state",
+        "source-ips",
+        "silent-hosts",
+        "patterns",
+        "anomalies",
+        "compare",
+        "correlate-state",
+        "topic-correlate",
+        "ingest-rate",
+        "unaddressed-errors",
+        "notifications-recent",
+        "skill-incidents",
+        "mcp-incidents",
+        "hook-incidents",
+    ] {
+        let kinds = export
+            .entries
             .iter()
+            .filter(|entry| {
+                entry.parity_group.as_deref() == Some(&format!("capability.{capability}"))
+            })
             .map(|entry| entry.kind)
-            .collect::<std::collections::BTreeSet<_>>(),
-        std::collections::BTreeSet::from(["cli", "mcp", "rest"])
-    );
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            kinds, expected_kinds,
+            "{capability} must retain CLI, MCP, and REST parity members"
+        );
+    }
 
     let mut groups = std::collections::BTreeMap::<&str, std::collections::BTreeSet<&str>>::new();
     for entry in &export.entries {
@@ -433,6 +451,30 @@ fn parity_groups_join_equivalent_transports_only() {
         }
     }
     assert!(groups.values().all(|kinds| kinds.len() >= 2));
+
+    let artifact_read = export
+        .entries
+        .iter()
+        .filter(|entry| entry.parity_group.as_deref() == Some("capability.artifact-evidence"))
+        .collect::<Vec<_>>();
+    assert!(
+        artifact_read
+            .iter()
+            .all(|entry| entry.mutation == MutationClass::None)
+    );
+    let artifact_record = export
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.parity_group.as_deref() == Some("capability.artifact-evidence-record")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(artifact_record.len(), 2);
+    assert!(
+        artifact_record
+            .iter()
+            .all(|entry| entry.mutation == MutationClass::AppendOnly)
+    );
 }
 
 #[test]
