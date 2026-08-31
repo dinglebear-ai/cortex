@@ -19,19 +19,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::mcp::AuthPolicy;
+use crate::surfaces::post;
 use axum::{
     Router,
     extract::{ConnectInfo, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER},
     middleware::{Next, from_fn},
     response::IntoResponse,
-    routing::post,
 };
 use bytes::Bytes;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use parking_lot::Mutex;
 use prost::Message;
-use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::config::AgentObservatoryPrivacyConfig;
 use crate::db::{DbPool, StorageBudgetState};
@@ -135,15 +134,15 @@ pub fn router(state: OtlpState) -> Router {
     Router::new()
         .contract_route(
             "POST /v1/logs",
-            post(logs_handler).layer(RequestBodyLimitLayer::new(OTLP_BODY_LIMIT_BYTES)),
+            post(logs_handler).request_body_limit(OTLP_BODY_LIMIT_BYTES),
         )
         .contract_route(
             "POST /v1/metrics",
-            post(metrics_handler).layer(RequestBodyLimitLayer::new(OTLP_SIGNAL_BODY_LIMIT_BYTES)),
+            post(metrics_handler).request_body_limit(OTLP_SIGNAL_BODY_LIMIT_BYTES),
         )
         .contract_route(
             "POST /v1/traces",
-            post(traces_handler).layer(RequestBodyLimitLayer::new(OTLP_SIGNAL_BODY_LIMIT_BYTES)),
+            post(traces_handler).request_body_limit(OTLP_SIGNAL_BODY_LIMIT_BYTES),
         )
         .layer(from_fn(add_retry_after_on_413))
         .with_state(state)

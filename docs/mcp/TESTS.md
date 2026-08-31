@@ -51,23 +51,17 @@ Database tests use `tempfile::TempDir` for isolated SQLite instances. Each test 
 
 ## Live smoke tests
 
-Live tests run against a running cortex server:
+The canonical profile creates a run-owned Cortex topology:
 
 ```bash
 just test-live
-# or: bash tests/test_live.sh
+# or: bash tests/live/run-profile.sh smoke
 ```
 
-The smoke test (`scripts/smoke-test.sh`) exercises all `cortex` actions via mcporter.
-`tests/test_live.sh` additionally covers live UDP and TCP syslog ingest, MCP
-tool calls, CLI parity between local SQLite and `--http`, REST surface parity,
-and a deterministic admin `POST /api/file-tails` status/list path when
-`CORTEX_API_ADMIN_TOKEN` is set. Docker log ingest is split by operational
-path: host-local agent Docker streaming is covered by agent deployment parity
-tests, while the legacy central pull path uses the mocked Docker HTTP fixture
-in `src/docker_ingest/client_tests.rs`.
-Compose diagnostics are non-mutating and are validated only for redacted shape,
-so the smoke test can pass on either Docker-backed or non-Docker deployments.
+The registry-derived suite covers live UDP/TCP/OTLP ingest, every MCP action,
+every REST route, the CLI tree, browser workspace, admin/auth negatives, and
+cleanup. `scripts/smoke-test.sh` and `tests/test_live.sh` are thin compatibility
+wrappers. See `docs/LIVE_QUALIFICATION.md` for specialist profiles and cadence.
 When seeding is enabled, the smoke scripts import
 `tests/fixtures/ai-session-smoke.jsonl` and assert that `sessions`,
 `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, and `project_context` can retrieve real AI transcript

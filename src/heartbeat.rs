@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::surfaces::{get, post};
 use axum::{
     Router,
     body::Body,
@@ -24,7 +25,6 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     middleware::{Next, from_fn},
     response::{IntoResponse, Json, Response},
-    routing::{get, post},
 };
 use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};

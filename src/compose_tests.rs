@@ -1120,8 +1120,9 @@ fn live_target_allows_listener_without_process_info_when_docker_confirms_owner()
 #[test]
 fn up_invocation_is_detached_and_uses_project_directory_and_all_files() {
     let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    let env = EnvGuard::new(&["CORTEX_ENV_FILE", "CORTEX_HOME"]);
+    let env = EnvGuard::new(&["CORTEX_ENV_FILE", "CORTEX_HOME", "CORTEX_COMPOSE_PROGRAM"]);
     env.remove("CORTEX_ENV_FILE");
+    env.remove("CORTEX_COMPOSE_PROGRAM");
     let dir = tempfile::tempdir().unwrap();
     let empty_home = dir.path().join(".cortex");
     std::fs::create_dir(&empty_home).unwrap();
@@ -1170,6 +1171,24 @@ fn up_invocation_is_detached_and_uses_project_directory_and_all_files() {
             "cortex",
         ]
     );
+}
+
+#[test]
+fn compose_invocation_honors_explicit_compose_program() {
+    let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let env = EnvGuard::new(&["CORTEX_COMPOSE_PROGRAM"]);
+    env.set("CORTEX_COMPOSE_PROGRAM", "/run/cortex/compose-runner");
+    let service = ComposeService::new(
+        FakeInspector::default(),
+        FakeRunner,
+        ComposeDefaults::default(),
+    );
+    let target = target_from_container(&labelled_container(), &ComposeDefaults::default());
+
+    let invocation = service.logs_invocation(&target, 20);
+
+    assert_eq!(invocation.program, "/run/cortex/compose-runner");
+    assert_eq!(invocation.args.first().map(String::as_str), Some("compose"));
 }
 
 #[test]

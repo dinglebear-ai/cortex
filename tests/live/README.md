@@ -9,9 +9,11 @@ and emits `summary.json`, `junit.xml`, and a machine-readable
 empty, run-local environment.
 
 The ledger is fail-closed. Every required surface/case in the selected profile
-must have one unique `first_attempt` outcome of `pass` or `fail`; unsupported,
-qualified, skipped, missing, duplicate, unknown-surface, and missing-evidence
-outcomes cannot make a mandatory capability green. `diagnostic_retry` events
+must have one unique `first_attempt` outcome of `pass` or `fail`; skipped,
+missing, duplicate, unknown-surface, and missing-evidence outcomes cannot make
+a mandatory capability green. Platform-qualified topology dispositions are
+accepted only by an exact allowlist in `contracts/platform-coverage.json` and
+remain visible as qualifications, never passes. `diagnostic_retry` events
 are retained separately and never replace the original result. Reports reduce
 the event stream incrementally and do not accumulate a results array.
 
@@ -66,3 +68,20 @@ bash tests/live/runner.sh --janitor --runs-root /path/to/runs --provider provide
 The janitor refuses corrupt or symlinked manifests and provider mismatches. A
 `MANUAL_RECONCILIATION_REQUIRED`, `RESIDUE`, or `CLEANUP_UNVERIFIED` audit is a
 failed cleanup outcome; it is never silently converted to success.
+
+## Platform qualification
+
+Every run writes `platform-coverage.json` and embeds it in `summary.json` with
+the detected platform, selected policy, certification level, qualifications,
+and required coverage. Darwin and Windows default to `portable`; Linux defaults
+to `linux-full`. `--platform-policy` can make the choice explicit but cannot
+select a policy that excludes the detected platform.
+
+Portable macOS qualification may be green with only the explicit topology
+limitations approved by the contract. The result continues to list Linux-only
+coverage and is not a full certification. Linux topology profiles require
+`CORTEX_LIVE_DIND_AUTHORIZED=1` and fail closed unless hard quota,
+Docker-agent boundary, and redirector-egress denial all pass. CI additionally
+runs the agent boundary in full mode for DinD, OOM, daemon restart, and Unix
+socket-permission coverage. See `profiles/macos/README.md` for the read-only
+host audit and recovery procedure.

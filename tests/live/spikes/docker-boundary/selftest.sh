@@ -22,6 +22,9 @@ jq -e '.linux_dind.host_socket == false and .desktop_proxy.disposition == "platf
 if rg -n '/var/run/docker.sock:/var/run/docker.sock|/run/docker.sock:/var/run/docker.sock' "$compose" >/dev/null; then exit 1; fi
 rg -n 'dind-socket:/var/run:ro' "$compose" >/dev/null
 rg -n 'internal: true' "$compose" >/dev/null
+daemon_ports="$(docker compose -f "$compose" config --format json | jq -c '.services.daemon.ports // []')"
+[[ "$daemon_ports" == '[]' ]]
+docker compose -f "$compose" config --format json | jq -e '.services.daemon.expose == ["2375"] and (.services.proxy.ports|length)==1' >/dev/null
 
 set +e
 env -u CORTEX_LIVE_DOCKER_PROXY_URL bash "$here/probe.sh" "$tmp/missing.json"

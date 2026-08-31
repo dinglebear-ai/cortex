@@ -472,7 +472,10 @@ pub(crate) fn run_compose_phase(compose_dir: &Path, env_path: &Path, args: &[&st
     if override_path.exists() {
         command.arg("-f").arg(override_path);
     }
-    command.args(args).current_dir(compose_dir);
+    command
+        .args(args)
+        .current_dir(compose_dir)
+        .env("PWD", compose_dir);
     match command.output() {
         Ok(output) if output.status.success() => timer.finish(
             SetupStatus::Ok,

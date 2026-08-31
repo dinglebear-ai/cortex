@@ -337,6 +337,10 @@ fn is_known_transcript_root(path: &Path) -> bool {
     let Some(home) = crate::env::var_os("HOME").map(PathBuf::from) else {
         return false;
     };
+    // macOS commonly exposes /tmp through the /private/tmp symlink. Compare
+    // canonical roots to the already-canonical candidate so a disposable HOME
+    // beneath /tmp remains a recognized transcript boundary.
+    let home = home.canonicalize().unwrap_or(home);
     let allowed = [
         home.join(".claude/projects"),
         home.join(".codex/sessions"),

@@ -342,7 +342,7 @@ raw collector warnings, raw frames, or `metadata_json` are returned.
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/smoke-test.sh` | Live smoke test -- current MCP action set via mcporter |
+| `scripts/smoke-test.sh` | Compatibility wrapper for the canonical live smoke profile |
 | `scripts/backup.sh` | WAL-safe SQLite backup (checkpoint + `.backup` method) |
 | `scripts/reset-db.sh` | WAL-safe backup + destructive DB reset for dev recovery |
 

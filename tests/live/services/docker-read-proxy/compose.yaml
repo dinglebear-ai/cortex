@@ -10,7 +10,7 @@ services:
       cortex.live.role: daemon
     networks: [control]
     volumes: [dind-socket:/var/run]
-    ports: ["127.0.0.1::2375"]
+    expose: ["2375"]
   proxy:
     image: tecnativa/docker-socket-proxy:latest@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     environment:

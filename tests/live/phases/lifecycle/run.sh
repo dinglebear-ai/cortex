@@ -11,7 +11,10 @@ query() {
     -d "$(jq -cn --arg q "\"$marker\"" '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"cortex",arguments:{action:"search",query:$q,limit:5}}}')" \
     "http://127.0.0.1:$LIVE_HTTP_PORT/mcp" | grep -F "$marker"
 }
-printf '<134>1 %s cortex-live lifecycle - - - %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$marker" | nc -u -w 1 127.0.0.1 "$LIVE_SYSLOG_UDP_PORT"
+# Persistence requires a committed seed, so use reliable TCP acceptance rather
+# than treating an unacknowledged UDP datagram as durable setup.
+printf '<134>1 %s cortex-live lifecycle - - - %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$marker" | nc -w 5 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
+live_connection_opened 1
 live_wait_until 30 lifecycle-marker query
 before="$(docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"
 docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" restart candidate >/dev/null

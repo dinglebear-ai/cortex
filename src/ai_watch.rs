@@ -208,6 +208,44 @@ async fn prune_missing_checkpoints(service: &CortexService, json: bool) -> bool 
     }
 }
 
+fn event_path_allowed(path: &Path, targets: &[WatchTarget]) -> bool {
+    let canonical = path.canonicalize().unwrap_or_else(|error| {
+        tracing::warn!(
+            path = %path.display(),
+            error = %error,
+            "AI transcript event path canonicalization failed; using original path"
+        );
+        path.to_path_buf()
+    });
+    canonical_path_allowed(&canonical, targets)
+}
+
+fn event_path_allowed_missing_ok(path: &Path, targets: &[WatchTarget]) -> bool {
+    let canonical = canonicalize_missing_path(path);
+    canonical_path_allowed(&canonical, targets)
+}
+
+fn canonicalize_missing_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+
+    // Remove notifications arrive after the leaf has disappeared. Canonicalize
+    // its still-existing parent so platform aliases such as macOS `/var` and
+    // `/private/var` are resolved consistently with the watch target.
+    path.parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn canonical_path_allowed(canonical: &Path, targets: &[WatchTarget]) -> bool {
+    targets.iter().any(|target| match target {
+        WatchTarget::Directory(root) => canonical.starts_with(root),
+        WatchTarget::File { path, .. } => canonical == path,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RescanStatus {
     Completed,

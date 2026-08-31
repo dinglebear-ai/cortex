@@ -2,17 +2,10 @@
 
 #[path = "watcher_queue.rs"]
 mod queue;
-#[path = "watcher_supervisor.rs"]
-mod supervisor;
 pub use queue::{
     GitWatchAction, GitWatchEvent, GitWatchEventKind, GitWatchQueue, GitWatchQueueError,
     GitWatchQueueErrorKind, GitWatchQueueOptions, GitWatchSender, WatchEnqueueResult,
     git_watch_channel,
-};
-pub use supervisor::{
-    GitFullReconcileReason, GitWatchScheduledAction, GitWatchSupervisor, GitWatchSupervisorError,
-    GitWatchSupervisorErrorKind, GitWatchSupervisorHandle, GitWatchSupervisorOptions,
-    git_watch_supervisor,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};

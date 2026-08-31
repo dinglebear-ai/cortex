@@ -2,11 +2,25 @@
 
 live_timeout() {
   local seconds="$1"; shift
-  if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; return; fi
   local marker
   marker="$(mktemp "${TMPDIR:-/tmp}/cortex-live-timeout.XXXXXX")"; rm -f "$marker"
   "$@" & local command_pid=$!
-  ( sleep "$seconds"; touch "$marker"; kill -TERM "$command_pid" 2>/dev/null || exit 0; sleep 1; kill -KILL "$command_pid" 2>/dev/null || true ) & local watcher_pid=$!
+  # Poll instead of a single long sleep. On macOS, terminating the watcher
+  # shell does not reliably reap its `sleep` child, causing successful short
+  # commands to block until the full timeout. This exits within one second of
+  # normal completion and also works when the target is a shell function.
+  (
+    local elapsed=0
+    while kill -0 "$command_pid" 2>/dev/null && (( elapsed < seconds )); do
+      sleep 1
+      ((elapsed+=1))
+    done
+    kill -0 "$command_pid" 2>/dev/null || exit 0
+    touch "$marker"
+    kill -TERM "$command_pid" 2>/dev/null || exit 0
+    sleep 1
+    kill -KILL "$command_pid" 2>/dev/null || true
+  ) & local watcher_pid=$!
   local status=0
   wait "$command_pid" || status=$?
   kill "$watcher_pid" 2>/dev/null || true

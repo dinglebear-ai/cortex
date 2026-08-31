@@ -20,4 +20,7 @@ if bash "$root/tests/live/phases/ingest/generate.sh" fixture 4 3 100 5 "$tmp/rec
 if bash "$root/tests/live/phases/ingest/generate.sh" fixture 3 3 5 5 "$tmp/bytes" >/dev/null 2>&1; then echo 'generator accepted byte overflow' >&2; exit 1; fi
 for required in syslog-tcp-reconnect syslog-oversize invalid-utf8 file-tail-rotate file-tail-truncate file-tail-checkpoint legacy-docker; do grep -q "$required" "$root/tests/live/phases/ingest/run.sh"; done
 for required in producer_bound file-tail-registration downtime.udp-loss ingest-case-reconciliation; do grep -q "$required" "$root/tests/live/phases/ingest/run.sh"; done
+grep -F 'Accept: application/json, text/event-stream' "$root/tests/live/phases/ingest/run.sh" >/dev/null
+grep -F '?os=linux&arch=x86_64' "$root/tests/live/phases/ingest/run.sh" >/dev/null
+grep -F 'MCP initialize semantic probe failed' "$root/tests/live/phases/ingest/run.sh" >/dev/null
 echo 'ingest phase selftest passed'

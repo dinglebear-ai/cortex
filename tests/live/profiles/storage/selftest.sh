@@ -4,6 +4,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 fail() { echo "storage selftest: $*" >&2; exit 1; }
 for f in "$root/tests/live/phases/storage/run.sh" "$root/tests/live/phases/storage/retention.sh" "$root/tests/live/phases/storage/db-size.sh" "$root/tests/live/phases/storage/cleanup-faults.sh" "$root/tests/live/phases/storage/pressure.sh" "$root/tests/live/phases/lifecycle/run.sh" "$root/tests/live/profiles/storage/pressure-watchdog.sh" "$root/tests/live/profiles/storage/quota-resource.sh"; do bash -n "$f"; done
 jq -e '.pressure.requires_verified_hard_quota and .pressure.external_watchdog and .safety.deployed_targets_forbidden and .database.backup_invariants==["wal-safe","integrity-ok","marker-readable"]' "$root/tests/live/contracts/storage.json" >/dev/null
+jq -e '.policies.portable.approved_qualifications["storage.pressure"]==["platform-qualified"]' "$root/tests/live/contracts/platform-coverage.json" >/dev/null || fail "portable policy does not recognize honest storage pressure qualification"
 grep -q 'platform-qualified' "$root/tests/live/phases/storage/pressure.sh" || fail "missing honest no-quota disposition"
 grep -q 'CORTEX_LIVE_STORAGE_PRESSURE_AUTHORIZED' "$root/tests/live/phases/storage/pressure.sh" || fail "pressure is not authorization gated"
 grep -q 'max_written_bytes' "$root/tests/live/phases/storage/pressure.sh" || fail "missing byte cap"
@@ -16,6 +17,18 @@ grep -q 'docker create --name' "$root/tests/live/phases/storage/pressure.sh" || 
 grep -q 'watchdog cannot read the quota volume byte-accounting path' "$root/tests/live/phases/storage/pressure.sh" || fail "watchdog byte accounting can silently degrade"
 grep -q 'chmod 0755.*fixtures' "$root/tests/live/phases/storage/pressure.sh" || fail "UID 1000 fixture traversal is not portable"
 grep -q 'profile lacks mandatory otlp-storage-blocked evidence' "$root/tests/live/runner.sh" || fail "storage/full final reconciliation is absent"
+grep -q 'disposition.*platform-qualified.*not-authorized' "$root/tests/live/runner.sh" || fail "qualified pressure dispositions are not reconciled"
+grep -q 'without executing the pressure capability' "$root/tests/live/runner.sh" || fail "qualified pressure can retain false execution evidence"
+grep -q 'LIVE_PROFILE="$profile"; export LIVE_PROFILE' "$root/tests/live/runner.sh" || fail "runner does not export canonical profile ownership"
+grep -q 'profiles|index(\$profile)' "$root/tests/live/phases/storage/run.sh" || fail "storage result emission is not profile-owner gated"
+grep -q 'attempt_kind=="first_attempt"' "$root/tests/live/phases/storage/run.sh" || fail "storage duplicate identity guard is absent"
+grep -q 'jq -e -n --arg id' "$root/tests/live/phases/storage/run.sh" || fail "storage duplicate guard does not reduce JSONL inputs"
+grep -q 'db integrity status not-a-number --json' "$root/tests/live/phases/storage/run.sh" || fail "integrity-status validation case is not executed"
+! grep -q 'cp .*cli.db-integrity-status.*record cli.db-integrity-status' "$root/tests/live/phases/storage/run.sh" || fail "integrity-status canonical result is synthesized from copied evidence"
+grep -q 'rather than manufacturing canonical coverage' "$root/tests/live/phases/storage/run.sh" || fail "non-owner storage checks are not separated from canonical coverage"
+grep -q 'cli_semantic_oracle' "$root/tests/live/phases/storage/run.sh" || fail "storage CLI positives lack semantic oracles"
+grep -q 'rest_semantic_oracle' "$root/tests/live/phases/storage/run.sh" || fail "storage REST positives lack semantic oracles"
+grep -q 'storage extra check failed' "$root/tests/live/phases/storage/run.sh" || fail "non-canonical full-profile storage checks can fail silently"
 awk '/  full\)/,/    ;;/ {print}' "$root/tests/live/runner.sh" | grep -q 'phases/storage/pressure.sh' || fail "full profile does not execute storage pressure obligation"
 # Exercise the watchdog as a process supervisor, not merely as shell syntax.
 watch_tmp="$(mktemp -d)"; trap 'rm -rf "$watch_tmp"' EXIT

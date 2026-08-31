@@ -26,13 +26,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path=urlparse(self.path).path
         n=min(int(self.headers.get("Content-Length", "0")), 1048576); body=self.rfile.read(n)
+        # The isolated Apprise-compatible endpoint intentionally has no bearer
+        # authentication: cortex's Apprise client sends destination URLs in the
+        # JSON body and has no auth-header option.  The service is reachable only
+        # on the run-owned internal network and captures no body content.
+        if path in ("/notify", "/notify/"):
+            digest=hashlib.sha256(body).hexdigest(); record={"at_ns":time.time_ns(),"path":path,"sha256":digest,"bytes":len(body)}
+            with (ROOT/"requests.jsonl").open("a") as f: f.write(json.dumps(record,separators=(",", ":"))+"\n")
+            return self._reply(202, {"success":True,"captured":True,"sha256":digest})
         supplied=self.headers.get("Authorization", "").removeprefix("Bearer ").encode()
         if not hmac.compare_digest(supplied, TOKEN): return self._reply(401, {"error":"unauthorized"})
         digest=hashlib.sha256(body).hexdigest(); record={"at_ns":time.time_ns(),"path":path,"sha256":digest,"bytes":len(body)}
         with (ROOT/"requests.jsonl").open("a") as f: f.write(json.dumps(record,separators=(",", ":"))+"\n")
         if path == "/oauth/token": return self._reply(200, {"access_token":"fake-access-token","token_type":"Bearer","expires_in":300,"scope":"openid email"})
         if path == "/control": return self._reply(200, {"controlled":True,"sha256":digest})
-        if path == "/notify": return self._reply(202, {"success":True,"captured":True,"sha256":digest})
         return self._reply(202, {"accepted":True,"sha256":digest})
     def log_message(self, *_): pass
 

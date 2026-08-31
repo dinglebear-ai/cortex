@@ -109,6 +109,9 @@ fn qualification_contract_is_versioned_deterministic_and_unique() {
             entry
                 .required_cases
                 .contains(&RequiredCaseKind::SemanticPositive)
+                || entry
+                    .required_cases
+                    .contains(&RequiredCaseKind::ExecutedRefusalSemantic)
         );
         assert!(
             entry
@@ -132,6 +135,62 @@ fn qualification_contract_is_versioned_deterministic_and_unique() {
             );
         }
     }
+}
+
+#[test]
+fn ingest_surfaces_have_executable_profile_owners() {
+    let exported = contract::contract();
+    let ingest: Vec<_> = exported
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == "ingest")
+        .collect();
+    assert!(!ingest.is_empty());
+    assert!(ingest.iter().all(|entry| !entry.profiles.is_empty()));
+    assert_eq!(
+        ingest
+            .iter()
+            .find(|entry| entry.spelling == "agent-docker")
+            .unwrap()
+            .profiles,
+        ["agent"]
+    );
+    assert_eq!(
+        ingest
+            .iter()
+            .find(|entry| entry.spelling == "POST /token")
+            .unwrap()
+            .profiles,
+        ["auth"]
+    );
+    assert_eq!(
+        ingest
+            .iter()
+            .find(|entry| entry.spelling == "POST /v1/logs")
+            .unwrap()
+            .profiles,
+        ["isolated"]
+    );
+    assert_eq!(
+        ingest
+            .iter()
+            .find(|entry| entry.spelling == "GET /app")
+            .unwrap()
+            .profiles,
+        ["security"]
+    );
+}
+
+#[test]
+fn every_surface_has_one_aggregate_owner() {
+    let exported = contract::contract();
+    assert!(
+        exported
+            .entries
+            .iter()
+            .all(|entry| entry.profiles.len() == 1),
+        "aggregate ownership must be unambiguous"
+    );
 }
 
 #[test]
@@ -225,7 +284,7 @@ fn metadata_distinguishes_read_mutating_platform_and_cleanup_classes() {
         MutationClass::Destructive
     );
     assert!(get("cli.compose-up").platforms.contains(&Platform::Unix));
-    assert!(get("rest.get-api-search").profiles.contains(&"smoke"));
+    assert!(get("rest.get-api-search").profiles.contains(&"full"));
     assert_eq!(
         get("ingest.post-v1-logs").cleanup,
         Some("purge-or-discard-run-owned-ingest-store")

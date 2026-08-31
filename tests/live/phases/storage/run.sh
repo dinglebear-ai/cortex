@@ -17,10 +17,15 @@ live_wait_until 60 storage-maintenance-health _live_http_health_ready
 
 record() {
   local surface="$1" case_kind="$2" result="$3" evidence="$4"
-  if jq -e --arg id "$surface" --arg case "$case_kind" 'any(.entries[]; .id==$id and (.required_cases|index($case)))' "$LIVE_SURFACE_CONTRACT" >/dev/null; then
+  if jq -e --arg id "$surface" --arg case "$case_kind" --arg profile "${LIVE_PROFILE:?}" \
+    'any(.entries[]; .id==$id and (.required_cases|index($case)) and (.profiles|index($profile)))' "$LIVE_SURFACE_CONTRACT" >/dev/null &&
+    ! jq -e -n --arg id "$surface" --arg case "$case_kind" \
+      'any(inputs; .kind=="result" and .payload.surface_id==$id and .payload.case_kind==$case and .payload.attempt_kind=="first_attempt")' \
+      "$LIVE_RUN_ROOT/events.jsonl" >/dev/null; then
     live_result "$surface" storage-maintenance "$result" 0 "$evidence" "$case_kind"
   else
     live_event storage_extra_check "$(jq -cn --arg surface "$surface" --arg case "$case_kind" --arg result "$result" --arg evidence "$evidence" '{surface_id:$surface,case_kind:$case,result:$result,evidence:$evidence}')"
+    [[ "$result" == pass ]] || live_die "storage extra check failed: $surface/$case_kind"
   fi
 }
 artifact() { printf '%s\n' "$2" >"$LIVE_RUN_ROOT/artifacts/storage/$1"; chmod 600 "$LIVE_RUN_ROOT/artifacts/storage/$1"; }
@@ -34,13 +39,29 @@ api() {
 cli() {
   docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex --http --server http://127.0.0.1:3100 "$@" </dev/null
 }
+cli_semantic_oracle() {
+  local surface="$1" evidence="$2"
+  case "$surface" in
+    cli.db-status) jq -e '.journal_mode=="wal" and (.page_size|type=="number") and (.logical_size_bytes|type=="number")' "$evidence" >/dev/null;;
+    cli.db-integrity) jq -e '.ok==true and (.messages|type=="array")' "$evidence" >/dev/null;;
+    cli.db-checkpoint) jq -e '.mode=="passive" and (.checkpointed_frames|type=="number") and (.log_frames|type=="number")' "$evidence" >/dev/null;;
+    cli.db-vacuum) jq -e '.full==false and .incremental_pages==32 and (.after_physical_size_bytes|type=="number")' "$evidence" >/dev/null;;
+    cli.db-backup) jq -e '.backup_path=="/data/live-storage-backup.db" and (.size_bytes|type=="number" and .>0)' "$evidence" >/dev/null;;
+    *) return 2;;
+  esac
+}
 
 # CLI: every DB maintenance command, an invalid invocation, and an HTTP auth denial.
 while IFS='|' read -r surface command; do
-  read -r -a argv <<<"$command"; out="artifacts/storage/${surface}.json"
-  if cli "${argv[@]}" >"$LIVE_RUN_ROOT/$out" 2>&1; then record "$surface" semantic-positive pass "$out"; else record "$surface" semantic-positive fail "$out"; fi
+  read -r -a argv <<<"$command"; out="artifacts/storage/${surface}.json"; semantic_err="artifacts/storage/${surface}.stderr"
+  if cli "${argv[@]}" >"$LIVE_RUN_ROOT/$out" 2>"$LIVE_RUN_ROOT/$semantic_err" && cli_semantic_oracle "$surface" "$LIVE_RUN_ROOT/$out"; then record "$surface" semantic-positive pass "$out"; else record "$surface" semantic-positive fail "$out"; fi
   bad="artifacts/storage/${surface}.invalid.txt"
-  if ! cli "${argv[0]}" "${argv[1]}" --definitely-invalid >"$LIVE_RUN_ROOT/$bad" 2>&1; then record "$surface" validation-negative pass "$bad"; else record "$surface" validation-negative fail "$bad"; fi
+  if ! cli "${argv[0]}" "${argv[1]}" --definitely-invalid >"$LIVE_RUN_ROOT/$bad" 2>&1 &&
+    grep -Eqi 'unexpected argument|unknown argument|invalid|usage:' "$LIVE_RUN_ROOT/$bad"; then
+    record "$surface" validation-negative pass "$bad"
+  else
+    record "$surface" validation-negative fail "$bad"
+  fi
   auth="artifacts/storage/${surface}.auth.txt"
   if ! docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error -e CORTEX_API_TOKEN= candidate cortex --http --server http://127.0.0.1:3100 "${argv[@]}" </dev/null >"$LIVE_RUN_ROOT/$auth" 2>&1; then record "$surface" authorization pass "$auth"; else record "$surface" authorization fail "$auth"; fi
 done <<'COMMANDS'
@@ -57,16 +78,36 @@ if docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=e
   job="$(jq -r '.job_id // .id // empty' "$LIVE_RUN_ROOT/$start")"
 else job=""; fi
 status_ev="artifacts/storage/cli.db-integrity-status.json"
-if [[ "$job" =~ ^[1-9][0-9]*$ ]] && docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex --http --server http://127.0.0.1:3100 db integrity status "$job" --json </dev/null >"$LIVE_RUN_ROOT/$status_ev" 2>&1; then result=pass; else result=fail; fi
+if [[ "$job" =~ ^[1-9][0-9]*$ ]] && docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex --http --server http://127.0.0.1:3100 db integrity status "$job" --json </dev/null >"$LIVE_RUN_ROOT/$status_ev" 2>&1 &&
+  jq -e --argjson job "$job" '.job_id==$job and (.status|IN("running","done","failed")) and .kind=="db_integrity"' "$LIVE_RUN_ROOT/$status_ev" >/dev/null; then result=pass; else result=fail; fi
 record cli.db-integrity-status semantic-positive "$result" "$status_ev"
-for kind in validation-negative authorization; do cp "$LIVE_RUN_ROOT/$start" "$LIVE_RUN_ROOT/artifacts/storage/cli.db-integrity-status.$kind.txt"; record cli.db-integrity-status "$kind" pass "artifacts/storage/cli.db-integrity-status.$kind.txt"; done
+status_invalid="artifacts/storage/cli.db-integrity-status.invalid.txt"
+if ! cli db integrity status not-a-number --json >"$LIVE_RUN_ROOT/$status_invalid" 2>&1 &&
+  grep -Eqi 'invalid|number|digit|value|argument' "$LIVE_RUN_ROOT/$status_invalid"; then
+  result=pass
+else
+  result=fail
+fi
+record cli.db-integrity-status validation-negative "$result" "$status_invalid"
+
+# Local-only CLI entries do not require an authorization case in the compiled
+# contract. Still exercise the HTTP-backed status command without credentials,
+# but retain it as an extra check rather than manufacturing canonical coverage.
+status_auth="artifacts/storage/cli.db-integrity-status.auth.txt"
+if ! docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error -e CORTEX_API_TOKEN= candidate \
+  cortex --http --server http://127.0.0.1:3100 db integrity status "$job" --json </dev/null >"$LIVE_RUN_ROOT/$status_auth" 2>&1; then
+  result=pass
+else
+  result=fail
+fi
+record cli.db-integrity-status authorization "$result" "$status_auth"
 
 # REST read, mutation, background job, negative validation, and missing-admin cases.
 rest_case() {
   local surface="$1" method="$2" path="$3" body="$4" admin="$5" okcodes="$6" invalid_path="$7"
   local ev="artifacts/storage/${surface}.json" code
   code="$(api "$method" "$path" "$admin" "$body" "$LIVE_RUN_ROOT/$ev")"
-  if [[ " $okcodes " == *" $code "* ]]; then result=pass; else result=fail; fi; record "$surface" semantic-positive "$result" "$ev"
+  if [[ " $okcodes " == *" $code "* ]] && rest_semantic_oracle "$surface" "$LIVE_RUN_ROOT/$ev"; then result=pass; else result=fail; fi; record "$surface" semantic-positive "$result" "$ev"
   local neg="artifacts/storage/${surface}.invalid.json" ncode
   ncode="$(api "$method" "$invalid_path" "$admin" '{"mode":"INVALID","full":"wrong"}' "$LIVE_RUN_ROOT/$neg")"
   if [[ "$ncode" =~ ^4 ]]; then result=pass; else result=fail; fi; record "$surface" validation-negative "$result" "$neg"
@@ -78,6 +119,19 @@ rest_case() {
   fi
   if [[ "$acode" =~ ^(401|403)$ ]]; then result=pass; else result=fail; fi
   record "$surface" authorization "$result" "$auth"
+}
+rest_semantic_oracle() {
+  local surface="$1" evidence="$2"
+  case "$surface" in
+    rest.get-api-db-status) jq -e '.journal_mode=="wal" and (.page_size|type=="number") and (.db_path|type=="string")' "$evidence" >/dev/null;;
+    rest.get-api-db-integrity) jq -e '.ok==true and (.messages|type=="array")' "$evidence" >/dev/null;;
+    rest.post-api-db-checkpoint) jq -e '.mode=="passive" and (.checkpointed_frames|type=="number") and (.complete|type=="boolean")' "$evidence" >/dev/null;;
+    rest.post-api-db-vacuum) jq -e '.full==false and .incremental_pages==32 and (.after_physical_size_bytes|type=="number")' "$evidence" >/dev/null;;
+    rest.post-api-db-backup) jq -e '.backup_path=="/data/live-rest-backup.db" and (.size_bytes|type=="number" and .>0)' "$evidence" >/dev/null;;
+    rest.post-api-db-integrity-background) jq -e '(.job_id|type=="number" and .>0) and .status=="running"' "$evidence" >/dev/null;;
+    rest.get-api-db-integrity-jobs-id) jq -e '(.job_id|type=="number" and .>0) and .kind=="db_integrity" and (.status|IN("running","done","failed"))' "$evidence" >/dev/null;;
+    *) return 2;;
+  esac
 }
 rest_case rest.get-api-db-status GET /api/db/status '' '' '200' /api/db/status/invalid
 rest_case rest.get-api-db-integrity GET /api/db/integrity?quick=true '' '' '200' /api/db/integrity?bogus=1
@@ -113,7 +167,12 @@ live_event storage_failure_injection "$(jq -cn '{scenario:"interrupted-checkpoin
 markers="$LIVE_RUN_ROOT/artifacts/storage/committed-markers.txt"; : >"$markers"
 for index in 1 2 3 4 5; do
   marker="backup-${LIVE_RUN_ID#cortex-e2e-}-$index"; printf '%s\n' "$marker" >>"$markers"
-  printf '<134>1 %s cortex-live backup-writer - - - %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$marker" | nc -u -w 1 127.0.0.1 "$LIVE_SYSLOG_UDP_PORT"
+  # A transaction barrier cannot be established from fire-and-forget UDP:
+  # packet delivery is not guaranteed during the preceding container churn.
+  # TCP completion proves the receiver accepted each marker; the query below
+  # then proves the final batch was committed before backup starts.
+  printf '<134>1 %s cortex-live backup-writer - - - %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$marker" | nc -w 5 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
+  live_connection_opened 1
 done
 barrier="backup-${LIVE_RUN_ID#cortex-e2e-}-5"; live_wait_until 30 backup-commit-barrier _live_ingest_ready "$barrier"
 backup_started="$(date +%s)"

@@ -35,6 +35,7 @@ pub enum MutationClass {
 #[serde(rename_all = "kebab-case")]
 pub enum RequiredCaseKind {
     SemanticPositive,
+    ExecutedRefusalSemantic,
     ValidationNegative,
     Authorization,
 }

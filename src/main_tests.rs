@@ -965,6 +965,20 @@ fn parse_setup_command_accepts_main_modes_and_rejects_bad_args() {
 }
 
 #[test]
+fn setup_install_rejects_unknown_options_before_side_effects() {
+    let error =
+        super::parse_setup_command(&["install".into(), "--cortex-live-invalid-option".into()])
+            .unwrap_err();
+    assert!(error.to_string().contains("unknown setup install argument"));
+}
+
+#[test]
+fn update_rejects_unknown_options_before_dispatch() {
+    let error = super::parse_update_command(&["--cortex-live-invalid-option".into()]).unwrap_err();
+    assert!(error.to_string().contains("unknown update scope"));
+}
+
+#[test]
 fn parse_deploy_command_covers_modes_and_rejects_contextual_flags() {
     let preflight = super::parse_deploy_command(&["preflight".into(), "--json".into()]).unwrap();
     assert!(matches!(

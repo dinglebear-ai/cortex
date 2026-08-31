@@ -8,6 +8,11 @@ passes=0
 ok() { "$@"; passes=$((passes+1)); }
 reject() { if "$@" >/dev/null 2>&1; then echo "expected rejection: $*" >&2; exit 1; else passes=$((passes+1)); fi; }
 
+lock_mutant="$tmp/callback-failure"
+reject live_with_lock "$lock_mutant" false
+[[ ! -e "$lock_mutant.lock" ]] || { echo 'failing callback stranded lock' >&2; exit 1; }
+ok live_with_lock "$lock_mutant" true
+
 live_init_run "$tmp/runs" >/dev/null
 contract="$LIVE_RUN_ROOT/surface-contract.json"
 printf '%s\n' '{"version":1,"entries":[{"id":"selftest.foundation","kind":"selftest","profiles":["smoke"],"required_cases":["semantic-positive","validation-negative","authorization"]}]}' >"$contract"
@@ -196,11 +201,17 @@ grep -q 'trap live_runner_cleanup HUP INT TERM EXIT' "$ROOT/tests/live/runner.sh
 
 # The explicit no-op profile succeeds concurrently without weakening smoke.
 noop_runs="$tmp/noop-runs"
-bash "$ROOT/tests/live/runner.sh" --profile noop --runs-root "$noop_runs" >"$tmp/noop-1.out" 2>"$tmp/noop-1.err" & noop_one=$!
-LIVE_LEGACY_RUNNER="$ROOT/tests/live/selftest/legacy-success.sh" bash "$ROOT/tests/live/runner.sh" --profile noop --runs-root "$noop_runs" --legacy >"$tmp/noop-2.out" 2>"$tmp/noop-2.err" & noop_two=$!
+env -u LIVE_RUN_ID -u LIVE_RUN_ROOT -u LIVE_SURFACE_CONTRACT \
+  bash "$ROOT/tests/live/runner.sh" --profile noop --runs-root "$noop_runs" >"$tmp/noop-1.out" 2>"$tmp/noop-1.err" & noop_one=$!
+env -u LIVE_RUN_ID -u LIVE_RUN_ROOT -u LIVE_SURFACE_CONTRACT \
+  LIVE_LEGACY_RUNNER="$ROOT/tests/live/selftest/legacy-success.sh" \
+  bash "$ROOT/tests/live/runner.sh" --profile noop --runs-root "$noop_runs" --legacy >"$tmp/noop-2.out" 2>"$tmp/noop-2.err" & noop_two=$!
 wait "$noop_one"; wait "$noop_two"
 [[ "$(find "$noop_runs" -mindepth 1 -maxdepth 1 -type d -name 'cortex-e2e-*' | wc -l | tr -d ' ')" == 2 ]]
 legacy_events="$(find "$noop_runs" -name events.jsonl -type f -exec grep -l 'legacy_result' {} \;)"
 [[ -n "$legacy_events" ]] && jq -e 'select(.kind=="legacy_result" and .payload.schema=="cortex-live-legacy-result-v1" and .payload.isolated_from_capability_ledger==true and .payload.result=="pass")' "$legacy_events" >/dev/null
+
+bash "$ROOT/tests/live/phases/artifacts/selftest.sh"
+bash "$ROOT/tests/live/lib/aggregate-selftest.sh"
 
 printf 'live foundation self-tests: %d passed\n' "$passes"

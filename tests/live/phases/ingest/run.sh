@@ -368,6 +368,9 @@ live_ingest_matrix_run() {
   live_ingest_file_tail
   live_ingest_inventory_cli
   live_ingest_legacy_docker
+  status="$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/file-tail-unauth.json" -X POST -H 'Content-Type: application/json' --data-binary '{"op":"list"}' "$(live_ingest_http /api/file-tails)")"
+  [[ "$status" == 401 ]]
+  live_ingest_surface_results
   jq -s --slurpfile contract "$LIVE_PROJECT_ROOT/tests/live/contracts/ingest-cases.json" '
     ([.[]|select(.kind=="ingest_case" and .payload.result=="pass")|.payload.case]|unique) as $passed |
     ($contract[0].required-$passed) as $missing |
@@ -376,4 +379,86 @@ live_ingest_matrix_run() {
   jq -cn --arg run_id "$LIVE_RUN_ID" --slurpfile matrix "$LIVE_PROJECT_ROOT/tests/live/fixtures/ingest/matrix.json" '{schema:"cortex-live-ingest-result-v1",run_id:$run_id,matrix:$matrix[0],disposition:"pass",direct_db_seeding:false}' >"$LIVE_RUN_ROOT/artifacts/ingest-matrix.json"
   chmod 600 "$LIVE_RUN_ROOT/artifacts/ingest-matrix.json"
   live_event phase_finished '{"phase":"ingest","disposition":"pass"}'
+}
+
+live_ingest_surface_results() {
+  local id case_kind evidence
+  while IFS=$'\t' read -r id case_kind; do
+    case "$id/$case_kind" in
+      ingest.syslog-udp/semantic-positive) evidence=artifacts/ingest-syslog-udp-rfc5424-2-rest.json ;;
+      ingest.syslog-udp/validation-negative) evidence=artifacts/syslog-oversize-query.json ;;
+      ingest.syslog-tcp/semantic-positive) evidence=artifacts/ingest-syslog-tcp-rfc5424-4-rest.json ;;
+      ingest.syslog-tcp/validation-negative) evidence=artifacts/ingest-syslog-tcp-framing-5-rest.json ;;
+      ingest.file-tail/semantic-positive) evidence=artifacts/ingest-file-tail-checkpoint-34-rest.json ;;
+      ingest.file-tail/validation-negative) evidence=artifacts/file-tail-traversal.stdout ;;
+      ingest.file-tail/authorization) evidence=artifacts/file-tail-unauth.json ;;
+      ingest.post-v1-heartbeats/semantic-positive) evidence=artifacts/ingest-heartbeat-post.json ;;
+      ingest.post-v1-heartbeats/validation-negative) evidence=artifacts/ingest-heartbeat-malformed.json ;;
+      ingest.post-v1-heartbeats/authorization) evidence=artifacts/ingest-heartbeat-unauth.json ;;
+      ingest.post-v1-agent-commands/semantic-positive) evidence=artifacts/ingest-agent-command-post.json ;;
+      ingest.post-v1-agent-commands/validation-negative) evidence=artifacts/ingest-agent-command-malformed.json ;;
+      ingest.post-v1-agent-commands/authorization) evidence=artifacts/ingest-agent-command-unauth.json ;;
+      ingest.post-v1-shell-history/semantic-positive) evidence=artifacts/ingest-shell-history-post.json ;;
+      ingest.post-v1-shell-history/validation-negative) evidence=artifacts/ingest-shell-history-malformed.json ;;
+      ingest.post-v1-shell-history/authorization) evidence=artifacts/ingest-shell-history-unauth.json ;;
+      ingest.post-v1-ai-transcripts/semantic-positive) evidence=artifacts/ingest-ai-transcript-post.json ;;
+      ingest.post-v1-ai-transcripts/validation-negative) evidence=artifacts/ingest-ai-transcript-malformed.json ;;
+      ingest.post-v1-ai-transcripts/authorization) evidence=artifacts/ingest-ai-transcript-unauth.json ;;
+      ingest.post-v1-logs/semantic-positive) evidence=artifacts/otlp-logs-response.pb ;;
+      ingest.post-v1-logs/validation-negative) evidence=artifacts/otlp-logs-malformed.json ;;
+      ingest.post-v1-logs/authorization) evidence=artifacts/otlp-logs-unauth.json ;;
+      ingest.post-v1-metrics/semantic-positive) evidence=artifacts/otlp-metrics-response.pb ;;
+      ingest.post-v1-metrics/validation-negative) evidence=artifacts/otlp-metrics-malformed.json ;;
+      ingest.post-v1-metrics/authorization) evidence=artifacts/otlp-metrics-unauth.json ;;
+      ingest.post-v1-traces/semantic-positive) evidence=artifacts/otlp-traces-response.pb ;;
+      ingest.post-v1-traces/validation-negative) evidence=artifacts/otlp-traces-malformed.json ;;
+      ingest.post-v1-traces/authorization) evidence=artifacts/otlp-traces-unauth.json ;;
+      *) live_ingest_direct_surface_case "$id" "$case_kind"; continue ;;
+    esac
+    [[ -f "$LIVE_RUN_ROOT/$evidence" ]]
+    live_result "$id" "isolated-$case_kind" pass 0 "$evidence" "$case_kind"
+  done < <(jq -r '.entries[]|select(.profiles|index("isolated")) as $e|$e.required_cases[]|[$e.id,.]|@tsv' "$LIVE_SURFACE_CONTRACT")
+}
+
+live_ingest_direct_surface_case() {
+  local id="$1" case_kind="$2" method path status body=''
+  local evidence="artifacts/${id}.${case_kind}.json"
+  read -r method path < <(jq -r --arg id "$id" '.entries[]|select(.id==$id)|.spelling' "$LIVE_SURFACE_CONTRACT")
+  if [[ "$case_kind" == validation-negative ]]; then
+    [[ "$method" == GET ]] && method=POST || { method=GET; body=''; }
+  elif [[ "$id" == ingest.post-mcp ]]; then
+    body='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"live-isolated","version":"1"}}}'
+  fi
+  if [[ "$case_kind" == semantic-positive && "$id" == ingest.get-v1-agent-binary ]]; then
+    path="$path?os=linux&arch=x86_64"
+  elif [[ "$case_kind" == semantic-positive && "$id" == ingest.get-v1-agent-release ]]; then
+    local candidate version
+    candidate="$(live_ingest_candidate_id)"; version="$(docker exec "$candidate" cortex --version | awk '{print $2}')"
+    path="$path?os=windows&arch=x86_64&version=$version&kind=checksum"
+  fi
+  local headers=(-H 'Host: localhost')
+  [[ "$case_kind" == authorization ]] || headers+=(-H "Authorization: Bearer $LIVE_CORTEX_TOKEN")
+  if [[ "$method" == POST ]]; then headers+=(-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'); fi
+  local request=(-sS --max-time 10 -o "$LIVE_RUN_ROOT/$evidence.body" -w '%{http_code}' -X "$method" "${headers[@]}")
+  if [[ "$case_kind" == semantic-positive && "$id" == ingest.get-v1-agent-binary ]]; then
+    request=(-sS --max-time 30 -D "$LIVE_RUN_ROOT/$evidence.headers" -o /dev/null -w '%{http_code}' -X GET "${headers[@]}")
+  fi
+  [[ -z "$body" ]] || request+=(--data-binary "$body")
+  status="$(curl "${request[@]}" "$(live_ingest_http "$path")")"
+  case "$case_kind" in
+    authorization) if [[ "$status" != 401 && "$status" != 403 ]]; then live_die "$id authorization request returned $status"; return 1; fi ;;
+    validation-negative) if [[ "$status" != 404 && "$status" != 405 ]]; then live_die "$id wrong method returned $status"; return 1; fi ;;
+    semantic-positive)
+      case "$id" in
+        ingest.post-mcp) [[ "$status" == 200 ]] && jq -e '.result.protocolVersion and .result.serverInfo.name=="cortex"' "$LIVE_RUN_ROOT/$evidence.body" >/dev/null || { live_die "MCP initialize semantic probe failed"; return 1; } ;;
+        ingest.get-v1-agent-binary) [[ "$status" == 200 ]] && grep -Eqi '^x-cortex-(version|sha256):' "$LIVE_RUN_ROOT/$evidence.headers" || { live_die "agent binary semantic probe failed"; return 1; } ;;
+        ingest.get-v1-agent-release) [[ "$status" == 502 ]] && jq -e '.error=="release_artifact_unavailable"' "$LIVE_RUN_ROOT/$evidence.body" >/dev/null || { live_die "release isolated-egress refusal semantic failed"; return 1; } ;;
+        *) if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then live_die "$id semantic request returned $status"; return 1; fi ;;
+      esac ;;
+  esac
+  local response_bytes=0
+  [[ ! -f "$LIVE_RUN_ROOT/$evidence.body" ]] || response_bytes="$(wc -c <"$LIVE_RUN_ROOT/$evidence.body" | tr -d ' ')"
+  jq -n --arg surface "$id" --arg method "$method" --arg path "$path" --arg case_kind "$case_kind" --argjson status "$status" --argjson response_bytes "$response_bytes" '{surface_id:$surface,method:$method,path:$path,case_kind:$case_kind,status:$status,response_bytes:$response_bytes}' >"$LIVE_RUN_ROOT/$evidence"
+  rm -f "$LIVE_RUN_ROOT/$evidence.body" "$LIVE_RUN_ROOT/$evidence.headers"
+  live_result "$id" "isolated-direct-$case_kind" pass 0 "$evidence" "$case_kind"
 }

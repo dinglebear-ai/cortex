@@ -196,6 +196,11 @@ jobs:
         # matches the previous `cargo test` invocation.
         run: cargo test --doc --locked
 
+      - name: Run live harness security and aggregate mutants
+        run: |
+          bash tests/live/phases/artifacts/selftest.sh
+          bash tests/live/lib/aggregate-selftest.sh
+
   docs-contract:
     name: Docs Contract
     runs-on: ci-pool-ops
@@ -223,6 +228,7 @@ jobs:
         # drift in README and current operator docs without running the full suite.
         run: |
           env -u CORTEX_API_TOKEN -u NO_AUTH cargo test --lib --locked docs_tests::
+          bash tests/live/selftest/ci-docs.sh
 
   coverage:
     name: Coverage
@@ -280,7 +286,7 @@ jobs:
         run: cargo deny --all-features check
 
   mcp-integration:
-    name: MCP Integration Tests
+    name: Live PR Smoke
     runs-on: ci-pool-system
     timeout-minutes: 30
     needs: [changes, test]
@@ -294,11 +300,39 @@ jobs:
         run: |
           set -euo pipefail
           docker info >/dev/null
+          docker compose version >/dev/null
 
-      - name: Run integration tests
+      - name: Sweep expired exact-identity leases
         env:
-          CORTEX_TOKEN: ci-integration-token
-        run: bash tests/test_live.sh
+          LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+
+      - name: Run fail-closed live smoke
+        env:
+          LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+        run: bash tests/live/run-profile.sh smoke
+
+      - name: Reconcile leases after success, failure, or cancellation
+        if: always()
+        env:
+          LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+
+      - name: Sanitize live artifacts
+        if: always()
+        run: bash scripts/ci/prepare-live-artifacts.sh .live-runs live-upload
+
+      - name: Upload live ledger and JUnit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-smoke-${{ github.run_id }}
+          path: live-upload
+          if-no-files-found: error
 
   deployment-contract:
     name: Container and Deployment Contracts

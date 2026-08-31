@@ -7,21 +7,27 @@ source "$root/tests/live/lib/common.sh"; source "$root/tests/live/lib/lock.sh"; 
 mkdir -p "$LIVE_RUN_ROOT/artifacts/storage"
 state="$(docker volume ls -q --filter "label=com.docker.compose.project=$LIVE_COMPOSE_PROJECT" --filter label=cortex.live.kind=state)"
 fixture="$LIVE_RUN_ROOT/artifacts/storage/db-size-fixture.syslog"
+candidate="$(docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"
 
 # Refill above the 4 MiB trigger, then hold an external SQLite write lock across
 # a cleanup tick. The failure must be visible and the following tick recover.
 nc -w 30 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT" <"$fixture"; live_connection_opened 1
+# nc only proves the socket accepted the bytes. Wait until the batch writer has
+# committed enough data to cross the configured 4 MiB enforcement threshold;
+# otherwise the external lock can precede the write and cleanup correctly has
+# no over-budget work to fail.
+_cleanup_pressure_ready() { docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json 2>/dev/null | jq -e '.logical_size_bytes>5242880' >/dev/null; }
+live_wait_until 60 cleanup-pressure-ready _cleanup_pressure_ready
 lock_ev="$LIVE_RUN_ROOT/artifacts/storage/cleanup-lock.txt"
 docker run --rm --user 0:0 -v "$state:/data" --entrypoint python "$LIVE_ORACLE_IMAGE" -c '
 import sqlite3,time
-db=sqlite3.connect("/data/cortex.db",timeout=30); db.execute("BEGIN EXCLUSIVE"); print("LOCKED",flush=True); time.sleep(15); db.rollback(); db.close()
+db=sqlite3.connect("/data/cortex.db",timeout=30); db.execute("BEGIN EXCLUSIVE"); print("LOCKED",flush=True); time.sleep(30); db.rollback(); db.close()
 ' >"$lock_ev" 2>&1 & locker=$!
 live_wait_until 10 cleanup-lock-acquired grep -q LOCKED "$lock_ev"
 # SQLite connections use a five-second busy timeout and cleanup ticks every five
-# seconds. A 15-second hold therefore guarantees that even a just-missed tick
-# reaches its busy timeout while the external lock is still owned.
-sleep 11; wait "$locker"
-candidate="$(docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"
+# seconds. A synchronized 30-second hold guarantees the next tick reaches its
+# busy timeout while the external lock is still owned, even under CI jitter.
+sleep 26; wait "$locker"
 docker logs "$candidate" 2>&1 | grep -F 'Failed to enforce storage budget' >"$LIVE_RUN_ROOT/artifacts/storage/cleanup-failure.log" || live_die "cleanup failure was not observed"
 _cleanup_recovered() { docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json 2>/dev/null | jq -e '.logical_size_bytes<=2097152' >/dev/null; }
 live_wait_until 120 cleanup-failure-recovery _cleanup_recovered
@@ -34,7 +40,11 @@ _cleanup_started() { docker logs "$candidate" 2>&1 | grep -F 'self-trimming olde
 live_wait_until 30 cleanup-started _cleanup_started
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" restart candidate >/dev/null
 live_wait_until 60 cleanup-restart-health _live_http_health_ready
-live_wait_until 120 cleanup-restart-recovery _cleanup_recovered
+# Replacing the process restarts a one-row-per-chunk cleanup profile from its
+# durable DB state. Loaded Docker Desktop runners can require several minutes;
+# keep the bounded wait inside the profile wall budget without weakening the
+# exact <=2 MiB recovery oracle.
+live_wait_until 300 cleanup-restart-recovery _cleanup_recovered
 _live_ingest_ready "$marker" || live_die "newest committed marker lost across interrupted cleanup"
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db integrity --quick --json >"$LIVE_RUN_ROOT/artifacts/storage/cleanup-recovery-integrity.json"
 jq -cn '{schema:"cortex-live-cleanup-faults-v1",cleanup_failure_observed:true,failure_recovered:true,cleanup_interrupted_by_restart:true,restart_recovered:true,newest_marker_preserved:true,integrity_ok:true}' >"$LIVE_RUN_ROOT/artifacts/storage/cleanup-faults.json"

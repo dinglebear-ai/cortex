@@ -20,7 +20,6 @@ use axum::{
     extract::{ConnectInfo, Extension, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, post},
 };
 use lab_auth::AuthContext;
 use serde::{Deserialize, Serialize};
@@ -49,6 +48,7 @@ use crate::app::{
 use crate::artifact_evidence::{ArtifactEvidenceInput, MAX_EVIDENCE_WIRE_BYTES};
 use crate::config::{ApiConfig, NotificationsConfig};
 use crate::mcp::{AuthPolicy, build_auth_layer};
+use crate::surfaces::{get, post};
 
 mod investigation;
 

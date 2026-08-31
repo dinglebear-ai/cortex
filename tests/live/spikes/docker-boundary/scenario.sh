@@ -116,11 +116,11 @@ register_exact full-network network "$network_id" network-identified
 register_exact full-volume volume "$volume_id" volume-identified
 register_exact full-daemon container "$daemon_outer" daemon-identified
 register_exact full-proxy container "$proxy_outer" proxy-identified
-control_port="$(docker compose -p "$project" -f "$compose" port daemon 2375 | awk -F: '{print $NF}')"
 proxy_port="$(docker compose -p "$project" -f "$compose" port proxy 2375 | awk -F: '{print $NF}')"
-control="tcp://127.0.0.1:$control_port"; proxy="http://127.0.0.1:$proxy_port"
+proxy="http://127.0.0.1:$proxy_port"
+inner_docker() { docker exec "$daemon_outer" docker "$@"; }
 daemon_id=""
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do daemon_id="$(DOCKER_HOST="$control" docker info --format '{{.ID}}' 2>/dev/null || true)"; [[ -n "$daemon_id" ]] && break; sleep 1; done
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do daemon_id="$(inner_docker info --format '{{.ID}}' 2>/dev/null || true)"; [[ -n "$daemon_id" ]] && break; sleep 1; done
 [[ -n "$daemon_id" ]]
 CORTEX_LIVE_DOCKER_PROXY_URL="$proxy" bash "$here/probe.sh" "$LIVE_RUN_ROOT/full-proxy.json"
 # Verify actual outage and recovery without changing the daemon identity.
@@ -133,35 +133,35 @@ CORTEX_LIVE_DOCKER_PROXY_URL="$proxy" bash "$here/probe.sh" "$LIVE_RUN_ROOT/full
 
 # Preserve the topology's external-egress denial: preload via the control stream.
 docker image inspect alpine:3.23 >/dev/null 2>&1 || docker pull alpine:3.23 >/dev/null
-docker image save alpine:3.23 | DOCKER_HOST="$control" docker load >/dev/null
+docker image save alpine:3.23 | docker exec -i "$daemon_outer" docker load >/dev/null
 # A bind of the inner daemon's root must not reveal a marker from the outer host.
 host_marker="$LIVE_RUN_ROOT/host-secret-$LIVE_RUN_ID"; : >"$host_marker"
-DOCKER_HOST="$control" docker run --rm --network none --mount type=bind,src=/,dst=/host alpine:3.23 \
+inner_docker run --rm --network none --mount type=bind,src=/,dst=/host alpine:3.23 \
   test ! -e "/host$host_marker"
-workload="$(DOCKER_HOST="$control" docker create --network none --label "cortex.live.run_id=$LIVE_RUN_ID" alpine:3.23 sh -c 'echo cortex-stdout; echo cortex-stderr >&2')"
-DOCKER_HOST="$control" docker start -a "$workload" >"$LIVE_RUN_ROOT/workload.stdout" 2>"$LIVE_RUN_ROOT/workload.stderr"
+workload="$(inner_docker create --network none --label "cortex.live.run_id=$LIVE_RUN_ID" alpine:3.23 sh -c 'echo cortex-stdout; echo cortex-stderr >&2')"
+inner_docker start -a "$workload" >"$LIVE_RUN_ROOT/workload.stdout" 2>"$LIVE_RUN_ROOT/workload.stderr"
 grep -qx cortex-stdout "$LIVE_RUN_ROOT/workload.stdout"; grep -qx cortex-stderr "$LIVE_RUN_ROOT/workload.stderr"
 curl -fsS --max-time 5 "$proxy/containers/$workload/logs?stdout=1&stderr=1&tail=10" >"$LIVE_RUN_ROOT/proxy-workload.logs"
 grep -a -q cortex-stdout "$LIVE_RUN_ROOT/proxy-workload.logs"; grep -a -q cortex-stderr "$LIVE_RUN_ROOT/proxy-workload.logs"
 now="$(date +%s)"; curl -fsS --max-time 5 "$proxy/events?since=$started&until=$now&filters=%7B%22container%22%3A%5B%22$workload%22%5D%7D" >"$LIVE_RUN_ROOT/proxy-events.jsonl"
 event_count="$(wc -l <"$LIVE_RUN_ROOT/proxy-events.jsonl" | tr -d ' ')"
 (( event_count > 0 ))
-health="$(DOCKER_HOST="$control" docker create --network none --health-cmd false --health-interval 100ms --health-retries 1 alpine:3.23 sleep 5)"
-DOCKER_HOST="$control" docker start "$health" >/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do [[ "$(DOCKER_HOST="$control" docker inspect -f '{{.State.Health.Status}}' "$health")" == unhealthy ]] && break; sleep 0.2; done
-[[ "$(DOCKER_HOST="$control" docker inspect -f '{{.State.Health.Status}}' "$health")" == unhealthy ]]
+health="$(inner_docker create --network none --health-cmd false --health-interval 100ms --health-retries 1 alpine:3.23 sleep 5)"
+inner_docker start "$health" >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ "$(inner_docker inspect -f '{{.State.Health.Status}}' "$health")" == unhealthy ]] && break; sleep 0.2; done
+[[ "$(inner_docker inspect -f '{{.State.Health.Status}}' "$health")" == unhealthy ]]
 curl -fsS --max-time 5 "$proxy/containers/$health/json" | jq -e '.State.Health.Status == "unhealthy"' >/dev/null
-oom="$(DOCKER_HOST="$control" docker create --network none --memory 16m alpine:3.23 awk 'BEGIN{s="x";while(length(s)<67108864)s=s s}')"
-DOCKER_HOST="$control" docker start -a "$oom" >/dev/null 2>&1 || true
-[[ "$(DOCKER_HOST="$control" docker inspect -f '{{.State.OOMKilled}}' "$oom")" == true ]]
+oom="$(inner_docker create --network none --memory 16m alpine:3.23 awk 'BEGIN{s="x";while(length(s)<67108864)s=s s}')"
+inner_docker start -a "$oom" >/dev/null 2>&1 || true
+[[ "$(inner_docker inspect -f '{{.State.OOMKilled}}' "$oom")" == true ]]
 # Network-none must reject egress without relying on external DNS availability.
-egress="$(DOCKER_HOST="$control" docker run --rm --network none alpine:3.23 sh -c 'ip route | grep -q default'; printf '%s' "$?")" || true
+egress="$(inner_docker run --rm --network none alpine:3.23 sh -c 'ip route | grep -q default'; printf '%s' "$?")" || true
 [[ "${egress:-1}" != 0 ]]
 before="$daemon_id"; docker compose -p "$project" -f "$compose" restart daemon >/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do after="$(DOCKER_HOST="$control" docker info --format '{{.ID}}' 2>/dev/null || true)"; [[ -n "$after" ]] && break; sleep 1; done
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do after="$(inner_docker info --format '{{.ID}}' 2>/dev/null || true)"; [[ -n "$after" ]] && break; sleep 1; done
 [[ "$before" == "$after" ]]
-DOCKER_HOST="$control" docker rm -f "$workload" "$health" "$oom" >/dev/null
-bash "$here/verify-docker-id.sh" "$workload" "$control"
+inner_docker rm -f "$workload" "$health" "$oom" >/dev/null
+! inner_docker inspect "$workload" >/dev/null 2>&1
 # Killing the inner daemon must not broaden cleanup; outer exact run-owned IDs remain removable.
 docker compose -p "$project" -f "$compose" kill daemon >/dev/null
 live_cleanup_resources "$LIVE_RESOURCE_PROVIDER" 30

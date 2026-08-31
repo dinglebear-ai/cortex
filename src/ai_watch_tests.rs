@@ -222,7 +222,7 @@ fn remove_event_drops_pending_file_and_requests_checkpoint_prune() {
     );
 
     assert!(new_dirs.is_empty());
-    assert!(!pending.files.contains_key(&path));
+    assert!(pending.files.is_empty());
     assert!(!overflow_rescan.load(std::sync::atomic::Ordering::Relaxed));
     assert!(prune_missing.load(std::sync::atomic::Ordering::Relaxed));
 }

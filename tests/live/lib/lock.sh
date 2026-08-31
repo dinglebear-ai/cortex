@@ -7,8 +7,8 @@ live_with_lock() {
     (( waited++ < 500 )) || { printf 'lock timeout: %s\n' "$target" >&2; return 124; }
     sleep 0.01
   done
-  "$@"
-  local status=$?
-  rmdir "$lock"
+  local status=0
+  "$@" || status=$?
+  rmdir "$lock" || return 125
   return "$status"
 }

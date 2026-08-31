@@ -1,0 +1,8 @@
+#!/bin/sh
+# Isolated remote-host double. Never opens a socket. Provide only the managed
+# agent credential probe required by update planning; mutations acknowledge
+# success inside the disposable model.
+case "$*" in
+  *heartbeat-agent.env*) printf '%s\n' 'CORTEX_HEARTBEAT_TOKEN=cortex-live-heartbeat-token' ;;
+esac
+exit 0

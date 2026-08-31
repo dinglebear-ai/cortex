@@ -1,8 +1,13 @@
 use super::*;
 
-const CORE_PROFILES: &[&str] = &["smoke", "full"];
+const CORE_PROFILES: &[&str] = &["full"];
 const FULL_PROFILE: &[&str] = &["full"];
-const STORAGE_PROFILE: &[&str] = &["full", "storage"];
+const STORAGE_PROFILE: &[&str] = &["storage"];
+const INGEST_PROFILE: &[&str] = &["isolated"];
+const AUTH_PROFILE: &[&str] = &["auth"];
+const AGENT_PROFILE: &[&str] = &["agent"];
+const SECURITY_PROFILE: &[&str] = &["security"];
+const MCP_PROFILE: &[&str] = &["mcp"];
 const UNIX_PLATFORMS: &[Platform] = &[Platform::Unix, Platform::Linux];
 const ANY_PLATFORM: &[Platform] = &[Platform::Any];
 
@@ -52,19 +57,73 @@ where
     router
 }
 
+/// A method router whose mounted verbs are carried alongside the Axum value.
+///
+/// This prevents a textual `"GET /path"` contract from being paired with a
+/// `post(handler)` router. Callers can only obtain this value through the
+/// verb-specific constructors below.
+pub struct ContractMethodRouter<S, E = std::convert::Infallible> {
+    methods: Vec<HttpMethod>,
+    inner: axum::routing::MethodRouter<S, E>,
+}
+
+pub fn get<H, T, S>(handler: H) -> ContractMethodRouter<S>
+where
+    H: axum::handler::Handler<T, S>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    ContractMethodRouter {
+        methods: vec![HttpMethod::Get],
+        inner: axum::routing::get(handler),
+    }
+}
+
+pub fn post<H, T, S>(handler: H) -> ContractMethodRouter<S>
+where
+    H: axum::handler::Handler<T, S>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    ContractMethodRouter {
+        methods: vec![HttpMethod::Post],
+        inner: axum::routing::post(handler),
+    }
+}
+
+impl<S> ContractMethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    pub fn post<H, T>(mut self, handler: H) -> Self
+    where
+        H: axum::handler::Handler<T, S>,
+        T: 'static,
+    {
+        self.methods.push(HttpMethod::Post);
+        self.inner = self.inner.post(handler);
+        self
+    }
+
+    pub fn request_body_limit(self, limit: usize) -> Self {
+        ContractMethodRouter {
+            methods: self.methods,
+            inner: self
+                .inner
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(limit)),
+        }
+    }
+}
+
 /// Axum extension that makes route construction consume a contracted
 /// method/path. Unlike a post-hoc inventory, adding a mounted route through
 /// this API cannot omit registration.
 pub trait ContractRouterExt<S> {
-    fn contract_route(
-        self,
-        binding: &'static str,
-        method_router: axum::routing::MethodRouter<S>,
-    ) -> Self;
+    fn contract_route(self, binding: &'static str, method_router: ContractMethodRouter<S>) -> Self;
     fn contract_routes(
         self,
         bindings: &'static [&'static str],
-        method_router: axum::routing::MethodRouter<S>,
+        method_router: ContractMethodRouter<S>,
     ) -> Self;
 }
 
@@ -72,18 +131,20 @@ impl<S> ContractRouterExt<S> for axum::Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    fn contract_route(
-        self,
-        binding: &'static str,
-        method_router: axum::routing::MethodRouter<S>,
-    ) -> Self {
-        self.route(contract_path(binding), method_router)
+    fn contract_route(self, binding: &'static str, method_router: ContractMethodRouter<S>) -> Self {
+        let (method, _) = parse_binding(binding);
+        assert_eq!(
+            method_router.methods,
+            [method],
+            "contracted route method mismatch"
+        );
+        self.route(contract_path(binding), method_router.inner)
     }
 
     fn contract_routes(
         self,
         bindings: &'static [&'static str],
-        method_router: axum::routing::MethodRouter<S>,
+        method_router: ContractMethodRouter<S>,
     ) -> Self {
         assert_mounted_routes(bindings);
         let (_, path) = bindings[0]
@@ -93,8 +154,30 @@ where
             bindings.iter().all(|binding| binding.ends_with(path)),
             "combined methods must share a path"
         );
-        self.route(path, method_router)
+        let mut expected = bindings
+            .iter()
+            .map(|binding| parse_binding(binding).0)
+            .collect::<Vec<_>>();
+        expected.sort();
+        expected.dedup();
+        let mut mounted = method_router.methods;
+        mounted.sort();
+        mounted.dedup();
+        assert_eq!(mounted, expected, "contracted route methods mismatch");
+        self.route(path, method_router.inner)
     }
+}
+
+fn parse_binding(binding: &'static str) -> (HttpMethod, &'static str) {
+    let (method, path) = binding
+        .split_once(' ')
+        .expect("contract route must be METHOD /path");
+    let method = match method {
+        "GET" => HttpMethod::Get,
+        "POST" => HttpMethod::Post,
+        _ => panic!("unsupported contracted HTTP method {method}"),
+    };
+    (method, path)
 }
 
 fn access_name(access: SurfaceAccess) -> &'static str {
@@ -113,6 +196,14 @@ fn required_cases(access: SurfaceAccess) -> Vec<RequiredCaseKind> {
     ];
     if matches!(access, SurfaceAccess::Read | SurfaceAccess::Admin) {
         cases.push(RequiredCaseKind::Authorization);
+    }
+    cases
+}
+
+fn required_cases_for(spelling: &str, access: SurfaceAccess) -> Vec<RequiredCaseKind> {
+    let mut cases = required_cases(access);
+    if spelling == "GET /auth/google/callback" {
+        cases[0] = RequiredCaseKind::ExecutedRefusalSemantic;
     }
     cases
 }
@@ -152,6 +243,33 @@ fn cli_mutation(path: &str) -> MutationClass {
         return MutationClass::AppendOnly;
     }
     MutationClass::Operational
+}
+
+fn cli_access(path: &str, inherited: SurfaceAccess) -> SurfaceAccess {
+    if matches!(
+        path,
+        "analysis incident"
+            | "graph rebuild"
+            | "graph status"
+            | "sessions add"
+            | "sessions assess"
+            | "sessions doctor"
+            | "sessions hooksbackfill"
+            | "sessions index"
+            | "sessions mcpassess"
+            | "sessions skillassess"
+            | "sessions smokewatch"
+            | "sessions watch"
+            | "sessions watchstatus"
+    ) || path.starts_with("ingest inventory")
+        || path.starts_with("ingest shell")
+        || path.starts_with("ingest syslog")
+        || path.starts_with("ingest docker")
+    {
+        SurfaceAccess::LocalOnly
+    } else {
+        inherited
+    }
 }
 
 fn mcp_mutation(action: &str) -> MutationClass {
@@ -202,8 +320,39 @@ fn profiles_for(kind: &str, spelling: &str, mutation: MutationClass) -> &'static
     if spelling.contains("/db/") || spelling.starts_with("db ") {
         return STORAGE_PROFILE;
     }
+    if kind == "mcp" {
+        return MCP_PROFILE;
+    }
     if kind == "cli" || mutation == MutationClass::Destructive {
         return FULL_PROFILE;
+    }
+    if kind == "ingest" {
+        if spelling == "agent-docker" {
+            return AGENT_PROFILE;
+        }
+        if matches!(
+            spelling,
+            "GET /.well-known/oauth-authorization-server"
+                | "GET /.well-known/oauth-protected-resource"
+                | "GET /mcp/.well-known/oauth-authorization-server"
+                | "GET /mcp/.well-known/oauth-protected-resource"
+                | "GET /mcp/.well-known/openid-configuration"
+                | "GET /auth/login"
+                | "GET /auth/google/callback"
+                | "GET /authorize"
+                | "GET /jwks"
+                | "POST /register"
+                | "POST /token"
+        ) {
+            return AUTH_PROFILE;
+        }
+        if matches!(
+            spelling,
+            "GET /app" | "GET /app/{*path}" | "GET /app/assets/{*path}" | "GET /app/investigate"
+        ) {
+            return SECURITY_PROFILE;
+        }
+        return INGEST_PROFILE;
     }
     CORE_PROFILES
 }
@@ -247,6 +396,7 @@ fn entry(
     let cleanup = cleanup_for(&spelling, mutation);
     let profiles = profiles_for(kind, &spelling, mutation);
     let platforms = platforms_for(kind, &spelling);
+    let required_cases = required_cases_for(&spelling, access);
     SurfaceContractEntry {
         scenario_id: None,
         id,
@@ -259,7 +409,7 @@ fn entry(
         profiles,
         platforms,
         parity_group: matches!(kind, "cli" | "mcp" | "rest").then(|| format!("capability.{token}")),
-        required_cases: required_cases(access),
+        required_cases,
         allowed_dispositions: &[ProfileDisposition::PendingScenario],
         cleanup,
     }
@@ -297,9 +447,11 @@ pub fn contract() -> SurfaceContractExport {
     for (parent, children) in CLI_CHILDREN {
         for child in *children {
             let path = format!("{parent} {child}");
-            let access = find(SurfaceKind::Cli, parent)
+            let root = path.split_whitespace().next().unwrap_or(parent);
+            let inherited_access = find(SurfaceKind::Cli, root)
                 .map(|spec| spec.access)
                 .unwrap_or(SurfaceAccess::LocalOnly);
+            let access = cli_access(&path, inherited_access);
             entries.push(entry(
                 "cli",
                 path.clone(),

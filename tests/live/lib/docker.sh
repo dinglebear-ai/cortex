@@ -126,8 +126,7 @@ live_platform_disposition() {
   local os="${1:-$(uname -s)}" disposition reason
   case "$os" in
     Linux)
-      if [[ "${CORTEX_LIVE_DIND_AUTHORIZED:-0}" == 1 ]]; then disposition=pass; reason=linux-dind-authorized
-      else disposition=not-authorized; reason=linux-dind-requires-explicit-authorization; fi;;
+      disposition=not-applicable; reason=owned-by-agent-full-boundary;;
     Darwin|MINGW*|MSYS*)
       if [[ -n "${CORTEX_LIVE_DOCKER_PROXY_URL:-}" ]]; then disposition=platform-qualified; reason=desktop-read-only-proxy
       else disposition=not-authorized; reason=desktop-proxy-not-configured; fi;;
@@ -140,8 +139,8 @@ live_platform_disposition() {
 live_topology_dispositions() {
   local project="$1" volume quota disposition
   volume="$(docker volume ls -q --filter "label=com.docker.compose.project=$project" --filter label=cortex.live.kind=pressure)"
-  quota="$(docker volume inspect "$volume" | jq -r '.[0].Options.size // .[0].Options.device // empty')"
-  if [[ -n "$quota" ]]; then disposition=pass; else disposition=platform-qualified; fi
+  quota="$(docker volume inspect "$volume" | jq -r '.[0].Options.size // .[0].Options.o // empty')"
+  if [[ "$quota" == *size=* || "$quota" =~ ^[0-9]+[kKmMgG]?$ ]]; then disposition=pass; else disposition=platform-qualified; fi
   jq -cn --arg disposition "$disposition" --arg quota "$quota" \
     '{schema:"cortex-live-pressure-disposition-v1",disposition:$disposition,quota_evidence:(if $quota=="" then null else $quota end),green:($disposition=="pass")}' >"$LIVE_RUN_ROOT/pressure-disposition.json"
   live_platform_disposition >"$LIVE_RUN_ROOT/docker-agent-disposition.json"
@@ -217,7 +216,12 @@ live_topology_start() {
     return 2
   fi
   live_topology_register "$project" "$provider" "$compose_file" "$digest"
-  if ! docker compose -f "$compose_file" -p "$project" up -d --no-build --wait --wait-timeout 90; then
+  local -a compose_args=(-f "$compose_file")
+  if [[ "${LIVE_PLATFORM_POLICY:-}" == linux-full ]]; then
+    [[ "${CORTEX_LIVE_DIND_AUTHORIZED:-0}" == 1 ]] || { live_die 'linux-full topology requires CORTEX_LIVE_DIND_AUTHORIZED=1'; return 1; }
+    compose_args+=(-f "$LIVE_PROJECT_ROOT/tests/live/profiles/linux-full/compose.yaml")
+  fi
+  if ! docker compose "${compose_args[@]}" -p "$project" up -d --no-build --wait --wait-timeout 90; then
     live_diagnostics_once "$compose_file" "$project" compose-up-failed
     return 1
   fi

@@ -138,6 +138,7 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
             .ingested,
         1
     );
+    let canonical_missing_file = missing_file.canonicalize().unwrap();
     std::fs::remove_file(&missing_file).unwrap();
     let canonical_missing_file = missing_file
         .parent()
