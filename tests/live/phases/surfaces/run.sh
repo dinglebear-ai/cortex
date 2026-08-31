@@ -75,7 +75,7 @@ printf '%s\n' \
   '    pull_policy: never' \
   '    container_name: cortex' \
   '    command: ["cortex", "serve", "mcp"]' \
-  "    environment: [\"CORTEX_HOST=127.0.0.1\", \"CORTEX_API_TOKEN=$LIVE_API_TOKEN\", \"CORTEX_TOKEN=$LIVE_CORTEX_TOKEN\", \"CORTEX_DB_PATH=/data/cortex.db\", \"CORTEX_VOLUME_NAME=${LIVE_COMPOSE_PROJECT}-surface-cli_cortex-data\"]" \
+  "    environment: [\"CORTEX_HOST=127.0.0.1\", \"CORTEX_API_TOKEN=$LIVE_API_TOKEN\", \"CORTEX_API_ADMIN_TOKEN=$LIVE_ADMIN_TOKEN\", \"CORTEX_TOKEN=$LIVE_CORTEX_TOKEN\", \"CORTEX_CURSOR_SIGNING_KEY=$LIVE_CURSOR_SIGNING_KEY\", \"CORTEX_SERVER_ID=$LIVE_SERVER_INSTANCE_ID\", \"CORTEX_DB_PATH=/data/cortex.db\", \"CORTEX_VOLUME_NAME=${LIVE_COMPOSE_PROJECT}-surface-cli_cortex-data\"]" \
   "    volumes: [\"$LIVE_RUN_HOME/.cortex/data:/data\"]" \
   '    ports: ["127.0.0.1::1514/tcp", "127.0.0.1::1514/udp", "127.0.0.1::3100/tcp"]' \
   "    labels: [\"cortex.live.run_id=$LIVE_RUN_ID\"]" \

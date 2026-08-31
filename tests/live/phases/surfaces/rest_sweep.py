@@ -16,7 +16,8 @@ from pathlib import Path
 def request(base: str, method: str, path: str, token: str | None, admin: str | None,
             body: dict | None = None) -> tuple[int, bytes, dict[str, str]]:
     data = None if body is None else json.dumps(body, separators=(",", ":")).encode()
-    headers = {"Host": "localhost", "Accept": "application/json"}
+    is_stream = path.startswith("/api/streams/")
+    headers = {"Host": "localhost", "Accept": "text/event-stream" if is_stream else "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if admin:
@@ -31,7 +32,8 @@ def request(base: str, method: str, path: str, token: str | None, admin: str | N
     # Evidence is deliberately capped. Endpoint pagination semantics are
     # asserted independently; an unexpectedly large body is represented by
     # its bounded prefix rather than persisted wholesale.
-    payload = response.read(65536)
+    payload = response.readline(65536) if is_stream and response.status == 200 else response.read(65536)
+    response.close()
     return response.status, payload, {k.lower(): v for k, v in response.headers.items()}
 
 
@@ -52,6 +54,9 @@ QUERY = {
     "/api/v1/graph/evidence": {"evidence_id": "1"},
     "/api/sessions/search": {"query": '"cortex-live"', "limit": "5"},
     "/api/sessions/context": {"project": "cortex-live", "limit": "5"},
+    "/api/sessions/rendered": {"project": "cortex-live", "limit": "5"},
+    "/api/streams/logs": {},
+    "/api/streams/sessions": {},
     "/api/sessions/investigate": {"terms": "cortex-live", "limit": "1"},
     "/api/sessions/skill-investigate": {"skill": "cortex-live", "limit": "1"},
     "/api/sessions/mcp-investigate": {"mcp_server": "cortex-live", "limit": "1"},
@@ -120,6 +125,8 @@ def evidence(status: int, body: bytes, headers: dict[str, str]) -> dict:
 # explicit reviewable contract change. Requiring every documented top-level
 # field also catches accidentally routed/generic JSON responses.
 CONTRACTS = {
+    "GET /api/capabilities": ("object", "contract_version logs sessions"),
+    "GET /api/integration-profile": ("object", "api_version auth contract_version product product_version route_support server_id streams"),
     "GET /api/anomalies": ("object", "baseline_from baseline_minutes baseline_to hosts recent_from recent_minutes recent_to"),
     "GET /api/apps": ("object", "apps total"),
     "GET /api/artifact-evidence": ("object", "events truncated"),
@@ -167,6 +174,7 @@ CONTRACTS = {
     "GET /api/sessions/mcp-incidents": ("object", "candidate_cap candidate_event_rows candidate_window_truncated incidents total_incidents truncated"),
     "GET /api/sessions/mcp-investigate": ("object", "evidence no_data no_incident_low_severity_summary other_matching_incidents suggested_filters total_incidents truncated"),
     "GET /api/sessions/projects": ("object", "projects total_projects truncated"),
+    "GET /api/sessions/rendered": ("object", "events has_more next_cursor poll_after_ms"),
     "GET /api/sessions/search": ("object", "candidate_cap candidate_rows candidate_window_truncated sessions total_candidates truncated"),
     "GET /api/sessions/skill-incidents": ("object", "candidate_cap candidate_event_rows candidate_window_truncated incidents total_incidents truncated"),
     "GET /api/sessions/skill-investigate": ("object", "evidence no_data no_incident_low_severity_summary other_matching_incidents suggested_filters total_incidents truncated"),
@@ -176,6 +184,8 @@ CONTRACTS = {
     "GET /api/similar-incidents": ("object", "clusters query total_clusters truncated"),
     "GET /api/source-ips": ("object", "source_ips total"),
     "GET /api/stats": ("object", "agent_docker_gate_blocked_count free_disk_mb logical_db_size_mb max_db_size_mb min_free_disk_mb newest_log oldest_log phantom_fts_rows physical_db_size_mb total_hosts total_logs write_blocked"),
+    "GET /api/streams/logs": (None, ""),
+    "GET /api/streams/sessions": (None, ""),
     "GET /api/tail": ("object", "count logs"),
     "GET /api/timeline": ("object", "bucket group_by points rollup_as_of"),
     "GET /api/v1/graph/around": ("object", "metadata result"),
@@ -184,6 +194,7 @@ CONTRACTS = {
     "GET /api/v1/graph/explain": ("object", "metadata result"),
     "GET /api/v1/investigation/version": ("object", "schema_version ui_version"),
     "GET /api/version": ("object", "capabilities compose_container compose_project compose_service database_fingerprint deployment_id fleet_allowlist instance_id schema_version version"),
+    "GET /v1/integration/identity": ("object", "api_version auth contract_version product product_version route_support server_id streams"),
     "POST /api/artifact-evidence": ("object", "cortexLogId event inserted"),
     "POST /api/db/backup": ("object", "backup_path db_path size_bytes"),
     "POST /api/db/checkpoint": ("object", "busy checkpointed_frames complete log_frames mode"),
