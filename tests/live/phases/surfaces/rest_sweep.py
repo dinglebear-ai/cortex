@@ -6,10 +6,11 @@ import hashlib
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -54,7 +55,7 @@ QUERY = {
     "/api/v1/graph/evidence": {"evidence_id": "1"},
     "/api/sessions/search": {"query": '"cortex-live"', "limit": "5"},
     "/api/sessions/context": {"project": "cortex-live", "limit": "5"},
-    "/api/sessions/rendered": {"project": "cortex-live", "limit": "5"},
+    "/api/sessions/rendered": {},
     "/api/streams/logs": {},
     "/api/streams/sessions": {},
     "/api/sessions/investigate": {"terms": "cortex-live", "limit": "1"},
@@ -262,6 +263,37 @@ def main() -> int:
     admin_token = os.environ["LIVE_ADMIN_TOKEN"]
     fixture_host = os.environ["MCP_LIVE_HOST"]
     fixture_signature = os.environ["MCP_LIVE_SIGNATURE"]
+    fixture_session = os.environ["MCP_LIVE_SESSION"]
+    identity = None
+    for _ in range(20):
+        session_path = "/api/sessions?" + urllib.parse.urlencode({
+            "since": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            "limit": "100",
+        })
+        session_status, session_payload, _ = request(
+            base, "GET", session_path, read_token, None
+        )
+        try:
+            sessions = json.loads(session_payload)["sessions"] if session_status == 200 else []
+            identity = next(
+                item for item in sessions if item["session_id"] == fixture_session
+            )
+            break
+        except (KeyError, TypeError, StopIteration, json.JSONDecodeError):
+            time.sleep(0.25)
+    try:
+        if identity is None:
+            raise RuntimeError("run-owned session identity was not discoverable")
+        session_query = {
+            "project": identity["project"],
+            "tool": identity["tool"],
+            "session_id": identity["session_id"],
+            "host": identity["hostname"],
+        }
+    except (KeyError, TypeError) as error:
+        raise RuntimeError("run-owned session identity was not discoverable") from error
+    QUERY["/api/sessions/rendered"] = {**session_query, "limit": "5"}
+    QUERY["/api/streams/sessions"] = session_query
     for graph_path in ("/api/graph/entity", "/api/graph/around", "/api/graph/explain",
                        "/api/v1/graph/entity", "/api/v1/graph/around", "/api/v1/graph/explain"):
         QUERY[graph_path]["key"] = fixture_host

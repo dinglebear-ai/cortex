@@ -3,6 +3,7 @@
 # agent credential probe required by update planning; mutations acknowledge
 # success inside the disposable model.
 case "$*" in
+  *"id -u"*) printf '%s\n' '/tmp/cortex-live-remote' '1000' '1000' ;;
   *heartbeat-agent.env*) printf '%s\n' 'CORTEX_HEARTBEAT_TOKEN=cortex-live-heartbeat-token' ;;
 esac
 exit 0

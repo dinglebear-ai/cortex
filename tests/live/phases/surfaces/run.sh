@@ -52,6 +52,7 @@ printf '[mcp]\nport = 3100\n' >"$LIVE_RUN_TMP/cli-config.toml"; chmod 600 "$LIVE
 compose_cli_dir="$LIVE_RUN_HOME/.cortex/compose" compose_cli_bin="$LIVE_RUN_TMP/compose-bin" setup_cli_bin="$LIVE_RUN_TMP/setup-bin"
 mkdir -p "$compose_cli_dir" "$compose_cli_bin" "$setup_cli_bin"
 mkdir -p "$LIVE_RUN_HOME/.cortex/data"
+mkdir -p "$LIVE_RUN_HOME/.cortex/backups"
 ln -s "$LIVE_CLI_FIXTURE_BIN/docker-real-wrapper" "$compose_cli_bin/docker"
 ln -s "$LIVE_CLI_FIXTURE_BIN/timeout" "$compose_cli_bin/timeout"
 ln -s "$LIVE_CLI_FIXTURE_BIN/systemctl" "$compose_cli_bin/systemctl"
@@ -76,7 +77,7 @@ printf '%s\n' \
   '    container_name: cortex' \
   '    command: ["cortex", "serve", "mcp"]' \
   "    environment: [\"CORTEX_HOST=127.0.0.1\", \"CORTEX_API_TOKEN=$LIVE_API_TOKEN\", \"CORTEX_API_ADMIN_TOKEN=$LIVE_ADMIN_TOKEN\", \"CORTEX_TOKEN=$LIVE_CORTEX_TOKEN\", \"CORTEX_CURSOR_SIGNING_KEY=$LIVE_CURSOR_SIGNING_KEY\", \"CORTEX_SERVER_ID=$LIVE_SERVER_INSTANCE_ID\", \"CORTEX_DB_PATH=/data/cortex.db\", \"CORTEX_VOLUME_NAME=${LIVE_COMPOSE_PROJECT}-surface-cli_cortex-data\"]" \
-  "    volumes: [\"$LIVE_RUN_HOME/.cortex/data:/data\"]" \
+  "    volumes: [\"$LIVE_RUN_HOME/.cortex/data:/data\", \"$LIVE_RUN_HOME/.cortex/backups:/backups\"]" \
   '    ports: ["127.0.0.1::1514/tcp", "127.0.0.1::1514/udp", "127.0.0.1::3100/tcp"]' \
   "    labels: [\"cortex.live.run_id=$LIVE_RUN_ID\"]" \
   >"$compose_cli_dir/compose.yaml"

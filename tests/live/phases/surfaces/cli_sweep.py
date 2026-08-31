@@ -86,6 +86,8 @@ def run_long_lived(binary: str, spelling: str) -> dict:
            "TMPDIR": os.environ["LIVE_RUN_TMP"], "CORTEX_URL": os.environ["LIVE_CORTEX_URL"],
            "CORTEX_API_TOKEN": os.environ["LIVE_API_TOKEN"], "CORTEX_API_ADMIN_TOKEN": os.environ["LIVE_ADMIN_TOKEN"],
            "CORTEX_TOKEN": os.environ["LIVE_CORTEX_TOKEN"],
+           "CORTEX_CURSOR_SIGNING_KEY": os.environ["LIVE_CURSOR_SIGNING_KEY"],
+           "CORTEX_SERVER_ID": os.environ["LIVE_SERVER_INSTANCE_ID"],
            "CORTEX_DB_PATH": os.path.join(os.environ["LIVE_RUN_TMP"], f"cli-daemon-{command_key}.db"),
            "CORTEX_PORT": str(port), "CORTEX_RECEIVER_PORT": str(port + 1000), "NO_COLOR": "1"}
     if spelling == "sessions smokewatch":
@@ -280,7 +282,8 @@ def semantic_args(entry: dict, is_parent: bool) -> tuple[list[str], str, bool]:
             return ["--json"], "sandboxed-setup", True
         if spelling == "setup deploy preflight": return ["--json"], "sandboxed-refusal", True
         if spelling == "setup deploy local": return ["--dry-run", "--json"], "sandboxed-dry-run", True
-        if spelling == "setup deploy remote": return ["cortex-live.invalid", "--dry-run", "--json"], "sandboxed-refusal", True
+        if spelling == "setup deploy remote":
+            return ["cortex-live.invalid", "--home", "/tmp/cortex-live-remote", "--dry-run", "--json"], "sandboxed-refusal", True
         if spelling == "setup deploy agent": return ["--hosts", "cortex-live.invalid", "--json"], "sandboxed-refusal", True
         if spelling == "setup pluginhook": return ["--no-repair", "--json"], "sandboxed-refusal", True
     # Remaining operational leaves are deliberately executed against the
@@ -409,4 +412,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as error:
+        output = Path(sys.argv[3]) if len(sys.argv) > 3 else None
+        if output is not None:
+            output.write_text(json.dumps({
+                "schema": "cortex-live-cli-contract-sweep-v1",
+                "fatal_error": f"{type(error).__name__}: {error}",
+            }, indent=2) + "\n")
+            os.chmod(output, 0o600)
+        raise
