@@ -40,11 +40,21 @@ cleanup_images() {
   local status=$? cleanup_status=0 reconcile_status=0 state
   trap - EXIT INT TERM
   reconcile_image() {
-    local key="$1" ref="$2" externally_supplied="$3"
+    local key="$1" ref="$2" externally_supplied="$3" cleanup verify labels
     [[ -z "$externally_supplied" ]] || return 0
     state="$(jq -rs --arg key "$key" '[.[]|select(.key==$key)]|last.state // ""' "$(live_resource_file)" 2>/dev/null || true)"
-    if [[ "$state" == CREATING ]] && docker image inspect "$ref" >/dev/null 2>&1; then
-      identify_owned_image "$key" "$ref"
+    if [[ "$state" == CREATING ]]; then
+      if docker image inspect "$ref" >/dev/null 2>&1; then
+        identify_owned_image "$key" "$ref"
+      else
+        # The exact, run-unique tag is the creation intent. Its authoritative
+        # absence proves a failed build left no image, so reconcile the intent
+        # to a verifiable no-op instead of demanding manual cleanup.
+        cleanup="$(jq -cn --arg ref "$ref" '["sh","-c","if docker image inspect \"$1\" >/dev/null 2>&1; then docker image rm -f \"$1\"; fi","sh",$ref]')"
+        verify="$(jq -cn --arg ref "$ref" '["sh","-c","! docker image inspect \"$1\" >/dev/null 2>&1","sh",$ref]')"
+        labels="$(jq -cn --arg ref "$ref" '{image_ref:$ref,creation_outcome:"absent"}')"
+        live_resource_transition "$key" image IDENTIFIED "$provider" "$ref" "$cleanup" "$ref" "$labels" "$verify"
+      fi
     fi
   }
   reconcile_image candidate-image "$candidate" "${LIVE_CANDIDATE_IMAGE_REF:-}" || reconcile_status=$?

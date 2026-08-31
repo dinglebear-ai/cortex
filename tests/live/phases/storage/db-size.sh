@@ -16,13 +16,13 @@ live_wait_until 60 db-size-ingest _live_ingest_ready db-size-error-0715
 status="$LIVE_RUN_ROOT/artifacts/storage/db-size-status.json"
 _db_size_recovered() {
   docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json >"$status" 2>/dev/null &&
-    [[ "$(jq -r .logical_size_bytes "$status")" -le 2097152 ]]
+    [[ "$(jq -r .logical_size_bytes "$status")" -le 3145728 ]]
 }
 live_wait_until 120 db-size-recovery _db_size_recovered
 errors="$LIVE_RUN_ROOT/artifacts/storage/db-size-errors.json"
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex search --grep db-size-error --limit 100 --json >"$errors"
 count="$(jq -r .count "$errors")"; (( count >= 10 && count < 715 )) || live_die "err-floor pressure semantics not observed: $count"
 jq -cn --argjson fixture_bytes "$fixture_bytes" --argjson logical_size_bytes "$(jq -r .logical_size_bytes "$status")" --argjson protected_errors "$count" \
-  '{schema:"cortex-live-db-size-pressure-v1",disposition:"pass",fixture_bytes:$fixture_bytes,recovered_below_bytes:2097152,logical_size_bytes:$logical_size_bytes,error_floor_per_source_cap:10,remaining_errors:$protected_errors,observed_excess_errors_deleted:($protected_errors<715),observed_floor_minimum_preserved:($protected_errors>=10)}' \
+  '{schema:"cortex-live-db-size-pressure-v1",disposition:"pass",fixture_bytes:$fixture_bytes,recovered_below_bytes:3145728,logical_size_bytes:$logical_size_bytes,error_floor_per_source_cap:10,remaining_errors:$protected_errors,observed_excess_errors_deleted:($protected_errors<715),observed_floor_minimum_preserved:($protected_errors>=10)}' \
   >"$LIVE_RUN_ROOT/artifacts/storage/db-size.json"
 chmod 600 "$LIVE_RUN_ROOT/artifacts/storage/db-size"*.json

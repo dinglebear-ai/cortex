@@ -94,14 +94,12 @@ EOF
   # resolution while the distinct verified host remains available to `graph`.
   printf '<14>1 %s %s cortex-topic - - - topic-%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$MCP_LIVE_TOPIC_HOST" "${LIVE_RUN_ID#cortex-e2e-}" | nc -w 2 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
   docker exec "$candidate" cortex graph rebuild --json >"$dir/seed-graph-rebuild.json"
-  set +e
   docker exec "$candidate" cortex compose status --json >"$dir/seed-compose-status.json" 2>"$dir/seed-compose-status.stderr"
-  compose_status=$?
-  set -e
-  (( compose_status != 0 ))
-  [[ -s "$dir/seed-compose-status.stderr" ]]
-  jq -cn --argjson exit "$compose_status" --arg stderr_sha "$(live_sha256 "$dir/seed-compose-status.stderr")" \
-    '{operation:"cortex compose status",expected:"container-boundary-refusal",exit:$exit,stderr_sha256:$stderr_sha,result:"observed"}' >"$dir/seed-compose-status-outcome.json"
+  jq -e --arg project "$LIVE_COMPOSE_PROJECT" \
+    '.status=="running" and .health=="healthy" and .compose_project==$project and .service=="candidate" and (.ports|length)==3 and (.diagnostics|length)==0' \
+    "$dir/seed-compose-status.json" >/dev/null
+  jq -cn --arg stdout_sha "$(live_sha256 "$dir/seed-compose-status.json")" \
+    '{operation:"cortex compose status",expected:"deterministic-read-only-boundary",exit:0,stdout_sha256:$stdout_sha,result:"observed"}' >"$dir/seed-compose-status-outcome.json"
   response="$dir/seed-unaddressed.json"
   for i in $(seq 1 20); do
     mcp_http "$LIVE_CORTEX_TOKEN" '{"jsonrpc":"2.0","id":700,"method":"tools/call","params":{"name":"cortex","arguments":{"action":"unaddressed_errors","limit":100}}}' "$response"

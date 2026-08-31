@@ -33,6 +33,7 @@ if [[ -z "$binary" ]]; then
 fi
 if [[ ! -x "$binary" ]]; then cargo build --quiet --bin cortex; fi
 [[ -x "$binary" ]] || { live_die "compiled Cortex binary missing: $binary"; exit 1; }
+live_event phase_progress '{"phase":"surfaces","stage":"binary-ready"}'
 export LIVE_RUN_HOME="$LIVE_RUN_ROOT/home" LIVE_RUN_TMP="$LIVE_RUN_ROOT/tmp" LIVE_CORTEX_URL="http://127.0.0.1:$LIVE_HTTP_PORT"
 export LIVE_CLI_FIXTURE_BIN="$LIVE_PROJECT_ROOT/tests/live/fixtures/surfaces/bin"
 LIVE_CLI_PATH="$LIVE_CLI_FIXTURE_BIN:$(dirname "$binary"):/usr/bin:/bin:/usr/sbin:/sbin"
@@ -43,6 +44,8 @@ if [[ -z "$LIVE_DOCKER_COMPOSE_BIN" ]]; then
 fi
 LIVE_CANDIDATE_ID="$(live_ingest_candidate_id)"
 export LIVE_CLI_PATH LIVE_DOCKER_BIN LIVE_DOCKER_COMPOSE_BIN LIVE_CANDIDATE_ID
+[[ -n "$LIVE_CANDIDATE_ID" ]] || { live_die "surfaces candidate container was not discoverable"; exit 1; }
+live_event phase_progress '{"phase":"surfaces","stage":"candidate-ready"}'
 mkdir -p "$LIVE_RUN_HOME" "$LIVE_RUN_TMP"; chmod 700 "$LIVE_RUN_HOME" "$LIVE_RUN_TMP"
 mkdir -p "$LIVE_RUN_TMP/bin"
 cp "$binary" "$LIVE_RUN_TMP/bin/cortex"
@@ -58,6 +61,7 @@ compose_cli_dir="$LIVE_RUN_HOME/.cortex/compose" compose_cli_bin="$LIVE_RUN_TMP/
 mkdir -p "$compose_cli_dir" "$compose_cli_bin" "$setup_cli_bin"
 mkdir -p "$LIVE_RUN_HOME/.cortex/data"
 mkdir -p "$LIVE_RUN_HOME/.cortex/backups"
+chmod 0777 "$LIVE_RUN_HOME/.cortex/data" "$LIVE_RUN_HOME/.cortex/backups"
 ln -s "$LIVE_CLI_FIXTURE_BIN/docker-real-wrapper" "$compose_cli_bin/docker"
 ln -s "$LIVE_CLI_FIXTURE_BIN/timeout" "$compose_cli_bin/timeout"
 ln -s "$LIVE_CLI_FIXTURE_BIN/systemctl" "$compose_cli_bin/systemctl"
@@ -88,9 +92,11 @@ printf '%s\n' \
   >"$compose_cli_dir/compose.yaml"
 chmod 600 "$compose_cli_dir/compose.yaml"
 export COMPOSE_PROJECT_NAME="${LIVE_COMPOSE_PROJECT}-surface-cli" COMPOSE_FILE="$compose_cli_dir/compose.yaml"
+live_event phase_progress '{"phase":"surfaces","stage":"cli-fixture-ready"}'
 
 # Register this secondary project before creation so EXIT cleanup owns it.
 surface_cli_resource_register "$COMPOSE_PROJECT_NAME" "$COMPOSE_FILE"
+live_event phase_progress '{"phase":"surfaces","stage":"cli-resource-registered"}'
 
 python3 "$surface_dir/rest_sweep.py" "$LIVE_SURFACE_CONTRACT" "$artifact_dir/rest.json"
 python3 "$surface_dir/domain_normalizers.py" --self-test >"$artifact_dir/domain-normalizer-self-test.json"
@@ -101,9 +107,14 @@ if ((cli_sweep_status == 0)); then
   surface_cli_resource_created "$COMPOSE_PROJECT_NAME"
   python3 "$surface_dir/cli_sweep.py" "$LIVE_SURFACE_CONTRACT" "$binary" "$artifact_dir/cli.json"
   cli_sweep_status=$?
+else
+  docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" logs --no-color >"$artifact_dir/cli-compose-failure.log" 2>&1 || true
 fi
 set -e
 docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans >/dev/null 2>&1 || cli_sweep_status=1
+if ((cli_sweep_status == 0)); then
+  surface_cli_resource_verified_removed "$COMPOSE_PROJECT_NAME"
+fi
 ((cli_sweep_status == 0)) || exit "$cli_sweep_status"
 python3 "$surface_dir/browser_sweep.py"
 

@@ -18,3 +18,10 @@ surface_cli_resource_created() {
   local project="$1" parent_key="${2-topology}"
   live_resource_transition "$SURFACE_RESOURCE_KEY" compose-project CREATED "$LIVE_RESOURCE_PROVIDER" "$project" "$SURFACE_RESOURCE_CLEANUP" "$SURFACE_RESOURCE_DIGEST" "$SURFACE_RESOURCE_LABELS" "$SURFACE_RESOURCE_VERIFY" "$parent_key"
 }
+
+surface_cli_resource_verified_removed() {
+  local project="$1" parent_key="${2-topology}"
+  live_resource_transition "$SURFACE_RESOURCE_KEY" compose-project CLEANING "$LIVE_RESOURCE_PROVIDER" "$project" "$SURFACE_RESOURCE_CLEANUP" "$SURFACE_RESOURCE_DIGEST" "$SURFACE_RESOURCE_LABELS" "$SURFACE_RESOURCE_VERIFY" "$parent_key"
+  live_resource_transition "$SURFACE_RESOURCE_KEY" compose-project REMOVED "$LIVE_RESOURCE_PROVIDER" "$project" "$SURFACE_RESOURCE_CLEANUP" "$SURFACE_RESOURCE_DIGEST" "$SURFACE_RESOURCE_LABELS" "$SURFACE_RESOURCE_VERIFY" "$parent_key"
+  live_resource_transition "$SURFACE_RESOURCE_KEY" compose-project VERIFIED "$LIVE_RESOURCE_PROVIDER" "$project" "$SURFACE_RESOURCE_CLEANUP" "$SURFACE_RESOURCE_DIGEST" "$SURFACE_RESOURCE_LABELS" "$SURFACE_RESOURCE_VERIFY" "$parent_key"
+}
