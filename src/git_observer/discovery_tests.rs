@@ -121,11 +121,11 @@ fn depth_limit_is_inclusive_and_reports_each_untraversed_directory() {
         vec![
             DiscoveryWarning {
                 kind: DiscoveryWarningKind::DepthLimitReached { max_depth: 3 },
-                path: beneath_canonical_root(root, "one/two/too-deep"),
+                path: beneath_canonical_root(&root, "one/two/too-deep"),
             },
             DiscoveryWarning {
                 kind: DiscoveryWarningKind::DepthLimitReached { max_depth: 3 },
-                path: beneath_canonical_root(root, "other/middle/also-too-deep"),
+                path: beneath_canonical_root(&root, "other/middle/also-too-deep"),
             },
         ]
     );
@@ -209,7 +209,7 @@ fn permission_denied_directory_becomes_warning_without_losing_other_repositories
             kind: DiscoveryWarningKind::ReadDirectoryFailed {
                 error_kind: ErrorKind::PermissionDenied,
             },
-            path: beneath_canonical_root(root, "blocked"),
+            path: beneath_canonical_root(&root, "blocked"),
         }]
     );
 }
@@ -233,7 +233,7 @@ fn symlinked_git_marker_is_not_accepted_as_repository() {
         result.warnings,
         vec![DiscoveryWarning {
             kind: DiscoveryWarningKind::SymlinkSkipped,
-            path: beneath_canonical_root(root, "repository/.git"),
+            path: beneath_canonical_root(&root, "repository/.git"),
         }]
     );
 }
