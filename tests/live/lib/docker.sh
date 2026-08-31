@@ -23,9 +23,11 @@ live_topology_generate_secrets() {
   LIVE_API_TOKEN="$(openssl rand -hex 32)"
   LIVE_ADMIN_TOKEN="$(openssl rand -hex 32)"
   LIVE_ORACLE_TOKEN="$(openssl rand -hex 32)"
+  LIVE_CURSOR_SIGNING_KEY="$(openssl rand -hex 32)"
   live_register_secret "$LIVE_CORTEX_TOKEN"; live_register_secret "$LIVE_API_TOKEN"
   live_register_secret "$LIVE_ADMIN_TOKEN"; live_register_secret "$LIVE_ORACLE_TOKEN"
-  export LIVE_CORTEX_TOKEN LIVE_API_TOKEN LIVE_ADMIN_TOKEN LIVE_ORACLE_TOKEN
+  live_register_secret "$LIVE_CURSOR_SIGNING_KEY"
+  export LIVE_CORTEX_TOKEN LIVE_API_TOKEN LIVE_ADMIN_TOKEN LIVE_ORACLE_TOKEN LIVE_CURSOR_SIGNING_KEY
 }
 
 live_compose_project_exists() {
