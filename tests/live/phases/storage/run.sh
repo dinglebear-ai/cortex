@@ -39,6 +39,41 @@ api() {
 cli() {
   docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex --http --server http://127.0.0.1:3100 "$@" </dev/null
 }
+
+maintenance_audit_count() {
+  local action="$1"
+  docker logs "$(live_ingest_candidate_id)" 2>&1 | grep -Ec "action=\"?$action\"?([[:space:]]|$)" || true
+}
+
+maintenance_audit_advanced() {
+  local action="$1" before="$2" current
+  current="$(maintenance_audit_count "$action")"
+  [[ "$current" =~ ^[0-9]+$ && "$current" -gt "$before" ]]
+}
+
+backup_operation_active() {
+  local client_pid="$1" path="$2" candidate
+  kill -0 "$client_pid" 2>/dev/null || return 1
+  candidate="$(live_ingest_candidate_id)"
+  docker exec "$candidate" sh -ceu '
+    test -s "$1"
+    result="$(timeout 1 sqlite3 "$1" "PRAGMA integrity_check;" 2>/dev/null || true)"
+    test "$result" != ok
+  ' sh "$path"
+}
+
+add_maintenance_response_delay() {
+  local name="$1"
+  curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+    --data "$(jq -cn --arg name "$name" '{name:$name,type:"latency",stream:"downstream",toxicity:1.0,attributes:{latency:10000,jitter:0}}')" \
+    "http://127.0.0.1:${LIVE_TOXIPROXY_PORT:?}/proxies/${LIVE_RUN_ID}-http/toxics" >/dev/null
+}
+
+remove_maintenance_response_delay() {
+  local name="$1"
+  curl -fsS --max-time 10 -X DELETE \
+    "http://127.0.0.1:${LIVE_TOXIPROXY_PORT:?}/proxies/${LIVE_RUN_ID}-http/toxics/$name" >/dev/null
+}
 cli_semantic_oracle() {
   local surface="$1" evidence="$2"
   case "$surface" in
@@ -154,12 +189,22 @@ for spec in 'unwritable:/proc/cortex-live.db' 'full:/dev/full'; do
   live_event storage_failure_injection "$(jq -cn --arg scenario "backup-$name" --arg evidence "$ev" '{scenario:$scenario,result:"pass",evidence:$evidence}')"
 done
 checkpoint_interrupt="$LIVE_RUN_ROOT/artifacts/storage/checkpoint-interrupted.txt"
+checkpoint_audit_before="$(maintenance_audit_count db_checkpoint)"
+checkpoint_toxic="checkpoint-interrupt-${LIVE_RUN_ID#cortex-e2e-}"
+add_maintenance_response_delay "$checkpoint_toxic"
 curl -sS --max-time 120 -X POST -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" -H "x-cortex-admin-token: $LIVE_ADMIN_TOKEN" -H 'Content-Type: application/json' \
   --data '{"mode":"truncate"}' "http://127.0.0.1:$LIVE_HTTP_PORT/api/db/checkpoint" >"$checkpoint_interrupt" 2>&1 & checkpoint_client=$!
-kill -TERM "$checkpoint_client" 2>/dev/null || true; wait "$checkpoint_client" 2>/dev/null || true
+live_wait_until 15 checkpoint-server-start maintenance_audit_advanced db_checkpoint "$checkpoint_audit_before"
+kill -TERM "$checkpoint_client"
+set +e; wait "$checkpoint_client"; checkpoint_client_status=$?; set -e
+remove_maintenance_response_delay "$checkpoint_toxic"
+[[ "$checkpoint_client_status" -ne 0 && "$checkpoint_client_status" -ne 124 ]] || live_die "checkpoint client was not interrupted after server-side start"
 live_wait_until 30 checkpoint-interrupt-health _live_http_health_ready
 cli db integrity --quick --json >>"$checkpoint_interrupt" 2>&1 || live_die "database unhealthy after interrupted checkpoint client"
-live_event storage_failure_injection "$(jq -cn '{scenario:"interrupted-checkpoint-client",result:"pass",evidence:"artifacts/storage/checkpoint-interrupted.txt"}')"
+jq -cn --argjson before "$checkpoint_audit_before" --argjson after "$(maintenance_audit_count db_checkpoint)" --argjson client_status "$checkpoint_client_status" \
+  '{schema:"cortex-live-maintenance-interruption-v1",scenario:"interrupted-checkpoint-client",server_audit_action:"db_checkpoint",server_audit_count_before:$before,server_audit_count_after:$after,server_start_observed:($after>$before),client_exit_status:$client_status,client_interrupted:($client_status!=0 and $client_status!=124),database_healthy_afterward:true}' \
+  >"$LIVE_RUN_ROOT/artifacts/storage/checkpoint-interrupted.json"
+live_event storage_failure_injection "$(jq -cn '{scenario:"interrupted-checkpoint-client",result:"pass",evidence:"artifacts/storage/checkpoint-interrupted.json"}')"
 
 # Establish a committed-transaction barrier while WAL writes are active. Every
 # marker observed before the barrier must exist in the independently opened
@@ -217,10 +262,20 @@ chmod 600 "$backup_raw" "$LIVE_RUN_ROOT/$backup_ev"
 # Crash the candidate during a separate maintenance backup, then prove restart
 # recovery and integrity. The interrupted artifact is never treated as valid.
 restart_ev="$LIVE_RUN_ROOT/artifacts/storage/restart-during-maintenance.txt"
+backup_audit_before="$(maintenance_audit_count db_backup)"
+backup_toxic="backup-interrupt-${LIVE_RUN_ID#cortex-e2e-}"
+add_maintenance_response_delay "$backup_toxic"
 curl -sS --max-time 30 -X POST -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" -H "x-cortex-admin-token: $LIVE_ADMIN_TOKEN" -H 'Content-Type: application/json' \
   --data '{"output_path":"/data/interrupted-backup.db"}' "http://127.0.0.1:$LIVE_HTTP_PORT/api/db/backup" >"$restart_ev" 2>&1 & maintenance_client=$!
-sleep 0.1; docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" restart candidate >/dev/null
-wait "$maintenance_client" 2>/dev/null || true
+live_wait_until 15 backup-server-start maintenance_audit_advanced db_backup "$backup_audit_before"
+live_wait_until 15 backup-operation-active backup_operation_active "$maintenance_client" /data/interrupted-backup.db
+docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" restart candidate >/dev/null
+set +e; wait "$maintenance_client"; maintenance_client_status=$?; set -e
+remove_maintenance_response_delay "$backup_toxic"
+[[ "$maintenance_client_status" -ne 0 && "$maintenance_client_status" -ne 124 ]] || live_die "backup client was not interrupted after server-side start"
 live_wait_until 60 maintenance-restart-health _live_http_health_ready
 cli db integrity --quick --json >>"$restart_ev" 2>&1 || live_die "database unhealthy after restart during maintenance"
-live_event storage_failure_injection "$(jq -cn '{scenario:"restart-during-maintenance",result:"pass",evidence:"artifacts/storage/restart-during-maintenance.txt"}')"
+jq -cn --argjson before "$backup_audit_before" --argjson after "$(maintenance_audit_count db_backup)" --argjson client_status "$maintenance_client_status" \
+  '{schema:"cortex-live-maintenance-interruption-v1",scenario:"restart-during-maintenance",server_audit_action:"db_backup",server_audit_count_before:$before,server_audit_count_after:$after,server_start_observed:($after>$before),partial_backup_observed_before_restart:true,client_exit_status:$client_status,client_interrupted:($client_status!=0 and $client_status!=124),database_healthy_afterward:true}' \
+  >"$LIVE_RUN_ROOT/artifacts/storage/restart-during-maintenance.json"
+live_event storage_failure_injection "$(jq -cn '{scenario:"restart-during-maintenance",result:"pass",evidence:"artifacts/storage/restart-during-maintenance.json"}')"

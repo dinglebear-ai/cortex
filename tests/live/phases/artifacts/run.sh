@@ -95,6 +95,37 @@ artifact_verify_remote_provenance() {
   esac
 }
 
+artifact_qualify_native_archive() {
+  local extracted="$1" platform="$2" release="$3" evidence_dir="$4" name="$5"
+  local executable version_output help_output expected_name
+  case "$platform" in
+    linux-amd64|linux-arm64|darwin-arm64) expected_name=cortex ;;
+    windows-amd64) expected_name=cortex.exe ;;
+    *) live_die "native archive has unsupported platform: $platform"; return ;;
+  esac
+  executable="$extracted/$expected_name"
+  [[ -f "$executable" && ! -L "$executable" ]] || { live_die "native archive lacks root $expected_name executable: $name"; return; }
+  [[ -x "$executable" ]] || { live_die "native archive cortex binary is not executable: $name"; return; }
+  # The release archives intentionally contain one root executable. Rejecting
+  # extra payload prevents an archive from qualifying an unrelated runnable
+  # cortex binary while also shipping unexpected files.
+  [[ "$(find -P "$extracted" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" == 1 ]] || {
+    live_die "native archive must contain exactly one root executable: $name"; return;
+  }
+  version_output="$evidence_dir/$name.version.txt"
+  help_output="$evidence_dir/$name.help.txt"
+  live_timeout 10 live_sanitized_env "$executable" --version >"$version_output" || {
+    live_die "packaged cortex --version failed or timed out: $name"; return;
+  }
+  [[ "$(head -1 "$version_output")" == "cortex $release" ]] || {
+    live_die "packaged cortex version does not match release $release: $name"; return;
+  }
+  live_timeout 10 live_sanitized_env "$executable" --help >"$help_output" || {
+    live_die "packaged cortex --help smoke failed or timed out: $name"; return;
+  }
+  grep -q 'Usage:' "$help_output" || { live_die "packaged cortex help smoke lacked usage output: $name"; return; }
+}
+
 artifact_qualify_manifest() {
   local manifest="$1" dir="$LIVE_RUN_ROOT/artifacts/releases" native release row name kind path expected actual platform out version image_platform install_root origin canonical_path
   mkdir -p "$dir" "$LIVE_RUN_ROOT/artifact-sandbox/home" "$LIVE_RUN_ROOT/artifact-sandbox/tmp"
@@ -132,6 +163,9 @@ artifact_qualify_manifest() {
         archive|plugin|mcpb)
           out="$LIVE_RUN_ROOT/artifact-sandbox/extract-$name"; mkdir -p "$out"
           python3 "$LIVE_PROJECT_ROOT/tests/live/phases/artifacts/safe_extract.py" "$path" "$out" --max-files 2000 --max-bytes 268435456 >"$dir/$name.extract.txt"
+          if [[ "$kind" == archive && "$platform" == "$native" ]]; then
+            artifact_qualify_native_archive "$out" "$platform" "$release" "$dir" "$name"
+          fi
           if [[ "$kind" == plugin ]]; then find "$out" -path '*/skills/*/SKILL.md' -print -quit | grep -q . || live_die "plugin lacks skills: $name"; fi
           if [[ "$kind" == mcpb ]]; then
             mcpb_manifest="$(find "$out" -name manifest.json -print -quit)"; [[ -n "$mcpb_manifest" ]] || live_die "MCPB lacks manifest: $name"

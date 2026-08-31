@@ -29,12 +29,13 @@ allowlisted, checksum-pinned artifact manifest. Fleet/provider profiles require
 an immutable target manifest and separately supplied short-lived grants; they
 are never selected by normal CI.
 
-Each run owns a mode-0700 directory below `LIVE_RUNS_ROOT`, a unique Compose
-project, exact container/network/volume identities, and synthetic tokens. The
-runner captures `summary.json`, `junit.xml`, `capability-ledger.jsonl`,
-`cleanup-audit.json`, `run-manifest.json`, and `budget-metrics.json`; aggregate
-runs also emit `aggregate-qualification.json`. CI copies only these seven
-schema-governed basenames, then scans and caps them before upload;
+Each run owns a mode-0700 directory below `LIVE_RUNS_ROOT`. Topology-based runs
+also own a unique Compose project, exact container/network/volume identities,
+and synthetic tokens. The runner captures `summary.json`, `junit.xml`,
+`capability-ledger.jsonl`, `cleanup-audit.json`, `run-manifest.json`, and
+`budget-metrics.json`; aggregate runs also emit `aggregate-qualification.json`.
+CI allowlists these seven possible schema-governed basenames, then scans and
+caps the files present before upload;
 raw databases, WAL/auth stores, keys, environment dumps, and browser profiles
 are never upload artifacts.
 

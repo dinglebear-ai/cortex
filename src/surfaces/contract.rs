@@ -12,10 +12,10 @@ const MCP_PROFILE: &[&str] = &["mcp"];
 const UNIX_PLATFORMS: &[Platform] = &[Platform::Unix, Platform::Linux];
 const ANY_PLATFORM: &[Platform] = &[Platform::Any];
 
-/// Construction-time audit used by every non-REST router. A route constructor
-/// must enumerate the exact method/path pairs it mounts; an absent contract
-/// entry fails immediately in tests and startup rather than producing a green
-/// qualification ledger.
+/// Construction-time audit for routers that opt into the surface contract.
+/// Contract-aware route constructors enumerate their method/path pairs so an
+/// absent entry fails immediately when that router is built rather than
+/// producing a green qualification ledger.
 pub fn assert_mounted_routes(routes: &[&str]) {
     for route in routes {
         let api_registered = route.split_once(' ').is_some_and(|(method, path)| {

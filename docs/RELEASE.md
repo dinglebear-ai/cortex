@@ -47,6 +47,7 @@ Run the release-blocking isolated profiles against run-owned services:
 just live-full
 just live-auth
 just live-stateful
+just live-notifications
 just live-artifact
 just live-upgrade
 just live-security

@@ -5,6 +5,8 @@ set -euo pipefail
 surface_dir="$LIVE_PROJECT_ROOT/tests/live/phases/surfaces"
 artifact_dir="$LIVE_RUN_ROOT/artifacts/surfaces"
 mkdir -p "$artifact_dir"; chmod 700 "$artifact_dir"
+# shellcheck disable=SC1091
+source "$surface_dir/resources.sh"
 
 # Qualify surfaces against the same fully capable isolated epoch used by the
 # MCP matrix: admin scope, notification capture, graph projection, a managed
@@ -84,12 +86,16 @@ printf '%s\n' \
 chmod 600 "$compose_cli_dir/compose.yaml"
 export COMPOSE_PROJECT_NAME="${LIVE_COMPOSE_PROJECT}-surface-cli" COMPOSE_FILE="$compose_cli_dir/compose.yaml"
 
+# Register this secondary project before creation so EXIT cleanup owns it.
+surface_cli_resource_register "$COMPOSE_PROJECT_NAME" "$COMPOSE_FILE"
+
 python3 "$surface_dir/rest_sweep.py" "$LIVE_SURFACE_CONTRACT" "$artifact_dir/rest.json"
 python3 "$surface_dir/domain_normalizers.py" --self-test >"$artifact_dir/domain-normalizer-self-test.json"
 set +e
 docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d --wait
 cli_sweep_status=$?
 if ((cli_sweep_status == 0)); then
+  surface_cli_resource_created "$COMPOSE_PROJECT_NAME"
   python3 "$surface_dir/cli_sweep.py" "$LIVE_SURFACE_CONTRACT" "$binary" "$artifact_dir/cli.json"
   cli_sweep_status=$?
 fi

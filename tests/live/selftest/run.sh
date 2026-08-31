@@ -224,6 +224,7 @@ legacy_events="$(find "$noop_runs" -name events.jsonl -type f -exec grep -l 'leg
 [[ -n "$legacy_events" ]] && jq -e 'select(.kind=="legacy_result" and .payload.schema=="cortex-live-legacy-result-v1" and .payload.isolated_from_capability_ledger==true and .payload.result=="pass")' "$legacy_events" >/dev/null
 
 bash "$ROOT/tests/live/phases/artifacts/selftest.sh"
+bash "$ROOT/tests/live/phases/surfaces/resource-selftest.sh"
 bash "$ROOT/tests/live/selftest/artifact-upload.sh"
 bash "$ROOT/tests/live/lib/aggregate-selftest.sh"
 
