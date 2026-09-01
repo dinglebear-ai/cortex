@@ -52,8 +52,14 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         if spelling.startswith("setup") or spelling == "doctor":
             command_key = "setup-shared"
         isolated_port = 43000 + int(hashlib.sha256(b"setup-port").hexdigest()[:3], 16) % 1000
+        docker_transport = {
+            key: os.environ[key]
+            for key in ("DOCKER_HOST", "DOCKER_API_VERSION", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
+            if key in os.environ
+        }
         process = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
-                                 env={"PATH": path, "HOME": os.environ["LIVE_RUN_HOME"],
+                                 env={**docker_transport,
+                                      "PATH": path, "HOME": os.environ["LIVE_RUN_HOME"],
                                       "XDG_CONFIG_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".config"),
                                       "XDG_DATA_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".local", "share"),
                                       "XDG_CACHE_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cache"),

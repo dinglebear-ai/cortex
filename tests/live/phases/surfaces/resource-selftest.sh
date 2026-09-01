@@ -8,6 +8,10 @@ grep -q 'background integrity job did not finish before maintenance sweep' "$roo
   echo 'surface selftest: REST sweep does not serialize maintenance after background integrity' >&2
   exit 1
 }
+grep -Fq '"DOCKER_HOST", "DOCKER_API_VERSION", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"' "$root/tests/live/phases/surfaces/cli_sweep.py" || {
+  echo 'surface selftest: CLI sweep does not preserve the selected Docker transport' >&2
+  exit 1
+}
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 export LIVE_RESOURCE_PROVIDER=docker-host:selftest LIVE_RUN_ID=cortex-e2e-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export LIVE_RUN_ROOT="$tmp/run"; mkdir -p "$LIVE_RUN_ROOT" "$tmp/bin"
