@@ -35,6 +35,11 @@ allowlisted, checksum-pinned artifact manifest. Fleet/provider profiles require
 an immutable target manifest and separately supplied short-lived grants; they
 are never selected by normal CI.
 
+Storage pressure qualification reads the selected daemon's volume accounting
+directly. Providers whose Docker data root is not `/var/lib/docker` must export
+`LIVE_DOCKER_ROOT_DIR` as the absolute host path backing that daemon's
+`/var/lib/docker` directory.
+
 Each run owns a mode-0700 directory below `LIVE_RUNS_ROOT`. Topology-based runs
 also own a unique Compose project, exact container/network/volume identities,
 and synthetic tokens. The runner captures `summary.json`, `junit.xml`,

@@ -24,7 +24,9 @@ done
 # from the mount root is traversable. The fixture mount contains no secrets.
 chmod 0755 "$fixtures" "$fixtures"/*; chmod 0644 "$fixtures"/*/*.pb
 deadline=$(( $(date +%s) + max_seconds ))
-volume_path="/var/lib/docker/volumes/$volume/_data"
+docker_root="${LIVE_DOCKER_ROOT_DIR:-/var/lib/docker}"
+[[ "$docker_root" == /* && "$docker_root" != / ]] || live_die "LIVE_DOCKER_ROOT_DIR must be an absolute non-root path"
+volume_path="$docker_root/volumes/$volume/_data"
 "$root/tests/live/profiles/storage/pressure-watchdog.sh" "$$" "$deadline" "$max_bytes" "$volume_path" & lifecycle_watchdog=$!
 trap 'kill "$lifecycle_watchdog" 2>/dev/null || true; wait "$lifecycle_watchdog" 2>/dev/null || true' EXIT
 provider="${LIVE_RESOURCE_PROVIDER:?}"; resource_script="$root/tests/live/profiles/storage/quota-resource.sh"
@@ -43,7 +45,7 @@ jq -e '.[0].Options.o|contains("size=67108864")' "$inspect" >/dev/null || live_d
 preflight="$LIVE_RUN_ROOT/artifacts/storage/quota-preflight.txt"
 if docker run --rm --user 0:0 -v "$volume:/data" --entrypoint sh "$LIVE_ORACLE_IMAGE" -ceu 'dd if=/dev/urandom of=/data/over-limit bs=1048576 count=65 conv=fsync' >"$preflight" 2>&1; then live_die "quota preflight over-limit write unexpectedly succeeded"; fi
 docker run --rm --user 0:0 -v "$volume:/data" --entrypoint sh "$LIVE_ORACLE_IMAGE" -ceu 'rm -f /data/over-limit; chmod 0777 /data'
-host_free="$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2{print $4*1024}' || df -Pk / | awk 'NR==2{print $4*1024}')"
+host_free="$(df -Pk "$docker_root" 2>/dev/null | awk 'NR==2{print $4*1024}' || df -Pk / | awk 'NR==2{print $4*1024}')"
 layers="$(docker image inspect "$LIVE_CANDIDATE_IMAGE" "$LIVE_ORACLE_IMAGE" | jq '[.[].Size]|add')"
 (( host_free > max_bytes + layers + 536870912 )) || live_die "insufficient host cleanup margin for quota scenario"
 container_labels="$(jq -cn --arg project "$LIVE_COMPOSE_PROJECT" '{"com.docker.compose.project":$project,"cortex.live.kind":"quota-candidate"}')"
