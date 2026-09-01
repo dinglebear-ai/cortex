@@ -26,7 +26,7 @@ wins.
 ## Current Actions
 
 cortex exposes one MCP tool named `cortex`. The required `action` argument
-selects one of these 58 actions:
+selects one of the actions below. The mechanically generated current count is in `tests/TEST_COVERAGE.md`:
 
 | Action | Scope | Cost | Purpose |
 | --- | --- | --- | --- |

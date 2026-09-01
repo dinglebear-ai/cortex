@@ -12,6 +12,10 @@ deploy/rendered/
 *.bak
 *.bak-*
 storage/
+!tests/live/phases/storage/
+!tests/live/phases/storage/**
+!tests/live/profiles/storage/
+!tests/live/profiles/storage/**
 .superpowers
 # ── Claude Code / AI tooling ────────────────────────────────────────────────
 .claude/settings.local.json

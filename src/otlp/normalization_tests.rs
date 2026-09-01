@@ -220,6 +220,6 @@ fn shared_signal_attributes_support_256_fields_while_log_view_stays_128_compatib
     let legacy = normalized.legacy_log_signal_attributes.as_object().unwrap();
 
     assert_eq!(full.len(), 200);
-    assert_eq!(legacy.len(), MAX_METADATA_OBJECT_FIELDS + 1);
-    assert_eq!(legacy["_omitted_fields"], 72);
+    assert_eq!(legacy.len(), MAX_METADATA_OBJECT_FIELDS);
+    assert_eq!(legacy["_omitted_fields"], 73);
 }

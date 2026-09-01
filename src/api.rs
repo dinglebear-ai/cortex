@@ -20,7 +20,6 @@ use axum::{
     extract::{ConnectInfo, Extension, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, post},
 };
 use lab_auth::AuthContext;
 use serde::{Deserialize, Serialize};
@@ -49,6 +48,7 @@ use crate::app::{
 use crate::artifact_evidence::{ArtifactEvidenceInput, MAX_EVIDENCE_WIRE_BYTES};
 use crate::config::{ApiConfig, NotificationsConfig};
 use crate::mcp::{AuthPolicy, build_auth_layer};
+use crate::surfaces::{get, post};
 
 mod investigation;
 
@@ -91,6 +91,37 @@ pub struct VersionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_sha: Option<String>,
     pub schema_version: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_container: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fleet_allowlist: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+fn csv_env(name: &str) -> Vec<String> {
+    crate::env::var(name)
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Shared mutable state for the /api/* router.
@@ -176,6 +207,14 @@ impl ApiState {
             version: CRATE_VERSION,
             git_sha: GIT_SHA.map(str::to_string),
             schema_version,
+            instance_id: crate::env::var("CORTEX_INSTANCE_ID").ok(),
+            deployment_id: crate::env::var("CORTEX_DEPLOYMENT_ID").ok(),
+            database_fingerprint: crate::env::var("CORTEX_DATABASE_FINGERPRINT").ok(),
+            compose_project: crate::env::var("CORTEX_COMPOSE_PROJECT").ok(),
+            compose_service: crate::env::var("CORTEX_COMPOSE_SERVICE").ok(),
+            compose_container: crate::env::var("CORTEX_COMPOSE_CONTAINER").ok(),
+            fleet_allowlist: csv_env("CORTEX_FLEET_ALLOWLIST"),
+            capabilities: csv_env("CORTEX_CAPABILITIES"),
         });
         let maintenance_permit = service.maintenance_permit();
         Ok(Self {
@@ -218,6 +257,7 @@ impl ApiState {
 }
 
 pub fn router(state: ApiState) -> anyhow::Result<Router> {
+    use crate::surfaces::ContractRouterExt as _;
     if state.config.api_token.is_none() {
         anyhow::bail!(
             "CORTEX_API_TOKEN required for the REST API — run 'cortex setup repair' to generate one"
@@ -226,96 +266,102 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
 
     let routes = Router::new()
         // --- syslog queries ---
-        .route("/api/search", get(search))
-        .route("/api/filter", get(filter))
-        .route("/api/feed", get(feed))
-        .route("/api/tail", get(tail))
-        .route("/api/errors", get(errors))
-        .route("/api/hosts", get(hosts))
-        .route("/api/correlate", get(correlate))
-        .route("/api/stats", get(stats))
-        .route("/api/version", get(version))
-        .route("/api/integration-profile", get(integration_profile))
-        .route("/v1/integration/identity", get(integration_profile))
-        .route("/api/capabilities", get(capabilities))
-        .route("/api/streams/logs", get(log_stream))
-        .route("/api/streams/sessions", get(session_stream))
+        .contract_route("GET /api/search", get(search))
+        .contract_route("GET /api/filter", get(filter))
+        .contract_route("GET /api/feed", get(feed))
+        .contract_route("GET /api/tail", get(tail))
+        .contract_route("GET /api/errors", get(errors))
+        .contract_route("GET /api/hosts", get(hosts))
+        .contract_route("GET /api/correlate", get(correlate))
+        .contract_route("GET /api/stats", get(stats))
+        .contract_route("GET /api/version", get(version))
+        .contract_route("GET /api/integration-profile", get(integration_profile))
+        .contract_route("GET /v1/integration/identity", get(integration_profile))
+        .contract_route("GET /api/capabilities", get(capabilities))
+        .contract_route("GET /api/streams/logs", get(log_stream))
+        .contract_route("GET /api/streams/sessions", get(session_stream))
         .merge(investigation::routes())
         // --- surface parity routes ---
-        .route("/api/source-ips", get(source_ips))
-        .route("/api/timeline", get(timeline))
-        .route("/api/patterns", get(patterns))
-        .route("/api/ingest-rate", get(ingest_rate))
-        .route("/api/get", get(get_log))
-        .route("/api/host-state", get(host_state))
-        .route("/api/context", get(context))
-        .route("/api/fleet-state", get(fleet_state))
-        .route("/api/correlate-state", get(correlate_state))
-        .route("/api/topic-correlate", post(topic_correlate))
-        .route("/api/errors/unaddressed", get(unaddressed_errors))
-        .route("/api/errors/ack", post(ack_error))
-        .route("/api/errors/unack", post(unack_error))
-        .route("/api/notifications/recent", get(notifications_recent))
-        .route("/api/notifications/test", post(notifications_test))
-        .route("/api/file-tails", post(file_tails))
+        .contract_route("GET /api/source-ips", get(source_ips))
+        .contract_route("GET /api/timeline", get(timeline))
+        .contract_route("GET /api/patterns", get(patterns))
+        .contract_route("GET /api/ingest-rate", get(ingest_rate))
+        .contract_route("GET /api/get", get(get_log))
+        .contract_route("GET /api/host-state", get(host_state))
+        .contract_route("GET /api/context", get(context))
+        .contract_route("GET /api/fleet-state", get(fleet_state))
+        .contract_route("GET /api/correlate-state", get(correlate_state))
+        .contract_route("POST /api/topic-correlate", post(topic_correlate))
+        .contract_route("GET /api/errors/unaddressed", get(unaddressed_errors))
+        .contract_route("POST /api/errors/ack", post(ack_error))
+        .contract_route("POST /api/errors/unack", post(unack_error))
+        .contract_route("GET /api/notifications/recent", get(notifications_recent))
+        .contract_route("POST /api/notifications/test", post(notifications_test))
+        .contract_route("POST /api/file-tails", post(file_tails))
         // --- surface parity routes ---
-        .route("/api/silent-hosts", get(silent_hosts))
-        .route("/api/clock-skew", get(clock_skew))
-        .route("/api/anomalies", get(anomalies))
-        .route("/api/compare", get(compare))
-        .route("/api/apps", get(apps))
-        .route("/api/similar-incidents", get(similar_incidents))
-        .route("/api/incident-context", get(incident_context))
-        .route("/api/graph/entity", get(graph_entity))
-        .route("/api/graph/around", get(graph_around))
-        .route("/api/graph/explain", get(graph_explain))
-        .route("/api/graph/evidence", get(graph_evidence))
-        .route(
-            "/api/artifact-evidence",
+        .contract_route("GET /api/silent-hosts", get(silent_hosts))
+        .contract_route("GET /api/clock-skew", get(clock_skew))
+        .contract_route("GET /api/anomalies", get(anomalies))
+        .contract_route("GET /api/compare", get(compare))
+        .contract_route("GET /api/apps", get(apps))
+        .contract_route("GET /api/similar-incidents", get(similar_incidents))
+        .contract_route("GET /api/incident-context", get(incident_context))
+        .contract_route("GET /api/graph/entity", get(graph_entity))
+        .contract_route("GET /api/graph/around", get(graph_around))
+        .contract_route("GET /api/graph/explain", get(graph_explain))
+        .contract_route("GET /api/graph/evidence", get(graph_evidence))
+        .contract_routes(
+            &["GET /api/artifact-evidence", "POST /api/artifact-evidence"],
             get(artifact_evidence).post(record_artifact_evidence),
         )
-        .route("/api/sessions/incidents", get(ai_incidents))
-        .route("/api/sessions/investigate", get(ai_investigate))
-        .route("/api/sessions/llm-invocations", get(ai_llm_invocations))
-        .route("/api/sessions/skills", get(ai_skills))
-        .route("/api/sessions/skill-incidents", get(ai_skill_incidents))
-        .route("/api/sessions/skill-investigate", get(ai_skill_investigate))
-        .route("/api/sessions/mcp-events", get(ai_mcp_events))
-        .route("/api/sessions/mcp-incidents", get(ai_mcp_incidents))
-        .route("/api/sessions/mcp-investigate", get(ai_mcp_investigate))
-        .route("/api/sessions/hooks", get(ai_hooks))
-        .route("/api/sessions/hook-incidents", get(ai_hook_incidents))
-        .route("/api/sessions/hook-investigate", get(ai_hook_investigate))
-        .route("/api/compose/status", get(compose_status))
-        .route("/api/compose/doctor", get(compose_doctor))
+        .contract_route("GET /api/sessions/incidents", get(ai_incidents))
+        .contract_route("GET /api/sessions/investigate", get(ai_investigate))
+        .contract_route("GET /api/sessions/llm-invocations", get(ai_llm_invocations))
+        .contract_route("GET /api/sessions/skills", get(ai_skills))
+        .contract_route("GET /api/sessions/skill-incidents", get(ai_skill_incidents))
+        .contract_route(
+            "GET /api/sessions/skill-investigate",
+            get(ai_skill_investigate),
+        )
+        .contract_route("GET /api/sessions/mcp-events", get(ai_mcp_events))
+        .contract_route("GET /api/sessions/mcp-incidents", get(ai_mcp_incidents))
+        .contract_route("GET /api/sessions/mcp-investigate", get(ai_mcp_investigate))
+        .contract_route("GET /api/sessions/hooks", get(ai_hooks))
+        .contract_route("GET /api/sessions/hook-incidents", get(ai_hook_incidents))
+        .contract_route(
+            "GET /api/sessions/hook-investigate",
+            get(ai_hook_investigate),
+        )
+        .contract_route("GET /api/compose/status", get(compose_status))
+        .contract_route("GET /api/compose/doctor", get(compose_doctor))
         // --- ai session queries ---
-        .route("/api/sessions", get(sessions))
-        .route("/api/sessions/rendered", get(rendered_session_page))
-        .route("/api/sessions/search", get(ai_search))
-        .route("/api/sessions/abuse", get(ai_abuse))
-        .route("/api/sessions/correlate", get(ai_correlate))
-        .route("/api/sessions/blocks", get(ai_blocks))
-        .route("/api/sessions/context", get(ai_context))
-        .route("/api/sessions/tools", get(ai_tools))
-        .route("/api/sessions/projects", get(ai_projects))
+        .contract_route("GET /api/sessions", get(sessions))
+        .contract_route("GET /api/sessions/rendered", get(rendered_session_page))
+        .contract_route("GET /api/sessions/search", get(ai_search))
+        .contract_route("GET /api/sessions/abuse", get(ai_abuse))
+        .contract_route("GET /api/sessions/correlate", get(ai_correlate))
+        .contract_route("GET /api/sessions/blocks", get(ai_blocks))
+        .contract_route("GET /api/sessions/context", get(ai_context))
+        .contract_route("GET /api/sessions/tools", get(ai_tools))
+        .contract_route("GET /api/sessions/projects", get(ai_projects))
         // --- ai diagnostic + admin (bead 0p8r.3) ---
-        .route("/api/sessions/checkpoints", get(ai_checkpoints))
-        .route("/api/sessions/errors", get(ai_parse_errors))
-        .route(
-            "/api/sessions/prune-checkpoints",
+        .contract_route("GET /api/sessions/checkpoints", get(ai_checkpoints))
+        .contract_route("GET /api/sessions/errors", get(ai_parse_errors))
+        .contract_route(
+            "POST /api/sessions/prune-checkpoints",
             post(ai_prune_checkpoints),
         )
         // --- db ops (bead 0p8r.4) ---
-        .route("/api/db/status", get(db_status))
-        .route("/api/db/integrity", get(db_integrity))
-        .route(
-            "/api/db/integrity/background",
+        .contract_route("GET /api/db/status", get(db_status))
+        .contract_route("GET /api/db/integrity", get(db_integrity))
+        .contract_route(
+            "POST /api/db/integrity/background",
             post(db_integrity_background),
         )
-        .route("/api/db/integrity/jobs/{id}", get(db_integrity_job))
-        .route("/api/db/checkpoint", post(db_checkpoint))
-        .route("/api/db/vacuum", post(db_vacuum))
-        .route("/api/db/backup", post(db_backup));
+        .contract_route("GET /api/db/integrity/jobs/{id}", get(db_integrity_job))
+        .contract_route("POST /api/db/checkpoint", post(db_checkpoint))
+        .contract_route("POST /api/db/vacuum", post(db_vacuum))
+        .contract_route("POST /api/db/backup", post(db_backup));
 
     // Force `AuthPolicy::Mounted` on /api/* regardless of the listener bind.
     // Loopback callers (CLI on the same host) MUST still present a bearer

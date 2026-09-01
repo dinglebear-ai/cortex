@@ -1788,19 +1788,11 @@ async fn public_action_references_cover_schema_registry() {
             "tests/test_live.sh",
             include_str!("../../tests/test_live.sh"),
         ),
-        (
-            "tests/mcporter/test-tools.sh",
-            include_str!("../../tests/mcporter/test-tools.sh"),
-        ),
     ] {
-        for action in &super::actions::action_names() {
-            assert!(
-                content.contains(&format!("cortex {action}"))
-                    || content.contains(&format!("mcp_call {action}"))
-                    || content.contains(&format!("\"action\":\"{action}\"")),
-                "{path} missing action coverage for {action}"
-            );
-        }
+        assert!(
+            content.contains("tests/live/run-profile.sh"),
+            "{path} must remain a thin wrapper around the registry-derived live runner"
+        );
     }
 
     for (path, content) in [

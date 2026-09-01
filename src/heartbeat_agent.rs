@@ -1769,11 +1769,34 @@ fn hostname() -> String {
                 return name;
             }
         }
-        Err(error) => {
-            tracing::warn!(error = %error, "could not determine hostname; using 'unknown'");
-        }
+        Err(error) => tracing::debug!(error = %error, "Linux proc hostname unavailable"),
     }
+    #[cfg(unix)]
+    if let Some(name) = unix_hostname() {
+        return name;
+    }
+    tracing::warn!("could not determine hostname; using 'unknown'");
     "unknown".to_string()
+}
+
+#[cfg(unix)]
+fn unix_hostname() -> Option<String> {
+    let mut bytes = [0_u8; 256];
+    // SAFETY: `bytes` is writable for its full advertised length. gethostname
+    // writes at most that many bytes; we find the first NUL (or use the full
+    // buffer) before validating UTF-8.
+    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
+        return None;
+    }
+    let len = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..len])
+        .ok()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn kernel_release() -> Option<String> {
@@ -1791,15 +1814,38 @@ fn boot_id() -> String {
                 return trimmed;
             }
         }
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to read boot_id from /proc; falling back to process ID \
-                 (heartbeat deduplication will not survive agent restart)"
-            );
-        }
+        Err(error) => tracing::debug!(error = %error, "Linux proc boot_id unavailable"),
     }
+    #[cfg(target_os = "macos")]
+    if let Some(id) = macos_boot_id() {
+        return id;
+    }
+    tracing::warn!("stable platform boot identity unavailable; falling back to process ID");
     format!("process-{}", std::process::id())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_boot_id() -> Option<String> {
+    let mut boot = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    let mut len = std::mem::size_of::<libc::timeval>();
+    let name = b"kern.boottime\0";
+    // SAFETY: `boot` and `len` point to initialized writable storage of the
+    // declared size, the sysctl name is NUL-terminated, and no new value is
+    // supplied for this read-only query.
+    let result = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr().cast(),
+            (&raw mut boot).cast(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (result == 0 && len == std::mem::size_of::<libc::timeval>() && boot.tv_sec > 0)
+        .then(|| format!("darwin-boot-{}-{}", boot.tv_sec, boot.tv_usec))
 }
 
 #[cfg(test)]

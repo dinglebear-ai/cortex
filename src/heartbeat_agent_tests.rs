@@ -7,6 +7,26 @@ use serial_test::serial;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(unix)]
+#[test]
+fn unix_hostname_is_available_without_proc() {
+    let _guard = EnvGuard::unset("HOSTNAME");
+    assert_ne!(hostname(), "unknown");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_boot_identity_is_stable_across_calls_and_not_process_scoped() {
+    let first = boot_id();
+    let second = boot_id();
+    assert_eq!(first, second);
+    assert!(
+        first.starts_with("darwin-boot-"),
+        "unexpected boot id: {first}"
+    );
+    assert!(!first.starts_with("process-"));
+}
+
 struct EnvGuard {
     name: &'static str,
     previous: Option<String>,
@@ -86,6 +106,7 @@ async fn unsupported_platform_emits_complete_host_only_heartbeat() {
     assert!(payload.sample.skipped_probes.is_empty());
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 #[cfg(target_os = "linux")]
 async fn linux_collector_constructs_probe_set_and_collects_core_proc_metrics() {
@@ -111,6 +132,7 @@ async fn linux_collector_constructs_probe_set_and_collects_core_proc_metrics() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 #[cfg(target_os = "linux")]
 async fn linux_probe_collectors_read_proc_and_statvfs_successfully() {

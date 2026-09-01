@@ -61,7 +61,7 @@ impl<I, R> ComposeService<I, R> {
             .map(|path| vec![("CORTEX_ENV_FILE".to_string(), path.display().to_string())])
             .unwrap_or_default();
         ComposeInvocation {
-            program: "docker".into(),
+            program: crate::env::var("CORTEX_COMPOSE_PROGRAM").unwrap_or_else(|_| "docker".into()),
             args,
             env,
             current_dir: target.compose_working_dir.clone(),

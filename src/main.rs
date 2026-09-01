@@ -904,6 +904,21 @@ fn parse_setup_command(args: &[String]) -> Result<SetupCommand> {
     let mut json = false;
     let mut iter = args.iter();
     if matches!(iter.clone().next().map(String::as_str), Some("install")) {
+        // Validate the complete command line before the first filesystem
+        // mutation. Historically this branch installed immediately after
+        // seeing `install`, so an unknown flag (and even `--help`) could
+        // overwrite ~/.local/bin/cortex before parsing rejected anything.
+        let _ = iter.next();
+        for arg in iter {
+            match arg.as_str() {
+                "--json" => {}
+                "--help" | "-h" => {
+                    print_usage();
+                    std::process::exit(0);
+                }
+                other => anyhow::bail!("unknown setup install argument: {other}"),
+            }
+        }
         let dest = cli::install_self()?;
         println!("installed -> {}", dest.display());
         std::process::exit(0);

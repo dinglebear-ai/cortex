@@ -14,11 +14,10 @@ use super::*;
 
 #[test]
 fn documented_rest_route_count_matches_router_registrations() {
-    let source = include_str!("api.rs");
-    let route_count = source.matches(".route(").count();
-    assert_eq!(route_count, 75, "update the documented API denominator");
-    assert!(include_str!("../docs/api.md").contains("75 routes total"));
-    assert!(include_str!("../docs/architecture.md").contains("(75 routes)"));
+    let binding_count = crate::surfaces::api_bindings().count();
+    assert_eq!(binding_count, 82, "update the documented API denominator");
+    assert!(include_str!("../docs/api.md").contains("82 method/path bindings total"));
+    assert!(include_str!("../docs/architecture.md").contains("(82 method/path bindings)"));
 }
 
 /// Build the router for a test, layering a `MockConnectInfo` so handlers
@@ -36,6 +35,46 @@ fn test_router(state: ApiState) -> axum::Router {
 /// variant most closely matches the production wiring they care about.
 fn test_state(token: Option<String>) -> (ApiState, Arc<DbPool>, tempfile::TempDir) {
     test_state_with_policy(token, AuthPolicy::Mounted { auth_state: None })
+}
+
+#[tokio::test]
+async fn every_contract_api_method_path_is_actually_mounted() {
+    use crate::surfaces::{HttpMethod, api_bindings};
+    for binding in api_bindings() {
+        let (state, _, _dir) = test_state_with_admin(Some("secret".into()), "admin-secret");
+        let app = test_router(state);
+        let path = binding.path.replace("{id}", "contract-probe");
+        let method = match binding.method {
+            HttpMethod::Get => axum::http::Method::GET,
+            HttpMethod::Post => axum::http::Method::POST,
+        };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            response.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "{:?} {} is contracted but not mounted",
+            binding.method,
+            binding.path
+        );
+        assert_ne!(
+            response.status(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "{:?} {} has wrong mounted method",
+            binding.method,
+            binding.path
+        );
+    }
 }
 
 fn test_state_with_policy(
@@ -862,6 +901,27 @@ async fn api_cookie_without_bearer_is_rejected() {
 }
 
 // ── /api/version + force-bearer-on-loopback + schema_version cache ────────────
+
+#[test]
+fn version_info_serializes_optional_fleet_identity() {
+    let value = serde_json::to_value(VersionInfo {
+        version: "1.2.3",
+        git_sha: None,
+        schema_version: 48,
+        instance_id: Some("instance".into()),
+        deployment_id: Some("sha256:image".into()),
+        database_fingerprint: Some("db-fingerprint".into()),
+        compose_project: Some("project".into()),
+        compose_service: Some("candidate".into()),
+        compose_container: Some("project-candidate-1".into()),
+        fleet_allowlist: vec!["instance".into()],
+        capabilities: vec!["read".into(), "admin".into()],
+    })
+    .unwrap();
+    assert_eq!(value["instance_id"], "instance");
+    assert_eq!(value["compose_service"], "candidate");
+    assert_eq!(value["capabilities"], serde_json::json!(["read", "admin"]));
+}
 
 /// `/api/version` returns 200 with a well-formed payload when authenticated.
 /// Verifies the cached `version_info` is rendered, not re-queried.
