@@ -1,3 +1,9 @@
+---
+title: Live qualification suite
+created: 2026-08-31
+updated: 2026-09-01
+---
+
 # Live qualification suite
 
 `tests/live/run-profile.sh` is the stable operator and CI entry point. It builds

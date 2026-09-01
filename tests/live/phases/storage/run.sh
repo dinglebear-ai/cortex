@@ -40,9 +40,16 @@ cli() {
   docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex --http --server http://127.0.0.1:3100 "$@" </dev/null
 }
 
+storage_candidate_id() {
+  local candidate
+  candidate="$(docker compose -f "$compose" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"
+  [[ -n "$candidate" ]] || { live_die "storage candidate container was not discoverable"; return 1; }
+  printf '%s\n' "$candidate"
+}
+
 maintenance_audit_count() {
   local action="$1"
-  docker logs "$(live_ingest_candidate_id)" 2>&1 | grep -Ec "action=\"?$action\"?([[:space:]]|$)" || true
+  docker logs "$(storage_candidate_id)" 2>&1 | grep -Ec "action=\"?$action\"?([[:space:]]|$)" || true
 }
 
 maintenance_audit_advanced() {
@@ -54,7 +61,7 @@ maintenance_audit_advanced() {
 backup_operation_active() {
   local client_pid="$1" path="$2" candidate
   kill -0 "$client_pid" 2>/dev/null || return 1
-  candidate="$(live_ingest_candidate_id)"
+  candidate="$(storage_candidate_id)"
   docker exec "$candidate" sh -ceu '
     test -s "$1"
     result="$(timeout 1 sqlite3 "$1" "PRAGMA integrity_check;" 2>/dev/null || true)"

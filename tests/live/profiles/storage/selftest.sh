@@ -29,6 +29,8 @@ grep -q 'rather than manufacturing canonical coverage' "$root/tests/live/phases/
 grep -q 'cli_semantic_oracle' "$root/tests/live/phases/storage/run.sh" || fail "storage CLI positives lack semantic oracles"
 grep -q 'rest_semantic_oracle' "$root/tests/live/phases/storage/run.sh" || fail "storage REST positives lack semantic oracles"
 grep -q 'storage extra check failed' "$root/tests/live/phases/storage/run.sh" || fail "non-canonical full-profile storage checks can fail silently"
+grep -q 'storage_candidate_id' "$root/tests/live/phases/storage/run.sh" || fail "standalone storage candidate discovery is absent"
+! grep -q 'live_ingest_candidate_id' "$root/tests/live/phases/storage/run.sh" || fail "storage phase depends on an ingest-only helper"
 awk '/  full\)/,/    ;;/ {print}' "$root/tests/live/runner.sh" | grep -q 'phases/storage/pressure.sh' || fail "full profile does not execute storage pressure obligation"
 # Exercise the watchdog as a process supervisor, not merely as shell syntax.
 watch_tmp="$(mktemp -d)"; trap 'rm -rf "$watch_tmp"' EXIT
