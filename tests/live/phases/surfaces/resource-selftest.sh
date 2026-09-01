@@ -4,6 +4,10 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 export LIVE_PROJECT_ROOT="$root"
 for lib in common lock redact events command report lease resources; do source "$root/tests/live/lib/$lib.sh"; done
 source "$root/tests/live/phases/surfaces/resources.sh"
+grep -q 'background integrity job did not finish before maintenance sweep' "$root/tests/live/phases/surfaces/rest_sweep.py" || {
+  echo 'surface selftest: REST sweep does not serialize maintenance after background integrity' >&2
+  exit 1
+}
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 export LIVE_RESOURCE_PROVIDER=docker-host:selftest LIVE_RUN_ID=cortex-e2e-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export LIVE_RUN_ROOT="$tmp/run"; mkdir -p "$LIVE_RUN_ROOT" "$tmp/bin"

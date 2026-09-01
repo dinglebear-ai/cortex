@@ -307,6 +307,22 @@ def main() -> int:
         integrity_job_id = str(json.loads(job_payload)["job_id"]) if job_status == 200 else "__missing__"
     except (KeyError, TypeError, json.JSONDecodeError):
         integrity_job_id = "__missing__"
+    if integrity_job_id == "__missing__":
+        raise RuntimeError(f"background integrity job did not start: status={job_status}")
+    integrity_path = "/api/db/integrity/jobs/" + urllib.parse.quote(integrity_job_id, safe="")
+    for _ in range(80):
+        poll_status, poll_payload, _ = request(base, "GET", integrity_path, read_token, None)
+        try:
+            terminal_status = json.loads(poll_payload)["status"] if poll_status == 200 else None
+        except (KeyError, TypeError, json.JSONDecodeError):
+            terminal_status = None
+        if terminal_status == "done":
+            break
+        if terminal_status == "failed":
+            raise RuntimeError(f"background integrity job failed: {poll_payload}")
+        time.sleep(0.25)
+    else:
+        raise RuntimeError("background integrity job did not finish before maintenance sweep")
     results = []
     failures = []
     entries = [entry for entry in contract["entries"] if entry["kind"] == "rest"]
@@ -314,7 +330,7 @@ def main() -> int:
         method, raw_path = entry["method"].upper(), entry["spelling"]
         path = expanded_path(raw_path)
         if raw_path == "/api/db/integrity/jobs/{id}":
-            path = "/api/db/integrity/jobs/" + urllib.parse.quote(integrity_job_id, safe="")
+            path = integrity_path
         body = POST.get(raw_path, {}) if method == "POST" else None
         if raw_path == "/api/db/integrity/background":
             body = None
