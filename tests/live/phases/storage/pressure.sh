@@ -73,9 +73,17 @@ _baseline_visible() { [[ "$(_log_count "$baseline_log")" == 1 ]]; }; live_wait_u
 docker run --rm --name "${container}-filler" --label "cortex.live.run_id=$LIVE_RUN_ID" -v "$volume:/data" --entrypoint sh "$LIVE_ORACLE_IMAGE" -ceu 'dd if=/dev/urandom of=/data/fill bs=1048576 count=52 conv=fsync' >"$LIVE_RUN_ROOT/artifacts/storage/quota-fill.txt" 2>&1 & filler=$!
 wait "$filler"
 _blocked() { _quota_stats | jq -e '.write_blocked==true' >/dev/null; }; live_wait_until 30 quota-write-block _blocked
+# The stats command measures the filesystem directly, while OTLP admission uses
+# the runtime state refreshed by the storage-enforcement task. Synchronize on
+# that actual admission gate before exercising the blocked log and trace paths.
+_runtime_blocked() {
+  _otlp_post blocked metrics "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-metrics.body" "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-metrics"
+  [[ "$(cat "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-metrics.status")" == 503 ]]
+}
+live_wait_until 30 quota-runtime-write-block _runtime_blocked
 _quota_stats >"$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-storage.json"
 blocked_log="${LIVE_RUN_ID#cortex-e2e-}-blocked-otlp-log-0040"
-for signal in logs metrics traces; do _otlp_post blocked "$signal" "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-$signal.body" "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-$signal"; done
+for signal in logs traces; do _otlp_post blocked "$signal" "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-$signal.body" "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-$signal"; done
 [[ "$(cat "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-logs.status")" == 200 ]]
 [[ "$(_log_count "$blocked_log")" == 0 ]] || live_die "blocked OTLP log became visible before storage recovery"
 [[ "$(cat "$LIVE_RUN_ROOT/artifacts/storage/otlp-blocked-metrics.status")" == 503 ]]
