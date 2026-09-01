@@ -72,7 +72,7 @@ backup_operation_active() {
 add_maintenance_response_delay() {
   local name="$1"
   curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-    --data "$(jq -cn --arg name "$name" '{name:$name,type:"latency",stream:"downstream",toxicity:1.0,attributes:{latency:10000,jitter:0}}')" \
+    --data "$(jq -cn --arg name "$name" '{name:$name,type:"latency",stream:"downstream",toxicity:1.0,attributes:{latency:60000,jitter:0}}')" \
     "http://127.0.0.1:${LIVE_TOXIPROXY_PORT:?}/proxies/${LIVE_RUN_ID}-http/toxics" >/dev/null
 }
 

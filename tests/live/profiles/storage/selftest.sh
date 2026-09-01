@@ -16,6 +16,7 @@ grep -q 'storage-quota-container.*PLANNED' "$root/tests/live/phases/storage/pres
 grep -q 'docker create --name' "$root/tests/live/phases/storage/pressure.sh" || fail "quota container identity is not reconciled before start"
 grep -q 'watchdog cannot read the quota volume byte-accounting path' "$root/tests/live/phases/storage/pressure.sh" || fail "watchdog byte accounting can silently degrade"
 grep -q 'LIVE_DOCKER_ROOT_DIR' "$root/tests/live/phases/storage/pressure.sh" || fail "pressure watchdog cannot follow an isolated Docker data root"
+grep -q 'latency:60000' "$root/tests/live/phases/storage/run.sh" || fail "maintenance response delay must outlast a normal Compose restart"
 grep -q 'chmod 0755.*fixtures' "$root/tests/live/phases/storage/pressure.sh" || fail "UID 1000 fixture traversal is not portable"
 grep -q 'profile lacks mandatory otlp-storage-blocked evidence' "$root/tests/live/runner.sh" || fail "storage/full final reconciliation is absent"
 grep -q 'disposition.*platform-qualified.*not-authorized' "$root/tests/live/runner.sh" || fail "qualified pressure dispositions are not reconciled"
