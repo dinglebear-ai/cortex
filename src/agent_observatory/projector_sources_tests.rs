@@ -324,6 +324,26 @@ fn repository_observation_without_existing_run_is_skipped_and_never_creates_a_sy
 }
 
 #[test]
+fn failed_typed_source_uses_queryable_err_severity_and_increments_run_errors() {
+    let (pool, _dir, log_id) = setup();
+    let AgentSourceRecord::Mcp(mut failed) = records(log_id).remove(0) else {
+        unreachable!("fixture index zero is the MCP source");
+    };
+    failed.call_id = "call-failed".to_string();
+    failed.status = Some("error".to_string());
+    failed.is_error = Some(true);
+    failed.error_text = Some("receiver rejected request".to_string());
+
+    let SourceProjectionOutcome::Projected(written) =
+        project_agent_source(&pool, &AgentSourceRecord::Mcp(failed)).unwrap()
+    else {
+        panic!("failed MCP source should project");
+    };
+    assert_eq!(written.event.severity, "err");
+    assert_eq!(written.run.error_count, 1);
+}
+
+#[test]
 fn cursor_aware_llm_replay_consumes_legacy_projected_event_without_collision() {
     let (pool, _dir, log_id) = setup();
     let source_records = records(log_id);

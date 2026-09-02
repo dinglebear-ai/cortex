@@ -1,6 +1,6 @@
 //! Run counter updates for atomic Agent Observatory projection writes.
 
-use super::super::{AgentEventKind, AgentRunEventRow, AgentRunRow};
+use super::super::{AgentRunEventRow, AgentRunRow};
 use super::sql;
 use anyhow::Result;
 use rusqlite::{Transaction, params};
@@ -10,7 +10,7 @@ pub(super) fn apply_event_counters(
     run_id: i64,
     event: &AgentRunEventRow,
 ) -> Result<AgentRunRow> {
-    let error_increment = i64::from(event.event_kind == AgentEventKind::Error);
+    let error_increment = i64::from(event.severity == "err");
     tx.execute(
         "UPDATE agent_runs SET last_event_id=?1, event_count=event_count+1,
              error_count=error_count+?2,
@@ -43,7 +43,7 @@ pub(super) fn apply_evidence_event_counters(
     run_id: i64,
     event: &AgentRunEventRow,
 ) -> Result<AgentRunRow> {
-    let error_increment = i64::from(event.event_kind == AgentEventKind::Error);
+    let error_increment = i64::from(event.severity == "err");
     tx.execute(
         "UPDATE agent_runs SET last_event_id=?1, event_count=event_count+1,
              error_count=error_count+?2,

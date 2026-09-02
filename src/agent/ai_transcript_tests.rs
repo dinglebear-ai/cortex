@@ -40,6 +40,28 @@ fn collect_files_finds_supported_and_skips_unsupported() {
 }
 
 #[test]
+fn bounded_discovery_cursor_reaches_later_transcripts() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let first = claude_dir.join("001.jsonl");
+    let second = claude_dir.join("002.jsonl");
+    write_file(&first, "{}\n");
+    write_file(&second, "{}\n");
+
+    let mut after_first = Vec::new();
+    collect_files_after(dir.path(), &mut after_first, Some(&first));
+    assert_eq!(after_first, vec![second.clone()]);
+
+    let mut after_last = Vec::new();
+    collect_files_after(dir.path(), &mut after_last, Some(&second));
+    assert!(
+        after_last.is_empty(),
+        "the caller can wrap after the final file"
+    );
+}
+
+#[test]
 fn collect_files_skips_build_artifact_directories() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join(".codex/worktrees/session-id/lab");
@@ -173,6 +195,9 @@ fn checkpoint_round_trips_through_disk() {
     checkpoint
         .fingerprints
         .insert("/tmp/foo.jsonl".to_string(), "sha256:prefix".to_string());
+    checkpoint
+        .discovery_cursors
+        .insert("/tmp/root".to_string(), "/tmp/root/later.jsonl".to_string());
     checkpoint.gemini_parse_failures.insert(
         "/tmp/bad-gemini.json".to_string(),
         GeminiParseFailure {
@@ -190,6 +215,13 @@ fn checkpoint_round_trips_through_disk() {
             .get("/tmp/foo.jsonl")
             .map(String::as_str),
         Some("sha256:prefix")
+    );
+    assert_eq!(
+        loaded
+            .discovery_cursors
+            .get("/tmp/root")
+            .map(String::as_str),
+        Some("/tmp/root/later.jsonl")
     );
     assert!(
         loaded.gemini_parse_failures.is_empty(),
@@ -250,6 +282,38 @@ fn envelope_identity_survives_an_archive_move_when_native_session_is_available()
         before.envelope.source.locator, after.envelope.source.locator,
         "safe locator records that the mutable location changed"
     );
+}
+
+#[test]
+fn transcript_record_bounds_every_variable_wire_field() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("session.jsonl");
+    write_file(&path, "{}\n");
+    let config = AiTranscriptForwardConfig {
+        roots: vec![root.path().to_path_buf()],
+        target: "http://unused".to_string(),
+        token: None,
+        hostname: "h".repeat(MAX_FORWARDED_IDENTIFIER_BYTES + 1),
+        checkpoint_path: root.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(1),
+    };
+    let record = transcript_record(
+        &config,
+        &path,
+        scanner::SourceKind::ClaudeProject,
+        TranscriptRecordDetails {
+            revision: "revision".to_string(),
+            timestamp: Some("t".repeat(MAX_FORWARDED_TIMESTAMP_BYTES + 1)),
+            ai_project: None,
+            ai_session_id: None,
+            event_kind: Some("e".repeat(MAX_FORWARDED_IDENTIFIER_BYTES + 1)),
+            message: "m".repeat(MAX_FORWARDED_MESSAGE_BYTES + 1),
+        },
+    );
+    assert!(record.envelope.hostname.len() <= MAX_FORWARDED_IDENTIFIER_BYTES + 3);
+    assert!(record.envelope.timestamp.unwrap().len() <= MAX_FORWARDED_TIMESTAMP_BYTES + 3);
+    assert!(record.envelope.event_kind.unwrap().len() <= MAX_FORWARDED_IDENTIFIER_BYTES + 3);
+    assert!(record.envelope.message.len() <= MAX_FORWARDED_MESSAGE_BYTES + 3);
 }
 
 #[test]

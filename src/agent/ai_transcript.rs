@@ -26,15 +26,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::ai_project::normalize_local_ai_project_path;
 use crate::ai_transcript_ingest::{
-    AiTranscriptIngestRequest, AiTranscriptIngestResponse, AiTranscriptRecord,
-    EVIDENCE_ENVELOPE_VERSION, EvidenceCapabilityCoverage, EvidenceCoverage, EvidenceEnvelope,
-    EvidenceSource,
+    AI_TRANSCRIPT_BODY_LIMIT_BYTES, AiTranscriptIngestRequest, AiTranscriptIngestResponse,
+    AiTranscriptRecord, EVIDENCE_ENVELOPE_VERSION, EvidenceCapabilityCoverage, EvidenceCoverage,
+    EvidenceEnvelope, EvidenceSource,
 };
 use crate::scanner;
 
@@ -48,6 +48,14 @@ const MAX_BATCH_RECORDS: usize = 500;
 /// the agent's recurring forwarder.
 const MAX_FORWARD_FILES: usize = 1_024;
 const MAX_TRANSCRIPT_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_JSONL_LINE_BYTES: usize = 64 * 1024;
+// At 500 records, a 3 KiB message can at worst double while JSON escaping.
+// Together with the explicitly bounded scalar fields below, that remains
+// under the receiver's 4 MiB request budget without an unbounded retry loop.
+const MAX_FORWARDED_MESSAGE_BYTES: usize = 3_000;
+const MAX_FORWARDED_IDENTIFIER_BYTES: usize = 512;
+const MAX_FORWARDED_TIMESTAMP_BYTES: usize = 128;
+const MAX_FORWARD_BODY_BYTES: usize = AI_TRANSCRIPT_BODY_LIMIT_BYTES - 128 * 1024;
 const CODEX_PREFIX_METADATA_SCAN_LINES: usize = 200;
 const TRANSCRIPT_FORWARDER_ADAPTER_VERSION: &str = "cortex-ai-forwarder-v1";
 
@@ -83,6 +91,13 @@ struct Checkpoint {
     /// file's local cursor; receipt IDs keep the replay safe.
     #[serde(default)]
     fingerprints: HashMap<String, String>,
+    /// Per-root discovery cursors. Discovery is intentionally bounded, so a
+    /// busy provider tree cannot permanently hide its later transcript files.
+    /// The cursor only moves after the scan is either durably checkpointed or
+    /// has nothing to submit; a failed network delivery always retries the
+    /// same discovery window.
+    #[serde(default)]
+    discovery_cursors: HashMap<String, String>,
     /// In-process record of malformed Gemini transcripts, keyed by canonical
     /// path. Deliberately not persisted: a restart should re-warn rather than
     /// inherit suppression from a previous process.
@@ -121,13 +136,19 @@ fn save_checkpoint(path: &Path, checkpoint: &Checkpoint) -> Result<()> {
             .with_context(|| format!("failed to create checkpoint dir {}", parent.display()))?;
     }
     let bytes = serde_json::to_vec(checkpoint)?;
-    let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).context("failed to generate checkpoint temp-file nonce")?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let tmp_path = path.with_extension(format!("tmp-{}-{nonce}", std::process::id()));
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(&tmp_path).with_context(|| {
         format!(
@@ -200,6 +221,14 @@ fn evict_missing_gemini_failures(checkpoint: &mut Checkpoint, present: &HashSet<
 /// predicate, without pulling in the local-indexing `IndexResult` coupling
 /// that `scanner::collect_supported_files` carries).
 fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
+    collect_files_after(root, out, None);
+}
+
+/// Collect one stable discovery window after `after`. Directories are always
+/// traversed, because a directory whose own path precedes the cursor can
+/// contain later files. File paths are sorted at every level so a persisted
+/// cursor rotates predictably across a large transcript tree.
+fn collect_files_after(root: &Path, out: &mut Vec<PathBuf>, after: Option<&Path>) {
     if out.len() >= MAX_FORWARD_FILES {
         return;
     }
@@ -217,9 +246,11 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
     if root.is_file() {
         if scanner::is_supported_transcript_file(root)
-            && root
-                .metadata()
-                .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES)
+            && after.is_none_or(|cursor| root > cursor)
+            && (!scanner::gemini::is_chat_file(root)
+                || root
+                    .metadata()
+                    .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES))
         {
             out.push(root.to_path_buf());
         }
@@ -231,8 +262,12 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
     let Ok(read_dir) = fs::read_dir(root) else {
         return;
     };
-    for entry in read_dir.flatten() {
-        let path = entry.path();
+    let mut paths = read_dir
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
         if fs::symlink_metadata(&path)
             .ok()
             .is_some_and(|metadata| metadata.file_type().is_symlink())
@@ -240,11 +275,13 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
             continue;
         }
         if path.is_dir() {
-            collect_files(&path, out);
+            collect_files_after(&path, out, after);
         } else if scanner::is_supported_transcript_file(&path)
-            && path
-                .metadata()
-                .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES)
+            && after.is_none_or(|cursor| path > cursor)
+            && (!scanner::gemini::is_chat_file(&path)
+                || path
+                    .metadata()
+                    .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES))
         {
             out.push(path);
         }
@@ -288,10 +325,10 @@ fn read_new_lines(
     limit: usize,
 ) -> Result<(Vec<(usize, String)>, usize)> {
     let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
     let mut out = Vec::new();
     let mut line_no = 0usize;
-    for line in reader.lines() {
+    while let Some(line) = read_bounded_jsonl_line(&mut reader)? {
         if line_no < from_line {
             line_no += 1;
             continue;
@@ -299,11 +336,45 @@ fn read_new_lines(
         if out.len() >= limit {
             break;
         }
-        let line = line.with_context(|| format!("read line from {}", path.display()))?;
         out.push((line_no, line));
         line_no += 1;
     }
     Ok((out, line_no))
+}
+
+fn read_bounded_jsonl_line(reader: &mut BufReader<fs::File>) -> Result<Option<String>> {
+    let mut line = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                String::from_utf8(line)
+                    .context("transcript line is not UTF-8")
+                    .map(Some)
+            };
+        }
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if line.len().saturating_add(take) > MAX_JSONL_LINE_BYTES {
+            reader.consume(take);
+            bail!("transcript line exceeds {MAX_JSONL_LINE_BYTES} bytes");
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if line.ends_with(b"\n") {
+            line.pop();
+            if line.ends_with(b"\r") {
+                line.pop();
+            }
+            return String::from_utf8(line)
+                .context("transcript line is not UTF-8")
+                .map(Some);
+        }
+    }
 }
 
 fn codex_fallback_session_id(path: &Path, source_kind: scanner::SourceKind) -> Option<String> {
@@ -382,14 +453,18 @@ fn source_epoch(path: &Path) -> String {
     sha256_id(parts)
 }
 
-fn file_prefix_fingerprint(path: &Path) -> Result<String> {
-    use std::io::Read;
-
-    let mut file = fs::File::open(path)?;
-    let mut bytes = vec![0; 4096];
-    let read = file.read(&mut bytes)?;
-    bytes.truncate(read);
-    Ok(sha256_id([bytes.as_slice()]))
+fn file_prefix_fingerprint(path: &Path, acknowledged_lines: usize) -> Result<String> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    for _ in 0..acknowledged_lines {
+        let Some(line) = read_bounded_jsonl_line(&mut reader)? else {
+            break;
+        };
+        hasher.update(line.as_bytes());
+        hasher.update([0]);
+    }
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 /// Returns a fingerprint for the acknowledged logical prefix of a Gemini
@@ -509,16 +584,34 @@ fn transcript_record(
                 native_session_id: safe_provenance_id("session", details.ai_session_id.clone()),
                 title: None,
             },
-            timestamp: details.timestamp,
-            hostname: config.hostname.clone(),
+            timestamp: details
+                .timestamp
+                .map(|timestamp| truncate_utf8(&timestamp, MAX_FORWARDED_TIMESTAMP_BYTES)),
+            hostname: truncate_utf8(&config.hostname, MAX_FORWARDED_IDENTIFIER_BYTES),
             ai_project: safe_provenance_id("project", details.ai_project),
             ai_session_id: safe_provenance_id("session", details.ai_session_id),
-            event_kind: details.event_kind,
-            message: crate::receiver::enrichment::scrub_ai_message(&details.message, None),
+            event_kind: details
+                .event_kind
+                .map(|event_kind| truncate_utf8(&event_kind, MAX_FORWARDED_IDENTIFIER_BYTES)),
+            message: crate::receiver::enrichment::scrub_ai_message(
+                &truncate_utf8(&details.message, MAX_FORWARDED_MESSAGE_BYTES),
+                None,
+            ),
             capabilities: capability_coverage(source_kind),
             diagnostics: Vec::new(),
         },
     }
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &value[..end])
 }
 
 async fn scan_and_forward(
@@ -527,9 +620,31 @@ async fn scan_and_forward(
     checkpoint: &mut Checkpoint,
 ) -> Result<usize> {
     let mut files = Vec::new();
+    let mut discovery_updates = HashMap::new();
     for root in &config.roots {
-        collect_files(root, &mut files);
+        // Bound each configured root independently and rotate that window on
+        // subsequent scans. One busy provider must not hide later roots (or
+        // its own later sessions) forever.
+        let root_key = root.to_string_lossy().to_string();
+        let cursor = checkpoint
+            .discovery_cursors
+            .get(&root_key)
+            .map(PathBuf::from);
+        let mut root_files = Vec::new();
+        collect_files_after(root, &mut root_files, cursor.as_deref());
+        if root_files.is_empty() && cursor.is_some() {
+            // Reached the end of this stable traversal: wrap so ongoing
+            // sessions near the beginning remain observable.
+            collect_files(root, &mut root_files);
+        }
+        root_files.sort();
+        if let Some(last) = root_files.last() {
+            discovery_updates.insert(root_key, last.to_string_lossy().to_string());
+        }
+        files.extend(root_files);
     }
+    files.sort();
+    files.dedup();
     evict_missing_gemini_failures(
         checkpoint,
         &files
@@ -643,7 +758,7 @@ async fn scan_and_forward(
         }
 
         let mut from_line = checkpoint.files.get(&key).copied().unwrap_or(0);
-        let fingerprint = match file_prefix_fingerprint(path) {
+        let fingerprint = match file_prefix_fingerprint(path, from_line) {
             Ok(fingerprint) => fingerprint,
             Err(error) => {
                 tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to fingerprint file");
@@ -715,11 +830,22 @@ async fn scan_and_forward(
                 }
             }
         }
-        new_totals.insert(key, total_lines);
-        new_fingerprints.insert(path.to_string_lossy().to_string(), fingerprint);
+        let acknowledged_fingerprint = match file_prefix_fingerprint(path, total_lines) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to fingerprint acknowledged prefix");
+                continue;
+            }
+        };
+        new_totals.insert(key.clone(), total_lines);
+        new_fingerprints.insert(key, acknowledged_fingerprint);
     }
 
     if records.is_empty() {
+        // Advancing an all-quiet window is still essential: otherwise a
+        // checkpointed first 1,024 files would starve every later file.
+        checkpoint.discovery_cursors.extend(discovery_updates);
+        save_checkpoint(&config.checkpoint_path, checkpoint)?;
         return Ok(0);
     }
 
@@ -732,11 +858,17 @@ async fn scan_and_forward(
         expected_receipts.len() == sent,
         "ai transcript forward constructed duplicate source-record identities"
     );
+    let payload = serde_json::to_vec(&AiTranscriptIngestRequest { records })?;
+    anyhow::ensure!(
+        payload.len() <= MAX_FORWARD_BODY_BYTES,
+        "ai transcript forward payload exceeded bounded request budget"
+    );
     let mut url = config.target.trim_end_matches('/').to_string();
     url.push_str("/v1/ai-transcripts");
     let mut request = client
         .post(&url)
-        .json(&AiTranscriptIngestRequest { records });
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(payload);
     if let Some(token) = &config.token {
         request = request.bearer_auth(token);
     }
@@ -775,6 +907,7 @@ async fn scan_and_forward(
         checkpoint.files.insert(key, total);
     }
     checkpoint.fingerprints.extend(new_fingerprints);
+    checkpoint.discovery_cursors.extend(discovery_updates);
     save_checkpoint(&config.checkpoint_path, checkpoint)?;
     Ok(sent)
 }

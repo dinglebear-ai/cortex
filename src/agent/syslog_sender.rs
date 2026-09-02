@@ -191,6 +191,9 @@ impl SyslogSender {
                 reason_code: "record_too_large".into(),
             });
             state.spool.evicted_records = state.spool.evicted_records.saturating_add(1);
+            while state.spool.gaps.len() > 256 {
+                state.spool.gaps.pop_front();
+            }
         } else {
             state.spool.records.push_back(SyslogForwardRecord {
                 source_instance: source_instance.clone(),

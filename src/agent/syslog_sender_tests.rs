@@ -286,6 +286,25 @@ fn aggregate_cap_bounds_high_cardinality_sources_and_records_each_loss_window() 
     );
 }
 
+#[tokio::test]
+async fn oversized_input_gaps_stay_bounded_during_a_receiver_outage() {
+    let dir = tempfile::tempdir().unwrap();
+    let sender = SyslogSender::new(
+        "http://127.0.0.1:9".to_string(),
+        None,
+        dir.path().join("spool.json"),
+    );
+    let oversized = "x".repeat(MAX_FORWARD_RECORD_BYTES + 1);
+    for _ in 0..257 {
+        sender.try_send_from("journald", oversized.clone());
+    }
+
+    let status = sender.status();
+    assert_eq!(status.queued_records, 0);
+    assert_eq!(status.pending_gaps, 256);
+    assert_eq!(status.evicted_records, 257);
+}
+
 fn source_record(source_instance: &str, sequence: u64) -> SyslogForwardRecord {
     SyslogForwardRecord {
         source_instance: source_instance.into(),

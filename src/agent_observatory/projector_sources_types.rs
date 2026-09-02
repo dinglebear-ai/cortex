@@ -120,7 +120,7 @@ fn mcp_parts(row: &AgentMcpSourceRow) -> ProjectionParts {
         source_log_id: row.call_log_id.or(row.result_log_id),
         trace_id: None,
         span_id: None,
-        severity: if is_error { "error" } else { "info" }.to_string(),
+        severity: if is_error { "err" } else { "info" }.to_string(),
         title: format!(
             "MCP {}: {}",
             if label.is_empty() { "event" } else { label },
@@ -180,7 +180,7 @@ fn hook_parts(row: &AgentHookSourceRow) -> ProjectionParts {
         source_log_id: row.log_id,
         trace_id: None,
         span_id: None,
-        severity: if is_error { "error" } else { "info" }.to_string(),
+        severity: if is_error { "err" } else { "info" }.to_string(),
         title: format!("Hook {}: {}", row.hook_event, actor_name),
         summary: truncate_utf8(
             row.stderr_preview
@@ -279,7 +279,7 @@ fn llm_parts(row: &AgentLlmSourceRow) -> ProjectionParts {
         source_log_id: None,
         trace_id: None,
         span_id: None,
-        severity: if is_error { "error" } else { "info" }.to_string(),
+        severity: if is_error { "err" } else { "info" }.to_string(),
         title: format!("LLM {}: {}", row.action, actor_name),
         summary: truncate_utf8(
             row.error.as_deref().unwrap_or(&row.status),
@@ -338,7 +338,7 @@ fn otlp_span_parts(row: &AgentOtelSpanSourceRow) -> ProjectionParts {
         source_log_id: None,
         trace_id: Some(row.trace_id.clone()),
         span_id: Some(row.span_id.clone()),
-        severity: if is_error { "error" } else { "info" }.to_string(),
+        severity: if is_error { "err" } else { "info" }.to_string(),
         title: format!(
             "OTLP span: {}",
             truncate_utf8(&row.span_name, MAX_SUMMARY_BYTES)
@@ -437,7 +437,7 @@ fn repository_observation_parts(row: &AgentRepositoryObservationSourceRow) -> Pr
         trace_id: None,
         span_id: None,
         severity: if row.observation_kind == "error" {
-            "error"
+            "err"
         } else {
             "info"
         }
