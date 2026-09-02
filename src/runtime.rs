@@ -579,17 +579,37 @@ impl RuntimeCore {
     /// [`MaintenanceHandles::syslog_monitor`] so it participates in the
     /// cooperative shutdown drain.
     pub async fn start_syslog(&self, handles: &mut MaintenanceHandles) -> Result<()> {
-        let listener_handles = receiver::start_listeners(
+        let listener_handles = receiver::start_listeners_with_shutdown(
             self.config.receiver.clone(),
             self.ingest.clone(),
             Arc::clone(&self.observability),
+            handles.token.clone(),
         )
         .await?;
 
         let fatal_shutdown = self.fatal_shutdown.clone();
+        let shutdown = handles.token.clone();
         let monitor = tokio::spawn(async move {
+            let mut udp = listener_handles.udp;
+            let mut tcp = listener_handles.tcp;
             let protocol = tokio::select! {
-                res = listener_handles.udp => {
+                biased;
+                _ = shutdown.cancelled() => {
+                    // Both supervisors receive this token and abort their
+                    // active recv/accept task before returning. Join them so
+                    // graceful shutdown does not leave detached listeners or
+                    // misclassify their expected exit as a fatal outage.
+                    let (udp_result, tcp_result) = tokio::join!(udp, tcp);
+                    for (listener, result) in [("udp", udp_result), ("tcp", tcp_result)] {
+                        if let Err(error) = result {
+                            tracing::warn!(listener, error = %error,
+                                "syslog listener supervisor failed during shutdown");
+                        }
+                    }
+                    tracing::debug!("syslog listener monitor stopped cleanly");
+                    return;
+                }
+                res = &mut udp => {
                     match res {
                         Ok(()) => tracing::error!(
                             "syslog supervisor task (udp) exited unexpectedly — \
@@ -601,9 +621,11 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    tcp.abort();
+                    let _ = tcp.await;
                     "udp"
                 }
-                res = listener_handles.tcp => {
+                res = &mut tcp => {
                     match res {
                         Ok(()) => tracing::error!(
                             "syslog supervisor task (tcp) exited unexpectedly — \
@@ -615,6 +637,8 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    udp.abort();
+                    let _ = udp.await;
                     "tcp"
                 }
             };
