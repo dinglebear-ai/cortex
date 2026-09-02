@@ -485,6 +485,7 @@ impl<'a> CheckpointStore<'a> {
             affected_paths,
             recent_schema_error_count,
             stale_indicators,
+            provider_coverage: crate::scanner::providers::runtime_health_conn(&conn)?,
         })
     }
 }

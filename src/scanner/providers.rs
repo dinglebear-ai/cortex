@@ -1,0 +1,472 @@
+//! Canonical AI-session provider descriptors.
+//!
+//! Keep source format parsing in the provider-local scanner modules.  This
+//! registry only owns stable provider names, safe discovery roots, and the
+//! coverage a caller may honestly claim for each evidence lane.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+
+/// A provider known to the local AI-session scanner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Claude,
+    Codex,
+    Gemini,
+    Antigravity,
+}
+
+impl Provider {
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Gemini => "gemini",
+            Self::Antigravity => "antigravity",
+        }
+    }
+
+    pub fn from_alias(value: &str) -> Option<Self> {
+        PROVIDERS.iter().find_map(|definition| {
+            (definition.canonical_name == value || definition.aliases.contains(&value))
+                .then_some(definition.provider)
+        })
+    }
+}
+
+/// A bounded evidence lane. `NotObserved` means unsupported or unavailable;
+/// it is deliberately distinct from an observed lane with zero records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderLane {
+    SessionMetadata,
+    Transcript,
+    ToolCalls,
+    McpEvents,
+    Skills,
+    Hooks,
+    Usage,
+}
+
+/// Static support declared by a reviewed adapter.
+///
+/// This is intentionally a different vocabulary from [`Coverage`]. An
+/// adapter may support a lane before this installation has received a single
+/// receipt for it; serializing that fact as `observed` would be misleading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterSupport {
+    Supported,
+    Partial,
+    Unsupported,
+}
+
+impl AdapterSupport {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Partial => "partial",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// Receipt-backed runtime coverage, shared by health and projection consumers
+/// without inventing a second session model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coverage {
+    Observed,
+    Partial,
+    NotObserved,
+    Failed,
+}
+
+impl Coverage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Partial => "partial",
+            Self::NotObserved => "not_observed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Checkpoint fields currently persisted for a provider source.
+///
+/// `canonical_path` is a mutable locator, not an immutable source identity.
+/// The existing scanner combines it with a content fingerprint for safe
+/// rewrites/replays. Persisting a true source epoch or immutable source ID
+/// requires a migration and is intentionally not claimed by this slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckpointPolicy {
+    pub source_locator: &'static str,
+    pub revision: &'static str,
+    pub content_fingerprint: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderDefinition {
+    pub provider: Provider,
+    pub canonical_name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub adapter_version: &'static str,
+    pub privacy_policy: &'static str,
+    pub checkpoint: CheckpointPolicy,
+    lanes: &'static [(ProviderLane, AdapterSupport)],
+}
+
+impl ProviderDefinition {
+    pub fn support(self, lane: ProviderLane) -> AdapterSupport {
+        for &(candidate, coverage) in self.lanes {
+            if candidate == lane {
+                return coverage;
+            }
+        }
+        AdapterSupport::Unsupported
+    }
+}
+
+const CONTENT_FINGERPRINT_CHECKPOINT: CheckpointPolicy = CheckpointPolicy {
+    source_locator: "canonical_path",
+    revision: "size_and_mtime",
+    content_fingerprint: "sha256",
+};
+
+const PROVIDERS: &[ProviderDefinition] = &[
+    ProviderDefinition {
+        provider: Provider::Claude,
+        canonical_name: "claude",
+        aliases: &["claude-code"],
+        adapter_version: "claude-jsonl-v1",
+        privacy_policy: "scrub-before-persist",
+        checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
+        lanes: &[
+            (ProviderLane::SessionMetadata, AdapterSupport::Supported),
+            (ProviderLane::Transcript, AdapterSupport::Supported),
+            (ProviderLane::ToolCalls, AdapterSupport::Partial),
+            (ProviderLane::McpEvents, AdapterSupport::Supported),
+            (ProviderLane::Skills, AdapterSupport::Supported),
+            (ProviderLane::Hooks, AdapterSupport::Supported),
+            (ProviderLane::Usage, AdapterSupport::Unsupported),
+        ],
+    },
+    ProviderDefinition {
+        provider: Provider::Codex,
+        canonical_name: "codex",
+        aliases: &["openai-codex"],
+        adapter_version: "codex-jsonl-v1",
+        privacy_policy: "scrub-before-persist",
+        checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
+        lanes: &[
+            (ProviderLane::SessionMetadata, AdapterSupport::Supported),
+            (ProviderLane::Transcript, AdapterSupport::Supported),
+            (ProviderLane::ToolCalls, AdapterSupport::Partial),
+            (ProviderLane::McpEvents, AdapterSupport::Supported),
+            (ProviderLane::Skills, AdapterSupport::Supported),
+            (ProviderLane::Hooks, AdapterSupport::Unsupported),
+            (ProviderLane::Usage, AdapterSupport::Unsupported),
+        ],
+    },
+    ProviderDefinition {
+        provider: Provider::Gemini,
+        canonical_name: "gemini",
+        aliases: &["gemini-cli"],
+        adapter_version: "gemini-chat-json-v1",
+        privacy_policy: "scrub-before-persist",
+        checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
+        lanes: &[
+            (ProviderLane::SessionMetadata, AdapterSupport::Supported),
+            (ProviderLane::Transcript, AdapterSupport::Supported),
+            (ProviderLane::ToolCalls, AdapterSupport::Unsupported),
+            (ProviderLane::McpEvents, AdapterSupport::Unsupported),
+            (ProviderLane::Skills, AdapterSupport::Unsupported),
+            (ProviderLane::Hooks, AdapterSupport::Unsupported),
+            (ProviderLane::Usage, AdapterSupport::Unsupported),
+        ],
+    },
+    ProviderDefinition {
+        provider: Provider::Antigravity,
+        canonical_name: "antigravity",
+        aliases: &["agy", "antigravity-cli"],
+        adapter_version: "antigravity-sqlite-metadata-v1",
+        privacy_policy: "metadata-only-until-parser-is-reviewed",
+        checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
+        lanes: &[
+            // The SQLite stores can establish session/usage lifecycle
+            // metadata. They do not establish transcript or extracted event
+            // content, so those lanes must remain visibly unavailable.
+            (ProviderLane::SessionMetadata, AdapterSupport::Partial),
+            (ProviderLane::Transcript, AdapterSupport::Unsupported),
+            (ProviderLane::ToolCalls, AdapterSupport::Unsupported),
+            (ProviderLane::McpEvents, AdapterSupport::Unsupported),
+            (ProviderLane::Skills, AdapterSupport::Unsupported),
+            (ProviderLane::Hooks, AdapterSupport::Unsupported),
+            (ProviderLane::Usage, AdapterSupport::Partial),
+        ],
+    },
+];
+
+/// All definitions, for in-process health/forwarding/projection consumers.
+pub const fn definitions() -> &'static [ProviderDefinition] {
+    PROVIDERS
+}
+
+pub fn definition(provider: Provider) -> &'static ProviderDefinition {
+    PROVIDERS
+        .iter()
+        .find(|definition| definition.provider == provider)
+        .expect("every Provider has a registry definition")
+}
+
+/// Runtime scanner-only coverage for one provider. This derives coverage from
+/// persisted scanner sources, so a provider descriptor alone cannot turn an
+/// unavailable lane into an `observed` one.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProviderRuntimeHealth {
+    pub provider: String,
+    pub source_count: usize,
+    pub successful_sources: usize,
+    pub failed_sources: usize,
+    pub lanes: Vec<ProviderLaneHealth>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProviderLaneHealth {
+    pub lane: String,
+    /// Format support declared by the provider adapter, never runtime evidence.
+    pub declared_support: String,
+    pub coverage: String,
+}
+
+/// Return the bounded provider-runtime view used by scanner health callers.
+///
+/// Only `transcript_sources` is inspected: one grouped query, then a fixed
+/// four-provider/fourteen-lane maximum in memory. Forwarding, Observatory,
+/// and OTLP consumers are deliberately not reported as wired until their
+/// corresponding beads call this registry themselves.
+pub fn runtime_health(pool: &crate::db::DbPool) -> Result<Vec<ProviderRuntimeHealth>> {
+    let conn = pool.get()?;
+    runtime_health_conn(&conn)
+}
+
+/// Same bounded projection as [`runtime_health`], using a caller-owned
+/// connection so scanner health collection does not exhaust a single-slot DB
+/// pool by checking out a second connection.
+pub(crate) fn runtime_health_conn(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<ProviderRuntimeHealth>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.canonical_path,
+                s.last_error,
+                COUNT(r.id) AS imported_records
+         FROM transcript_sources s
+         LEFT JOIN transcript_import_records r ON r.source_id = s.id
+         GROUP BY s.id
+         ORDER BY s.canonical_path ASC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut counts = [(0usize, 0usize, 0usize); 4];
+    for (path, error, imported_records) in rows {
+        let Some(provider) = provider_for_path(Path::new(&path)) else {
+            continue;
+        };
+        let count = &mut counts[provider_index(provider)];
+        count.0 += 1;
+        if imported_records > 0 && error.is_none() {
+            count.1 += 1;
+        } else if error.is_some() {
+            count.2 += 1;
+        }
+    }
+
+    Ok(definitions()
+        .iter()
+        .map(|definition| {
+            let (source_count, successful_sources, failed_sources) =
+                counts[provider_index(definition.provider)];
+            ProviderRuntimeHealth {
+                provider: definition.canonical_name.to_string(),
+                source_count,
+                successful_sources,
+                failed_sources,
+                lanes: ALL_LANES
+                    .iter()
+                    .map(|lane| ProviderLaneHealth {
+                        lane: lane_name(*lane).to_string(),
+                        declared_support: definition.support(*lane).as_str().to_string(),
+                        coverage: runtime_coverage(
+                            *lane,
+                            definition.support(*lane),
+                            source_count,
+                            successful_sources,
+                            failed_sources,
+                        )
+                        .as_str()
+                        .to_string(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect())
+}
+
+const ALL_LANES: &[ProviderLane] = &[
+    ProviderLane::SessionMetadata,
+    ProviderLane::Transcript,
+    ProviderLane::ToolCalls,
+    ProviderLane::McpEvents,
+    ProviderLane::Skills,
+    ProviderLane::Hooks,
+    ProviderLane::Usage,
+];
+
+fn provider_index(provider: Provider) -> usize {
+    match provider {
+        Provider::Claude => 0,
+        Provider::Codex => 1,
+        Provider::Gemini => 2,
+        Provider::Antigravity => 3,
+    }
+}
+
+fn lane_name(lane: ProviderLane) -> &'static str {
+    match lane {
+        ProviderLane::SessionMetadata => "session_metadata",
+        ProviderLane::Transcript => "transcript",
+        ProviderLane::ToolCalls => "tool_calls",
+        ProviderLane::McpEvents => "mcp_events",
+        ProviderLane::Skills => "skills",
+        ProviderLane::Hooks => "hooks",
+        ProviderLane::Usage => "usage",
+    }
+}
+
+fn runtime_coverage(
+    lane: ProviderLane,
+    declared: AdapterSupport,
+    source_count: usize,
+    successful_sources: usize,
+    failed_sources: usize,
+) -> Coverage {
+    // The transcript scanner persists only transcript import receipts. It has
+    // no durable per-source receipts for tools, MCP, skills, hooks, usage, or
+    // metadata, so those lanes remain `not_observed` even when an adapter
+    // advertises format support. Later ingest/projection beads must add their
+    // own receipt-backed lane logic rather than inherit this status.
+    if lane != ProviderLane::Transcript || declared == AdapterSupport::Unsupported {
+        return Coverage::NotObserved;
+    }
+    if successful_sources > 0 && failed_sources > 0 {
+        Coverage::Partial
+    } else if successful_sources > 0 {
+        Coverage::Observed
+    } else if source_count > 0 && failed_sources == source_count {
+        Coverage::Failed
+    } else {
+        Coverage::NotObserved
+    }
+}
+
+/// Safe roots that the JSON transcript scanner may recursively inspect.
+///
+/// Antigravity is deliberately excluded: its approved adapter is currently
+/// SQLite metadata only, and treating its workspace transcript artifacts as a
+/// supported transcript lane would overclaim capability and duplicate chunks.
+pub(crate) fn transcript_roots() -> Vec<PathBuf> {
+    let Some(home) = crate::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+
+    let mut roots = vec![home.join(".claude/projects"), home.join(".gemini/tmp")];
+    for codex_home in codex_homes(&home) {
+        roots.extend([
+            codex_home.join("sessions"),
+            codex_home.join("archived_sessions"),
+            codex_home.join("worktrees"),
+        ]);
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+pub(crate) fn is_known_transcript_root(path: &Path) -> bool {
+    let canonical = canonical_or_self(path.to_path_buf());
+    transcript_roots().iter().any(|root| {
+        let root = canonical_or_self(root.clone());
+        canonical == root || canonical.starts_with(root)
+    })
+}
+
+pub(crate) fn provider_for_path(path: &Path) -> Option<Provider> {
+    // Scanner sources are canonicalized before persistence. Normalize the
+    // provider roots too: macOS commonly aliases `/var` to `/private/var`,
+    // and a lexical starts_with check would otherwise hide real sources from
+    // the health projection.
+    let home = crate::env::var_os("HOME").map(PathBuf::from)?;
+    let homes = path_variants(home);
+    if homes
+        .iter()
+        .any(|home| path.starts_with(home.join(".claude/projects")))
+    {
+        return Some(Provider::Claude);
+    }
+    if homes.iter().flat_map(|home| codex_homes(home)).any(|root| {
+        path.starts_with(root.join("sessions"))
+            || path.starts_with(root.join("archived_sessions"))
+            || path.starts_with(root.join("worktrees"))
+    }) {
+        return Some(Provider::Codex);
+    }
+    if homes
+        .iter()
+        .any(|home| path.starts_with(home.join(".gemini/tmp")))
+    {
+        return Some(Provider::Gemini);
+    }
+    homes
+        .iter()
+        .any(|home| {
+            path.starts_with(home.join(".gemini/antigravity"))
+                || path.starts_with(home.join(".gemini/antigravity-cli"))
+        })
+        .then_some(Provider::Antigravity)
+}
+
+fn path_variants(path: PathBuf) -> Vec<PathBuf> {
+    let mut variants = vec![path.clone(), canonical_or_self(path)];
+    variants.sort();
+    variants.dedup();
+    variants
+}
+
+fn codex_homes(home: &Path) -> Vec<PathBuf> {
+    let default = home.join(".codex");
+    let mut homes = path_variants(default);
+    if let Some(configured) = crate::env::var_os("CODEX_HOME") {
+        let configured = PathBuf::from(configured);
+        if configured.is_absolute() {
+            homes.extend(path_variants(configured));
+        }
+    }
+    homes.sort();
+    homes.dedup();
+    homes
+}
+
+fn canonical_or_self(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
+#[cfg(test)]
+#[path = "providers_tests.rs"]
+mod tests;

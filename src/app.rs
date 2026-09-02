@@ -46,6 +46,7 @@ pub use models::{
     AiHookInvestigateResponse,
     AiIncidentRequest,
     AiIncidentResponse,
+    AiIndexingOperatorHealth,
     AiInvestigateRequest,
     AiInvestigateResponse,
     AiLimitPolicy,

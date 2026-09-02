@@ -62,7 +62,10 @@ fn force_reindexes_file_without_duplicate_logs() {
         &pool,
         &file,
         "explicit_file",
-        IndexFileOptions { force: true },
+        IndexFileOptions {
+            force: true,
+            ..Default::default()
+        },
         None,
     )
     .unwrap();
@@ -1294,6 +1297,462 @@ fn index_roots_since_skips_older_file_mtimes() {
     assert_eq!(search.sessions[0].ai_session_id, "new");
 }
 
+#[test]
+#[serial]
+fn bounded_snapshot_timeout_yields_to_later_source_without_late_persistence() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let stalled = root.join("000-stalled-codex.jsonl");
+    let fast = root.join("999-fast-codex.jsonl");
+    std::fs::write(
+        &stalled,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"stalled-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"must never persist after timeout"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &fast,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"fast-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"later source reached canonical ingestion"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let _delay = SnapshotDelayGuard::for_file(
+        "000-stalled-codex.jsonl",
+        std::time::Duration::from_millis(450),
+    );
+    let started = std::time::Instant::now();
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root.clone()),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 8_192,
+                per_source_deadline: std::time::Duration::from_millis(100),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_deadline_exceeded, 1, "result={result:#?}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(300),
+        "a stalled reader held the scan longer than its deadline"
+    );
+    let ingested_fast: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'later source reached canonical ingestion'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ingested_fast, 1);
+
+    // The worker remains intentionally detached until the OS read returns.
+    // It owns no persistence capability, so completion cannot create a source
+    // or imports after the scanner classified it as deferred.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let late_source_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM transcript_sources WHERE canonical_path LIKE '%000-stalled-codex.jsonl'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        late_source_rows, 0,
+        "timed-out source persisted after return"
+    );
+}
+
+#[test]
+#[serial]
+fn bounded_gemini_snapshot_timeout_yields_to_later_gemini_without_late_persistence() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
+    let root = dir.path().join(".gemini/tmp/hash/chats");
+    std::fs::create_dir_all(&root).unwrap();
+    let stalled = root.join("session-000-stalled.json");
+    let fast = root.join("session-999-fast.json");
+    std::fs::write(
+        &stalled,
+        r#"{"sessionId":"stalled","messages":[{"id":"stalled","content":"gemini must not persist late"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &fast,
+        r#"{"sessionId":"fast","messages":[{"id":"fast","content":"later Gemini source reached canonical ingestion"}]}"#,
+    )
+    .unwrap();
+
+    let _delay = SnapshotDelayGuard::for_file(
+        "session-000-stalled.json",
+        std::time::Duration::from_millis(450),
+    );
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            // Default provider roots preserve the `/var`↔`/private/var`
+            // identity used by the HOME override on macOS.
+            root_override: None,
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 8_192,
+                per_source_deadline: std::time::Duration::from_millis(100),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_deadline_exceeded, 1, "result={result:#?}");
+    let fast_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'later Gemini source reached canonical ingestion'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fast_rows, 1);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let late_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM transcript_sources WHERE canonical_path LIKE '%session-000-stalled.json'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(late_rows, 0);
+}
+
+#[test]
+#[serial]
+fn saturated_snapshot_workers_defer_without_starving_later_source_on_retry() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["000-stalled.jsonl", "001-stalled.jsonl"] {
+        std::fs::write(
+            root.join(name),
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"stalled"}}"#,
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.join("999-healthy.jsonl"),
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"healthy source after saturation"}}"#,
+    )
+    .unwrap();
+    let delay = SnapshotDelayGuard::for_files([
+        ("000-stalled.jsonl", std::time::Duration::from_millis(450)),
+        ("001-stalled.jsonl", std::time::Duration::from_millis(450)),
+    ]);
+    let options = IndexOptions {
+        root_override: Some(root),
+        scan_budget: Some(ScanBudget {
+            per_source_max_bytes: 4_096,
+            scan_max_bytes: 16_384,
+            per_source_deadline: std::time::Duration::from_millis(100),
+        }),
+        ..Default::default()
+    };
+    let first = index_roots_with_options(&pool, options.clone(), None).unwrap();
+    assert_eq!(first.source_deadline_exceeded, 2, "result={first:#?}");
+    assert_eq!(first.snapshot_capacity_deferred, 1, "result={first:#?}");
+    assert!(
+        first.next_scan_cursor.is_some(),
+        "attempted sources advance cursor"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    drop(delay);
+    let second = index_roots_with_options(&pool, options, None).unwrap();
+    assert_eq!(second.snapshot_capacity_deferred, 0, "result={second:#?}");
+    let healthy_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'healthy source after saturation'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(healthy_rows, 1, "later healthy source gets a fair retry");
+}
+
+#[test]
+fn snapshot_bytes_count_when_gemini_utf8_validation_fails_before_records() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".gemini/tmp/hash/chats");
+    std::fs::create_dir_all(&root).unwrap();
+    let invalid = root.join("session-invalid.json");
+    let later = root.join("session-later.json");
+    std::fs::write(&invalid, [b'{', b'\xff', b'}']).unwrap();
+    std::fs::write(
+        &later,
+        r#"{"sessionId":"later","messages":[{"id":"later","content":"must defer after invalid bytes"}]}"#,
+    )
+    .unwrap();
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: None,
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 64,
+                scan_max_bytes: 3,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.parse_errors, 1, "result={result:#?}");
+    assert_eq!(result.scanned_bytes, 3, "invalid source bytes must count");
+    assert!(result.scan_budget_cap_hit, "later source must be deferred");
+}
+
+#[test]
+#[serial]
+fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    // The scanner honors an operator-supplied alternate Codex root. Isolate
+    // this scheduling test from the developer's real `CODEX_HOME`, whose
+    // discovery cost is outside the fixture and would make the elapsed-time
+    // assertion non-deterministic.
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
+    let huge_root = dir.path().join(".claude/projects");
+    std::fs::create_dir_all(&huge_root).unwrap();
+    for index in 0..=MAX_DISCOVERY_ENTRIES_PER_ROOT {
+        std::fs::write(huge_root.join(format!("noise-{index:04}.txt")), "noise").unwrap();
+    }
+    let gemini_root = dir.path().join(".gemini/tmp/hash/chats");
+    std::fs::create_dir_all(&gemini_root).unwrap();
+    std::fs::write(
+        gemini_root.join("session-later-provider.json"),
+        r#"{"sessionId":"later-provider","messages":[{"id":"later","content":"later provider discovered despite huge root"}]}"#,
+    )
+    .unwrap();
+    let _delay = SnapshotDelayGuard::for_file("projects", std::time::Duration::from_millis(180));
+    let started = std::time::Instant::now();
+
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 16_384,
+                per_source_deadline: std::time::Duration::from_millis(25),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.discovery_cap_hits, 1, "result={result:#?}");
+    assert_eq!(result.discovery_deferred_roots, 1, "result={result:#?}");
+    assert!(result.next_discovery_cursor.is_some());
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(120),
+        "a slow provider-root discovery blocked the later provider root"
+    );
+    let later_provider_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'later provider discovered despite huge root'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(later_provider_rows, 1);
+}
+
+#[test]
+fn bounded_root_scan_yields_from_a_valid_slow_source_to_the_next_source() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let slow = root.join("000-slow-codex.jsonl");
+    let fast = root.join("999-fast-codex.jsonl");
+
+    let mut slow_records =
+        String::from(r#"{"type":"session_meta","payload":{"id":"slow-session"}}"#);
+    slow_records.push('\n');
+    for record in 0..200 {
+        slow_records.push_str(&format!(
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":"slow valid record {record} {}"}}}}"#,
+            "x".repeat(160)
+        ));
+        slow_records.push('\n');
+    }
+    std::fs::write(&slow, slow_records).unwrap();
+    std::fs::write(
+        &fast,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"fast-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"fast source reached canonical ingestion"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root.clone()),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 1_200,
+                scan_max_bytes: 8_000,
+                per_source_deadline: std::time::Duration::from_secs(30),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_budget_cap_hits, 1, "result={result:#?}");
+    assert_eq!(result.source_deadline_exceeded, 0);
+    assert!(!result.scan_budget_cap_hit);
+    let ingested_fast: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'fast source reached canonical ingestion'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        ingested_fast, 1,
+        "a valid but byte-capped source must yield before a later valid source is starved"
+    );
+}
+
+#[test]
+fn bounded_root_scan_reports_scan_wide_cap_and_defers_remaining_sources() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let slow = root.join("000-budget-source.jsonl");
+    let deferred = root.join("999-deferred-source.jsonl");
+    std::fs::write(
+        &slow,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"budget-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":""#,
+            "x",
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "\"}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &deferred,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"deferred-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"must wait for next pass"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root.clone()),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 10_000,
+                scan_max_bytes: 120,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert!(result.scan_budget_cap_hit);
+    assert_eq!(result.deferred_sources, 1);
+    let cursor = result
+        .next_scan_cursor
+        .clone()
+        .expect("a source was attempted before the scan-wide cap");
+    let deferred_ingested: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'must wait for next pass'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(deferred_ingested, 0);
+
+    let second = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root),
+            start_after: Some(cursor),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 10_000,
+                scan_max_bytes: 20_000,
+                per_source_deadline: std::time::Duration::from_secs(30),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(second.next_scan_cursor.is_some());
+    let deferred_ingested: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'must wait for next pass'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        deferred_ingested, 1,
+        "the next bounded scan begins after the last attempted source"
+    );
+}
+
 fn set_mtime(path: &std::path::Path, secs: u64, nanos: u32) {
     let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
     file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(secs, nanos))
@@ -1316,6 +1775,29 @@ impl Drop for HomeOverride {
             crate::env::set_test_var("HOME", home);
         } else {
             crate::env::remove_test_var("HOME");
+        }
+    }
+}
+
+struct EnvOverride {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvOverride {
+    fn remove(key: &'static str) -> Self {
+        let previous = crate::env::var_os(key);
+        crate::env::remove_test_var(key);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvOverride {
+    fn drop(&mut self) {
+        if let Some(value) = &self.previous {
+            crate::env::set_test_var(self.key, value);
+        } else {
+            crate::env::remove_test_var(self.key);
         }
     }
 }
@@ -1591,7 +2073,10 @@ fn reindexing_same_transcript_does_not_duplicate_skill_events() {
         &pool,
         &file,
         "explicit_file",
-        IndexFileOptions { force: true },
+        IndexFileOptions {
+            force: true,
+            ..Default::default()
+        },
         None,
     )
     .unwrap();

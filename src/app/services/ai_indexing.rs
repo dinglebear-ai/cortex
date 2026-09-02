@@ -7,6 +7,19 @@ impl CortexService {
         force: bool,
         since: Option<String>,
     ) -> ServiceResult<scanner::IndexResult> {
+        self.index_ai_roots_with_scan_budget(path, force, since, None, None, None)
+            .await
+    }
+
+    pub(crate) async fn index_ai_roots_with_scan_budget(
+        &self,
+        path: Option<String>,
+        force: bool,
+        since: Option<String>,
+        scan_budget: Option<scanner::ScanBudget>,
+        start_after: Option<std::path::PathBuf>,
+        discovery_start_after: Option<std::path::PathBuf>,
+    ) -> ServiceResult<scanner::IndexResult> {
         let storage = self.storage.clone();
         let since_mtime_nanos = since
             .as_deref()
@@ -27,6 +40,10 @@ impl CortexService {
                     root_override: path.map(std::path::PathBuf::from),
                     force,
                     since_mtime_nanos,
+                    scan_budget,
+                    start_after,
+                    discovery_start_after,
+                    ..Default::default()
                 },
                 Some(&storage),
             )
@@ -46,7 +63,10 @@ impl CortexService {
                 pool,
                 std::path::Path::new(&file),
                 "explicit_file",
-                scanner::IndexFileOptions { force },
+                scanner::IndexFileOptions {
+                    force,
+                    ..Default::default()
+                },
                 Some(&storage),
             )
         })

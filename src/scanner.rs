@@ -1,7 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+#[cfg(test)]
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -25,6 +30,7 @@ mod codex;
 pub(crate) mod gemini;
 pub(crate) mod hook_events;
 pub(crate) mod mcp_events;
+pub mod providers;
 pub(crate) mod skill_events;
 
 pub use checkpoint::CheckpointStore;
@@ -39,6 +45,172 @@ const MAX_INDEX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_AI_PROJECT_CHARS: usize = 512;
 const MAX_AI_SESSION_ID_CHARS: usize = 128;
 const MAX_TRANSCRIPT_PATH_CHARS: usize = 1024;
+const MAX_ABANDONED_SNAPSHOT_WORKERS: usize = 2;
+const MAX_DISCOVERY_ENTRIES_PER_ROOT: usize = 1_024;
+const MAX_DISCOVERY_PATH_BYTES_PER_ROOT: usize = 256 * 1024;
+
+// The worker reads no DB state and has no write handle. If an OS filesystem
+// read stalls, the scanner can stop waiting without allowing a late worker to
+// mutate imports or checkpoints after the source was declared deferred.
+static SNAPSHOT_WORKERS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+static DISCOVERY_WORKERS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
+enum SnapshotOutcome {
+    Complete(Vec<u8>),
+    ByteCap {
+        scanned_bytes: u64,
+    },
+    Deadline,
+    /// Existing detached readers have consumed the bounded abandoned-worker
+    /// allowance. This is a scheduling deferral, not evidence the current
+    /// source was slow or failed its own deadline.
+    Capacity,
+}
+
+#[derive(Default)]
+struct DiscoveryResult {
+    files: Vec<PathBuf>,
+    diagnostics: IndexResult,
+    capped: bool,
+}
+
+struct DiscoveryBudget {
+    max_entries: usize,
+    max_path_bytes: usize,
+    deadline: Duration,
+}
+
+/// Acquire a JSONL source before touching its checkpoint or imports. The
+/// worker owns only a file handle and an in-memory buffer: when it is late,
+/// dropping the receiver cannot leave a background task able to persist data.
+///
+/// Rust's blocking filesystem reads cannot be cancelled safely. Limiting the
+/// number of detached readers makes that limitation explicit while allowing a
+/// later source to proceed through the single persistence path immediately.
+fn snapshot_jsonl_source(
+    path: PathBuf,
+    max_bytes: u64,
+    deadline: Duration,
+) -> Result<SnapshotOutcome> {
+    if !reserve_snapshot_worker() {
+        return Ok(SnapshotOutcome::Capacity);
+    }
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let worker = std::thread::Builder::new()
+        .name("cortex-transcript-snapshot".to_string())
+        .spawn(move || {
+            let outcome = (|| -> Result<SnapshotOutcome> {
+                #[cfg(test)]
+                maybe_delay_snapshot_for_test(&path);
+
+                let file = fs::File::open(path)?;
+                let mut reader = BufReader::new(file);
+                let max_with_sentinel = max_bytes.saturating_add(1);
+                let mut bytes = Vec::new();
+                reader
+                    .by_ref()
+                    .take(max_with_sentinel)
+                    .read_to_end(&mut bytes)?;
+
+                if bytes.len() as u64 > max_bytes {
+                    Ok(SnapshotOutcome::ByteCap {
+                        scanned_bytes: max_bytes,
+                    })
+                } else {
+                    Ok(SnapshotOutcome::Complete(bytes))
+                }
+            })();
+
+            let _ = sender.send(outcome);
+            SNAPSHOT_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+        });
+
+    if worker.is_err() {
+        SNAPSHOT_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+        return Err(anyhow::anyhow!("could not start bounded transcript reader"));
+    }
+
+    match receiver.recv_timeout(deadline) {
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(error)) => Err(error),
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(SnapshotOutcome::Deadline),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow::anyhow!(
+            "bounded transcript reader stopped unexpectedly"
+        )),
+    }
+}
+
+fn reserve_snapshot_worker() -> bool {
+    let mut current = SNAPSHOT_WORKERS_IN_FLIGHT.load(Ordering::Acquire);
+    loop {
+        if current >= MAX_ABANDONED_SNAPSHOT_WORKERS {
+            return false;
+        }
+        match SNAPSHOT_WORKERS_IN_FLIGHT.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(next) => current = next,
+        }
+    }
+}
+
+#[cfg(test)]
+static SNAPSHOT_TEST_DELAY: LazyLock<Mutex<Option<Vec<(String, Duration)>>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+fn maybe_delay_snapshot_for_test(path: &Path) {
+    let delay = SNAPSHOT_TEST_DELAY
+        .lock()
+        .expect("snapshot delay lock")
+        .as_ref()
+        .and_then(|delays| {
+            let name = path.file_name().and_then(|name| name.to_str());
+            delays
+                .iter()
+                .find_map(|(file_name, delay)| (name == Some(file_name)).then_some(*delay))
+        });
+    if let Some(delay) = delay {
+        std::thread::sleep(delay);
+    }
+}
+
+#[cfg(test)]
+struct SnapshotDelayGuard(Option<Vec<(String, Duration)>>);
+
+#[cfg(test)]
+impl SnapshotDelayGuard {
+    fn for_file(file_name: &str, delay: Duration) -> Self {
+        Self::for_files([(file_name, delay)])
+    }
+
+    fn for_files<'a>(delays: impl IntoIterator<Item = (&'a str, Duration)>) -> Self {
+        let mut configured = SNAPSHOT_TEST_DELAY.lock().expect("snapshot delay lock");
+        Self(
+            configured.replace(
+                delays
+                    .into_iter()
+                    .map(|(file_name, delay)| (file_name.to_string(), delay))
+                    .collect(),
+            ),
+        )
+    }
+}
+
+#[cfg(test)]
+impl Drop for SnapshotDelayGuard {
+    fn drop(&mut self) {
+        *SNAPSHOT_TEST_DELAY.lock().expect("snapshot delay lock") = self.0.take();
+    }
+}
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct IndexResult {
@@ -53,9 +225,40 @@ pub struct IndexResult {
     pub storage_blocked_chunks: usize,
     pub dropped_metadata_fields: usize,
     pub checkpoint_updates: usize,
+    /// Bytes read from sources during this invocation. This is a scheduling
+    /// diagnostic, not a persisted source size.
+    pub scanned_bytes: u64,
+    /// Sources stopped because their bounded byte allowance was exhausted.
+    pub source_budget_cap_hits: usize,
+    /// Sources stopped because their cooperative per-source deadline elapsed.
+    /// A synchronous filesystem syscall already in progress cannot be safely
+    /// preempted; this is checked between bounded record reads.
+    pub source_deadline_exceeded: usize,
+    /// Sources deferred because already-abandoned reader workers consumed the
+    /// scanner-local cap. These are retried fairly; they are not classified as
+    /// failed or as having exceeded their own deadline.
+    pub snapshot_capacity_deferred: usize,
+    /// One provider root reached its bounded discovery allowance. This is a
+    /// scheduling diagnostic only; paths remain internal continuation state.
+    pub discovery_cap_hits: usize,
+    pub discovery_deferred_roots: usize,
+    /// The scan-wide allowance was exhausted; remaining sources were deferred
+    /// for a later scan rather than silently skipped.
+    pub scan_budget_cap_hit: bool,
+    pub deferred_sources: usize,
+    /// Canonical locator of the last source whose scan was actually started.
+    /// Watcher rescan scheduling uses this only as an ordering cursor; it is
+    /// never exposed as an operator-status payload.
+    #[serde(skip_serializing)]
+    pub(crate) next_scan_cursor: Option<PathBuf>,
+    /// Last provider root whose incremental traversal reached an allowance.
+    /// It is never rendered or serialized; watcher rescans rotate roots after
+    /// it so one huge tree cannot starve another provider tree.
+    #[serde(skip_serializing)]
+    pub(crate) next_discovery_cursor: Option<PathBuf>,
     pub file_errors: Vec<IndexFileError>,
     #[serde(skip)]
-    dropped_metadata_field_keys: HashSet<String>,
+    pub(crate) dropped_metadata_field_keys: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -63,11 +266,37 @@ pub struct IndexOptions {
     pub root_override: Option<PathBuf>,
     pub force: bool,
     pub since_mtime_nanos: Option<i64>,
+    /// Resume after this canonical source locator. Missing/deleted locators
+    /// remain safe because ordering is lexical, not identity-dependent.
+    pub start_after: Option<PathBuf>,
+    /// Resume provider-root traversal after this root when discovery was
+    /// bounded in a previous pass. This is deliberately separate from the
+    /// source-file cursor.
+    pub discovery_start_after: Option<PathBuf>,
+    /// Optional bounded scheduling for root scans. Defaults remain unbounded
+    /// for existing explicit/manual indexing callers.
+    pub scan_budget: Option<ScanBudget>,
+}
+
+/// Small scanner-local execution allowance. It prevents one large or slow
+/// source from consuming an entire watcher pass; this is deliberately not a
+/// worker-pool abstraction.
+#[derive(Debug, Clone, Copy)]
+pub struct ScanBudget {
+    pub per_source_max_bytes: u64,
+    pub scan_max_bytes: u64,
+    /// Cooperative deadline checked between bounded record reads. This keeps
+    /// a source from monopolizing normal scanner work, but deliberately does
+    /// not claim to cancel a blocked synchronous filesystem syscall: aborting
+    /// a worker that may still persist checkpoint state would violate replay
+    /// and cursor guarantees.
+    pub per_source_deadline: Duration,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct IndexFileOptions {
     pub force: bool,
+    pub scan_budget: Option<ScanBudget>,
 }
 
 /// Raw skill-extraction source paired 1:1 with each `LogBatchEntry` pushed
@@ -201,6 +430,10 @@ pub struct AiIndexingHealth {
     pub affected_paths: Vec<String>,
     pub recent_schema_error_count: i64,
     pub stale_indicators: Vec<String>,
+    /// Bounded, receipt-backed provider coverage for the existing operator
+    /// watch-status route. Declared adapter support is separate from runtime
+    /// evidence and never upgrades a quiet lane.
+    pub provider_coverage: Vec<providers::ProviderRuntimeHealth>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -334,23 +567,7 @@ impl std::fmt::Display for PathScanError {
 impl std::error::Error for PathScanError {}
 
 fn is_known_transcript_root(path: &Path) -> bool {
-    let Some(home) = crate::env::var_os("HOME").map(PathBuf::from) else {
-        return false;
-    };
-    // macOS commonly exposes /tmp through the /private/tmp symlink. Compare
-    // canonical roots to the already-canonical candidate so a disposable HOME
-    // beneath /tmp remains a recognized transcript boundary.
-    let home = home.canonicalize().unwrap_or(home);
-    let allowed = [
-        home.join(".claude/projects"),
-        home.join(".codex/sessions"),
-        home.join(".codex/worktrees"),
-        home.join(".gemini/tmp"),
-    ];
-    allowed.iter().any(|root| {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        path == root || path.starts_with(root)
-    })
+    providers::is_known_transcript_root(path)
 }
 
 fn test_temp_path(path: &Path) -> bool {
@@ -388,7 +605,7 @@ pub fn index_roots_with_options(
     options: IndexOptions,
     storage: Option<&StorageConfig>,
 ) -> Result<IndexResult> {
-    let roots = match options.root_override.as_deref() {
+    let mut roots = match options.root_override.as_deref() {
         Some(path) => {
             let mut result = IndexResult::default();
             match validate_transcript_scan_path(path) {
@@ -403,17 +620,77 @@ pub fn index_roots_with_options(
         None => default_roots(),
     };
 
+    roots.sort();
+    roots.dedup();
+    if let Some(start_after) = options.discovery_start_after.as_ref() {
+        // This is intentionally provider-root fairness, separate from the
+        // source cursor below. A giant root yields to its peers on the next
+        // bounded pass even if its own traversal remains incomplete.
+        let pivot = roots.partition_point(|root| root <= start_after);
+        roots.rotate_left(pivot);
+    }
+
     let mut result = IndexResult::default();
     let mut files = Vec::new();
     for root in roots {
         if !root.exists() {
             continue;
         }
-        collect_supported_files(&root, &mut files, &mut result);
+        if let Some(scan_budget) = options.scan_budget {
+            let discovery = discover_root_bounded(
+                root.clone(),
+                DiscoveryBudget {
+                    max_entries: MAX_DISCOVERY_ENTRIES_PER_ROOT,
+                    max_path_bytes: MAX_DISCOVERY_PATH_BYTES_PER_ROOT,
+                    deadline: scan_budget.per_source_deadline,
+                },
+            )?;
+            files.extend(discovery.files);
+            merge_result(&mut result, &discovery.diagnostics);
+            if discovery.capped {
+                result.discovery_cap_hits += 1;
+                result.discovery_deferred_roots += 1;
+                result.next_discovery_cursor = Some(root);
+            }
+        } else {
+            collect_supported_files(&root, &mut files, &mut result);
+        }
     }
     files.sort();
     files.dedup();
-    for file in files {
+    if let Some(start_after) = options.start_after.as_ref() {
+        // `partition_point` also does the right thing when the previous file
+        // disappeared: begin at the first surviving lexical successor, then
+        // wrap once to preserve bounded round-robin fairness.
+        let pivot = files.partition_point(|path| path <= start_after);
+        files.rotate_left(pivot);
+    }
+    for (position, file) in files.iter().enumerate() {
+        let global_remaining = options
+            .scan_budget
+            .map(|budget| budget.scan_max_bytes.saturating_sub(result.scanned_bytes));
+        let global_budget_limits_source = options.scan_budget.is_some_and(|budget| {
+            global_remaining.is_some_and(|remaining| remaining < budget.per_source_max_bytes)
+        });
+        let source_budget = options.scan_budget.map(|budget| ScanBudget {
+            // Bound every source independently, then reserve the remainder
+            // of the scan-wide allowance for later sources. Processing is
+            // deterministic, so a capped source yields to the next source
+            // instead of monopolizing the pass.
+            per_source_max_bytes: budget
+                .per_source_max_bytes
+                .min(budget.scan_max_bytes.saturating_sub(result.scanned_bytes)),
+            scan_max_bytes: budget.scan_max_bytes,
+            per_source_deadline: budget.per_source_deadline,
+        });
+        if options
+            .scan_budget
+            .is_some_and(|budget| result.scanned_bytes >= budget.scan_max_bytes)
+        {
+            result.scan_budget_cap_hit = true;
+            result.deferred_sources += 1;
+            continue;
+        }
         if let Some(since_mtime_nanos) = options.since_mtime_nanos {
             let metadata = match fs::metadata(&file) {
                 Ok(metadata) => metadata,
@@ -433,11 +710,31 @@ pub fn index_roots_with_options(
             detect_source_kind(&file).as_str(),
             IndexFileOptions {
                 force: options.force,
+                scan_budget: source_budget,
             },
             storage,
         ) {
-            Ok(file_result) => merge_result(&mut result, &file_result),
+            Ok(file_result) => {
+                // A capacity deferral never began source acquisition, so do
+                // not advance the fairness cursor past it. The next pass can
+                // revisit it after an abandoned reader releases its slot.
+                if file_result.snapshot_capacity_deferred == 0 {
+                    result.next_scan_cursor = Some(file.clone());
+                }
+                let exhausted_scan_budget =
+                    global_budget_limits_source && file_result.source_budget_cap_hits > 0;
+                merge_result(&mut result, &file_result);
+                if exhausted_scan_budget {
+                    result.scan_budget_cap_hit = true;
+                    // `files` is sorted and deterministic. Deferring the
+                    // remaining candidates is intentional: opening each one
+                    // just to reject it would defeat scan-wide boundedness.
+                    result.deferred_sources += files.len().saturating_sub(position + 1);
+                    break;
+                }
+            }
             Err(error) => {
+                result.next_scan_cursor = Some(file.clone());
                 classify_path_error(&error, &mut result);
                 tracing::warn!(path = %file.display(), error = %error, "Transcript file indexing failed");
                 record_file_error(&mut result, &file, &error);
@@ -477,17 +774,6 @@ pub fn index_file_with_options(
     if !path.is_file() {
         return Err(PathScanError::ExpectedFile(path.to_path_buf()).into());
     }
-    if let Some(storage) = storage {
-        let outcome = enforce_storage_budget(pool, storage)?;
-        if outcome.write_blocked {
-            return Ok(IndexResult {
-                discovered_files: 1,
-                storage_blocked_chunks: 1,
-                ..Default::default()
-            });
-        }
-    }
-
     let canonical_path = path.canonicalize()?;
     let canonical = canonical_path.to_string_lossy().to_string();
     let mut source_kind = SourceKind::from_str(source_kind, &canonical_path);
@@ -505,12 +791,61 @@ pub fn index_file_with_options(
     } else {
         None
     };
+    let current_metadata = FileMetadata::from_path_metadata(&canonical_path)?;
+
+    // Every provider first crosses this bounded, read-only acquisition
+    // boundary. The timeout applies before source identity, imports, or
+    // checkpoints are touched; the main thread is the only persistence owner.
+    let snapshot = if let Some(budget) = options.scan_budget {
+        match snapshot_jsonl_source(
+            canonical_path.clone(),
+            budget.per_source_max_bytes,
+            budget.per_source_deadline,
+        )? {
+            SnapshotOutcome::Complete(bytes) => Some(bytes),
+            SnapshotOutcome::ByteCap { scanned_bytes } => {
+                return Ok(IndexResult {
+                    discovered_files: 1,
+                    scanned_bytes,
+                    source_budget_cap_hits: 1,
+                    ..Default::default()
+                });
+            }
+            SnapshotOutcome::Deadline => {
+                return Ok(IndexResult {
+                    discovered_files: 1,
+                    source_deadline_exceeded: 1,
+                    ..Default::default()
+                });
+            }
+            SnapshotOutcome::Capacity => {
+                return Ok(IndexResult {
+                    discovered_files: 1,
+                    deferred_sources: 1,
+                    snapshot_capacity_deferred: 1,
+                    ..Default::default()
+                });
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(storage) = storage {
+        let outcome = enforce_storage_budget(pool, storage)?;
+        if outcome.write_blocked {
+            return Ok(IndexResult {
+                discovered_files: 1,
+                storage_blocked_chunks: 1,
+                ..Default::default()
+            });
+        }
+    }
     let checkpoint_store = checkpoint::CheckpointStore::new(pool);
     let source_id = checkpoint_store.ensure_source(&canonical, source_kind.as_str())?;
     if options.force {
         checkpoint_store.reset_source(source_id, &canonical)?;
     }
-    let current_metadata = FileMetadata::from_path_metadata(&canonical_path)?;
     let stored_metadata = if !options.force {
         checkpoint_store.source_metadata(source_id)?
     } else {
@@ -523,7 +858,10 @@ pub fn index_file_with_options(
             current_metadata.size,
             current_metadata.mtime,
         )?
-        && source_hash_matches(&canonical_path, stored_metadata.as_ref())?
+        && match snapshot.as_ref() {
+            Some(bytes) => source_hash_matches_bytes(bytes, stored_metadata.as_ref()),
+            None => source_hash_matches(&canonical_path, stored_metadata.as_ref())?,
+        }
     {
         return Ok(IndexResult {
             discovered_files: 1,
@@ -531,6 +869,23 @@ pub fn index_file_with_options(
         });
     }
     if source_kind == SourceKind::GeminiSession {
+        let raw = match snapshot.as_ref() {
+            Some(bytes) => match String::from_utf8(bytes.clone()) {
+                Ok(raw) => raw,
+                Err(_) => {
+                    // The snapshot has already consumed the source budget;
+                    // account it even though no parser record was reached.
+                    return Ok(IndexResult {
+                        discovered_files: 1,
+                        scanned_bytes: bytes.len() as u64,
+                        parse_errors: 1,
+                        ..Default::default()
+                    });
+                }
+            },
+            None => fs::read_to_string(&canonical_path)
+                .context("Gemini transcript is not valid UTF-8")?,
+        };
         return index_gemini_file(
             pool,
             storage,
@@ -538,6 +893,8 @@ pub fn index_file_with_options(
             &canonical_path,
             &canonical,
             &current_metadata,
+            &raw,
+            snapshot.as_ref().map_or(0, |bytes| bytes.len() as u64),
         );
     }
     let append_start = if !options.force {
@@ -554,8 +911,13 @@ pub fn index_file_with_options(
     let mut mcp_sources = Vec::new();
     let mut chunk_bytes = 0usize;
     let mut project_normalizer = ProjectNormalizer::default();
-    let file = fs::File::open(&canonical_path)?;
-    let mut reader = BufReader::new(file);
+    let snapshot_scanned_bytes = snapshot.as_ref().map_or(0, |bytes| bytes.len() as u64);
+    let snapshot_complete = snapshot.is_some();
+    let input: Box<dyn ReadSeek> = match snapshot {
+        Some(bytes) => Box::new(Cursor::new(bytes)),
+        None => Box::new(fs::File::open(&canonical_path)?),
+    };
+    let mut reader = BufReader::new(input);
     let mut hasher = Sha256::new();
     let mut line_no = if let Some(offset) = append_start {
         let counted = hash_prefix_and_count_lines(reader.get_mut(), &mut hasher, offset)?;
@@ -577,13 +939,34 @@ pub fn index_file_with_options(
     };
     let mut result = IndexResult {
         discovered_files: 1,
+        scanned_bytes: snapshot_scanned_bytes,
         ..Default::default()
     };
+    let source_started_at = Instant::now();
+    let mut source_complete = true;
 
     loop {
+        if let Some(budget) = options.scan_budget
+            && source_started_at.elapsed() >= budget.per_source_deadline
+        {
+            result.source_deadline_exceeded += 1;
+            source_complete = false;
+            break;
+        }
         let Some(read_line) = read_bounded_line(&mut reader, Some(&mut hasher))? else {
             break;
         };
+        if !snapshot_complete {
+            let line_bytes = read_line.text.len() as u64;
+            if let Some(budget) = options.scan_budget
+                && result.scanned_bytes.saturating_add(line_bytes) > budget.per_source_max_bytes
+            {
+                result.source_budget_cap_hits += 1;
+                source_complete = false;
+                break;
+            }
+            result.scanned_bytes = result.scanned_bytes.saturating_add(line_bytes);
+        }
         if read_line.oversized {
             result.parse_errors += 1;
             let error = "transcript record exceeds max size";
@@ -764,7 +1147,7 @@ pub fn index_file_with_options(
     let final_metadata = FileMetadata::from_path_metadata(&canonical_path)?;
     let unchanged_during_scan = current_metadata.same_size_and_mtime(&final_metadata);
     let file_metadata = current_metadata.with_hash(&hasher.finalize());
-    let completion_metadata = unchanged_during_scan
+    let completion_metadata = (source_complete && unchanged_during_scan)
         .then_some(file_metadata)
         .filter(|_| result.parse_errors == 0);
     if result.parse_errors > 0 {
@@ -838,6 +1221,13 @@ fn source_hash_matches(path: &Path, stored: Option<&checkpoint::SourceMetadata>)
     Ok(hash_file(path)? == *content_hash)
 }
 
+fn source_hash_matches_bytes(bytes: &[u8], stored: Option<&checkpoint::SourceMetadata>) -> bool {
+    let Some(content_hash) = stored.and_then(|metadata| metadata.content_hash.as_ref()) else {
+        return false;
+    };
+    hex_digest(&Sha256::digest(bytes)) == *content_hash
+}
+
 fn hash_file(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let mut buffer = [0u8; 8192];
@@ -852,8 +1242,8 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex_digest(&hasher.finalize()))
 }
 
-fn hash_prefix_and_count_lines(
-    file: &mut fs::File,
+fn hash_prefix_and_count_lines<R: Read + Seek + ?Sized>(
+    file: &mut R,
     hasher: &mut Sha256,
     offset: u64,
 ) -> Result<usize> {
@@ -1101,6 +1491,149 @@ fn collect_supported_files(path: &Path, files: &mut Vec<PathBuf>, result: &mut I
     }
 }
 
+/// Discover one provider root without granting the worker any persistence
+/// capability. A root that blocks in filesystem discovery can be abandoned at
+/// the deadline; a later provider root still receives its own bounded turn.
+fn discover_root_bounded(path: PathBuf, budget: DiscoveryBudget) -> Result<DiscoveryResult> {
+    if !reserve_discovery_worker() {
+        return Ok(DiscoveryResult {
+            capped: true,
+            ..Default::default()
+        });
+    }
+    let deadline = budget.deadline;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let worker = std::thread::Builder::new()
+        .name("cortex-transcript-discovery".to_string())
+        .spawn(move || {
+            #[cfg(test)]
+            maybe_delay_snapshot_for_test(&path);
+            let mut result = DiscoveryResult::default();
+            let started = Instant::now();
+            let mut entries = 0usize;
+            let mut path_bytes = 0usize;
+            collect_supported_files_bounded(
+                &path,
+                &mut result,
+                &mut entries,
+                &mut path_bytes,
+                &budget,
+                started,
+            );
+            let _ = sender.send(result);
+            DISCOVERY_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+        });
+    if worker.is_err() {
+        DISCOVERY_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+        return Err(anyhow::anyhow!(
+            "could not start bounded transcript discovery"
+        ));
+    }
+    match receiver.recv_timeout(deadline) {
+        Ok(result) => Ok(result),
+        Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
+            Ok(DiscoveryResult {
+                capped: true,
+                ..Default::default()
+            })
+        }
+    }
+}
+
+fn reserve_discovery_worker() -> bool {
+    let mut current = DISCOVERY_WORKERS_IN_FLIGHT.load(Ordering::Acquire);
+    loop {
+        if current >= MAX_ABANDONED_SNAPSHOT_WORKERS {
+            return false;
+        }
+        match DISCOVERY_WORKERS_IN_FLIGHT.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(next) => current = next,
+        }
+    }
+}
+
+fn collect_supported_files_bounded(
+    path: &Path,
+    result: &mut DiscoveryResult,
+    entries: &mut usize,
+    path_bytes: &mut usize,
+    budget: &DiscoveryBudget,
+    started: Instant,
+) {
+    if result.capped || started.elapsed() >= budget.deadline {
+        result.capped = true;
+        return;
+    }
+    if let Err(error) = validate_path(path) {
+        classify_path_error(&error, &mut result.diagnostics);
+        record_file_error(&mut result.diagnostics, path, &error);
+        return;
+    }
+    if path.is_file() {
+        if supported_discovered_file(path) {
+            result.files.push(path.to_path_buf());
+        } else {
+            result.diagnostics.unsupported_files += 1;
+        }
+        return;
+    }
+    if !should_descend_transcript_dir(path) {
+        return;
+    }
+    let read_dir = match fs::read_dir(path) {
+        Ok(read_dir) => read_dir,
+        Err(error) => {
+            record_discovered_path_error(&mut result.diagnostics, path, &error.into());
+            return;
+        }
+    };
+    let mut children = Vec::new();
+    for entry in read_dir {
+        if result.capped || started.elapsed() >= budget.deadline {
+            result.capped = true;
+            break;
+        }
+        if *entries >= budget.max_entries || *path_bytes >= budget.max_path_bytes {
+            result.capped = true;
+            break;
+        }
+        match entry {
+            Ok(entry) => {
+                let child = entry.path();
+                *entries += 1;
+                *path_bytes = path_bytes.saturating_add(child.as_os_str().len());
+                if *path_bytes > budget.max_path_bytes {
+                    result.capped = true;
+                    break;
+                }
+                children.push(child);
+            }
+            Err(error) => {
+                record_discovered_path_error(&mut result.diagnostics, path, &error.into())
+            }
+        }
+    }
+    children.sort();
+    for child in children {
+        if result.capped {
+            break;
+        }
+        if child.is_dir() {
+            collect_supported_files_bounded(&child, result, entries, path_bytes, budget, started);
+        } else if supported_discovered_file(&child) {
+            result.files.push(child);
+        } else {
+            result.diagnostics.unsupported_files += 1;
+        }
+    }
+}
+
 fn supported_discovered_file(path: &Path) -> bool {
     matches!(path.extension().and_then(|ext| ext.to_str()), Some("jsonl"))
         || gemini::is_chat_file(path)
@@ -1154,15 +1687,11 @@ fn looks_like_codex_record(line: &str) -> bool {
 }
 
 pub(crate) fn detect_source_kind(path: &Path) -> SourceKind {
-    let display = path.to_string_lossy();
-    if display.contains(".codex/sessions") || display.contains(".codex/worktrees") {
-        SourceKind::CodexSession
-    } else if display.contains(".gemini/tmp") {
-        SourceKind::GeminiSession
-    } else if display.contains(".claude/projects") {
-        SourceKind::ClaudeProject
-    } else {
-        SourceKind::ExplicitFile
+    match providers::provider_for_path(path) {
+        Some(providers::Provider::Codex) => SourceKind::CodexSession,
+        Some(providers::Provider::Gemini) => SourceKind::GeminiSession,
+        Some(providers::Provider::Claude) => SourceKind::ClaudeProject,
+        Some(providers::Provider::Antigravity) | None => SourceKind::ExplicitFile,
     }
 }
 
@@ -1257,13 +1786,15 @@ fn index_gemini_file(
     path: &Path,
     canonical: &str,
     current_metadata: &FileMetadata,
+    raw: &str,
+    scanned_bytes: u64,
 ) -> Result<IndexResult> {
     let checkpoint_store = checkpoint::CheckpointStore::new(pool);
-    let raw = fs::read_to_string(path).context("Gemini transcript is not valid UTF-8")?;
     let file_hash = hash_text(&raw);
     let parsed = gemini::parse_file(&raw, path)?;
     let mut result = IndexResult {
         discovered_files: 1,
+        scanned_bytes,
         ..Default::default()
     };
 
@@ -1451,6 +1982,20 @@ fn merge_result(total: &mut IndexResult, next: &IndexResult) {
     total.storage_blocked_chunks += next.storage_blocked_chunks;
     total.dropped_metadata_fields += next.dropped_metadata_fields;
     total.checkpoint_updates += next.checkpoint_updates;
+    total.scanned_bytes = total.scanned_bytes.saturating_add(next.scanned_bytes);
+    total.source_budget_cap_hits += next.source_budget_cap_hits;
+    total.source_deadline_exceeded += next.source_deadline_exceeded;
+    total.snapshot_capacity_deferred += next.snapshot_capacity_deferred;
+    total.discovery_cap_hits += next.discovery_cap_hits;
+    total.discovery_deferred_roots += next.discovery_deferred_roots;
+    total.scan_budget_cap_hit |= next.scan_budget_cap_hit;
+    total.deferred_sources += next.deferred_sources;
+    if next.next_scan_cursor.is_some() {
+        total.next_scan_cursor = next.next_scan_cursor.clone();
+    }
+    if next.next_discovery_cursor.is_some() {
+        total.next_discovery_cursor = next.next_discovery_cursor.clone();
+    }
     total.file_errors.extend(next.file_errors.iter().cloned());
 }
 
@@ -1709,17 +2254,7 @@ pub(crate) fn read_transcript_lines(
 }
 
 fn default_roots() -> Vec<PathBuf> {
-    crate::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| {
-            vec![
-                home.join(".claude/projects"),
-                home.join(".codex/sessions"),
-                home.join(".codex/worktrees"),
-                home.join(".gemini/tmp"),
-            ]
-        })
-        .unwrap_or_default()
+    providers::transcript_roots()
 }
 
 #[cfg(test)]
