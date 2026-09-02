@@ -287,7 +287,7 @@ jobs:
 
   mcp-integration:
     name: Live PR Smoke
-    runs-on: ci-pool-system
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes, test]
     if: ${{ needs.test.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.mcp == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
@@ -336,7 +336,7 @@ jobs:
 
   deployment-contract:
     name: Container and Deployment Contracts
-    runs-on: ci-pool-system
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
     if: ${{ (needs.changes.outputs.rust == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.workflow == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
