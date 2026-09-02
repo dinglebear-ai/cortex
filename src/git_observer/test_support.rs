@@ -1,6 +1,7 @@
 //! Deterministic real-Git fixtures for Git observer tests.
 
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, SecondsFormat};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -401,14 +402,30 @@ impl GitFixture {
         let mut strings = fields.into_iter().map(|field| {
             String::from_utf8(field.to_vec()).context("commit metadata was not UTF-8")
         });
+        let sha = strings.next().expect("five fields")?;
+        let parents = strings.next().expect("five fields")?;
+        let subject = strings.next().expect("five fields")?;
+        let authored_at = strings.next().expect("five fields")?;
+        let committed_at = strings.next().expect("five fields")?;
+
         Ok(CommitMetadata {
-            sha: strings.next().expect("five fields")?,
-            parents: strings.next().expect("five fields")?,
-            subject: strings.next().expect("five fields")?,
-            authored_at: strings.next().expect("five fields")?,
-            committed_at: strings.next().expect("five fields")?,
+            sha,
+            parents,
+            subject,
+            authored_at: canonical_timestamp(&authored_at)?,
+            committed_at: canonical_timestamp(&committed_at)?,
         })
     }
+}
+
+fn canonical_timestamp(value: &str) -> Result<String> {
+    DateTime::parse_from_rfc3339(value)
+        .context("commit metadata timestamp was not RFC3339")
+        .map(|timestamp| {
+            timestamp
+                .to_utc()
+                .to_rfc3339_opts(SecondsFormat::Secs, true)
+        })
 }
 
 #[cfg(test)]
