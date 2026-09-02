@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -257,7 +257,7 @@ pub struct IndexResult {
     /// It is never rendered or serialized; watcher rescans rotate roots after
     /// it so one huge tree cannot starve another provider tree.
     #[serde(skip_serializing)]
-    pub(crate) next_discovery_cursor: Option<PathBuf>,
+    pub(crate) next_discovery_cursors: BTreeMap<PathBuf, PathBuf>,
     pub file_errors: Vec<IndexFileError>,
     #[serde(skip)]
     pub(crate) dropped_metadata_field_keys: HashSet<String>,
@@ -274,7 +274,7 @@ pub struct IndexOptions {
     /// Resume provider-root traversal after this root when discovery was
     /// bounded in a previous pass. This is deliberately separate from the
     /// source-file cursor.
-    pub discovery_start_after: Option<PathBuf>,
+    pub discovery_start_after: BTreeMap<PathBuf, PathBuf>,
     /// Optional bounded scheduling for root scans. Defaults remain unbounded
     /// for existing explicit/manual indexing callers.
     pub scan_budget: Option<ScanBudget>,
@@ -624,14 +624,6 @@ pub fn index_roots_with_options(
 
     roots.sort();
     roots.dedup();
-    if let Some(start_after) = options.discovery_start_after.as_ref() {
-        // This is intentionally provider-root fairness, separate from the
-        // source cursor below. A giant root yields to its peers on the next
-        // bounded pass even if its own traversal remains incomplete.
-        let pivot = roots.partition_point(|root| root <= start_after);
-        roots.rotate_left(pivot);
-    }
-
     let mut result = IndexResult::default();
     let mut files = Vec::new();
     for root in roots {
@@ -641,8 +633,8 @@ pub fn index_roots_with_options(
         if let Some(scan_budget) = options.scan_budget {
             let start_after = options
                 .discovery_start_after
-                .as_deref()
-                .filter(|cursor| cursor.starts_with(&root));
+                .get(&root)
+                .map(PathBuf::as_path);
             let discovery = discover_root_bounded(
                 root.clone(),
                 start_after,
@@ -660,7 +652,9 @@ pub fn index_roots_with_options(
                 // A root-level marker merely rotates roots. Retaining the
                 // last visited entry is what makes the capped root itself
                 // eventually complete on a later pass.
-                result.next_discovery_cursor = discovery.next_cursor.or(Some(root));
+                result
+                    .next_discovery_cursors
+                    .insert(root.clone(), discovery.next_cursor.unwrap_or(root));
             }
         } else {
             collect_supported_files(&root, &mut files, &mut result);
@@ -856,21 +850,34 @@ pub fn index_file_with_options(
     if options.force {
         checkpoint_store.reset_source(source_id, &canonical)?;
     }
-    let stored_metadata = if !options.force {
+    let mut stored_metadata = if !options.force {
         checkpoint_store.source_metadata(source_id)?
     } else {
         None
     };
+    let bounded_stream = options.scan_budget.is_some_and(|budget| {
+        snapshot.is_none() && current_metadata.size > budget.per_source_max_bytes
+    });
+    let current_revision = source_revision_for_path(&canonical_path)?;
     if !options.force
         && source_kind != SourceKind::ExplicitFile
-        && checkpoint_store.source_matches_metadata(
-            source_id,
-            current_metadata.size,
-            current_metadata.mtime,
-        )?
-        && match snapshot.as_ref() {
-            Some(bytes) => source_hash_matches_bytes(bytes, stored_metadata.as_ref()),
-            None => source_hash_matches(&canonical_path, stored_metadata.as_ref())?,
+        && if bounded_stream {
+            stored_metadata.as_ref().is_some_and(|metadata| {
+                metadata.scan_state == checkpoint::SourceScanState::Complete
+                    && metadata.source_revision.as_deref() == Some(current_revision.as_str())
+                    && metadata.file_size == Some(current_metadata.size as i64)
+                    && metadata.file_mtime == current_metadata.mtime
+                    && metadata.last_error.is_none()
+            })
+        } else {
+            checkpoint_store.source_matches_metadata(
+                source_id,
+                current_metadata.size,
+                current_metadata.mtime,
+            )? && match snapshot.as_ref() {
+                Some(bytes) => source_hash_matches_bytes(bytes, stored_metadata.as_ref()),
+                None => source_hash_matches(&canonical_path, stored_metadata.as_ref())?,
+            }
         }
     {
         return Ok(IndexResult {
@@ -879,6 +886,18 @@ pub fn index_file_with_options(
         });
     }
     if source_kind == SourceKind::GeminiSession {
+        // Gemini chats are whole-file JSON. Until their parser has a
+        // resumable representation, a bounded scan must defer an oversized
+        // chat rather than bypass its allowance with `read_to_string`.
+        if let Some(budget) = options.scan_budget
+            && current_metadata.size > budget.per_source_max_bytes
+        {
+            return Ok(IndexResult {
+                discovered_files: 1,
+                source_budget_cap_hits: 1,
+                ..Default::default()
+            });
+        }
         let raw = match snapshot.as_ref() {
             Some(bytes) => match String::from_utf8(bytes.clone()) {
                 Ok(raw) => raw,
@@ -906,7 +925,39 @@ pub fn index_file_with_options(
             &raw,
         );
     }
-    let append_start = if !options.force {
+    let continuation = if bounded_stream {
+        stored_metadata.as_ref().and_then(|metadata| {
+            let valid_revision = metadata.source_revision.as_deref()
+                == Some(current_revision.as_str())
+                && metadata.file_size == Some(current_metadata.size as i64)
+                && metadata.file_mtime == current_metadata.mtime
+                && metadata.last_error.is_none();
+            let offset = metadata
+                .last_offset
+                .and_then(|offset| u64::try_from(offset).ok())?;
+            valid_revision
+                .then_some((metadata.scan_state, offset))
+                .filter(|(state, _)| {
+                    matches!(
+                        state,
+                        checkpoint::SourceScanState::Boundary
+                            | checkpoint::SourceScanState::DiscardUntilNewline
+                    )
+                })
+        })
+    } else {
+        None
+    };
+    if bounded_stream && stored_metadata.is_some() && continuation.is_none() {
+        // A path can be replaced or rewritten between passes. Never carry its
+        // import receipts or cursor into the new revision: replay from zero is
+        // duplicate-safe and removes stale rows atomically.
+        checkpoint_store.reset_source(source_id, &canonical)?;
+        stored_metadata = None;
+    }
+    let append_start = if bounded_stream {
+        continuation.map(|(_, offset)| offset)
+    } else if !options.force {
         match stored_metadata.as_ref() {
             Some(metadata) => append_start_offset(metadata, &current_metadata)?,
             None => None,
@@ -929,19 +980,29 @@ pub fn index_file_with_options(
     let mut reader = BufReader::new(input);
     let mut hasher = Sha256::new();
     let mut line_no = if let Some(offset) = append_start {
-        let counted = hash_prefix_and_count_lines(reader.get_mut(), &mut hasher, offset)?;
-        let prefix_hash = hex_digest(&hasher.clone().finalize());
-        if stored_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.content_hash.as_ref())
-            .is_some_and(|content_hash| prefix_hash != *content_hash)
-        {
-            hasher = Sha256::new();
-            reader.get_mut().seek(SeekFrom::Start(0))?;
-            0
-        } else {
+        if bounded_stream {
+            // The persisted cursor is protected by an exact source revision.
+            // Do not rehash an arbitrary prefix just to reconstruct line
+            // numbers: that would put unbounded work ahead of this pass's
+            // deadline. Byte offsets remain stable record identities for the
+            // resumed tail if a provider omitted an explicit event id.
             reader.get_mut().seek(SeekFrom::Start(offset))?;
-            counted
+            usize::try_from(offset).unwrap_or(usize::MAX)
+        } else {
+            let counted = hash_prefix_and_count_lines(reader.get_mut(), &mut hasher, offset)?;
+            let prefix_hash = hex_digest(&hasher.clone().finalize());
+            if stored_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.content_hash.as_ref())
+                .is_some_and(|content_hash| prefix_hash != *content_hash)
+            {
+                hasher = Sha256::new();
+                reader.get_mut().seek(SeekFrom::Start(0))?;
+                0
+            } else {
+                reader.get_mut().seek(SeekFrom::Start(offset))?;
+                counted
+            }
         }
     } else {
         0
@@ -954,6 +1015,10 @@ pub fn index_file_with_options(
     let source_started_at = Instant::now();
     let mut source_complete = true;
     let mut partial_metadata = None;
+    let mut partial_scan_state = None;
+    let mut partial_offset = None;
+    let mut discard_until_newline = continuation
+        .is_some_and(|(state, _)| state == checkpoint::SourceScanState::DiscardUntilNewline);
 
     loop {
         if let Some(budget) = options.scan_budget
@@ -961,44 +1026,82 @@ pub fn index_file_with_options(
         {
             result.source_deadline_exceeded += 1;
             source_complete = false;
+            if bounded_stream {
+                partial_metadata = Some(current_metadata.clone());
+                partial_scan_state = Some(if discard_until_newline {
+                    checkpoint::SourceScanState::DiscardUntilNewline
+                } else {
+                    checkpoint::SourceScanState::Boundary
+                });
+                partial_offset = Some(reader.stream_position()?);
+            }
             break;
         }
-        let offset_before_line = (!snapshot_complete)
-            // `BufReader` can read ahead to the end of a small file. Its
-            // underlying reader's position would then skip unconsumed lines
-            // on the next pass; use the buffered reader's logical position.
-            .then(|| reader.stream_position())
-            .transpose()?;
-        let hash_before_line = (!snapshot_complete).then(|| hasher.clone());
-        let Some(read_line) = read_bounded_line(&mut reader, Some(&mut hasher))? else {
+        if bounded_stream
+            && options
+                .scan_budget
+                .is_some_and(|budget| result.scanned_bytes >= budget.per_source_max_bytes)
+        {
+            result.source_budget_cap_hits += 1;
+            source_complete = false;
+            partial_metadata = Some(current_metadata.clone());
+            partial_scan_state = Some(if discard_until_newline {
+                checkpoint::SourceScanState::DiscardUntilNewline
+            } else {
+                checkpoint::SourceScanState::Boundary
+            });
+            partial_offset = Some(reader.stream_position()?);
             break;
+        }
+        let physical_limit = if bounded_stream {
+            options.scan_budget.map(|budget| {
+                usize::try_from(
+                    budget
+                        .per_source_max_bytes
+                        .saturating_sub(result.scanned_bytes),
+                )
+                .unwrap_or(usize::MAX)
+            })
+        } else {
+            None
         };
-        if !snapshot_complete {
-            let line_bytes = read_line.text.len() as u64;
-            if let Some(budget) = options.scan_budget
-                && result.scanned_bytes.saturating_add(line_bytes) > budget.per_source_max_bytes
-                // Always make at least one-record progress from a checkpoint.
-                // A record itself may exceed the allowance; deferring it just
-                // because it is not at file offset zero would recreate the
-                // same permanent retry loop this continuation prevents.
-                && result.scanned_bytes > 0
-            {
+        let read_line = match read_bounded_line(&mut reader, Some(&mut hasher), physical_limit)? {
+            ReadLineOutcome::EndOfFile => break,
+            ReadLineOutcome::Line(read_line) => read_line,
+            ReadLineOutcome::LimitReached { bytes_consumed } => {
+                if !snapshot_complete {
+                    result.scanned_bytes =
+                        result.scanned_bytes.saturating_add(bytes_consumed as u64);
+                }
                 result.source_budget_cap_hits += 1;
                 source_complete = false;
-                partial_metadata = Some(
-                    current_metadata.clone().with_hash_from_hex(hex_digest(
-                        &hash_before_line
-                            .expect("streaming source has a prefix hash")
-                            .finalize(),
-                    )),
-                );
-                partial_metadata
-                    .as_mut()
-                    .expect("partial metadata set")
-                    .size = offset_before_line.expect("streaming source has an offset");
+                partial_metadata = Some(current_metadata.clone());
+                partial_scan_state = Some(checkpoint::SourceScanState::DiscardUntilNewline);
+                partial_offset = Some(reader.stream_position()?);
+                // Persist a recoverable diagnostic but keep this source
+                // resumable: a huge physical record must never turn into a
+                // terminal error or block the valid records after it.
+                checkpoint_store.record_parse_error(
+                    source_id,
+                    line_no as i64,
+                    "transcript record exceeds bounded scan allowance",
+                    None,
+                )?;
                 break;
             }
-            result.scanned_bytes = result.scanned_bytes.saturating_add(line_bytes);
+        };
+        if !snapshot_complete {
+            result.scanned_bytes = result
+                .scanned_bytes
+                .saturating_add(read_line.bytes_consumed as u64);
+        }
+        if discard_until_newline {
+            // The previous pass stopped inside an oversized record. This
+            // bounded read reached its newline, so discard it and resume
+            // normal record parsing without ever materializing that record.
+            discard_until_newline = false;
+            line_no = line_no.saturating_add(1);
+            continue;
         }
         if read_line.oversized {
             result.parse_errors += 1;
@@ -1178,12 +1281,44 @@ pub fn index_file_with_options(
     }
 
     let final_metadata = FileMetadata::from_path_metadata(&canonical_path)?;
-    let unchanged_during_scan = current_metadata.same_size_and_mtime(&final_metadata);
-    let file_metadata = current_metadata.with_hash(&hasher.finalize());
+    let final_revision = source_revision_for_path(&canonical_path)?;
+    let unchanged_during_scan = current_metadata.same_size_and_mtime(&final_metadata)
+        && (!bounded_stream || final_revision == current_revision);
+    if bounded_stream && !unchanged_during_scan {
+        // We might have already flushed a chunk before the source changed.
+        // Resetting the source transactionally removes those receipts and rows
+        // so the next pass replays a single coherent revision.
+        checkpoint_store.reset_source(source_id, &canonical)?;
+        result.deferred_sources += 1;
+        return Ok(result);
+    }
+    let file_metadata = if bounded_stream {
+        current_metadata.clone()
+    } else {
+        current_metadata.with_hash(&hasher.finalize())
+    };
     let completion_metadata = (source_complete && unchanged_during_scan)
         .then_some(file_metadata)
         .filter(|_| result.parse_errors == 0);
-    let checkpoint_metadata = completion_metadata.as_ref().or(partial_metadata.as_ref());
+    let checkpoint_update = if let Some(metadata) = completion_metadata.as_ref() {
+        Some(CheckpointUpdate::Complete {
+            metadata,
+            revision: &current_revision,
+        })
+    } else if let (Some(metadata), Some(state), Some(offset)) = (
+        partial_metadata.as_ref(),
+        partial_scan_state,
+        partial_offset,
+    ) {
+        Some(CheckpointUpdate::Partial {
+            metadata,
+            revision: &current_revision,
+            state,
+            offset,
+        })
+    } else {
+        None
+    };
     if result.parse_errors > 0 {
         flush_chunk(
             pool,
@@ -1213,7 +1348,7 @@ pub fn index_file_with_options(
         &mut imports,
         &mut skill_sources,
         &mut mcp_sources,
-        checkpoint_metadata,
+        checkpoint_update,
         &mut result,
     )?;
     Ok(result)
@@ -1331,6 +1466,20 @@ pub fn ai_indexing_health(
 }
 
 #[allow(clippy::too_many_arguments)]
+enum CheckpointUpdate<'a> {
+    Complete {
+        metadata: &'a FileMetadata,
+        revision: &'a str,
+    },
+    Partial {
+        metadata: &'a FileMetadata,
+        revision: &'a str,
+        state: checkpoint::SourceScanState,
+        offset: u64,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
 fn flush_chunk(
     pool: &DbPool,
     storage: Option<&StorageConfig>,
@@ -1339,16 +1488,33 @@ fn flush_chunk(
     imports: &mut Vec<String>,
     skill_sources: &mut Vec<ChunkSkillSource>,
     mcp_sources: &mut Vec<ChunkMcpSource>,
-    completion_metadata: Option<&FileMetadata>,
+    checkpoint_update: Option<CheckpointUpdate<'_>>,
     result: &mut IndexResult,
 ) -> Result<bool> {
+    let checkpoint_update_present = checkpoint_update.is_some();
     if batch.is_empty() {
         skill_sources.clear();
         mcp_sources.clear();
-        if let Some(file_metadata) = completion_metadata {
+        if let Some(checkpoint_update) = checkpoint_update {
             let mut conn = crate::db::write_conn(pool)?;
             let tx = conn.transaction()?;
-            checkpoint::update_source_metadata_in_tx(&tx, source_id, file_metadata)?;
+            match checkpoint_update {
+                CheckpointUpdate::Complete { metadata, revision } => {
+                    checkpoint::update_complete_source_metadata_in_tx(
+                        &tx, source_id, metadata, revision,
+                    )?;
+                }
+                CheckpointUpdate::Partial {
+                    metadata,
+                    revision,
+                    state,
+                    offset,
+                } => {
+                    checkpoint::update_partial_source_metadata_in_tx(
+                        &tx, source_id, metadata, revision, state, offset,
+                    )?;
+                }
+            }
             tx.commit()?;
             result.checkpoint_updates += 1;
         }
@@ -1463,8 +1629,24 @@ fn flush_chunk(
             insert_hook_events_in_tx(&tx, &hook_inserts)?;
         }
     }
-    if let Some(file_metadata) = completion_metadata {
-        checkpoint::update_source_metadata_in_tx(&tx, source_id, file_metadata)?;
+    if let Some(checkpoint_update) = checkpoint_update {
+        match checkpoint_update {
+            CheckpointUpdate::Complete { metadata, revision } => {
+                checkpoint::update_complete_source_metadata_in_tx(
+                    &tx, source_id, metadata, revision,
+                )?;
+            }
+            CheckpointUpdate::Partial {
+                metadata,
+                revision,
+                state,
+                offset,
+            } => {
+                checkpoint::update_partial_source_metadata_in_tx(
+                    &tx, source_id, metadata, revision, state, offset,
+                )?;
+            }
+        }
     }
     tx.commit()?;
     if !claimed_batch.is_empty() {
@@ -1472,7 +1654,7 @@ fn flush_chunk(
     }
     result.ingested += claimed_batch.len();
     result.skipped_dupes += skipped_dupes;
-    if completion_metadata.is_some() {
+    if checkpoint_update_present {
         result.checkpoint_updates += 1;
     }
     imports.clear();
@@ -1702,8 +1884,10 @@ fn detect_explicit_file_source_kind(path: &Path) -> Result<SourceKind> {
     let mut line_no = 0usize;
     while line_no < 50 {
         // Sniffing source kind only needs the text, not the checkpoint digest.
-        let Some(read_line) = read_bounded_line(&mut reader, None)? else {
-            return Ok(SourceKind::ExplicitFile);
+        let read_line = match read_bounded_line(&mut reader, None, None)? {
+            ReadLineOutcome::EndOfFile => return Ok(SourceKind::ExplicitFile),
+            ReadLineOutcome::Line(read_line) => read_line,
+            ReadLineOutcome::LimitReached { .. } => return Ok(SourceKind::ExplicitFile),
         };
         if read_line.oversized {
             return Ok(SourceKind::ExplicitFile);
@@ -2009,6 +2193,14 @@ fn index_gemini_file(
         )?;
         return Ok(result);
     }
+    let final_revision = source_revision_for_path(path)?;
+    let completion_update =
+        completion_metadata
+            .as_ref()
+            .map(|metadata| CheckpointUpdate::Complete {
+                metadata,
+                revision: final_revision.as_str(),
+            });
     let _ = flush_chunk(
         pool,
         storage,
@@ -2017,7 +2209,7 @@ fn index_gemini_file(
         &mut imports,
         &mut skill_sources,
         &mut mcp_sources,
-        completion_metadata.as_ref(),
+        completion_update,
         &mut result,
     )?;
     Ok(result)
@@ -2046,9 +2238,9 @@ fn merge_result(total: &mut IndexResult, next: &IndexResult) {
     if next.next_scan_cursor.is_some() {
         total.next_scan_cursor = next.next_scan_cursor.clone();
     }
-    if next.next_discovery_cursor.is_some() {
-        total.next_discovery_cursor = next.next_discovery_cursor.clone();
-    }
+    total
+        .next_discovery_cursors
+        .extend(next.next_discovery_cursors.clone());
     total.file_errors.extend(next.file_errors.iter().cloned());
 }
 
@@ -2212,6 +2404,18 @@ fn log_entry_string_bytes(entry: &LogBatchEntry) -> usize {
 struct ReadLine {
     text: String,
     oversized: bool,
+    bytes_consumed: usize,
+}
+
+enum ReadLineOutcome {
+    EndOfFile,
+    Line(ReadLine),
+    /// A bounded pass ended in the middle of a physical record. The reader is
+    /// positioned at that exact byte so the next pass can discard only a
+    /// bounded fragment rather than searching unboundedly for a newline.
+    LimitReached {
+        bytes_consumed: usize,
+    },
 }
 
 /// Read one newline-delimited record, capping it at `MAX_RECORD_SIZE_BYTES`.
@@ -2223,17 +2427,28 @@ struct ReadLine {
 fn read_bounded_line<R: BufRead>(
     reader: &mut R,
     mut hasher: Option<&mut Sha256>,
-) -> Result<Option<ReadLine>> {
+    physical_limit: Option<usize>,
+) -> Result<ReadLineOutcome> {
     let mut line = Vec::new();
     let mut oversized = false;
+    let mut consumed = 0usize;
     loop {
+        if physical_limit.is_some_and(|limit| consumed >= limit) {
+            return Ok(ReadLineOutcome::LimitReached {
+                bytes_consumed: consumed,
+            });
+        }
         let available = reader.fill_buf()?;
         if available.is_empty() {
             if line.is_empty() && !oversized {
-                return Ok(None);
+                return Ok(ReadLineOutcome::EndOfFile);
             }
             break;
         }
+        let permitted = physical_limit.map_or(available.len(), |limit| {
+            available.len().min(limit.saturating_sub(consumed))
+        });
+        let available = &available[..permitted];
         let newline_pos = available.iter().position(|byte| *byte == b'\n');
         let take_len = newline_pos.map_or(available.len(), |pos| pos + 1);
         if let Some(hasher) = hasher.as_deref_mut() {
@@ -2253,20 +2468,23 @@ fn read_bounded_line<R: BufRead>(
             }
         }
         reader.consume(take_len);
+        consumed = consumed.saturating_add(take_len);
         if newline_pos.is_some() {
             break;
         }
     }
     if oversized {
-        return Ok(Some(ReadLine {
+        return Ok(ReadLineOutcome::Line(ReadLine {
             text: String::new(),
             oversized: true,
+            bytes_consumed: consumed,
         }));
     }
     let text = String::from_utf8(line).context("transcript record is not valid UTF-8")?;
-    Ok(Some(ReadLine {
+    Ok(ReadLineOutcome::Line(ReadLine {
         text,
         oversized: false,
+        bytes_consumed: consumed,
     }))
 }
 
@@ -2293,8 +2511,10 @@ pub(crate) fn read_transcript_lines(
     let mut line_no = 0usize;
     let mut remaining = wanted.len();
     while remaining > 0 {
-        let Some(read_line) = read_bounded_line(&mut reader, None)? else {
-            break; // EOF before every requested line was found
+        let read_line = match read_bounded_line(&mut reader, None, None)? {
+            ReadLineOutcome::EndOfFile => break, // EOF before every requested line was found
+            ReadLineOutcome::Line(read_line) => read_line,
+            ReadLineOutcome::LimitReached { .. } => break,
         };
         if !read_line.oversized && wanted.contains(&line_no) {
             let text = read_line.text.trim_end_matches(['\r', '\n']).to_string();
@@ -2391,6 +2611,33 @@ fn metadata_mtime_nanos(metadata: &fs::Metadata) -> Option<i64> {
         .ok()
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .and_then(|duration| i64::try_from(duration.as_nanos()).ok())
+}
+
+/// A revision token is deliberately stronger than size/mtime. Bounded
+/// continuation cannot safely rehash an arbitrary already-indexed prefix on
+/// every pass, so Unix device/inode/ctime identity is persisted with the
+/// cursor and a replacement or in-place rewrite restarts transactionally.
+#[cfg(unix)]
+fn source_revision_for_path(path: &Path) -> Result<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::metadata(path)?;
+    Ok(format!(
+        "{}:{}:{}:{}",
+        metadata.dev(),
+        metadata.ino(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
+    ))
+}
+
+#[cfg(not(unix))]
+fn source_revision_for_path(path: &Path) -> Result<String> {
+    // Cortex's bounded transcript scanner runs on Unix hosts. Keep a
+    // deterministic fallback for test/tool builds elsewhere; it intentionally
+    // forces a restart whenever size or mtime changes.
+    let metadata = fs::metadata(path)?;
+    Ok(format!("{}:{:?}", metadata.len(), metadata.modified().ok()))
 }
 
 fn hex_digest(bytes: &[u8]) -> String {

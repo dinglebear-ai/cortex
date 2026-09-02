@@ -714,6 +714,8 @@ fn append_start_requires_stored_content_hash() {
         content_hash: None,
         last_offset: Some(10),
         last_error: None,
+        source_revision: None,
+        scan_state: checkpoint::SourceScanState::Complete,
     };
     let current = FileMetadata {
         size: 20,
@@ -1538,6 +1540,47 @@ fn snapshot_bytes_count_when_gemini_utf8_validation_fails_before_records() {
 }
 
 #[test]
+fn oversized_gemini_session_is_deferred_without_whole_file_ingestion() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("oversized-gemini.json");
+    std::fs::write(
+        &file,
+        format!(
+            r#"{{"sessionId":"large","messages":[{{"id":"m","content":"{}"}}]}}"#,
+            "x".repeat(512)
+        ),
+    )
+    .unwrap();
+
+    let result = index_file_with_options(
+        &pool,
+        &file,
+        "gemini_session",
+        IndexFileOptions {
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 64,
+                scan_max_bytes: 64,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_budget_cap_hits, 1);
+    assert_eq!(result.ingested, 0);
+    let checkpoints = list_checkpoints(&pool, &CheckpointListOptions::default()).unwrap();
+    assert_eq!(
+        checkpoints.len(),
+        1,
+        "source registration is not a scan cursor"
+    );
+    assert_eq!(checkpoints[0].last_offset, Some(0));
+    assert_eq!(checkpoints[0].file_size, None);
+}
+
+#[test]
 #[serial]
 fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
     let (pool, dir) = test_pool();
@@ -1585,10 +1628,11 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
 
     assert_eq!(result.discovery_cap_hits, 1, "result={result:#?}");
     assert_eq!(result.discovery_deferred_roots, 1, "result={result:#?}");
-    let cursor = result
-        .next_discovery_cursor
-        .clone()
-        .expect("capped discovery records its last visited entry");
+    let mut continuations = result.next_discovery_cursors.clone();
+    assert!(
+        !continuations.is_empty(),
+        "capped discovery records its last visited entry"
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_millis(1_500),
         "a slow provider-root discovery blocked the later provider root"
@@ -1609,12 +1653,11 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
     // reaches the deferred descendant.
     drop(_delay);
     std::thread::sleep(std::time::Duration::from_millis(250));
-    let mut continuation = cursor;
     for _ in 0..4 {
         let pass = index_roots_with_options(
             &pool,
             IndexOptions {
-                discovery_start_after: Some(continuation),
+                discovery_start_after: continuations.clone(),
                 scan_budget: Some(ScanBudget {
                     per_source_max_bytes: 4_096,
                     scan_max_bytes: 16_384,
@@ -1637,9 +1680,11 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
         if found == 1 {
             break;
         }
-        continuation = pass
-            .next_discovery_cursor
-            .expect("incomplete discovery produces a continuation cursor");
+        continuations = pass.next_discovery_cursors;
+        assert!(
+            !continuations.is_empty(),
+            "incomplete discovery produces a continuation cursor"
+        );
     }
     let continued_rows: i64 = pool
         .get()
@@ -1653,6 +1698,98 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
     assert_eq!(
         continued_rows, 1,
         "capped root resumes past its prior cursor"
+    );
+}
+
+#[test]
+#[serial]
+fn bounded_discovery_retains_continuations_for_multiple_capped_roots() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
+    let claude_root = dir.path().join(".claude/projects");
+    let codex_root = dir.path().join(".codex/sessions");
+    for (root, message) in [
+        (&claude_root, "claude continuation survives"),
+        (&codex_root, "codex continuation survives"),
+    ] {
+        std::fs::create_dir_all(root).unwrap();
+        for index in 0..=MAX_DISCOVERY_ENTRIES_PER_ROOT {
+            std::fs::write(root.join(format!("noise-{index:04}.txt")), "noise").unwrap();
+        }
+        let deferred = root.join("zz-deferred/session.jsonl");
+        std::fs::create_dir_all(deferred.parent().unwrap()).unwrap();
+        let record = if root == &claude_root {
+            format!(r#"{{"sessionId":"late-claude","content":"{message}"}}"#)
+        } else {
+            format!(r#"{{"type":"response_item","payload":{{"content":"{message}"}}}}"#)
+        };
+        std::fs::write(deferred, record).unwrap();
+    }
+    let first = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 16_384,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(first.next_discovery_cursors.contains_key(&claude_root));
+    assert!(first.next_discovery_cursors.contains_key(&codex_root));
+
+    let mut continuations = first.next_discovery_cursors;
+    for _ in 0..4 {
+        let pass = index_roots_with_options(
+            &pool,
+            IndexOptions {
+                discovery_start_after: continuations.clone(),
+                scan_budget: Some(ScanBudget {
+                    per_source_max_bytes: 4_096,
+                    scan_max_bytes: 16_384,
+                    per_source_deadline: std::time::Duration::from_secs(1),
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message IN \
+                 ('claude continuation survives', 'codex continuation survives')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 2 {
+            break;
+        }
+        continuations = pass.next_discovery_cursors;
+        assert!(
+            !continuations.is_empty(),
+            "incomplete multi-root discovery retains every outstanding cursor"
+        );
+    }
+    let found: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message IN \
+             ('claude continuation survives', 'codex continuation survives')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        found, 2,
+        "both simultaneously capped roots eventually complete"
     );
 }
 
@@ -1821,18 +1958,24 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
     std::fs::write(
         &file,
         concat!(
-            r#"{"type":"session_meta","payload":{"id":"oversized"}}"#,
+            r#"{"sessionId":"s","content":"one"}"#,
             "\n",
-            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"first bounded chunk"}}"#,
+            r#"{"sessionId":"s","content":"two"}"#,
             "\n",
-            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"second bounded chunk becomes visible later"}}"#,
+            r#"{"sessionId":"s","content":"three"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"four"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"five"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"second bounded chunk becomes visible later"}"#,
             "\n"
         ),
     )
     .unwrap();
     let options = IndexFileOptions {
         scan_budget: Some(ScanBudget {
-            per_source_max_bytes: 120,
+            per_source_max_bytes: 132,
             scan_max_bytes: 1_000,
             per_source_deadline: std::time::Duration::from_secs(1),
         }),
@@ -1840,7 +1983,7 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
     };
 
     let first =
-        index_file_with_options(&pool, &file, "codex_session", options.clone(), None).unwrap();
+        index_file_with_options(&pool, &file, "explicit_file", options.clone(), None).unwrap();
     assert_eq!(first.source_budget_cap_hits, 1, "result={first:#?}");
     let checkpoint = list_checkpoints(
         &pool,
@@ -1853,15 +1996,14 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
     .unwrap();
     assert!(checkpoint[0].last_offset.unwrap_or_default() > 0);
     assert!(
-        checkpoint[0].file_size.unwrap_or_default()
-            < std::fs::metadata(&file).unwrap().len() as i64,
-        "first bounded pass must checkpoint only its consumed prefix: {checkpoint:#?}"
+        checkpoint[0].last_offset.unwrap_or_default() < checkpoint[0].file_size.unwrap_or_default(),
+        "partial checkpoints retain full source metadata plus a separate cursor: {checkpoint:#?}"
     );
 
     let mut pass_results = Vec::new();
     for _ in 0..3 {
         let pass =
-            index_file_with_options(&pool, &file, "codex_session", options.clone(), None).unwrap();
+            index_file_with_options(&pool, &file, "explicit_file", options.clone(), None).unwrap();
         let found: i64 = pool
             .get()
             .unwrap()
@@ -1899,6 +2041,56 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
             },
         )
         .unwrap()
+    );
+}
+
+#[test]
+fn bounded_jsonl_discards_an_oversized_physical_record_across_passes() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("physical-record-boundary.jsonl");
+    let trailing = r#"{"sessionId":"later","content":"visible after oversized physical record"}"#;
+    std::fs::write(&file, format!("{}\n{trailing}\n", "x".repeat(256))).unwrap();
+    let options = IndexFileOptions {
+        scan_budget: Some(ScanBudget {
+            per_source_max_bytes: 128,
+            scan_max_bytes: 1_024,
+            per_source_deadline: std::time::Duration::from_secs(1),
+        }),
+        ..Default::default()
+    };
+
+    for _ in 0..16 {
+        let result =
+            index_file_with_options(&pool, &file, "explicit_file", options.clone(), None).unwrap();
+        assert!(
+            result.scanned_bytes <= 128,
+            "one pass consumed more than its physical allowance: {result:#?}"
+        );
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'visible after oversized physical record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 1 {
+            break;
+        }
+    }
+    let found: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'visible after oversized physical record'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        found, 1,
+        "later JSONL records are not stranded by a giant row"
     );
 }
 

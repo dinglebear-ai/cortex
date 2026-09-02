@@ -7,8 +7,15 @@ impl CortexService {
         force: bool,
         since: Option<String>,
     ) -> ServiceResult<scanner::IndexResult> {
-        self.index_ai_roots_with_scan_budget(path, force, since, None, None, None)
-            .await
+        self.index_ai_roots_with_scan_budget(
+            path,
+            force,
+            since,
+            None,
+            None,
+            std::collections::BTreeMap::new(),
+        )
+        .await
     }
 
     pub(crate) async fn index_ai_roots_with_scan_budget(
@@ -18,7 +25,7 @@ impl CortexService {
         since: Option<String>,
         scan_budget: Option<scanner::ScanBudget>,
         start_after: Option<std::path::PathBuf>,
-        discovery_start_after: Option<std::path::PathBuf>,
+        discovery_start_after: std::collections::BTreeMap<std::path::PathBuf, std::path::PathBuf>,
     ) -> ServiceResult<scanner::IndexResult> {
         let storage = self.storage.clone();
         let since_mtime_nanos = since

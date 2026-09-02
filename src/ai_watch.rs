@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -222,7 +223,7 @@ enum RescanStatus {
 #[derive(Debug, Default)]
 struct RescanCursor {
     start_after: Option<PathBuf>,
-    discovery_start_after: Option<PathBuf>,
+    discovery_start_after: BTreeMap<PathBuf, PathBuf>,
 }
 
 async fn run_rescan(
@@ -258,13 +259,11 @@ async fn run_rescan(
             if let Some(next) = result.next_scan_cursor.clone() {
                 cursor.start_after = Some(next);
             }
-            if let Some(next) = result.next_discovery_cursor.clone() {
-                cursor.discovery_start_after = Some(next);
-            }
+            cursor.discovery_start_after = result.next_discovery_cursors.clone();
             let status = rescan_status_for_result(&result);
             if status == RescanStatus::Completed {
                 cursor.start_after = None;
-                cursor.discovery_start_after = None;
+                cursor.discovery_start_after.clear();
             }
             status
         }
@@ -276,7 +275,7 @@ async fn run_rescan(
 }
 
 fn rescan_since_for_cursor(since: Option<SystemTime>, cursor: &RescanCursor) -> Option<SystemTime> {
-    if cursor.start_after.is_some() || cursor.discovery_start_after.is_some() {
+    if cursor.start_after.is_some() || !cursor.discovery_start_after.is_empty() {
         None
     } else {
         since

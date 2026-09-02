@@ -2,7 +2,7 @@
 //! core.
 //!
 //! Owns the full schema: the `logs` table + FTS5 index, AI/graph/heartbeat
-//! projections, and the **44 sequential migrations** tracked by
+//! projections, and the sequential migrations tracked by
 //! `KNOWN_SCHEMA_VERSION`. Migrations run at startup; heavy ones log
 //! `Migration N: starting ...` lines, and the one-time
 //! `auto_vacuum=INCREMENTAL` conversion VACUUM is logged loudly (it can take
@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 50;
+pub const KNOWN_SCHEMA_VERSION: i64 = 51;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3250,6 +3250,35 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              COMMIT;",
         )?;
         tracing::info!("Migration 50: indexed every durable stream filter shape");
+    }
+
+    // Migration 51: transcript scans can now distinguish a completed source
+    // revision from a checkpoint at a record boundary.  The columns are
+    // additive so older databases retain their imported-record identities;
+    // existing rows are deliberately treated as complete because that was the
+    // only state representable before this migration.
+    if !migration_applied(&conn, 51)? {
+        let tx = conn.transaction()?;
+        add_column_if_missing(&tx, "transcript_sources", "source_revision", "TEXT")?;
+        add_column_if_missing(
+            &tx,
+            "transcript_sources",
+            "scan_state",
+            "TEXT NOT NULL DEFAULT 'complete' CHECK (scan_state IN ('restart', 'boundary', 'discard_until_newline', 'complete'))",
+        )?;
+        tx.execute(
+            "UPDATE transcript_sources
+             SET scan_state = 'complete'
+             WHERE scan_state IS NULL
+                OR scan_state NOT IN ('restart', 'boundary', 'discard_until_newline', 'complete')",
+            [],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (51)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 51: added transcript scan revisions and states");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

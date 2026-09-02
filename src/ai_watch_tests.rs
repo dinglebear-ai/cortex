@@ -309,14 +309,17 @@ fn bounded_backlog_continuation_drops_overflow_since_filter_until_cursor_clears(
     );
 
     cursor.start_after = None;
-    cursor.discovery_start_after = Some(PathBuf::from("/safe/root/.claude/projects"));
+    cursor.discovery_start_after.insert(
+        PathBuf::from("/safe/root/.claude/projects"),
+        PathBuf::from("/safe/root/.claude/projects/entry"),
+    );
     assert_eq!(
         rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
         None,
         "a bounded provider-root continuation also keeps the backlog unfiltered"
     );
 
-    cursor.discovery_start_after = None;
+    cursor.discovery_start_after.clear();
     assert_eq!(
         rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
         Some(old_overflow_filter),
