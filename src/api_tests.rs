@@ -15,9 +15,9 @@ use super::*;
 #[test]
 fn documented_rest_route_count_matches_router_registrations() {
     let binding_count = crate::surfaces::api_bindings().count();
-    assert_eq!(binding_count, 82, "update the documented API denominator");
-    assert!(include_str!("../docs/api.md").contains("82 method/path bindings total"));
-    assert!(include_str!("../docs/architecture.md").contains("(82 method/path bindings)"));
+    assert_eq!(binding_count, 93, "update the documented API denominator");
+    assert!(include_str!("../docs/api.md").contains("93 method/path bindings total"));
+    assert!(include_str!("../docs/architecture.md").contains("(93 method/path bindings)"));
 }
 
 /// Build the router for a test, layering a `MockConnectInfo` so handlers
@@ -43,7 +43,11 @@ async fn every_contract_api_method_path_is_actually_mounted() {
     for binding in api_bindings() {
         let (state, _, _dir) = test_state_with_admin(Some("secret".into()), "admin-secret");
         let app = test_router(state);
-        let path = binding.path.replace("{id}", "contract-probe");
+        let path = binding
+            .path
+            .replace("{id}", "1")
+            .replace("{repository_id}", "1")
+            .replace("{run_key}", "contract-probe");
         let method = match binding.method {
             HttpMethod::Get => axum::http::Method::GET,
             HttpMethod::Post => axum::http::Method::POST,
@@ -60,9 +64,14 @@ async fn every_contract_api_method_path_is_actually_mounted() {
             )
             .await
             .unwrap();
-        assert_ne!(
-            response.status(),
-            axum::http::StatusCode::NOT_FOUND,
+        // Dynamic resource routes may legitimately return a JSON 404 for this
+        // synthetic probe when the temporary database lacks that resource.
+        // Axum's unmatched-route fallback has no JSON content type, so keep
+        // the construction audit without requiring seeded state for every
+        // contracted dynamic path.
+        assert!(
+            response.status() != axum::http::StatusCode::NOT_FOUND
+                || response.headers().contains_key(header::CONTENT_TYPE),
             "{:?} {} is contracted but not mounted",
             binding.method,
             binding.path

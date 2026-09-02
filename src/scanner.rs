@@ -459,7 +459,7 @@ pub(crate) enum SourceKind {
 }
 
 impl SourceKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ClaudeProject => "claude_project",
             Self::CodexSession => "codex_session",
@@ -622,6 +622,15 @@ pub fn index_roots_with_options(
         None => default_roots(),
     };
 
+    // `/var` is commonly an alias for `/private/var` on macOS. Provider
+    // discovery keeps both spellings so an explicitly mounted root is
+    // recognized, but scanning both would duplicate every transcript source
+    // and distort discovery diagnostics. Collapse existing aliases before
+    // traversal while retaining unresolved roots for a later scan.
+    roots = roots
+        .into_iter()
+        .map(|root| root.canonicalize().unwrap_or(root))
+        .collect();
     roots.sort();
     roots.dedup();
     let mut result = IndexResult::default();
@@ -1934,21 +1943,23 @@ pub(crate) fn detect_source_kind(path: &Path) -> SourceKind {
 }
 
 impl SourceKind {
-    fn from_str(source_kind: &str, path: &Path) -> Self {
+    pub(crate) fn from_persisted_kind(source_kind: &str) -> Option<Self> {
         match source_kind {
-            "codex_session" => Self::CodexSession,
-            "claude_project" => Self::ClaudeProject,
-            "gemini_session" => Self::GeminiSession,
-            _ => detect_source_kind(path),
+            "codex_session" => Some(Self::CodexSession),
+            "claude_project" => Some(Self::ClaudeProject),
+            "gemini_session" => Some(Self::GeminiSession),
+            _ => None,
         }
     }
 
+    fn from_str(source_kind: &str, path: &Path) -> Self {
+        Self::from_persisted_kind(source_kind).unwrap_or_else(|| detect_source_kind(path))
+    }
+
     pub(crate) fn tool_name(self) -> &'static str {
-        match self {
-            Self::CodexSession => "codex",
-            Self::GeminiSession => "gemini",
-            Self::ClaudeProject | Self::ExplicitFile => "claude",
-        }
+        providers::provider_for_source_kind(self.as_str())
+            .unwrap_or(providers::Provider::Claude)
+            .canonical_name()
     }
 }
 

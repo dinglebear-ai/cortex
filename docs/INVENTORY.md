@@ -98,6 +98,7 @@ that registry by `src/mcp/schemas.rs::tool_definitions()`.
 | `unaddressed_errors` | Repeating unacknowledged error signatures | no |
 | `notifications_recent` | Recent notification firings | no |
 | `similar_incidents` | FTS5 historical incident clusters with overlapping AI sessions | no |
+| `recurring_error_comparison` | Compare recurring error signatures with redacted deterministic evidence bundles | no |
 | `incident_context` | Window bundle of non-AI log aggregates/errors and active AI sessions | no |
 | `graph` | Resolve graph entities, neighborhoods, and evidence-backed explanations | no |
 | `artifact_evidence` | Query bounded source-attributed artifact ecosystem evidence | no |

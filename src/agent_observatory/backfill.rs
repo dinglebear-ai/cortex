@@ -45,6 +45,10 @@ pub struct AgentBackfillCursors {
     pub otel_spans: String,
     #[serde(default)]
     pub otel_metric_points: String,
+    /// Separate from the Git-attribution repair cursor below.  Repository
+    /// observations are a projected source as well as a HEAD-repair input.
+    #[serde(default)]
+    pub repository_observation_events: String,
     pub repository_observations: i64,
 }
 
@@ -236,6 +240,9 @@ fn source_cursor_mut(progress: &mut AgentBackfillProgress, kind: AgentSourceKind
         AgentSourceKind::Llm => &mut progress.cursors.llm_invocations,
         AgentSourceKind::OtelSpan => &mut progress.cursors.otel_spans,
         AgentSourceKind::OtelMetric => &mut progress.cursors.otel_metric_points,
+        AgentSourceKind::RepositoryObservation => {
+            &mut progress.cursors.repository_observation_events
+        }
     }
 }
 
@@ -247,6 +254,9 @@ fn source_high_water(progress: &AgentBackfillProgress, kind: AgentSourceKind) ->
         AgentSourceKind::Llm => progress.high_water.llm_invocations.clone(),
         AgentSourceKind::OtelSpan => progress.high_water.otel_spans.to_string(),
         AgentSourceKind::OtelMetric => progress.high_water.otel_metric_points.to_string(),
+        AgentSourceKind::RepositoryObservation => {
+            progress.high_water.repository_observations.to_string()
+        }
     }
 }
 

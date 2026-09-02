@@ -15,6 +15,7 @@ pub enum AgentSourceKind {
     Llm,
     OtelSpan,
     OtelMetric,
+    RepositoryObservation,
 }
 
 impl AgentSourceKind {
@@ -27,6 +28,7 @@ impl AgentSourceKind {
             Self::Llm => "llm_invocations",
             Self::OtelSpan => "otel_spans",
             Self::OtelMetric => "otel_metric_points",
+            Self::RepositoryObservation => "repository_observations",
         }
     }
 }
@@ -155,6 +157,26 @@ pub struct AgentOtelMetricSourceRow {
     pub received_at: String,
 }
 
+/// A durable Git-observer observation.  This source deliberately contains no
+/// synthetic tool or session identity: repository observations can only be
+/// attached by the projector when it finds pre-existing, bounded run evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRepositoryObservationSourceRow {
+    pub cursor_id: i64,
+    pub observation_key: String,
+    pub repository_key: String,
+    pub repository_name: String,
+    pub hostname: String,
+    pub worktree_key: Option<String>,
+    pub worktree_path: Option<String>,
+    pub observed_at: String,
+    pub observation_kind: String,
+    pub old_head_sha: Option<String>,
+    pub new_head_sha: Option<String>,
+    pub summary: String,
+    pub payload_json: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSourceRecord {
     Mcp(AgentMcpSourceRow),
@@ -163,6 +185,7 @@ pub enum AgentSourceRecord {
     Llm(AgentLlmSourceRow),
     OtelSpan(AgentOtelSpanSourceRow),
     OtelMetric(AgentOtelMetricSourceRow),
+    RepositoryObservation(AgentRepositoryObservationSourceRow),
 }
 
 impl AgentSourceRecord {
@@ -181,6 +204,7 @@ impl AgentSourceRecord {
             .expect("LLM cursor serialization cannot fail"),
             Self::OtelSpan(row) => row.cursor_id.to_string(),
             Self::OtelMetric(row) => row.cursor_id.to_string(),
+            Self::RepositoryObservation(row) => row.cursor_id.to_string(),
         }
     }
 }
@@ -455,6 +479,45 @@ fn otel_metric_page(
         .collect::<rusqlite::Result<_>>()?)
 }
 
+fn repository_observation_page(
+    conn: &rusqlite::Connection,
+    after: i64,
+    limit: i64,
+) -> Result<Vec<AgentSourceRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT o.id, o.observation_key, r.repository_key, r.display_name, r.hostname,
+                w.worktree_key, w.path, o.observed_at, o.observation_kind,
+                o.old_head_sha, o.new_head_sha, o.summary, o.payload_json
+           FROM repository_observations o
+           JOIN repositories r ON r.id = o.repository_id
+      LEFT JOIN repository_worktrees w ON w.id = o.worktree_id
+          WHERE o.id > ?1
+          ORDER BY o.id
+          LIMIT ?2",
+    )?;
+    Ok(stmt
+        .query_map(params![after, limit], |row| {
+            Ok(AgentSourceRecord::RepositoryObservation(
+                AgentRepositoryObservationSourceRow {
+                    cursor_id: row.get(0)?,
+                    observation_key: row.get(1)?,
+                    repository_key: row.get(2)?,
+                    repository_name: row.get(3)?,
+                    hostname: row.get(4)?,
+                    worktree_key: row.get(5)?,
+                    worktree_path: row.get(6)?,
+                    observed_at: row.get(7)?,
+                    observation_kind: row.get(8)?,
+                    old_head_sha: row.get(9)?,
+                    new_head_sha: row.get(10)?,
+                    summary: row.get(11)?,
+                    payload_json: row.get(12)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
 pub fn page_agent_sources(
     pool: &DbPool,
     kind: AgentSourceKind,
@@ -476,6 +539,9 @@ pub fn page_agent_sources(
         }
         AgentSourceKind::OtelMetric => {
             otel_metric_page(&conn, numeric_cursor(after_cursor)?, probe_limit)?
+        }
+        AgentSourceKind::RepositoryObservation => {
+            repository_observation_page(&conn, numeric_cursor(after_cursor)?, probe_limit)?
         }
     };
     let truncated = records.len() > limit;

@@ -5,8 +5,10 @@ use super::{
 use crate::config::StorageConfig;
 use crate::db::agent_observatory::{
     AgentEventKind, AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow,
-    AgentOtelSpanSourceRow, AgentSkillSourceRow, AgentSourceRecord, RepositoryUpsert,
-    RepositoryWorktreeUpsert, projection_cursor, reconcile_repository,
+    AgentOtelSpanSourceRow, AgentSkillSourceRow, AgentSourceKind, AgentSourceRecord,
+    RepositoryObservationInput, RepositoryObservationKind, RepositoryUpsert,
+    RepositoryWorktreeUpsert, page_agent_sources, projection_cursor, reconcile_repository,
+    record_repository_observations_if_changed,
 };
 use crate::db::otlp_traces::{OtelSpanInput, insert_otel_spans_batch};
 use crate::db::{LogBatchEntry, init_pool, insert_logs_batch};
@@ -191,6 +193,134 @@ fn otlp_span_record() -> AgentSourceRecord {
         attributes_json: "{\"bounded\":true}".to_string(),
         received_at: "2026-08-05T12:00:01.000Z".to_string(),
     })
+}
+
+fn repository_observation() -> RepositoryObservationInput {
+    RepositoryObservationInput {
+        worktree_key: Some("worktree-key".to_string()),
+        observation_kind: RepositoryObservationKind::Head,
+        new_head_sha: Some(HEAD.to_string()),
+        summary: "worktree HEAD changed".to_string(),
+        payload_json: r#"{"new_commit_shas":[]}"#.to_string(),
+    }
+}
+
+#[test]
+fn repository_observation_projects_only_to_an_existing_evidenced_run_without_extending_activity() {
+    let (pool, _dir, log_id) = setup();
+    let seed = records(log_id).remove(0);
+    let SourceProjectionOutcome::Projected(seed) = project_agent_source(&pool, &seed).unwrap()
+    else {
+        panic!("MCP fixture should create the explicitly identified run");
+    };
+    let last_activity_before = seed.run.last_activity_at.clone();
+    let observation = record_repository_observations_if_changed(
+        &pool,
+        "repo-key",
+        &[repository_observation()],
+        "2026-08-05T12:02:00.000Z",
+    )
+    .unwrap();
+    assert_eq!(observation.len(), 1);
+    assert_eq!(
+        projection_cursor(&pool, "repository_observations").unwrap(),
+        ""
+    );
+    let connection = pool.get().unwrap();
+    let plan = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT o.id FROM repository_observations o
+             JOIN repositories r ON r.id = o.repository_id
+        LEFT JOIN repository_worktrees w ON w.id = o.worktree_id
+            WHERE o.id > ?1 ORDER BY o.id LIMIT ?2",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![0_i64, 2_i64], |row| {
+            row.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter().any(|detail| detail.contains("PRIMARY KEY")),
+        "repository observation page must seek by its durable cursor: {plan:?}"
+    );
+    drop(connection);
+    let page = page_agent_sources(&pool, AgentSourceKind::RepositoryObservation, "", 10).unwrap();
+    assert_eq!(page.records.len(), 1);
+    let SourceProjectionOutcome::Projected(projected) = project_agent_source_with_cursor(
+        &pool,
+        &page.records[0],
+        "repository_observations",
+        &page.next_cursor,
+    )
+    .unwrap() else {
+        panic!("durably evidenced worktree observation should project");
+    };
+    assert_eq!(projected.run.id, seed.run.id);
+    assert_eq!(projected.run.last_activity_at, last_activity_before);
+    assert_eq!(
+        projection_cursor(&pool, "repository_observations").unwrap(),
+        page.next_cursor
+    );
+    let payload: serde_json::Value = serde_json::from_str(&projected.event.payload_json).unwrap();
+    assert_eq!(payload["association"]["trust"], "correlated");
+    assert_eq!(payload["source"]["observation"]["kind"], "head");
+    assert_eq!(projected.event.source_id, observation[0].observation_key);
+    assert!(projected.event_inserted);
+    assert!(projected.outbox.is_some());
+
+    let SourceProjectionOutcome::Projected(replay) =
+        project_agent_source(&pool, &page.records[0]).unwrap()
+    else {
+        panic!("replay remains a safe no-op");
+    };
+    assert!(!replay.event_inserted);
+    assert!(replay.outbox.is_none());
+}
+
+#[test]
+fn repository_observation_without_existing_run_is_skipped_and_never_creates_a_synthetic_run() {
+    let (pool, _dir, _log_id) = setup();
+    let observation = record_repository_observations_if_changed(
+        &pool,
+        "repo-key",
+        &[repository_observation()],
+        "2026-08-05T12:02:00.000Z",
+    )
+    .unwrap();
+    assert_eq!(
+        projection_cursor(&pool, "repository_observations").unwrap(),
+        ""
+    );
+    let page = page_agent_sources(&pool, AgentSourceKind::RepositoryObservation, "", 10).unwrap();
+    let SourceProjectionOutcome::Skipped(diagnostic) = project_agent_source_with_cursor(
+        &pool,
+        &page.records[0],
+        "repository_observations",
+        &page.next_cursor,
+    )
+    .unwrap() else {
+        panic!("unidentified Git state must not create a faux agent run");
+    };
+    assert_eq!(diagnostic.reason, SourceProjectionSkipReason::NoMatchingRun);
+    assert_eq!(
+        projection_cursor(&pool, "repository_observations").unwrap(),
+        page.next_cursor
+    );
+    let connection = pool.get().unwrap();
+    let runs: i64 = connection
+        .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
+        .unwrap();
+    let events: i64 = connection
+        .query_row("SELECT COUNT(*) FROM agent_run_events", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(runs, 0);
+    assert_eq!(events, 0);
+    assert_eq!(observation.len(), 1);
 }
 
 #[test]
@@ -645,7 +775,7 @@ fn trace_association_caps_high_cardinality_candidate_evidence() {
     drop(conn);
     let source = super::projection_parts(&otlp_span_record());
     assert_eq!(
-        super::classify_span_association(&pool, &source).unwrap(),
+        super::classify_telemetry_association(&pool, &source).unwrap(),
         super::SpanAssociation::Ambiguous(8)
     );
 }

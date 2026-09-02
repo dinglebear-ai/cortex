@@ -204,7 +204,7 @@ fn projection_cycle_counts_an_oversized_first_row() {
 }
 
 #[test]
-fn projection_cycle_projects_otlp_span_and_metric_with_atomic_cursors() {
+fn projection_cycle_defers_untrusted_otlp_span_and_metric_but_advances_cursors() {
     let (_directory, pool) = pool();
     let conn = pool.get().unwrap();
     conn.execute(
@@ -247,13 +247,15 @@ fn projection_cycle_projects_otlp_span_and_metric_with_atomic_cursors() {
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap();
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].0, "otlp_span");
-    assert_eq!(events[0].1, "otel_spans");
-    assert_eq!(events[0].2, Some("1".repeat(32)));
-    assert_eq!(events[0].3, Some("2".repeat(16)));
-    assert_eq!(events[1].0, "otlp_metric");
-    assert_eq!(events[1].1, "otel_metric_points");
+    assert!(events.is_empty(), "telemetry may not synthesize a run");
+    let relation: (Option<i64>, String) = conn
+        .query_row(
+            "SELECT run_id,evidence_kind FROM agent_run_trace_relations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(relation, (None, "no_match".to_string()));
 }
 
 #[test]

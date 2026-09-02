@@ -2,8 +2,8 @@
 
 use crate::db::agent_observatory::{
     AgentEventKind, AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow,
-    AgentOtelMetricSourceRow, AgentOtelSpanSourceRow, AgentSkillSourceRow, AgentSourceKind,
-    AgentSourceRecord,
+    AgentOtelMetricSourceRow, AgentOtelSpanSourceRow, AgentRepositoryObservationSourceRow,
+    AgentSkillSourceRow, AgentSourceKind, AgentSourceRecord,
 };
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
@@ -406,6 +406,65 @@ fn otlp_metric_parts(row: &AgentOtelMetricSourceRow) -> ProjectionParts {
     }
 }
 
+fn repository_observation_parts(row: &AgentRepositoryObservationSourceRow) -> ProjectionParts {
+    let event_kind = match row.observation_kind.as_str() {
+        "head" => AgentEventKind::GitHead,
+        "error" => AgentEventKind::Error,
+        _ => AgentEventKind::GitStatus,
+    };
+    let title = format!(
+        "Repository {}: {}",
+        truncate_utf8(&row.repository_name, MAX_SUMMARY_BYTES),
+        truncate_utf8(&row.observation_kind, MAX_SUMMARY_BYTES),
+    );
+    ProjectionParts {
+        kind: AgentSourceKind::RepositoryObservation,
+        source_cursor: row.cursor_id.to_string(),
+        provider_sequence: Some(row.cursor_id),
+        source_kind: "repository_observations",
+        source_id: row.observation_key.clone(),
+        projection_variant: "repository_observation",
+        event_kind,
+        tool: None,
+        provider_tool: None,
+        session_id: None,
+        hostname: Some(row.hostname.clone()),
+        project: row.worktree_path.clone(),
+        observed_at: row.observed_at.clone(),
+        ingested_at: row.observed_at.clone(),
+        last_activity_at: row.observed_at.clone(),
+        source_log_id: None,
+        trace_id: None,
+        span_id: None,
+        severity: if row.observation_kind == "error" {
+            "error"
+        } else {
+            "info"
+        }
+        .to_string(),
+        title,
+        summary: truncate_utf8(&row.summary, MAX_SUMMARY_BYTES),
+        payload: json!({
+            "repository": {
+                "hostname": row.hostname,
+                "key": row.repository_key,
+                "name": row.repository_name,
+            },
+            "observation": {
+                "kind": row.observation_kind,
+                "new_head_sha": row.new_head_sha,
+                "old_head_sha": row.old_head_sha,
+                "payload": bounded_json(Some(row.payload_json.as_str())),
+                "worktree_key": row.worktree_key,
+                "worktree_path": row.worktree_path,
+            },
+        }),
+        actor_id: "git-observer".to_string(),
+        actor_type: "repository_observer",
+        actor_name: "Git observer".to_string(),
+    }
+}
+
 pub(super) fn projection_parts(record: &AgentSourceRecord) -> ProjectionParts {
     match record {
         AgentSourceRecord::Mcp(row) => mcp_parts(row),
@@ -414,5 +473,6 @@ pub(super) fn projection_parts(record: &AgentSourceRecord) -> ProjectionParts {
         AgentSourceRecord::Llm(row) => llm_parts(row),
         AgentSourceRecord::OtelSpan(row) => otlp_span_parts(row),
         AgentSourceRecord::OtelMetric(row) => otlp_metric_parts(row),
+        AgentSourceRecord::RepositoryObservation(row) => repository_observation_parts(row),
     }
 }

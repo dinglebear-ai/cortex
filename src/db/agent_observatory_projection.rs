@@ -17,6 +17,9 @@ pub use lookup::{
     AgentProjectionRunMatch, find_active_projection_worktree,
     find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
 };
+pub(crate) use lookup::{
+    AgentRepositoryObservationRunMatch, find_unique_projection_run_for_repository_observation,
+};
 #[path = "agent_observatory_projection_refs.rs"]
 mod refs;
 #[path = "agent_observatory_projection_sql.rs"]
@@ -24,6 +27,7 @@ mod sql;
 #[path = "agent_observatory_projection_tie_break.rs"]
 mod tie_break;
 
+use super::AgentRunRow;
 use crate::agent_observatory::identity::{actor_key, canonical_tool, event_key, run_key};
 use crate::db::pool::DbPool;
 use anyhow::{Context, Result, bail};
@@ -221,6 +225,10 @@ fn outbox_key(input: &AgentProjectionWriteInput) -> Result<String> {
     Ok(format!("v1:projection_outbox:{:x}", Sha256::digest(bytes)))
 }
 
+fn existing_run_event_outbox_key(event_key: &str) -> String {
+    digest_key("repository_observation_outbox", &[event_key])
+}
+
 pub(crate) fn projection_event_has_summary(
     pool: &DbPool,
     source_kind: &str,
@@ -380,6 +388,101 @@ pub(crate) fn write_agent_projection_with_cursor(
     cursor: &str,
 ) -> Result<AgentProjectionWriteResult> {
     write_inner(pool, input, Some((source_name, cursor)), None)
+}
+
+/// Atomically attach source evidence to a pre-existing run.  Unlike
+/// [`write_agent_projection_with_cursor`], this does not upsert or refresh the
+/// run: callers use it for sources (notably Git observations) that have no
+/// native agent/session identity and therefore must not manufacture activity.
+fn write_agent_existing_run_event_inner(
+    pool: &DbPool,
+    expected_run: &AgentRunRow,
+    event: &AgentRunEventUpsert,
+    outbox: &AgentProjectionOutboxInput,
+    cursor: Option<(&str, &str)>,
+) -> Result<AgentProjectionWriteResult> {
+    required(&expected_run.run_key, "existing run_key")?;
+    validate_event(event)?;
+    validate_outbox(outbox)?;
+    let durable_event_key = event_key(
+        &event.source_kind,
+        &event.source_id,
+        &event.projection_variant,
+    )?;
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current_run = sql::run_by_id(&tx, expected_run.id)?;
+    if current_run.run_key != expected_run.run_key {
+        bail!("existing run identity changed before repository observation projection");
+    }
+    let event_worktree_id = event
+        .worktree_key
+        .as_deref()
+        .map(|key| sql::worktree_id(&tx, key))
+        .transpose()?;
+    let (event_row, event_inserted) = sql::insert_event(
+        &tx,
+        &durable_event_key,
+        current_run.id,
+        None,
+        event_worktree_id,
+        event,
+    )?;
+    let run = if event_inserted {
+        counters::apply_evidence_event_counters(&tx, current_run.id, &event_row)?
+    } else {
+        current_run
+    };
+    let outbox = if event_inserted {
+        Some(sql::insert_outbox(
+            &tx,
+            &existing_run_event_outbox_key(&durable_event_key),
+            run.id,
+            outbox,
+        )?)
+    } else {
+        None
+    };
+    if let Some((source_name, cursor)) = cursor {
+        super::advance_projection_cursor_in_tx(&tx, source_name, cursor)?;
+    }
+    tx.commit()?;
+    Ok(AgentProjectionWriteResult {
+        run,
+        actor: None,
+        worktree_evidence: None,
+        trace_relation: None,
+        event: event_row,
+        event_inserted,
+        materialized_state_changed: event_inserted,
+        outbox,
+    })
+}
+
+pub(crate) fn write_agent_existing_run_event_with_cursor(
+    pool: &DbPool,
+    expected_run: &AgentRunRow,
+    event: &AgentRunEventUpsert,
+    outbox: &AgentProjectionOutboxInput,
+    source_name: &str,
+    cursor: &str,
+) -> Result<AgentProjectionWriteResult> {
+    write_agent_existing_run_event_inner(
+        pool,
+        expected_run,
+        event,
+        outbox,
+        Some((source_name, cursor)),
+    )
+}
+
+pub(crate) fn write_agent_existing_run_event(
+    pool: &DbPool,
+    expected_run: &AgentRunRow,
+    event: &AgentRunEventUpsert,
+    outbox: &AgentProjectionOutboxInput,
+) -> Result<AgentProjectionWriteResult> {
+    write_agent_existing_run_event_inner(pool, expected_run, event, outbox, None)
 }
 
 /// Record an explicit non-match or ambiguous trace conclusion when no run can

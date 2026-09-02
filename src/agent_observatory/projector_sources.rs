@@ -9,13 +9,15 @@ use crate::agent_observatory::identity::canonical_tool;
 use crate::db::DbPool;
 use crate::db::agent_observatory::{
     AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionRunMatch,
-    AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunRow,
-    AgentRunUpsert, AgentSourceKind, AgentSourceRecord, AgentTraceRelationUpsert,
-    AgentWorktreeEvidenceUpsert, EvidenceTrustLevel, RunStatus, StreamEventName,
-    advance_projection_cursor, find_active_projection_worktree,
-    find_unique_projection_run_by_session, projection_event_has_summary,
-    reconcile_unmatched_trace_relations, write_agent_projection,
-    write_agent_projection_with_cursor, write_agent_trace_relation_without_run,
+    AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRepositoryObservationRunMatch,
+    AgentRunEventUpsert, AgentRunRow, AgentRunUpsert, AgentSourceKind, AgentSourceRecord,
+    AgentTraceRelationUpsert, AgentWorktreeEvidenceUpsert, EvidenceTrustLevel, RunStatus,
+    StreamEventName, advance_projection_cursor, find_active_projection_worktree,
+    find_unique_projection_run_by_session, find_unique_projection_run_for_repository_observation,
+    projection_event_has_summary, reconcile_unmatched_trace_relations,
+    write_agent_existing_run_event, write_agent_existing_run_event_with_cursor,
+    write_agent_projection, write_agent_projection_with_cursor,
+    write_agent_trace_relation_without_run,
 };
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
@@ -37,6 +39,7 @@ pub enum SourceProjectionSkipReason {
     MissingTool,
     MissingSession,
     MissingHostname,
+    MissingWorktree,
     AlreadyProjected,
     NoMatchingRun,
     AmbiguousMatchingRun,
@@ -335,8 +338,14 @@ fn trace_relation(
     })
 }
 
-fn classify_span_association(pool: &DbPool, source: &ProjectionParts) -> Result<SpanAssociation> {
-    if source.kind != AgentSourceKind::OtelSpan {
+fn classify_telemetry_association(
+    pool: &DbPool,
+    source: &ProjectionParts,
+) -> Result<SpanAssociation> {
+    if !matches!(
+        source.kind,
+        AgentSourceKind::OtelSpan | AgentSourceKind::OtelMetric
+    ) {
         return Ok(SpanAssociation::Exact(1));
     }
     let (Some(hostname), Some(tool), Some(session)) = (
@@ -385,13 +394,19 @@ fn project_agent_source_inner(
     cursor: Option<(&str, &str)>,
 ) -> Result<SourceProjectionOutcome> {
     let source = projection_parts(record);
-    let association = classify_span_association(pool, &source)?;
+    if matches!(record, AgentSourceRecord::RepositoryObservation(_)) {
+        return project_repository_observation(pool, &source, cursor);
+    }
+    let association = classify_telemetry_association(pool, &source)?;
     let relation = trace_relation(&source, association);
-    if source.kind == AgentSourceKind::OtelSpan
-        && !matches!(association, SpanAssociation::Exact(_))
-        && let Some(relation) = relation.as_ref()
+    if matches!(
+        source.kind,
+        AgentSourceKind::OtelSpan | AgentSourceKind::OtelMetric
+    ) && !matches!(association, SpanAssociation::Exact(_))
     {
-        write_agent_trace_relation_without_run(pool, relation)?;
+        if let Some(relation) = relation.as_ref() {
+            write_agent_trace_relation_without_run(pool, relation)?;
+        }
         if let Some((source_name, cursor)) = cursor {
             advance_projection_cursor(pool, source_name, cursor)?;
         }
@@ -440,6 +455,107 @@ fn project_agent_source_inner(
     // A later transcript/source may resolve an older no-match span, but only
     // through the exact host/tool/provider-session identity; never by time.
     let _ = reconcile_unmatched_trace_relations(pool)?;
+    Ok(SourceProjectionOutcome::Projected(Box::new(written)))
+}
+
+fn project_repository_observation(
+    pool: &DbPool,
+    source: &ProjectionParts,
+    cursor: Option<(&str, &str)>,
+) -> Result<SourceProjectionOutcome> {
+    let Some(worktree_key) = source
+        .payload
+        .pointer("/observation/worktree_key")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        if let Some((source_name, cursor)) = cursor {
+            advance_projection_cursor(pool, source_name, cursor)?;
+        }
+        return Ok(skip(source, SourceProjectionSkipReason::MissingWorktree));
+    };
+    let association = match find_unique_projection_run_for_repository_observation(
+        pool,
+        worktree_key,
+        &source.observed_at,
+    )? {
+        AgentRepositoryObservationRunMatch::None => {
+            if let Some((source_name, cursor)) = cursor {
+                advance_projection_cursor(pool, source_name, cursor)?;
+            }
+            return Ok(skip(source, SourceProjectionSkipReason::NoMatchingRun));
+        }
+        AgentRepositoryObservationRunMatch::Ambiguous => {
+            if let Some((source_name, cursor)) = cursor {
+                advance_projection_cursor(pool, source_name, cursor)?;
+            }
+            return Ok(skip(
+                source,
+                SourceProjectionSkipReason::AmbiguousMatchingRun,
+            ));
+        }
+        AgentRepositoryObservationRunMatch::Unique(association) => association,
+    };
+    let payload = bounded_payload(
+        json!({
+            "association": {
+                // The run evidence can be verified, but a repository row has
+                // no native session identity.  Its event is therefore always
+                // explicitly correlated and capped below exact attribution.
+                "confidence": association.evidence_confidence.min(0.75),
+                "evidence_kind": association.evidence_kind,
+                "evidence_source": association.evidence_source,
+                "evidence_trust": association.evidence_trust.as_str(),
+                "method": "active_worktree_evidence",
+                "trust": "correlated",
+            },
+            "source": source.payload,
+        }),
+        &source.title,
+        &source.source_cursor,
+    );
+    let event = AgentRunEventUpsert {
+        source_kind: source.source_kind.to_string(),
+        source_id: source.source_id.clone(),
+        // Ambiguous observations do not project, so the immutable source key
+        // plus this fixed variant is sufficient for replay idempotency.
+        projection_variant: source.projection_variant.to_string(),
+        worktree_key: Some(worktree_key.to_string()),
+        observed_at: source.observed_at.clone(),
+        ingested_at: source.ingested_at.clone(),
+        event_kind: source.event_kind,
+        source_log_id: None,
+        provider_sequence: source.provider_sequence,
+        trace_id: None,
+        span_id: None,
+        severity: source.severity.clone(),
+        title: source.title.clone(),
+        summary: source.summary.clone(),
+        payload_json: payload,
+        content_scrubbed: true,
+    };
+    let outbox = AgentProjectionOutboxInput {
+        event_name: StreamEventName::RunEvent,
+        expires_at: expires_at(&source.observed_at)?,
+        payload_json: json!({
+            "event_kind": "repository_observation",
+            "source_cursor": source.source_cursor,
+            "source_id": source.source_id,
+            "source_kind": source.source_kind,
+        })
+        .to_string(),
+    };
+    let written = match cursor {
+        Some((source_name, cursor)) => write_agent_existing_run_event_with_cursor(
+            pool,
+            &association.run,
+            &event,
+            &outbox,
+            source_name,
+            cursor,
+        )?,
+        None => write_agent_existing_run_event(pool, &association.run, &event, &outbox)?,
+    };
     Ok(SourceProjectionOutcome::Projected(Box::new(written)))
 }
 

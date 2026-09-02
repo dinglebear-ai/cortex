@@ -91,6 +91,10 @@ struct SenderState {
 pub struct SyslogSender {
     state: Arc<Mutex<SenderState>>,
     notify: Arc<Notify>,
+    /// The sender is normally retained by the agent for its entire lifetime.
+    /// Keeping the abort handle means a dropped/restarted agent cannot leave an
+    /// orphaned delivery loop running against the durable spool.
+    delivery_task: tokio::task::AbortHandle,
 }
 
 impl SyslogSender {
@@ -101,13 +105,17 @@ impl SyslogSender {
             last_error_code: None,
         }));
         let notify = Arc::new(Notify::new());
-        tokio::spawn(delivery_loop(
+        let delivery_task = tokio::spawn(delivery_loop(
             target,
             token,
             Arc::clone(&state),
             Arc::clone(&notify),
         ));
-        Self { state, notify }
+        Self {
+            state,
+            notify,
+            delivery_task: delivery_task.abort_handle(),
+        }
     }
 
     pub async fn send(&self, line: String) -> Result<()> {
@@ -184,6 +192,12 @@ impl SyslogSender {
         drop(state);
         self.notify.notify_one();
         Ok(())
+    }
+}
+
+impl Drop for SyslogSender {
+    fn drop(&mut self) {
+        self.delivery_task.abort();
     }
 }
 

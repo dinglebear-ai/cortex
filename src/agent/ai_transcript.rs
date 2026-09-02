@@ -235,11 +235,6 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn has_path_segment(path: &Path, expected: &str) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == std::ffi::OsStr::new(expected))
-}
-
 /// The scanner's provider registry intentionally recognizes only configured
 /// `$HOME` roots. An agent may be explicitly configured with a mounted or
 /// test root outside that home, though, so preserve provider classification
@@ -251,18 +246,11 @@ fn forward_source_kind(path: &Path) -> scanner::SourceKind {
         scanner::SourceKind::ExplicitFile if scanner::gemini::is_chat_file(path) => {
             scanner::SourceKind::GeminiSession
         }
-        scanner::SourceKind::ExplicitFile
-            if has_path_segment(path, ".codex")
-                && (has_path_segment(path, "sessions")
-                    || has_path_segment(path, "archived_sessions")
-                    || has_path_segment(path, "worktrees")) =>
-        {
-            scanner::SourceKind::CodexSession
-        }
-        scanner::SourceKind::ExplicitFile
-            if has_path_segment(path, ".claude") && has_path_segment(path, "projects") =>
-        {
-            scanner::SourceKind::ClaudeProject
+        scanner::SourceKind::ExplicitFile => {
+            scanner::providers::provider_for_transcript_layout(path)
+                .and_then(scanner::providers::source_kind_for_provider)
+                .and_then(scanner::SourceKind::from_persisted_kind)
+                .unwrap_or(scanner::SourceKind::ExplicitFile)
         }
         source_kind => source_kind,
     }
@@ -412,32 +400,34 @@ fn gemini_prefix_fingerprint(records: &[scanner::ParsedTranscriptRecord], count:
 }
 
 fn capability_coverage(source_kind: scanner::SourceKind) -> EvidenceCapabilityCoverage {
-    let not_observed = EvidenceCoverage::NotObserved;
-    match source_kind {
-        scanner::SourceKind::ClaudeProject => EvidenceCapabilityCoverage {
-            transcript: EvidenceCoverage::Observed,
-            mcp_events: EvidenceCoverage::Partial,
-            skill_events: EvidenceCoverage::Partial,
-            hook_events: EvidenceCoverage::Partial,
-        },
-        scanner::SourceKind::CodexSession => EvidenceCapabilityCoverage {
-            transcript: EvidenceCoverage::Observed,
-            mcp_events: EvidenceCoverage::Partial,
-            skill_events: EvidenceCoverage::Partial,
-            hook_events: not_observed,
-        },
-        scanner::SourceKind::GeminiSession => EvidenceCapabilityCoverage {
-            transcript: EvidenceCoverage::Observed,
-            mcp_events: not_observed,
-            skill_events: not_observed,
-            hook_events: not_observed,
-        },
-        scanner::SourceKind::ExplicitFile => EvidenceCapabilityCoverage {
-            transcript: EvidenceCoverage::Partial,
-            mcp_events: not_observed,
-            skill_events: not_observed,
-            hook_events: not_observed,
-        },
+    let provider = scanner::providers::provider_for_source_kind(source_kind.as_str());
+    let coverage = |lane| {
+        provider
+            .map(|provider| scanner::providers::definition(provider).forwarding_coverage(lane))
+            // An explicitly configured generic file remains a bounded,
+            // parseable transcript input, but never inherits provider events.
+            .unwrap_or_else(|| match lane {
+                scanner::providers::ProviderLane::Transcript => {
+                    scanner::providers::Coverage::Partial
+                }
+                _ => scanner::providers::Coverage::NotObserved,
+            })
+    };
+
+    EvidenceCapabilityCoverage {
+        transcript: evidence_coverage(coverage(scanner::providers::ProviderLane::Transcript)),
+        mcp_events: evidence_coverage(coverage(scanner::providers::ProviderLane::McpEvents)),
+        skill_events: evidence_coverage(coverage(scanner::providers::ProviderLane::Skills)),
+        hook_events: evidence_coverage(coverage(scanner::providers::ProviderLane::Hooks)),
+    }
+}
+
+fn evidence_coverage(coverage: scanner::providers::Coverage) -> EvidenceCoverage {
+    match coverage {
+        scanner::providers::Coverage::Observed => EvidenceCoverage::Observed,
+        scanner::providers::Coverage::Partial => EvidenceCoverage::Partial,
+        scanner::providers::Coverage::NotObserved => EvidenceCoverage::NotObserved,
+        scanner::providers::Coverage::Failed => EvidenceCoverage::Failed,
     }
 }
 

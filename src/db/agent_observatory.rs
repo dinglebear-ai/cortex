@@ -23,8 +23,8 @@ pub use run_commits::{
 mod sources;
 pub use sources::{
     AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow, AgentOtelMetricSourceRow,
-    AgentOtelSpanSourceRow, AgentSkillSourceRow, AgentSourceKind, AgentSourceRecord,
-    page_agent_sources,
+    AgentOtelSpanSourceRow, AgentRepositoryObservationSourceRow, AgentSkillSourceRow,
+    AgentSourceKind, AgentSourceRecord, page_agent_sources,
 };
 
 #[path = "agent_observatory_projection.rs"]
@@ -37,7 +37,9 @@ pub use projection::{
     write_agent_projection,
 };
 pub(crate) use projection::{
+    AgentRepositoryObservationRunMatch, find_unique_projection_run_for_repository_observation,
     projection_event_has_summary, reconcile_unmatched_trace_relations,
+    write_agent_existing_run_event, write_agent_existing_run_event_with_cursor,
     write_agent_projection_with_cursor, write_agent_trace_relation_without_run,
 };
 
@@ -45,7 +47,7 @@ pub(crate) use projection::{
 mod observations;
 pub use observations::RepositoryObservationInput;
 #[cfg(test)]
-pub use observations::list_repository_observations;
+pub use observations::{list_repository_observations, record_repository_observations_if_changed};
 
 #[path = "agent_observatory_queries.rs"]
 mod queries;

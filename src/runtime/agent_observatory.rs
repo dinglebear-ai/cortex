@@ -22,13 +22,14 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-const SOURCE_KINDS: [AgentSourceKind; 6] = [
+const SOURCE_KINDS: [AgentSourceKind; 7] = [
     AgentSourceKind::Mcp,
     AgentSourceKind::Hook,
     AgentSourceKind::Skill,
     AgentSourceKind::Llm,
     AgentSourceKind::OtelSpan,
     AgentSourceKind::OtelMetric,
+    AgentSourceKind::RepositoryObservation,
 ];
 
 fn source_name(kind: AgentSourceKind) -> &'static str {

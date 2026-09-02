@@ -28,9 +28,11 @@ impl Provider {
     }
 
     pub fn from_alias(value: &str) -> Option<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
         PROVIDERS.iter().find_map(|definition| {
-            (definition.canonical_name == value || definition.aliases.contains(&value))
-                .then_some(definition.provider)
+            (definition.canonical_name == normalized
+                || definition.aliases.contains(&normalized.as_str()))
+            .then_some(definition.provider)
         })
     }
 }
@@ -109,20 +111,58 @@ pub struct ProviderDefinition {
     pub provider: Provider,
     pub canonical_name: &'static str,
     pub aliases: &'static [&'static str],
+    /// The persisted scanner source kind for this provider, when its
+    /// transcript adapter is enabled. Keeping this with the descriptor
+    /// prevents health, forwarding, and projections from maintaining their
+    /// own provider-to-source-kind tables.
+    pub source_kind: Option<&'static str>,
     pub adapter_version: &'static str,
     pub privacy_policy: &'static str,
     pub checkpoint: CheckpointPolicy,
-    lanes: &'static [(ProviderLane, AdapterSupport)],
+    lanes: &'static [ProviderLaneDefinition],
 }
 
 impl ProviderDefinition {
     pub fn support(self, lane: ProviderLane) -> AdapterSupport {
-        for &(candidate, coverage) in self.lanes {
-            if candidate == lane {
-                return coverage;
-            }
-        }
-        AdapterSupport::Unsupported
+        self.lane(lane)
+            .map(|definition| definition.adapter_support)
+            .unwrap_or(AdapterSupport::Unsupported)
+    }
+
+    /// Conservative coverage an agent may put into a transcript evidence
+    /// envelope. This is adapter-specific, but it remains distinct from
+    /// receipt-backed runtime health: an envelope only describes what that
+    /// forwarded record can carry, not what the server has durably observed.
+    pub fn forwarding_coverage(self, lane: ProviderLane) -> Coverage {
+        self.lane(lane)
+            .map(|definition| definition.forwarding_coverage)
+            .unwrap_or(Coverage::NotObserved)
+    }
+
+    fn lane(self, lane: ProviderLane) -> Option<&'static ProviderLaneDefinition> {
+        self.lanes.iter().find(|definition| definition.lane == lane)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderLaneDefinition {
+    pub lane: ProviderLane,
+    pub adapter_support: AdapterSupport,
+    /// The most the current bounded transcript forwarder can truthfully
+    /// report for this lane. Static support must never silently turn into
+    /// observed runtime evidence.
+    pub forwarding_coverage: Coverage,
+}
+
+const fn lane(
+    lane: ProviderLane,
+    adapter_support: AdapterSupport,
+    forwarding_coverage: Coverage,
+) -> ProviderLaneDefinition {
+    ProviderLaneDefinition {
+        lane,
+        adapter_support,
+        forwarding_coverage,
     }
 }
 
@@ -136,58 +176,146 @@ const PROVIDERS: &[ProviderDefinition] = &[
     ProviderDefinition {
         provider: Provider::Claude,
         canonical_name: "claude",
-        aliases: &["claude-code"],
+        aliases: &["claude-code", "claude-transcript"],
+        source_kind: Some("claude_project"),
         adapter_version: "claude-jsonl-v1",
         privacy_policy: "scrub-before-persist",
         checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
         lanes: &[
-            (ProviderLane::SessionMetadata, AdapterSupport::Supported),
-            (ProviderLane::Transcript, AdapterSupport::Supported),
-            (ProviderLane::ToolCalls, AdapterSupport::Partial),
-            (ProviderLane::McpEvents, AdapterSupport::Supported),
-            (ProviderLane::Skills, AdapterSupport::Supported),
-            (ProviderLane::Hooks, AdapterSupport::Supported),
-            (ProviderLane::Usage, AdapterSupport::Unsupported),
+            lane(
+                ProviderLane::SessionMetadata,
+                AdapterSupport::Supported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Transcript,
+                AdapterSupport::Supported,
+                Coverage::Observed,
+            ),
+            lane(
+                ProviderLane::ToolCalls,
+                AdapterSupport::Partial,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::McpEvents,
+                AdapterSupport::Supported,
+                Coverage::Partial,
+            ),
+            lane(
+                ProviderLane::Skills,
+                AdapterSupport::Supported,
+                Coverage::Partial,
+            ),
+            lane(
+                ProviderLane::Hooks,
+                AdapterSupport::Supported,
+                Coverage::Partial,
+            ),
+            lane(
+                ProviderLane::Usage,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
         ],
     },
     ProviderDefinition {
         provider: Provider::Codex,
         canonical_name: "codex",
-        aliases: &["openai-codex"],
+        aliases: &["openai-codex", "codex-transcript"],
+        source_kind: Some("codex_session"),
         adapter_version: "codex-jsonl-v1",
         privacy_policy: "scrub-before-persist",
         checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
         lanes: &[
-            (ProviderLane::SessionMetadata, AdapterSupport::Supported),
-            (ProviderLane::Transcript, AdapterSupport::Supported),
-            (ProviderLane::ToolCalls, AdapterSupport::Partial),
-            (ProviderLane::McpEvents, AdapterSupport::Supported),
-            (ProviderLane::Skills, AdapterSupport::Supported),
-            (ProviderLane::Hooks, AdapterSupport::Unsupported),
-            (ProviderLane::Usage, AdapterSupport::Unsupported),
+            lane(
+                ProviderLane::SessionMetadata,
+                AdapterSupport::Supported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Transcript,
+                AdapterSupport::Supported,
+                Coverage::Observed,
+            ),
+            lane(
+                ProviderLane::ToolCalls,
+                AdapterSupport::Partial,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::McpEvents,
+                AdapterSupport::Supported,
+                Coverage::Partial,
+            ),
+            lane(
+                ProviderLane::Skills,
+                AdapterSupport::Supported,
+                Coverage::Partial,
+            ),
+            lane(
+                ProviderLane::Hooks,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Usage,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
         ],
     },
     ProviderDefinition {
         provider: Provider::Gemini,
         canonical_name: "gemini",
-        aliases: &["gemini-cli"],
+        aliases: &["gemini-cli", "gemini-transcript"],
+        source_kind: Some("gemini_session"),
         adapter_version: "gemini-chat-json-v1",
         privacy_policy: "scrub-before-persist",
         checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
         lanes: &[
-            (ProviderLane::SessionMetadata, AdapterSupport::Supported),
-            (ProviderLane::Transcript, AdapterSupport::Supported),
-            (ProviderLane::ToolCalls, AdapterSupport::Unsupported),
-            (ProviderLane::McpEvents, AdapterSupport::Unsupported),
-            (ProviderLane::Skills, AdapterSupport::Unsupported),
-            (ProviderLane::Hooks, AdapterSupport::Unsupported),
-            (ProviderLane::Usage, AdapterSupport::Unsupported),
+            lane(
+                ProviderLane::SessionMetadata,
+                AdapterSupport::Supported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Transcript,
+                AdapterSupport::Supported,
+                Coverage::Observed,
+            ),
+            lane(
+                ProviderLane::ToolCalls,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::McpEvents,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Skills,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Hooks,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Usage,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
         ],
     },
     ProviderDefinition {
         provider: Provider::Antigravity,
         canonical_name: "antigravity",
         aliases: &["agy", "antigravity-cli"],
+        source_kind: None,
         adapter_version: "antigravity-sqlite-metadata-v1",
         privacy_policy: "metadata-only-until-parser-is-reviewed",
         checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
@@ -195,13 +323,41 @@ const PROVIDERS: &[ProviderDefinition] = &[
             // The SQLite stores can establish session/usage lifecycle
             // metadata. They do not establish transcript or extracted event
             // content, so those lanes must remain visibly unavailable.
-            (ProviderLane::SessionMetadata, AdapterSupport::Partial),
-            (ProviderLane::Transcript, AdapterSupport::Unsupported),
-            (ProviderLane::ToolCalls, AdapterSupport::Unsupported),
-            (ProviderLane::McpEvents, AdapterSupport::Unsupported),
-            (ProviderLane::Skills, AdapterSupport::Unsupported),
-            (ProviderLane::Hooks, AdapterSupport::Unsupported),
-            (ProviderLane::Usage, AdapterSupport::Partial),
+            lane(
+                ProviderLane::SessionMetadata,
+                AdapterSupport::Partial,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Transcript,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::ToolCalls,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::McpEvents,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Skills,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Hooks,
+                AdapterSupport::Unsupported,
+                Coverage::NotObserved,
+            ),
+            lane(
+                ProviderLane::Usage,
+                AdapterSupport::Partial,
+                Coverage::NotObserved,
+            ),
         ],
     },
 ];
@@ -216,6 +372,52 @@ pub fn definition(provider: Provider) -> &'static ProviderDefinition {
         .iter()
         .find(|definition| definition.provider == provider)
         .expect("every Provider has a registry definition")
+}
+
+/// Resolve the provider represented by one persisted scanner source kind.
+/// Unknown and generic files intentionally do not inherit Claude support.
+pub fn provider_for_source_kind(source_kind: &str) -> Option<Provider> {
+    definitions()
+        .iter()
+        .find(|definition| definition.source_kind == Some(source_kind))
+        .map(|definition| definition.provider)
+}
+
+/// Resolve the persisted scanner source kind for a provider. Antigravity is
+/// deliberately `None`: metadata discovery is not a transcript source.
+pub fn source_kind_for_provider(provider: Provider) -> Option<&'static str> {
+    definition(provider).source_kind
+}
+
+/// Normalize a provider alias only when it has an approved transcript source
+/// adapter. Agent Observatory and OTLP use this at their trust boundary so
+/// they cannot separately grow a list of transcript-capable providers.
+pub fn canonical_transcript_provider(value: &str) -> Option<&'static str> {
+    Provider::from_alias(value)
+        .filter(|provider| source_kind_for_provider(*provider).is_some())
+        .map(Provider::canonical_name)
+}
+
+/// Classify a structurally valid transcript path outside the configured home.
+/// This supports explicitly-mounted agent roots without broadening discovery;
+/// callers must still use the scanner's supported-file predicate first.
+pub fn provider_for_transcript_layout(path: &Path) -> Option<Provider> {
+    let has_segment = |expected: &str| {
+        path.components()
+            .any(|component| component.as_os_str() == std::ffi::OsStr::new(expected))
+    };
+
+    if has_segment(".codex")
+        && (has_segment("sessions") || has_segment("archived_sessions") || has_segment("worktrees"))
+    {
+        Some(Provider::Codex)
+    } else if has_segment(".claude") && has_segment("projects") {
+        Some(Provider::Claude)
+    } else if has_segment(".gemini") && has_segment("tmp") {
+        Some(Provider::Gemini)
+    } else {
+        None
+    }
 }
 
 /// Runtime scanner-only coverage for one provider. This derives coverage from
@@ -348,16 +550,7 @@ fn provider_index(provider: Provider) -> usize {
     }
 }
 
-fn provider_for_source_kind(source_kind: &str) -> Option<Provider> {
-    match source_kind {
-        "claude_project" => Some(Provider::Claude),
-        "codex_session" => Some(Provider::Codex),
-        "gemini_session" => Some(Provider::Gemini),
-        _ => None,
-    }
-}
-
-fn lane_name(lane: ProviderLane) -> &'static str {
+pub const fn lane_name(lane: ProviderLane) -> &'static str {
     match lane {
         ProviderLane::SessionMetadata => "session_metadata",
         ProviderLane::Transcript => "transcript",

@@ -756,6 +756,11 @@ fn rewritten_file_falls_back_to_duplicate_safe_full_scan() {
 fn index_roots_default_scans_claude_codex_codex_app_and_gemini_roots() {
     let (pool, dir) = test_pool();
     let _home = HomeOverride::set(dir.path());
+    // The default-root fixture is intentionally scoped to its temporary
+    // home. A caller-supplied CODEX_HOME is an additional supported root and
+    // must be covered in its own test rather than leaking real sessions into
+    // this denominator.
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
 
     let claude_root = dir.path().join(".claude/projects/-tmp-default");
     std::fs::create_dir_all(&claude_root).unwrap();
@@ -1739,8 +1744,20 @@ fn bounded_discovery_retains_continuations_for_multiple_capped_roots() {
         None,
     )
     .unwrap();
-    assert!(first.next_discovery_cursors.contains_key(&claude_root));
-    assert!(first.next_discovery_cursors.contains_key(&codex_root));
+    // Discovery keys use canonical paths so `/var` and `/private/var` share
+    // one cursor on macOS rather than repeatedly scanning the same source.
+    let canonical_claude_root = claude_root.canonicalize().unwrap();
+    let canonical_codex_root = codex_root.canonicalize().unwrap();
+    assert!(
+        first
+            .next_discovery_cursors
+            .contains_key(&canonical_claude_root)
+    );
+    assert!(
+        first
+            .next_discovery_cursors
+            .contains_key(&canonical_codex_root)
+    );
 
     let mut continuations = first.next_discovery_cursors;
     for _ in 0..4 {

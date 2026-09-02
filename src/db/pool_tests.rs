@@ -2,9 +2,9 @@ use super::*;
 
 #[test]
 fn documented_schema_count_matches_known_version() {
-    assert_eq!(KNOWN_SCHEMA_VERSION, 50);
-    assert!(include_str!("../../README.md").contains("50 sequential schema migrations"));
-    assert!(include_str!("../../docs/architecture.md").contains("50 sequential migrations"));
+    assert_eq!(KNOWN_SCHEMA_VERSION, 54);
+    assert!(include_str!("../../README.md").contains("54 sequential schema migrations"));
+    assert!(include_str!("../../docs/architecture.md").contains("54 sequential migrations"));
 }
 use crate::config::StorageConfig;
 use crate::db::{
@@ -4714,6 +4714,7 @@ fn migration_45_completes_transactionally_and_is_idempotent() {
             "agent_run_actors",
             "agent_run_commits",
             "agent_run_events",
+            "agent_run_trace_relations",
             "agent_run_worktrees",
             "agent_runs",
             "agent_stream_outbox",
@@ -4816,6 +4817,7 @@ fn migration_45_fresh_database_applies_transactionally() {
             "agent_run_actors",
             "agent_run_commits",
             "agent_run_events",
+            "agent_run_trace_relations",
             "agent_run_worktrees",
             "agent_runs",
             "agent_stream_outbox",

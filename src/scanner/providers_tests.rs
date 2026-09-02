@@ -14,6 +14,12 @@ impl EnvOverride {
         crate::env::set_test_var(key, value);
         Self { key, previous }
     }
+
+    fn remove(key: &'static str) -> Self {
+        let previous = crate::env::var_os(key);
+        crate::env::remove_test_var(key);
+        Self { key, previous }
+    }
 }
 
 impl Drop for EnvOverride {
@@ -49,6 +55,55 @@ fn aliases_and_antigravity_lane_coverage_are_explicit() {
     assert_eq!(Coverage::NotObserved.as_str(), "not_observed");
     assert_eq!(AdapterSupport::Supported.as_str(), "supported");
     assert_eq!(AdapterSupport::Unsupported.as_str(), "unsupported");
+}
+
+#[test]
+fn registry_is_the_single_source_for_source_kinds_and_forwarding_lanes() {
+    for (provider, source_kind) in [
+        (Provider::Claude, "claude_project"),
+        (Provider::Codex, "codex_session"),
+        (Provider::Gemini, "gemini_session"),
+    ] {
+        assert_eq!(source_kind_for_provider(provider), Some(source_kind));
+        assert_eq!(provider_for_source_kind(source_kind), Some(provider));
+        assert_eq!(
+            definition(provider).forwarding_coverage(ProviderLane::Transcript),
+            Coverage::Observed
+        );
+    }
+
+    assert_eq!(source_kind_for_provider(Provider::Antigravity), None);
+    assert_eq!(provider_for_source_kind("explicit_file"), None);
+    assert_eq!(
+        definition(Provider::Codex).forwarding_coverage(ProviderLane::Hooks),
+        Coverage::NotObserved,
+        "an unsupported lane cannot become evidence merely through forwarding"
+    );
+}
+
+#[test]
+fn mounted_transcript_layouts_resolve_through_registry() {
+    for (path, expected) in [
+        (
+            "/mounted/.claude/projects/project/session.jsonl",
+            Provider::Claude,
+        ),
+        (
+            "/mounted/.codex/archived_sessions/2026/session.jsonl",
+            Provider::Codex,
+        ),
+        (
+            "/mounted/.gemini/tmp/run/chats/session.json",
+            Provider::Gemini,
+        ),
+    ] {
+        let provider = provider_for_transcript_layout(Path::new(path));
+        assert_eq!(provider, Some(expected));
+        assert_eq!(
+            provider.and_then(source_kind_for_provider),
+            definition(expected).source_kind
+        );
+    }
 }
 
 #[test]
@@ -267,6 +322,7 @@ fn runtime_health_aggregates_provider_source_kinds_without_reading_paths() {
 fn runtime_health_uses_real_scanner_outcomes_and_isolates_a_bad_provider_source() {
     let home = tempfile::tempdir().unwrap();
     let _home = EnvOverride::set("HOME", home.path());
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
     let db = tempfile::tempdir().unwrap();
     let pool = init_pool(&StorageConfig::for_test(db.path().join("test.db"))).unwrap();
 
@@ -308,10 +364,10 @@ fn runtime_health_uses_real_scanner_outcomes_and_isolates_a_bad_provider_source(
         result.ingested, 1,
         "a malformed Claude source must not block Codex"
     );
-    // The malformed Claude and archived Codex fixtures each fail once. The
-    // quiet Codex session deliberately contains only metadata, so it also
-    // produces a parse diagnostic without fabricating an evidence receipt.
-    assert_eq!(result.parse_errors, 3);
+    // The malformed Claude and Codex fixtures each fail once. The
+    // metadata-only Codex session has no transcript record to ingest, but it
+    // is not malformed and therefore must not fabricate a parse error.
+    assert_eq!(result.parse_errors, 2);
 
     let health = runtime_health(&pool).unwrap();
     assert!(
@@ -329,9 +385,10 @@ fn runtime_health_uses_real_scanner_outcomes_and_isolates_a_bad_provider_source(
         .iter()
         .find(|entry| entry.provider == "codex")
         .unwrap();
-    // The fixture intentionally contains one valid archive, one malformed
-    // archive, and one quiet active session. Each file is a distinct source;
-    // the quiet source must be counted without upgrading any evidence lane.
+    // The fixture contains one valid archive, one malformed archive, and one
+    // metadata-only active session. It remains a distinct scanned source but
+    // has no durable import receipt, so it must not upgrade transcript
+    // coverage beyond the one successfully imported archive.
     assert_eq!(codex.source_count, 3);
     assert_eq!(codex.successful_sources, 1);
     assert_eq!(codex.failed_sources, 1);

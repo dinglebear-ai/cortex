@@ -78,6 +78,35 @@ fn configured_mounted_roots_keep_provider_layout_classification() {
     );
 }
 
+#[test]
+fn forwarded_evidence_capabilities_follow_the_provider_registry() {
+    let claude = capability_coverage(scanner::SourceKind::ClaudeProject);
+    assert_eq!(claude.transcript, EvidenceCoverage::Observed);
+    assert_eq!(claude.mcp_events, EvidenceCoverage::Partial);
+    assert_eq!(claude.skill_events, EvidenceCoverage::Partial);
+    assert_eq!(claude.hook_events, EvidenceCoverage::Partial);
+
+    let codex = capability_coverage(scanner::SourceKind::CodexSession);
+    assert_eq!(codex.transcript, EvidenceCoverage::Observed);
+    assert_eq!(codex.mcp_events, EvidenceCoverage::Partial);
+    assert_eq!(codex.skill_events, EvidenceCoverage::Partial);
+    assert_eq!(codex.hook_events, EvidenceCoverage::NotObserved);
+
+    let gemini = capability_coverage(scanner::SourceKind::GeminiSession);
+    assert_eq!(gemini.transcript, EvidenceCoverage::Observed);
+    assert_eq!(gemini.mcp_events, EvidenceCoverage::NotObserved);
+    assert_eq!(gemini.skill_events, EvidenceCoverage::NotObserved);
+    assert_eq!(gemini.hook_events, EvidenceCoverage::NotObserved);
+
+    // Explicit files remain useful, bounded transcript inputs, but have no
+    // provider descriptor and therefore cannot claim extracted event lanes.
+    let explicit = capability_coverage(scanner::SourceKind::ExplicitFile);
+    assert_eq!(explicit.transcript, EvidenceCoverage::Partial);
+    assert_eq!(explicit.mcp_events, EvidenceCoverage::NotObserved);
+    assert_eq!(explicit.skill_events, EvidenceCoverage::NotObserved);
+    assert_eq!(explicit.hook_events, EvidenceCoverage::NotObserved);
+}
+
 #[cfg(unix)]
 #[test]
 fn collect_files_never_follows_symlinked_transcript() {
