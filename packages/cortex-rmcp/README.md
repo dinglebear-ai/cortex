@@ -464,7 +464,7 @@ The CLI supports direct/local operation and HTTP operation. REST-backed mode is 
 
 ### MCP
 
-Cortex exposes one MCP tool named `cortex`. Its required `action` field selects one of **56 live actions** from a single authoritative Rust registry.
+Cortex exposes one MCP tool named `cortex`. Its required `action` field selects an action from a single authoritative Rust registry. The mechanically generated current count is published in [the live coverage inventory](tests/TEST_COVERAGE.md).
 
 The current scope split is:
 
@@ -865,7 +865,7 @@ just validate-plugin
 cargo xtask pre-push
 ```
 
-`just test-live` is the canonical end-to-end smoke harness. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, MCP calls, CLI and REST parity, and managed file-tail behavior. Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
+`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
 
 CI gates include:
 

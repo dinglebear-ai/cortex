@@ -161,6 +161,10 @@ jobs:
         uses: ./.github/actions/setup-rust-kache
         with:
           components: clippy
+          # The shared wrapper has twice exited during the final cortex crate
+          # compile without forwarding a rustc diagnostic. Keep this required
+          # correctness gate independent of the optional cache daemon.
+          enable-cache: "false"
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -176,6 +180,10 @@ jobs:
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
+        with:
+          # A cache miss only costs time; a wrapper failure must not look like
+          # a compiler/test failure. The cache remains enabled on lighter jobs.
+          enable-cache: "false"
 
       - name: Install nextest
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
@@ -287,7 +295,9 @@ jobs:
 
   mcp-integration:
     name: Live PR Smoke
-    runs-on: ci-pool-system
+    # The system pool does not guarantee a Docker socket. GitHub's Linux image
+    # does, and this gate explicitly validates that provisioned boundary.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes, test]
     if: ${{ needs.test.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.mcp == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
@@ -336,7 +346,9 @@ jobs:
 
   deployment-contract:
     name: Container and Deployment Contracts
-    runs-on: ci-pool-system
+    # Container qualification requires a provider with a contractual Docker
+    # daemon instead of whichever host happens to back ci-pool-system.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
     if: ${{ (needs.changes.outputs.rust == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.workflow == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
