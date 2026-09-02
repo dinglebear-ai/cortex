@@ -9,7 +9,8 @@ use std::str::FromStr;
 pub(super) use super::refs::{RunRefs, resolve_run_refs, worktree_id};
 use super::types::{
     AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionOutboxRow,
-    AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
+    AgentRunEventUpsert, AgentRunUpsert, AgentTraceRelationRow, AgentTraceRelationUpsert,
+    AgentWorktreeEvidenceUpsert,
 };
 
 const RUN_COLUMNS: &str = "id, run_key, native_session_id, tool, provider_tool, hostname,
@@ -29,6 +30,9 @@ const EVENT_COLUMNS: &str = "id, event_key, run_id, actor_id, worktree_id, commi
  content_scrubbed, created_at";
 const OUTBOX_COLUMNS: &str = "id, outbox_key, run_id, stream_event_type, expires_at,
  payload_json, created_at";
+const TRACE_RELATION_COLUMNS: &str = "id, relation_key, trace_id, span_id, run_id,
+ identifier_namespace, provider, evidence_kind, confidence, reason, projection_version,
+ candidate_count, observed_at, metadata_json";
 
 fn enum_value<T>(row: &Row<'_>, index: usize, _name: &'static str) -> rusqlite::Result<T>
 where
@@ -143,6 +147,25 @@ fn outbox_row(row: &Row<'_>) -> rusqlite::Result<AgentProjectionOutboxRow> {
         expires_at: row.get(4)?,
         payload_json: row.get(5)?,
         created_at: row.get(6)?,
+    })
+}
+
+fn trace_relation_row(row: &Row<'_>) -> rusqlite::Result<AgentTraceRelationRow> {
+    Ok(AgentTraceRelationRow {
+        id: row.get(0)?,
+        relation_key: row.get(1)?,
+        trace_id: row.get(2)?,
+        span_id: row.get(3)?,
+        run_id: row.get(4)?,
+        identifier_namespace: row.get(5)?,
+        provider: row.get(6)?,
+        evidence_kind: row.get(7)?,
+        confidence: row.get(8)?,
+        reason: row.get(9)?,
+        projection_version: row.get(10)?,
+        candidate_count: row.get(11)?,
+        observed_at: row.get(12)?,
+        metadata_json: row.get(13)?,
     })
 }
 
@@ -468,6 +491,64 @@ pub(super) fn insert_event(
         bail!("event identity conflict for key {key}");
     }
     Ok((row, inserted))
+}
+
+pub(super) fn upsert_trace_relation(
+    tx: &Transaction<'_>,
+    key: &str,
+    run_id: Option<i64>,
+    input: &AgentTraceRelationUpsert,
+) -> Result<(AgentTraceRelationRow, bool)> {
+    let select_sql = format!(
+        "SELECT {TRACE_RELATION_COLUMNS} FROM agent_run_trace_relations WHERE relation_key = ?1"
+    );
+    tx.execute(
+        "INSERT INTO agent_run_trace_relations
+            (relation_key, trace_id, span_id, run_id, identifier_namespace, provider,
+             evidence_kind, confidence, reason, projection_version, candidate_count,
+             observed_at, metadata_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         ON CONFLICT(relation_key) DO UPDATE SET
+             run_id=excluded.run_id,
+             provider=excluded.provider,
+             evidence_kind=excluded.evidence_kind,
+             confidence=excluded.confidence,
+             reason=excluded.reason,
+             projection_version=MAX(agent_run_trace_relations.projection_version, excluded.projection_version),
+             candidate_count=excluded.candidate_count,
+             observed_at=MAX(agent_run_trace_relations.observed_at, excluded.observed_at),
+             metadata_json=excluded.metadata_json
+         WHERE agent_run_trace_relations.run_id IS NOT excluded.run_id
+            OR agent_run_trace_relations.provider IS NOT excluded.provider
+            OR agent_run_trace_relations.evidence_kind IS NOT excluded.evidence_kind
+            OR agent_run_trace_relations.confidence IS NOT excluded.confidence
+            OR agent_run_trace_relations.reason IS NOT excluded.reason
+            OR agent_run_trace_relations.projection_version < excluded.projection_version
+            OR agent_run_trace_relations.candidate_count IS NOT excluded.candidate_count
+            OR agent_run_trace_relations.observed_at < excluded.observed_at
+            OR agent_run_trace_relations.metadata_json IS NOT excluded.metadata_json",
+        params![
+            key,
+            input.trace_id,
+            input.span_id,
+            run_id,
+            input.identifier_namespace,
+            input.provider,
+            input.evidence_kind,
+            input.confidence,
+            input.reason,
+            input.projection_version,
+            input.candidate_count,
+            input.observed_at,
+            input.metadata_json,
+        ],
+    )?;
+    let changed = tx.changes() > 0;
+    let row = tx.query_row(&select_sql, [key], trace_relation_row)?;
+    if row.trace_id != input.trace_id || row.span_id != input.span_id {
+        bail!("trace relation identity conflict for key {key}");
+    }
+    Ok((row, changed))
 }
 
 pub(super) fn run_by_id(connection: &Connection, run_id: i64) -> Result<AgentRunRow> {

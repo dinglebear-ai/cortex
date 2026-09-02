@@ -205,6 +205,7 @@ pub(super) const API_SURFACE_SPECS: &[SurfaceSpec] = &[
         RetainedProtocolCompatibility,
         Read
     ),
+    api!("/api/recurring-error-comparison", Analysis, Canonical, Read),
     api!(
         "/api/incident-context",
         Analysis,

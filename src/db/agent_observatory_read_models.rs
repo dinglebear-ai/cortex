@@ -147,6 +147,11 @@ pub struct ObservatorySpanRow {
     pub status_message: Option<String>,
     pub service_name: Option<String>,
     pub attributes_json: String,
+    pub relation_namespace: String,
+    pub relation_evidence_kind: String,
+    pub relation_confidence: f64,
+    pub relation_reason: String,
+    pub relation_candidate_count: i64,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryMetricRow {

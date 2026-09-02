@@ -13,7 +13,7 @@ use crate::observability::{ListenerState, RuntimeObservability};
 
 pub(crate) mod enrichment;
 mod listener;
-mod parser;
+pub(crate) mod parser;
 pub(crate) mod writer;
 
 #[cfg(test)]

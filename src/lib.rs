@@ -48,6 +48,7 @@ pub mod setup;
 pub mod shell_history_ingest;
 pub mod stream;
 pub mod surfaces;
+pub mod syslog_forward_ingest;
 pub mod update;
 pub mod web_app;
 

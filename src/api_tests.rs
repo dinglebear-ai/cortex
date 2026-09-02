@@ -196,6 +196,50 @@ async fn get_response(
         .unwrap()
 }
 
+#[tokio::test]
+async fn agent_observatory_routes_are_bearer_protected_and_return_bounded_pages() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO repositories
+                (repository_key,hostname,common_git_dir,primary_path,display_name,first_seen_at,last_seen_at)
+             VALUES ('repo-one','host','/workspace/repo/.git','/workspace/repo','repo',?1,?1)",
+            ["2026-09-02T12:00:00.000Z"],
+        )
+        .unwrap();
+    let app = test_router(state);
+    let (status, _) = get_json(app.clone(), "/api/repositories", None).await;
+    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    let (status, body) = get_json(app.clone(), "/api/repositories?limit=1", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["items"][0]["key"], "repo-one");
+    assert_eq!(body["pagination"]["limit"], 1);
+    let (status, body) = get_json(
+        app.clone(),
+        "/api/repositories?limit=999999",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["pagination"]["limit"], 200);
+    let (status, _) = get_json(
+        app.clone(),
+        "/api/repositories?unexpected=yes",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let (status, body) = get_json(
+        app,
+        "/api/agent-runs?status=active&status=idle",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["pagination"]["limit"], 50);
+}
+
 #[test]
 fn router_requires_token() {
     let (state, _pool, _dir) = test_state(None);
@@ -2984,6 +3028,23 @@ async fn similar_incidents_returns_200_with_token() {
     )
     .await;
     assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn recurring_error_comparison_requires_token_and_returns_bounded_shape() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let path = "/api/recurring-error-comparison?until=2026-05-21T13:00:00Z&window_minutes=60";
+    let (unauthorized, _) = get_json(app.clone(), path, None).await;
+    assert_eq!(unauthorized, axum::http::StatusCode::UNAUTHORIZED);
+    let (status, value) = get_json(app, path, Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{value}");
+    assert_eq!(value["candidate_cap"], 512);
+    assert!(
+        value.get("comparisons").is_some(),
+        "missing comparisons: {value}"
+    );
+    assert_eq!(value["privacy_policy"], "irreversible_redaction/v1");
 }
 
 #[tokio::test]

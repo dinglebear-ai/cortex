@@ -1,9 +1,11 @@
 //! Source-specific normalization for Agent Observatory projections.
 
 use crate::db::agent_observatory::{
-    AgentEventKind, AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow, AgentSkillSourceRow,
-    AgentSourceKind, AgentSourceRecord,
+    AgentEventKind, AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow,
+    AgentOtelMetricSourceRow, AgentOtelSpanSourceRow, AgentSkillSourceRow, AgentSourceKind,
+    AgentSourceRecord,
 };
+use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 pub(super) const MAX_SUMMARY_BYTES: usize = 1024;
@@ -24,8 +26,11 @@ pub(super) struct ProjectionParts {
     pub hostname: Option<String>,
     pub project: Option<String>,
     pub observed_at: String,
+    pub ingested_at: String,
     pub last_activity_at: String,
     pub source_log_id: Option<i64>,
+    pub trace_id: Option<String>,
+    pub span_id: Option<String>,
     pub severity: String,
     pub title: String,
     pub summary: String,
@@ -110,8 +115,11 @@ fn mcp_parts(row: &AgentMcpSourceRow) -> ProjectionParts {
         hostname: Some(row.hostname.clone()),
         project: row.ai_project.clone(),
         observed_at: row.timestamp.clone(),
+        ingested_at: row.timestamp.clone(),
         last_activity_at: row.timestamp.clone(),
         source_log_id: row.call_log_id.or(row.result_log_id),
+        trace_id: None,
+        span_id: None,
         severity: if is_error { "error" } else { "info" }.to_string(),
         title: format!(
             "MCP {}: {}",
@@ -167,8 +175,11 @@ fn hook_parts(row: &AgentHookSourceRow) -> ProjectionParts {
         hostname: Some(row.hostname.clone()),
         project: row.ai_project.clone(),
         observed_at: row.timestamp.clone(),
+        ingested_at: row.timestamp.clone(),
         last_activity_at: row.timestamp.clone(),
         source_log_id: row.log_id,
+        trace_id: None,
+        span_id: None,
         severity: if is_error { "error" } else { "info" }.to_string(),
         title: format!("Hook {}: {}", row.hook_event, actor_name),
         summary: truncate_utf8(
@@ -217,8 +228,11 @@ fn skill_parts(row: &AgentSkillSourceRow) -> ProjectionParts {
         hostname: Some(row.hostname.clone()),
         project: row.ai_project.clone(),
         observed_at: row.timestamp.clone(),
+        ingested_at: row.timestamp.clone(),
         last_activity_at: row.timestamp.clone(),
         source_log_id: Some(row.log_id),
+        trace_id: None,
+        span_id: None,
         severity: "info".to_string(),
         title: format!("Skill {}: {}", row.event_kind, actor_name),
         summary: truncate_utf8(&actor_name, MAX_SUMMARY_BYTES),
@@ -254,11 +268,17 @@ fn llm_parts(row: &AgentLlmSourceRow) -> ProjectionParts {
         hostname: None,
         project: row.ai_project.clone(),
         observed_at: row.started_at.clone(),
+        ingested_at: row
+            .finished_at
+            .clone()
+            .unwrap_or_else(|| row.started_at.clone()),
         last_activity_at: row
             .finished_at
             .clone()
             .unwrap_or_else(|| row.started_at.clone()),
         source_log_id: None,
+        trace_id: None,
+        span_id: None,
         severity: if is_error { "error" } else { "info" }.to_string(),
         title: format!("LLM {}: {}", row.action, actor_name),
         summary: truncate_utf8(
@@ -287,11 +307,112 @@ fn llm_parts(row: &AgentLlmSourceRow) -> ProjectionParts {
     }
 }
 
+fn rfc3339_from_nanos(value: i64) -> String {
+    chrono::DateTime::<Utc>::from_timestamp_nanos(value)
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn otlp_span_parts(row: &AgentOtelSpanSourceRow) -> ProjectionParts {
+    let observed_at = rfc3339_from_nanos(row.start_time_unix_nano);
+    let is_error = row.status_code != 0;
+    let actor_name = row
+        .service_name
+        .clone()
+        .unwrap_or_else(|| "OTLP trace".to_string());
+    ProjectionParts {
+        kind: AgentSourceKind::OtelSpan,
+        source_cursor: row.cursor_id.to_string(),
+        provider_sequence: Some(row.cursor_id),
+        source_kind: "otel_spans",
+        source_id: row.cursor_id.to_string(),
+        projection_variant: "span",
+        event_kind: AgentEventKind::OtlpSpan,
+        tool: row.ai_tool.clone(),
+        provider_tool: row.ai_tool.clone(),
+        session_id: row.ai_session_id.clone(),
+        hostname: Some(row.hostname.clone()),
+        project: row.ai_project.clone(),
+        observed_at: observed_at.clone(),
+        ingested_at: row.received_at.clone(),
+        last_activity_at: rfc3339_from_nanos(row.end_time_unix_nano),
+        source_log_id: None,
+        trace_id: Some(row.trace_id.clone()),
+        span_id: Some(row.span_id.clone()),
+        severity: if is_error { "error" } else { "info" }.to_string(),
+        title: format!(
+            "OTLP span: {}",
+            truncate_utf8(&row.span_name, MAX_SUMMARY_BYTES)
+        ),
+        summary: truncate_utf8(
+            row.status_message.as_deref().unwrap_or(&actor_name),
+            MAX_SUMMARY_BYTES,
+        ),
+        payload: json!({
+            "attributes": bounded_json(Some(row.attributes_json.as_str())),
+            "end_time_unix_nano": row.end_time_unix_nano,
+            "service_name": row.service_name,
+            "span_kind": row.span_kind,
+            "span_name": row.span_name,
+            "status_code": row.status_code,
+            "status_message": bounded_optional(row.status_message.as_deref()),
+        }),
+        actor_id: format!("otel-service:{actor_name}"),
+        actor_type: "otel_service",
+        actor_name,
+    }
+}
+
+fn otlp_metric_parts(row: &AgentOtelMetricSourceRow) -> ProjectionParts {
+    let observed_at = rfc3339_from_nanos(row.time_unix_nano);
+    let actor_name = row
+        .service_name
+        .clone()
+        .unwrap_or_else(|| "OTLP metrics".to_string());
+    ProjectionParts {
+        kind: AgentSourceKind::OtelMetric,
+        source_cursor: row.cursor_id.to_string(),
+        provider_sequence: Some(row.cursor_id),
+        source_kind: "otel_metric_points",
+        source_id: row.cursor_id.to_string(),
+        projection_variant: "metric",
+        event_kind: AgentEventKind::OtlpMetric,
+        tool: row.ai_tool.clone(),
+        provider_tool: row.ai_tool.clone(),
+        session_id: row.ai_session_id.clone(),
+        hostname: Some(row.hostname.clone()),
+        project: row.ai_project.clone(),
+        observed_at: observed_at.clone(),
+        ingested_at: row.received_at.clone(),
+        last_activity_at: observed_at,
+        source_log_id: None,
+        trace_id: None,
+        span_id: None,
+        severity: "info".to_string(),
+        title: format!(
+            "OTLP metric: {}",
+            truncate_utf8(&row.metric_name, MAX_SUMMARY_BYTES)
+        ),
+        summary: truncate_utf8(&row.instrument_kind, MAX_SUMMARY_BYTES),
+        payload: json!({
+            "attributes": bounded_json(Some(row.attributes_json.as_str())),
+            "instrument_kind": row.instrument_kind,
+            "metric_name": row.metric_name,
+            "point_key": row.point_key,
+            "value": bounded_json(Some(row.value_json.as_str())),
+        }),
+        actor_id: format!("otel-service:{actor_name}"),
+        actor_type: "otel_service",
+        actor_name,
+    }
+}
+
 pub(super) fn projection_parts(record: &AgentSourceRecord) -> ProjectionParts {
     match record {
         AgentSourceRecord::Mcp(row) => mcp_parts(row),
         AgentSourceRecord::Hook(row) => hook_parts(row),
         AgentSourceRecord::Skill(row) => skill_parts(row),
         AgentSourceRecord::Llm(row) => llm_parts(row),
+        AgentSourceRecord::OtelSpan(row) => otlp_span_parts(row),
+        AgentSourceRecord::OtelMetric(row) => otlp_metric_parts(row),
     }
 }

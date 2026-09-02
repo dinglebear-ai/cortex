@@ -1388,6 +1388,11 @@ fn sample_args_for_action(action: &str) -> Option<serde_json::Value> {
             json!({"action": action, "signature_hash": "0000000000000000000000000000000000000000000000000000000000000000"})
         }
         "similar_incidents" => json!({"action": action, "query": "test"}),
+        "recurring_error_comparison" => json!({
+            "action": action,
+            "until": "2026-01-01T01:00:00Z",
+            "window_minutes": 60
+        }),
         "incident_context" => {
             json!({"action": action, "since": "2026-01-01T00:00:00Z", "until": "2026-01-01T01:00:00Z"})
         }
@@ -1500,6 +1505,7 @@ fn typed_unknown_field_samples() -> Vec<serde_json::Value> {
         "unack_error",
         "notifications_recent",
         "similar_incidents",
+        "recurring_error_comparison",
         "incident_context",
         "artifact_evidence",
         "artifact_evidence_record",

@@ -22,15 +22,20 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::ai_project::normalize_local_ai_project_path;
-use crate::ai_transcript_ingest::{AiTranscriptIngestRequest, AiTranscriptRecord};
+use crate::ai_transcript_ingest::{
+    AiTranscriptIngestRequest, AiTranscriptIngestResponse, AiTranscriptRecord,
+    EVIDENCE_ENVELOPE_VERSION, EvidenceCapabilityCoverage, EvidenceCoverage, EvidenceEnvelope,
+    EvidenceSource,
+};
 use crate::scanner;
 
 /// Cap on the *aggregate* batch per scan cycle, across every transcript file
@@ -39,6 +44,7 @@ use crate::scanner;
 /// than this drains over several poll cycles instead of one oversized POST.
 const MAX_BATCH_RECORDS: usize = 500;
 const CODEX_PREFIX_METADATA_SCAN_LINES: usize = 200;
+const TRANSCRIPT_FORWARDER_ADAPTER_VERSION: &str = "cortex-ai-forwarder-v1";
 
 #[derive(Debug, Clone)]
 pub struct AiTranscriptForwardConfig {
@@ -68,6 +74,10 @@ impl AiTranscriptForwardConfig {
 struct Checkpoint {
     /// Canonical path string -> lines already forwarded.
     files: HashMap<String, usize>,
+    /// Bounded source-prefix fingerprints. A changed prefix resets that
+    /// file's local cursor; receipt IDs keep the replay safe.
+    #[serde(default)]
+    fingerprints: HashMap<String, String>,
     /// In-process record of malformed Gemini transcripts, keyed by canonical
     /// path. Deliberately not persisted: a restart should re-warn rather than
     /// inherit suppression from a previous process.
@@ -106,8 +116,35 @@ fn save_checkpoint(path: &Path, checkpoint: &Checkpoint) -> Result<()> {
             .with_context(|| format!("failed to create checkpoint dir {}", parent.display()))?;
     }
     let bytes = serde_json::to_vec(checkpoint)?;
-    fs::write(path, bytes)
-        .with_context(|| format!("failed to write checkpoint file {}", path.display()))
+    let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp_path).with_context(|| {
+        format!(
+            "failed to create checkpoint temp file {}",
+            tmp_path.display()
+        )
+    })?;
+    file.write_all(&bytes).with_context(|| {
+        format!(
+            "failed to write checkpoint temp file {}",
+            tmp_path.display()
+        )
+    })?;
+    file.sync_all()
+        .with_context(|| format!("failed to sync checkpoint temp file {}", tmp_path.display()))?;
+    drop(file);
+    fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "failed to atomically replace checkpoint file {}",
+            path.display()
+        )
+    })
 }
 
 fn gemini_content_fingerprint(raw: &str) -> u64 {
@@ -161,6 +198,15 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
     if !root.exists() {
         return;
     }
+    if fs::symlink_metadata(root)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    {
+        // Forwarder roots are local operator configuration, but their
+        // descendants are still hostile filesystem input. Never traverse a
+        // symlink into an unrelated home/cache tree or forward its locator.
+        return;
+    }
     if root.is_file() {
         if scanner::is_supported_transcript_file(root) {
             out.push(root.to_path_buf());
@@ -175,11 +221,50 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
     };
     for entry in read_dir.flatten() {
         let path = entry.path();
+        if fs::symlink_metadata(&path)
+            .ok()
+            .is_some_and(|metadata| metadata.file_type().is_symlink())
+        {
+            continue;
+        }
         if path.is_dir() {
             collect_files(&path, out);
         } else if scanner::is_supported_transcript_file(&path) {
             out.push(path);
         }
+    }
+}
+
+fn has_path_segment(path: &Path, expected: &str) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == std::ffi::OsStr::new(expected))
+}
+
+/// The scanner's provider registry intentionally recognizes only configured
+/// `$HOME` roots. An agent may be explicitly configured with a mounted or
+/// test root outside that home, though, so preserve provider classification
+/// from the safe, structural transcript layout as a fallback. This never
+/// broadens file discovery: [`collect_files`] already admits only supported
+/// filename shapes.
+fn forward_source_kind(path: &Path) -> scanner::SourceKind {
+    match scanner::detect_source_kind(path) {
+        scanner::SourceKind::ExplicitFile if scanner::gemini::is_chat_file(path) => {
+            scanner::SourceKind::GeminiSession
+        }
+        scanner::SourceKind::ExplicitFile
+            if has_path_segment(path, ".codex")
+                && (has_path_segment(path, "sessions")
+                    || has_path_segment(path, "archived_sessions")
+                    || has_path_segment(path, "worktrees")) =>
+        {
+            scanner::SourceKind::CodexSession
+        }
+        scanner::SourceKind::ExplicitFile
+            if has_path_segment(path, ".claude") && has_path_segment(path, "projects") =>
+        {
+            scanner::SourceKind::ClaudeProject
+        }
+        source_kind => source_kind,
     }
 }
 
@@ -259,6 +344,177 @@ fn seed_codex_prefix_fallbacks(
     }
 }
 
+fn sha256_id(parts: impl IntoIterator<Item = impl AsRef<[u8]>>) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_ref());
+        hasher.update([0]);
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn source_epoch(path: &Path) -> String {
+    let mut parts = Vec::new();
+    if let Ok(metadata) = fs::metadata(path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            parts.push(metadata.dev().to_le_bytes().to_vec());
+            parts.push(metadata.ino().to_le_bytes().to_vec());
+        }
+        parts.push(
+            metadata
+                .created()
+                .ok()
+                .and_then(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos().to_le_bytes().to_vec())
+                .unwrap_or_default(),
+        );
+    } else {
+        // A disappeared source cannot be forwarded, but retain a deterministic
+        // fallback for callers constructing an envelope during a race.
+        parts.push(path.as_os_str().as_encoded_bytes().to_vec());
+    }
+    sha256_id(parts)
+}
+
+fn file_prefix_fingerprint(path: &Path) -> Result<String> {
+    use std::io::Read;
+
+    let mut file = fs::File::open(path)?;
+    let mut bytes = vec![0; 4096];
+    let read = file.read(&mut bytes)?;
+    bytes.truncate(read);
+    Ok(sha256_id([bytes.as_slice()]))
+}
+
+/// Returns a fingerprint for the acknowledged logical prefix of a Gemini
+/// transcript. Gemini persists an entire JSON snapshot on every turn, so a
+/// byte prefix changes even when the already-forwarded messages have not.
+/// Fingerprinting the parsed records instead lets an append retain its record
+/// cursor while still detecting a rewrite, reordering, or truncation of the
+/// acknowledged prefix.
+fn gemini_prefix_fingerprint(records: &[scanner::ParsedTranscriptRecord], count: usize) -> String {
+    let mut hasher = Sha256::new();
+    for record in records.iter().take(count) {
+        for field in [
+            record.record_key.as_bytes(),
+            record.timestamp.as_deref().unwrap_or_default().as_bytes(),
+            record.event_kind.as_bytes(),
+            record.message.as_bytes(),
+            record.session_id.as_deref().unwrap_or_default().as_bytes(),
+        ] {
+            hasher.update(field);
+            hasher.update([0]);
+        }
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn capability_coverage(source_kind: scanner::SourceKind) -> EvidenceCapabilityCoverage {
+    let not_observed = EvidenceCoverage::NotObserved;
+    match source_kind {
+        scanner::SourceKind::ClaudeProject => EvidenceCapabilityCoverage {
+            transcript: EvidenceCoverage::Observed,
+            mcp_events: EvidenceCoverage::Partial,
+            skill_events: EvidenceCoverage::Partial,
+            hook_events: EvidenceCoverage::Partial,
+        },
+        scanner::SourceKind::CodexSession => EvidenceCapabilityCoverage {
+            transcript: EvidenceCoverage::Observed,
+            mcp_events: EvidenceCoverage::Partial,
+            skill_events: EvidenceCoverage::Partial,
+            hook_events: not_observed,
+        },
+        scanner::SourceKind::GeminiSession => EvidenceCapabilityCoverage {
+            transcript: EvidenceCoverage::Observed,
+            mcp_events: not_observed,
+            skill_events: not_observed,
+            hook_events: not_observed,
+        },
+        scanner::SourceKind::ExplicitFile => EvidenceCapabilityCoverage {
+            transcript: EvidenceCoverage::Partial,
+            mcp_events: not_observed,
+            skill_events: not_observed,
+            hook_events: not_observed,
+        },
+    }
+}
+
+fn safe_provenance_id(prefix: &str, value: Option<String>) -> Option<String> {
+    value.map(|value| format!("{prefix}:{}", sha256_id([value.as_bytes()])))
+}
+
+struct TranscriptRecordDetails {
+    revision: String,
+    timestamp: Option<String>,
+    ai_project: Option<String>,
+    ai_session_id: Option<String>,
+    event_kind: Option<String>,
+    message: String,
+}
+
+fn transcript_record(
+    config: &AiTranscriptForwardConfig,
+    path: &Path,
+    source_kind: scanner::SourceKind,
+    details: TranscriptRecordDetails,
+) -> AiTranscriptRecord {
+    let provider = source_kind.tool_name().to_string();
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical_bytes = canonical.as_os_str().as_encoded_bytes();
+    let source_identity = match details.ai_session_id.as_deref() {
+        // A native provider session identifier survives an archive move. It is
+        // hashed before forwarding, so the canonical receipt contains no raw
+        // session text or local path.
+        Some(session_id) => sha256_id([
+            b"ai-transcript-native-session",
+            provider.as_bytes(),
+            config.hostname.as_bytes(),
+            session_id.as_bytes(),
+        ]),
+        None => sha256_id([provider.as_bytes(), canonical_bytes]),
+    };
+    let epoch = source_epoch(&canonical);
+    let source_revision = sha256_id([details.revision.as_bytes()]);
+    let locator = sha256_id([
+        b"ai-transcript-locator",
+        provider.as_bytes(),
+        canonical_bytes,
+    ]);
+    let source_record_id = sha256_id([
+        b"ai-transcript-record-v1",
+        provider.as_bytes(),
+        source_identity.as_bytes(),
+        epoch.as_bytes(),
+        source_revision.as_bytes(),
+    ]);
+    AiTranscriptRecord {
+        envelope: EvidenceEnvelope {
+            version: EVIDENCE_ENVELOPE_VERSION,
+            source_record_id,
+            source: EvidenceSource {
+                provider,
+                adapter_version: TRANSCRIPT_FORWARDER_ADAPTER_VERSION.to_string(),
+                source_identity,
+                source_epoch: epoch,
+                source_revision,
+                locator,
+                native_session_id: safe_provenance_id("session", details.ai_session_id.clone()),
+                title: None,
+            },
+            timestamp: details.timestamp,
+            hostname: config.hostname.clone(),
+            ai_project: safe_provenance_id("project", details.ai_project),
+            ai_session_id: safe_provenance_id("session", details.ai_session_id),
+            event_kind: details.event_kind,
+            message: crate::receiver::enrichment::scrub_ai_message(&details.message, None),
+            capabilities: capability_coverage(source_kind),
+            diagnostics: Vec::new(),
+        },
+    }
+}
+
 async fn scan_and_forward(
     config: &AiTranscriptForwardConfig,
     client: &reqwest::Client,
@@ -278,6 +534,7 @@ async fn scan_and_forward(
 
     let mut records = Vec::new();
     let mut new_totals: HashMap<String, usize> = HashMap::new();
+    let mut new_fingerprints: HashMap<String, String> = HashMap::new();
     for path in &files {
         // Cap the aggregate batch across ALL files, not just per-file — a
         // host with a large never-forwarded backlog (many past sessions)
@@ -289,9 +546,8 @@ async fn scan_and_forward(
         if records.len() >= MAX_BATCH_RECORDS {
             break;
         }
-        let source_kind = scanner::detect_source_kind(path);
+        let source_kind = forward_source_kind(path);
         let key = path.to_string_lossy().to_string();
-        let ai_tool = source_kind.tool_name().to_string();
 
         if matches!(source_kind, scanner::SourceKind::GeminiSession) {
             // Gemini sessions are a single whole-file JSON object rewritten
@@ -299,10 +555,10 @@ async fn scan_and_forward(
             // JSONL stream — there's no byte/line offset to tail. The
             // checkpoint here is a *record index* into `parse_file`'s output
             // instead: re-parse the whole file each cycle and only forward
-            // records past however many were already sent. This assumes
-            // Gemini never rewrites/reorders earlier messages, only appends —
-            // true for an active chat session.
-            let from_record = checkpoint.files.get(&key).copied().unwrap_or(0);
+            // records past however many were already sent. The fingerprint is
+            // of that acknowledged logical record prefix, rather than raw
+            // bytes: every normal Gemini append rewrites the whole JSON file.
+            let mut from_record = checkpoint.files.get(&key).copied().unwrap_or(0);
             let raw = match fs::read_to_string(path) {
                 Ok(raw) => raw,
                 Err(error) => {
@@ -327,10 +583,23 @@ async fn scan_and_forward(
                     continue;
                 }
             };
+            if parsed.records.len() < from_record
+                || (from_record > 0
+                    && checkpoint.fingerprints.get(&key).is_some_and(|previous| {
+                        previous != &gemini_prefix_fingerprint(&parsed.records, from_record)
+                    }))
+            {
+                // A shrink or a changed logical prefix means this is a source
+                // rewrite/rotation. Replay from zero; exact server receipts
+                // suppress unchanged records.
+                from_record = 0;
+            }
             if parsed.missing_messages || parsed.records.len() <= from_record {
                 continue;
             }
             let remaining_budget = MAX_BATCH_RECORDS - records.len();
+            let forwarded_through = (from_record + remaining_budget).min(parsed.records.len());
+            let fingerprint = gemini_prefix_fingerprint(&parsed.records, forwarded_through);
             let new_records: Vec<_> = parsed
                 .records
                 .into_iter()
@@ -341,27 +610,47 @@ async fn scan_and_forward(
             // forwarded — if the global batch cap cut the read short, the
             // remaining tail is picked up next cycle, same as the
             // line-based sources below.
-            let forwarded_through = from_record + new_records.len();
-            for parsed_record in new_records {
-                records.push(AiTranscriptRecord {
-                    timestamp: parsed_record.timestamp,
-                    hostname: config.hostname.clone(),
-                    ai_tool: ai_tool.clone(),
-                    ai_project: parsed_record.ai_project,
-                    ai_session_id: parsed_record.session_id,
-                    ai_transcript_path: key.clone(),
-                    event_kind: Some(parsed_record.event_kind),
-                    message: crate::receiver::enrichment::scrub_ai_message(
-                        &parsed_record.message,
-                        None,
-                    ),
-                });
+            for (record_index, parsed_record) in new_records.into_iter().enumerate() {
+                let revision = format!(
+                    "gemini:{}:{}:{}",
+                    from_record + record_index,
+                    parsed_record.event_kind,
+                    parsed_record.message
+                );
+                records.push(transcript_record(
+                    config,
+                    path,
+                    source_kind,
+                    TranscriptRecordDetails {
+                        revision,
+                        timestamp: parsed_record.timestamp,
+                        ai_project: parsed_record.ai_project,
+                        ai_session_id: parsed_record.session_id,
+                        event_kind: Some(parsed_record.event_kind),
+                        message: parsed_record.message,
+                    },
+                ));
             }
             new_totals.insert(key, forwarded_through);
+            new_fingerprints.insert(path.to_string_lossy().to_string(), fingerprint);
             continue;
         }
 
-        let from_line = checkpoint.files.get(&key).copied().unwrap_or(0);
+        let mut from_line = checkpoint.files.get(&key).copied().unwrap_or(0);
+        let fingerprint = match file_prefix_fingerprint(path) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to fingerprint file");
+                continue;
+            }
+        };
+        if checkpoint
+            .fingerprints
+            .get(&key)
+            .is_some_and(|previous| previous != &fingerprint)
+        {
+            from_line = 0;
+        }
         let mut fallback_project = scanner::project_for_file(source_kind, path);
         let mut fallback_session_id = codex_fallback_session_id(path, source_kind);
         seed_codex_prefix_fallbacks(
@@ -400,19 +689,19 @@ async fn scan_and_forward(
                         .session_id
                         .clone()
                         .or_else(|| fallback_session_id.as_deref().map(ToString::to_string));
-                    records.push(AiTranscriptRecord {
-                        timestamp: parsed.timestamp,
-                        hostname: config.hostname.clone(),
-                        ai_tool: ai_tool.clone(),
-                        ai_project,
-                        ai_session_id,
-                        ai_transcript_path: key.clone(),
-                        event_kind: Some(parsed.event_kind),
-                        message: crate::receiver::enrichment::scrub_ai_message(
-                            &parsed.message,
-                            None,
-                        ),
-                    });
+                    records.push(transcript_record(
+                        config,
+                        path,
+                        source_kind,
+                        TranscriptRecordDetails {
+                            revision: format!("line:{line_no}:{line}"),
+                            timestamp: parsed.timestamp,
+                            ai_project,
+                            ai_session_id,
+                            event_kind: Some(parsed.event_kind),
+                            message: parsed.message,
+                        },
+                    ));
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -421,6 +710,7 @@ async fn scan_and_forward(
             }
         }
         new_totals.insert(key, total_lines);
+        new_fingerprints.insert(path.to_string_lossy().to_string(), fingerprint);
     }
 
     if records.is_empty() {
@@ -428,6 +718,14 @@ async fn scan_and_forward(
     }
 
     let sent = records.len();
+    let expected_receipts: HashSet<String> = records
+        .iter()
+        .map(|record| record.envelope.source_record_id.clone())
+        .collect();
+    anyhow::ensure!(
+        expected_receipts.len() == sent,
+        "ai transcript forward constructed duplicate source-record identities"
+    );
     let mut url = config.target.trim_end_matches('/').to_string();
     url.push_str("/v1/ai-transcripts");
     let mut request = client
@@ -444,12 +742,33 @@ async fn scan_and_forward(
             response.text().await.unwrap_or_default()
         );
     }
+    let receipt: AiTranscriptIngestResponse = response
+        .json()
+        .await
+        .context("ai transcript forward response was not a receipt")?;
+    let returned_receipts: HashSet<String> = receipt
+        .receipts
+        .iter()
+        .map(|receipt| receipt.source_record_id.clone())
+        .collect();
+    if receipt.accepted != sent
+        || receipt.receipts.len() != sent
+        || returned_receipts != expected_receipts
+    {
+        anyhow::bail!(
+            "ai transcript forward returned incomplete receipt set: expected {sent}, accepted {}, receipts {}",
+            receipt.accepted,
+            receipt.receipts.len()
+        );
+    }
 
-    // Only advance the checkpoint after a successful forward, so a failed
-    // request retries the same lines next cycle instead of losing them.
+    // Only advance after the server supplied an exact receipt for every
+    // submitted source-record ID. A lost/malformed response leaves the local
+    // cursor untouched; a retry is deduplicated by the server receipt table.
     for (key, total) in new_totals {
         checkpoint.files.insert(key, total);
     }
+    checkpoint.fingerprints.extend(new_fingerprints);
     save_checkpoint(&config.checkpoint_path, checkpoint)?;
     Ok(sent)
 }

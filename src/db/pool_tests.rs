@@ -1706,6 +1706,65 @@ fn schema_43_fixture_upgrades_to_48_and_preserves_legacy_rows() {
 }
 
 #[test]
+fn migration_51_recovers_a_missing_transcript_sources_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("missing-transcript-sources.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                 version INTEGER PRIMARY KEY,
+                 applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             );
+             WITH RECURSIVE versions(version) AS (
+                 SELECT 1 UNION ALL SELECT version + 1 FROM versions WHERE version < 50
+             )
+             INSERT INTO schema_migrations(version) SELECT version FROM versions;
+             CREATE TABLE logs (
+                 id INTEGER PRIMARY KEY,
+                 timestamp TEXT NOT NULL,
+                 hostname TEXT NOT NULL,
+                 facility TEXT,
+                 severity TEXT NOT NULL,
+                 app_name TEXT,
+                 process_id TEXT,
+                 message TEXT NOT NULL,
+                 raw TEXT NOT NULL,
+                 received_at TEXT NOT NULL,
+                 source_ip TEXT NOT NULL DEFAULT '',
+                 ai_project TEXT,
+                 ai_tool TEXT,
+                 ai_session_id TEXT,
+                 ai_transcript_path TEXT,
+                 metadata_json TEXT
+             );",
+        )
+        .unwrap();
+    }
+
+    let pool = init_pool(&test_storage_config(db_path)).unwrap();
+    let conn = pool.get().unwrap();
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('transcript_sources') ORDER BY cid")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    assert!(columns.contains(&"canonical_path".to_string()));
+    assert!(columns.contains(&"source_revision".to_string()));
+    assert!(columns.contains(&"scan_state".to_string()));
+    assert_eq!(
+        conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        KNOWN_SCHEMA_VERSION
+    );
+}
+
+#[test]
 fn graph_schema_enforces_vocabulary_and_dedup_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = test_storage_config(dir.path().join("graph-dedup.db"));

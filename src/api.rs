@@ -40,13 +40,15 @@ use crate::app::{
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
     ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListMcpEventsRequest,
     ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
-    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, RenderedSessionPageRequest,
-    RequestActor, SearchLogsRequest, SearchSessionsRequest, ServiceError, SilentHostsRequest,
-    SimilarIncidentsRequest, TailLogsRequest, TimelineRequest, TopicCorrelateRequest,
-    UnackErrorRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
+    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest,
+    RecurringErrorComparisonRequest, RenderedSessionPageRequest, RequestActor, SearchLogsRequest,
+    SearchSessionsRequest, ServiceError, SilentHostsRequest, SimilarIncidentsRequest,
+    TailLogsRequest, TimelineRequest, TopicCorrelateRequest, UnackErrorRequest,
+    UnaddressedErrorsRequest, UsageBlocksRequest,
 };
 use crate::artifact_evidence::{ArtifactEvidenceInput, MAX_EVIDENCE_WIRE_BYTES};
 use crate::config::{ApiConfig, NotificationsConfig};
+use crate::db::agent_observatory as observatory;
 use crate::mcp::{AuthPolicy, build_auth_layer};
 use crate::surfaces::{get, post};
 
@@ -278,6 +280,38 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .contract_route("GET /api/integration-profile", get(integration_profile))
         .contract_route("GET /v1/integration/identity", get(integration_profile))
         .contract_route("GET /api/capabilities", get(capabilities))
+        // --- Agent Observatory (authenticated, read-only) ---
+        .contract_route(
+            "GET /api/agent-observatory/repositories",
+            get(observatory_repositories),
+        )
+        .contract_route("GET /api/repositories", get(observatory_repositories))
+        .contract_route(
+            "GET /api/agent-observatory/worktrees",
+            get(observatory_worktrees),
+        )
+        .contract_route(
+            "GET /api/repositories/{repository_id}/worktrees",
+            get(observatory_repository_worktrees),
+        )
+        .contract_route("GET /api/agent-observatory/runs", get(observatory_runs))
+        .contract_route("GET /api/agent-runs", get(observatory_runs))
+        .contract_route(
+            "GET /api/agent-observatory/runs/{run_key}/events",
+            get(observatory_events),
+        )
+        .contract_route(
+            "GET /api/agent-runs/{run_key}/events",
+            get(observatory_events),
+        )
+        .contract_route(
+            "GET /api/agent-observatory/runs/{run_key}/telemetry",
+            get(observatory_telemetry),
+        )
+        .contract_route(
+            "GET /api/agent-runs/{run_key}/telemetry",
+            get(observatory_telemetry),
+        )
         .contract_route("GET /api/streams/logs", get(log_stream))
         .contract_route("GET /api/streams/sessions", get(session_stream))
         .merge(investigation::routes())
@@ -305,6 +339,10 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .contract_route("GET /api/compare", get(compare))
         .contract_route("GET /api/apps", get(apps))
         .contract_route("GET /api/similar-incidents", get(similar_incidents))
+        .contract_route(
+            "GET /api/recurring-error-comparison",
+            get(recurring_error_comparison),
+        )
         .contract_route("GET /api/incident-context", get(incident_context))
         .contract_route("GET /api/graph/entity", get(graph_entity))
         .contract_route("GET /api/graph/around", get(graph_around))
@@ -490,6 +528,254 @@ fn require_api_admin_token(
                 .into_response(),
         )
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryRepositoriesQuery {
+    host: Option<String>,
+    query: Option<String>,
+    active_runs_only: Option<bool>,
+    include_removed: Option<bool>,
+    since: Option<String>,
+    until: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn observatory_repositories(
+    State(state): State<ApiState>,
+    Query(query): Query<ObservatoryRepositoriesQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .observatory_repositories(
+                observatory::RepositoryQuery {
+                    host: query.host,
+                    query: query.query,
+                    active_runs_only: query.active_runs_only.unwrap_or(false),
+                    include_removed: query.include_removed.unwrap_or(false),
+                    since: query.since,
+                    until: query.until,
+                },
+                query.cursor,
+                query.limit.unwrap_or(50),
+            )
+            .await,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryWorktreesQuery {
+    repository_id: i64,
+    branch: Option<String>,
+    dirty: Option<bool>,
+    include_removed: Option<bool>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryRepositoryWorktreesQuery {
+    branch: Option<String>,
+    dirty: Option<bool>,
+    include_removed: Option<bool>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn observatory_worktrees(
+    State(state): State<ApiState>,
+    Query(query): Query<ObservatoryWorktreesQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .observatory_worktrees(
+                query.repository_id,
+                query.branch,
+                query.dirty,
+                query.include_removed.unwrap_or(false),
+                query.cursor,
+                query.limit.unwrap_or(50),
+            )
+            .await,
+    )
+}
+
+async fn observatory_repository_worktrees(
+    State(state): State<ApiState>,
+    Path(repository_id): Path<i64>,
+    serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryRepositoryWorktreesQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .observatory_worktrees(
+                repository_id,
+                query.branch,
+                query.dirty,
+                query.include_removed.unwrap_or(false),
+                query.cursor,
+                query.limit.unwrap_or(50),
+            )
+            .await,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryRunsQuery {
+    repository_id: Option<i64>,
+    worktree_id: Option<i64>,
+    branch: Option<String>,
+    #[serde(default)]
+    status: Vec<String>,
+    #[serde(default)]
+    tool: Vec<String>,
+    host: Option<String>,
+    query: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    active_only: Option<bool>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn observatory_runs(
+    State(state): State<ApiState>,
+    serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryRunsQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .observatory_runs(
+                observatory::AgentRunQuery {
+                    repository_id: query.repository_id,
+                    worktree_id: query.worktree_id,
+                    branch: query.branch,
+                    statuses: query.status,
+                    tools: query.tool,
+                    host: query.host,
+                    query: query.query,
+                    since: query.since,
+                    until: query.until,
+                    active_only: query.active_only.unwrap_or(false),
+                },
+                query.cursor,
+                query.limit.unwrap_or(50),
+            )
+            .await,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryEventsQuery {
+    #[serde(default)]
+    kind: Vec<String>,
+    severity_min: Option<i64>,
+    actor_key: Option<String>,
+    trace_id: Option<String>,
+    query: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    include: Option<String>,
+    order: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn observatory_events(
+    State(state): State<ApiState>,
+    Path(run_key): Path<String>,
+    serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryEventsQuery>,
+) -> impl IntoResponse {
+    let asc = query.order.as_deref().is_some_and(|order| order == "asc");
+    if query
+        .order
+        .as_deref()
+        .is_some_and(|order| order != "asc" && order != "desc")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid_order"})),
+        )
+            .into_response();
+    }
+    let include_payload = match query.include.as_deref() {
+        None => false,
+        Some("payload") => true,
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"invalid_include"})),
+            )
+                .into_response();
+        }
+    };
+    respond(
+        state
+            .service
+            .observatory_events(
+                run_key,
+                observatory::AgentEventQuery {
+                    kinds: query.kind,
+                    severity_min: query.severity_min,
+                    actor_key: query.actor_key,
+                    trace_id: query.trace_id,
+                    query: query.query,
+                    since: query.since,
+                    until: query.until,
+                    include_payload,
+                },
+                query.cursor,
+                query.limit.unwrap_or(100),
+                asc,
+            )
+            .await,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryTelemetryQuery {
+    trace_id: Option<String>,
+    metric_name: Option<String>,
+    since_nano: Option<i64>,
+    until_nano: Option<i64>,
+    span_cursor: Option<String>,
+    metric_cursor: Option<String>,
+    span_limit: Option<usize>,
+    metric_limit: Option<usize>,
+}
+
+async fn observatory_telemetry(
+    State(state): State<ApiState>,
+    Path(run_key): Path<String>,
+    Query(query): Query<ObservatoryTelemetryQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .observatory_telemetry(
+                run_key,
+                observatory::TelemetryQuery {
+                    trace_id: query.trace_id,
+                    metric_name: query.metric_name,
+                    since_nano: query.since_nano,
+                    until_nano: query.until_nano,
+                },
+                query.span_cursor,
+                query.metric_cursor,
+                query.span_limit.unwrap_or(100),
+                query.metric_limit.unwrap_or(100),
+            )
+            .await,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1316,6 +1602,36 @@ async fn similar_incidents(
                 until: q.until,
                 window_minutes: q.window_minutes,
                 limit: q.limit,
+            })
+            .await,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecurringErrorComparisonQuery {
+    signature_hash: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    window_minutes: Option<u32>,
+    limit: Option<u32>,
+    include_acknowledged: Option<bool>,
+}
+
+async fn recurring_error_comparison(
+    State(state): State<ApiState>,
+    Query(q): Query<RecurringErrorComparisonQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .compare_recurring_errors(RecurringErrorComparisonRequest {
+                signature_hash: q.signature_hash,
+                since: q.since,
+                until: q.until,
+                window_minutes: q.window_minutes,
+                limit: q.limit,
+                include_acknowledged: q.include_acknowledged,
             })
             .await,
     )

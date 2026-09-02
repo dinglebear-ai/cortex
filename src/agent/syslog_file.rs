@@ -120,7 +120,7 @@ pub async fn run_file_forwarder(
             parsed.procid,
             parsed.message,
         );
-        sender.try_send(forwarded);
+        sender.try_send_from(&format!("file:{}", path.display()), forwarded);
     }
 }
 

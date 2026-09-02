@@ -33,13 +33,32 @@ fn test_app_with(
 
 fn sample_record() -> serde_json::Value {
     serde_json::json!({
-        "timestamp": "2026-07-09T00:00:00Z",
-        "hostname": "devhost",
-        "ai_tool": "claude",
-        "ai_project": "/home/jmagar/workspace/cortex",
-        "ai_session_id": "sess-1",
-        "ai_transcript_path": "/home/jmagar/.claude/projects/-home-jmagar-workspace-cortex/sess-1.jsonl",
-        "message": "test transcript line",
+        "envelope": {
+            "version": EVIDENCE_ENVELOPE_VERSION,
+            "source_record_id": format!("sha256:{}", "a".repeat(64)),
+            "source": {
+                "provider": "claude",
+                "adapter_version": "test-adapter-v1",
+                "source_identity": format!("sha256:{}", "b".repeat(64)),
+                "source_epoch": format!("sha256:{}", "c".repeat(64)),
+                "source_revision": format!("sha256:{}", "d".repeat(64)),
+                "locator": format!("sha256:{}", "e".repeat(64)),
+                "native_session_id": "session:sha256:test",
+                "title": "safe title",
+            },
+            "timestamp": "2026-07-09T00:00:00Z",
+            "hostname": "devhost",
+            "ai_project": "project:sha256:test",
+            "ai_session_id": "session:sha256:test",
+            "message": "test transcript line",
+            "capabilities": {
+                "transcript": "observed",
+                "mcp_events": "partial",
+                "skill_events": "partial",
+                "hook_events": "not_observed",
+            },
+            "diagnostics": [],
+        }
     })
 }
 
@@ -104,6 +123,215 @@ async fn accepts_batch_with_valid_bearer_token_and_inserts_rows() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(value["accepted"], 1);
+    assert_eq!(value["receipts"][0]["disposition"], "accepted");
+}
+
+#[tokio::test]
+async fn rejects_unsupported_envelope_version_before_any_receipt_or_log_write() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    record["envelope"]["version"] = serde_json::json!(EVIDENCE_ENVELOPE_VERSION + 1);
+    let body = serde_json::to_string(&serde_json::json!({"records": [record]})).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"],
+        "unsupported_evidence_envelope_version"
+    );
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn mixed_valid_and_invalid_batch_is_rejected_atomically() {
+    let (app, dir) = test_app(Some("secret"));
+    let valid = sample_record();
+    let mut invalid = sample_record();
+    invalid["envelope"]["source_record_id"] =
+        serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+    invalid["envelope"]["source"]["source_revision"] = serde_json::json!("not-a-digest");
+    let body = serde_json::to_string(&serde_json::json!({
+        "records": [valid, invalid]
+    }))
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0,
+        "a rejected sibling must not leave a canonical log behind"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0,
+        "a rejected sibling must not leave a receipt behind"
+    );
+}
+
+#[tokio::test]
+async fn replay_returns_duplicate_receipt_without_duplicate_log_row() {
+    let (app, dir) = test_app(Some("secret"));
+    let body = serde_json::to_string(&serde_json::json!({"records": [sample_record()]})).unwrap();
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["accepted"], 1);
+    assert_eq!(value["receipts"][0]["disposition"], "duplicate");
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let log_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get(0))
+        .unwrap();
+    let receipt_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(log_count, 1);
+    assert_eq!(receipt_count, 1);
+}
+
+#[tokio::test]
+async fn receiver_scrubs_hostile_envelope_fields_before_persistence() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    let envelope = record["envelope"].as_object_mut().unwrap();
+    envelope.insert(
+        "message".into(),
+        serde_json::json!("token=sk-canary-secret"),
+    );
+    envelope.insert(
+        "hostname".into(),
+        serde_json::json!("host TOKEN=host-canary"),
+    );
+    envelope["source"]["title"] = serde_json::json!("secret=title-canary");
+    envelope["source"]["native_session_id"] = serde_json::json!("sk-session-canary");
+    envelope["diagnostics"] = serde_json::json!([
+        {"code":"TOKEN=diagnostic-canary", "detail":"Authorization: Bearer sk-diagnostic-canary"}
+    ]);
+    let body = serde_json::to_string(&serde_json::json!({"records": [record]})).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let persisted: String = conn
+        .query_row(
+            "SELECT message || ' ' || hostname || ' ' || metadata_json FROM logs LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for canary in [
+        "sk-canary-secret",
+        "host-canary",
+        "title-canary",
+        "sk-session-canary",
+        "diagnostic-canary",
+        "sk-diagnostic-canary",
+    ] {
+        assert!(
+            !persisted.contains(canary),
+            "persisted canary leaked: {canary}"
+        );
+    }
+    assert!(persisted.contains("REDACTED"));
+    let fts_canary_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs_fts WHERE logs_fts MATCH 'canary'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        fts_canary_count, 0,
+        "a redacted secret must not be discoverable through transcript FTS"
+    );
 }
 
 #[tokio::test]

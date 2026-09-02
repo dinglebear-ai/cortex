@@ -53,6 +53,12 @@ to them by default.
 | GET | `/api/streams/logs` | read | query: `cursor?`, `host?`, `app?`, `severity?`; or `Last-Event-ID` | SSE snapshot, log events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Durable ascending `logs.id` replay. Cursors bind principal and filter lineage. Batches are capped at 100 items/128 KiB and individual messages at 64 KiB. |
 | GET | `/api/streams/sessions` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`; or `Last-Event-ID` | SSE snapshot, session events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Same durable envelope and bounds as log streaming, restricted to one rendered-session identity. Retention gaps and cursor expiry require explicit resync. |
 
+### Recurring error comparison (1)
+
+| Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/recurring-error-comparison` | read | query: `signature_hash?`, `since?`, `until?`, `window_minutes?` (5..1440), `limit?` (1..50), `include_acknowledged?` | `RecurringErrorComparisonResponse { focal_from, focal_to, baseline_from, baseline_to, candidate_rows, candidate_cap, candidate_window_truncated, results_truncated, privacy_policy, comparisons }` | 200, 400, 401, 503, 500 | Y | Compares canonical recurring-error signatures in the focal window against the adjacent baseline. Candidates are capped at 512 before deterministic ranking; response text is irreversibly scrubbed and bounded. Each bundle has a replayable SHA-256 identity over canonical source keys, evidence revision, window, and privacy policy, plus bounded graph evidence handles and an explicit next graph query. Boundary/retention/projection gaps are markers, not silent zeroes; rankings are evidence-led and do not claim causation. MCP: `recurring_error_comparison` (`cortex:read`). |
+
 ### Artifact ecosystem evidence (2) — W16
 
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |

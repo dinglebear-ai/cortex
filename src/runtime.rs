@@ -500,6 +500,16 @@ impl RuntimeCore {
         crate::ai_transcript_ingest::router(state)
     }
 
+    /// Build the receipt-backed forwarded-syslog ingest router.
+    pub fn syslog_forward_router(&self) -> axum::Router {
+        let state = crate::syslog_forward_ingest::SyslogForwardIngestState::new(
+            Arc::clone(&self.pool),
+            self.config.mcp.api_token.0.clone(),
+            self.auth_policy.clone(),
+        );
+        crate::syslog_forward_ingest::router(state)
+    }
+
     /// Build the forwarded shell-history ingest router.
     pub fn shell_history_router(&self) -> axum::Router {
         let state = crate::shell_history_ingest::ShellHistoryIngestState::new(
