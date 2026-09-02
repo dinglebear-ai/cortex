@@ -95,18 +95,28 @@ pub fn find_unique_projection_run_for_repository_observation(
     let observed = parse_timestamp(observed_at, "repository observation observed_at")?;
     let connection = pool.get().context("acquire database connection")?;
     let mut statement = connection.prepare(
-        "SELECT r.id, e.evidence_kind, e.evidence_source, e.trust_level, e.confidence,
-                e.first_seen_at, e.last_seen_at
-           FROM agent_runs r
-           JOIN agent_run_worktrees e ON e.run_id = r.id
-           JOIN repository_worktrees w ON w.id = e.worktree_id
-          WHERE w.worktree_key = ?1
-            AND e.first_seen_at <= ?2
-            AND r.started_at <= ?2
-            AND (r.ended_at IS NULL OR r.ended_at >= ?2)
-            AND e.trust_level != 'refuted'
-          ORDER BY r.id, e.confidence DESC, e.last_seen_at DESC, e.id
-          LIMIT 3",
+        "WITH ranked_candidates AS (
+             SELECT r.id, e.evidence_kind, e.evidence_source, e.trust_level, e.confidence,
+                    e.first_seen_at, e.last_seen_at,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY r.id
+                      ORDER BY e.confidence DESC, e.last_seen_at DESC, e.id
+                    ) AS evidence_rank
+               FROM agent_runs r
+               JOIN agent_run_worktrees e ON e.run_id = r.id
+               JOIN repository_worktrees w ON w.id = e.worktree_id
+              WHERE w.worktree_key = ?1
+                AND e.first_seen_at <= ?2
+                AND r.started_at <= ?2
+                AND (r.ended_at IS NULL OR r.ended_at >= ?2)
+                AND e.trust_level != 'refuted'
+           )
+           SELECT id, evidence_kind, evidence_source, trust_level, confidence,
+                  first_seen_at, last_seen_at
+             FROM ranked_candidates
+            WHERE evidence_rank = 1
+            ORDER BY id
+            LIMIT 2",
     )?;
     let candidates = statement
         .query_map(params![worktree_key, observed_at], |row| {
@@ -152,9 +162,6 @@ pub fn find_unique_projection_run_for_repository_observation(
             });
         }
     }
-    // Several evidence rows can describe the same run.  They are one
-    // candidate, and their deterministic SQL ordering preserves provenance.
-    matches.dedup_by_key(|candidate| candidate.run.id);
     match matches.len() {
         0 => Ok(AgentRepositoryObservationRunMatch::None),
         1 => Ok(AgentRepositoryObservationRunMatch::Unique(Box::new(

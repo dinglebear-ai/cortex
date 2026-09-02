@@ -43,6 +43,11 @@ use crate::scanner;
 /// (2,000) and any fronting proxy's request-size limit. A backlog larger
 /// than this drains over several poll cycles instead of one oversized POST.
 const MAX_BATCH_RECORDS: usize = 500;
+/// Local transcript input is hostile filesystem data. Bound both discovery
+/// and individual reads before parsing so one malformed session cannot wedge
+/// the agent's recurring forwarder.
+const MAX_FORWARD_FILES: usize = 1_024;
+const MAX_TRANSCRIPT_FILE_BYTES: u64 = 1024 * 1024;
 const CODEX_PREFIX_METADATA_SCAN_LINES: usize = 200;
 const TRANSCRIPT_FORWARDER_ADAPTER_VERSION: &str = "cortex-ai-forwarder-v1";
 
@@ -195,6 +200,9 @@ fn evict_missing_gemini_failures(checkpoint: &mut Checkpoint, present: &HashSet<
 /// predicate, without pulling in the local-indexing `IndexResult` coupling
 /// that `scanner::collect_supported_files` carries).
 fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
+    if out.len() >= MAX_FORWARD_FILES {
+        return;
+    }
     if !root.exists() {
         return;
     }
@@ -208,7 +216,11 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
         return;
     }
     if root.is_file() {
-        if scanner::is_supported_transcript_file(root) {
+        if scanner::is_supported_transcript_file(root)
+            && root
+                .metadata()
+                .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES)
+        {
             out.push(root.to_path_buf());
         }
         return;
@@ -229,7 +241,11 @@ fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
         }
         if path.is_dir() {
             collect_files(&path, out);
-        } else if scanner::is_supported_transcript_file(&path) {
+        } else if scanner::is_supported_transcript_file(&path)
+            && path
+                .metadata()
+                .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES)
+        {
             out.push(path);
         }
     }

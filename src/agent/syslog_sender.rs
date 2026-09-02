@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,6 +30,7 @@ const MAX_SPOOL_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SPOOL_AGE_SECS: i64 = 86_400;
 const MAX_BATCH_RECORDS: usize = 100;
 const MAX_BATCH_BYTES: usize = 512 * 1024;
+const MAX_FORWARD_RECORD_BYTES: usize = 64 * 1024;
 const RECONNECT_MAX_MS: u64 = 30_000;
 
 /// Payload-free forwarding health that is safe to log or expose in status.
@@ -178,14 +180,27 @@ impl SyslogSender {
         };
         let source_instance = format!("{}:{source_key}", state.spool.source_instance);
         let epoch = state.spool.source_epoch;
-        state.spool.records.push_back(SyslogForwardRecord {
-            source_instance: source_instance.clone(),
-            source_epoch: epoch,
-            sequence,
-            idempotency_key: delivery_key(&source_instance, epoch, sequence, "record"),
-            observed_at: now(),
-            line,
-        });
+        if line.len() > MAX_FORWARD_RECORD_BYTES {
+            state.spool.gaps.push_back(SyslogForwardGap {
+                source_instance: source_instance.clone(),
+                source_epoch: epoch,
+                from_sequence: sequence,
+                to_sequence: sequence,
+                idempotency_key: delivery_key(&source_instance, epoch, sequence, "gap"),
+                observed_at: now(),
+                reason_code: "record_too_large".into(),
+            });
+            state.spool.evicted_records = state.spool.evicted_records.saturating_add(1);
+        } else {
+            state.spool.records.push_back(SyslogForwardRecord {
+                source_instance: source_instance.clone(),
+                source_epoch: epoch,
+                sequence,
+                idempotency_key: delivery_key(&source_instance, epoch, sequence, "record"),
+                observed_at: now(),
+                line,
+            });
+        }
         evict_source_to_quota(&mut state.spool, &source_key);
         evict_aggregate_to_quota(&mut state.spool);
         save_spool(&state.spool_path, &state.spool)?;
@@ -552,14 +567,21 @@ fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("create syslog spool dir {}", parent.display()))?;
     }
-    let temp = path.with_extension("tmp");
-    fs::write(&temp, serde_json::to_vec(spool)?)
-        .with_context(|| format!("write syslog spool {}", temp.display()))?;
+    let temp = path.with_extension(format!("tmp-{}", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
+    let mut file = options
+        .open(&temp)
+        .with_context(|| format!("create syslog spool {}", temp.display()))?;
+    file.write_all(&serde_json::to_vec(spool)?)
+        .with_context(|| format!("write syslog spool {}", temp.display()))?;
+    file.sync_all()?;
+    drop(file);
     fs::rename(&temp, path).with_context(|| format!("replace syslog spool {}", path.display()))
 }
 
