@@ -224,14 +224,16 @@ pub(super) fn timestamp(
     token_index: usize,
 ) -> Result<String, CommitParseError> {
     let value = utf8(field, name, commit_index, token_index)?;
-    DateTime::parse_from_rfc3339(&value).map_err(|_| {
+    let parsed = DateTime::parse_from_rfc3339(&value).map_err(|_| {
         CommitParseError::new(
             commit_index,
             token_index,
             CommitParseErrorKind::InvalidTimestamp(name),
         )
     })?;
-    Ok(value)
+    Ok(parsed
+        .to_utc()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 fn trim_ascii(value: &[u8]) -> &[u8] {
