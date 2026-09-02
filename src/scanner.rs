@@ -60,9 +60,7 @@ impl<T: Read + Seek> ReadSeek for T {}
 
 enum SnapshotOutcome {
     Complete(Vec<u8>),
-    ByteCap {
-        scanned_bytes: u64,
-    },
+    ByteCap,
     Deadline,
     /// Existing detached readers have consumed the bounded abandoned-worker
     /// allowance. This is a scheduling deferral, not evidence the current
@@ -75,6 +73,9 @@ struct DiscoveryResult {
     files: Vec<PathBuf>,
     diagnostics: IndexResult,
     capped: bool,
+    /// Last entry visited under this root. Kept internal and reused only as a
+    /// deterministic continuation cursor on the next bounded pass.
+    next_cursor: Option<PathBuf>,
 }
 
 struct DiscoveryBudget {
@@ -117,16 +118,14 @@ fn snapshot_jsonl_source(
                     .read_to_end(&mut bytes)?;
 
                 if bytes.len() as u64 > max_bytes {
-                    Ok(SnapshotOutcome::ByteCap {
-                        scanned_bytes: max_bytes,
-                    })
+                    Ok(SnapshotOutcome::ByteCap)
                 } else {
                     Ok(SnapshotOutcome::Complete(bytes))
                 }
             })();
 
-            let _ = sender.send(outcome);
             SNAPSHOT_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+            let _ = sender.send(outcome);
         });
 
     if worker.is_err() {
@@ -163,7 +162,10 @@ fn reserve_snapshot_worker() -> bool {
 }
 
 #[cfg(test)]
-static SNAPSHOT_TEST_DELAY: LazyLock<Mutex<Option<Vec<(String, Duration)>>>> =
+type SnapshotTestDelays = Vec<(String, Duration)>;
+
+#[cfg(test)]
+static SNAPSHOT_TEST_DELAY: LazyLock<Mutex<Option<SnapshotTestDelays>>> =
     LazyLock::new(|| Mutex::new(None));
 
 #[cfg(test)]
@@ -637,8 +639,13 @@ pub fn index_roots_with_options(
             continue;
         }
         if let Some(scan_budget) = options.scan_budget {
+            let start_after = options
+                .discovery_start_after
+                .as_deref()
+                .filter(|cursor| cursor.starts_with(&root));
             let discovery = discover_root_bounded(
                 root.clone(),
+                start_after,
                 DiscoveryBudget {
                     max_entries: MAX_DISCOVERY_ENTRIES_PER_ROOT,
                     max_path_bytes: MAX_DISCOVERY_PATH_BYTES_PER_ROOT,
@@ -650,7 +657,10 @@ pub fn index_roots_with_options(
             if discovery.capped {
                 result.discovery_cap_hits += 1;
                 result.discovery_deferred_roots += 1;
-                result.next_discovery_cursor = Some(root);
+                // A root-level marker merely rotates roots. Retaining the
+                // last visited entry is what makes the capped root itself
+                // eventually complete on a later pass.
+                result.next_discovery_cursor = discovery.next_cursor.or(Some(root));
             }
         } else {
             collect_supported_files(&root, &mut files, &mut result);
@@ -692,10 +702,10 @@ pub fn index_roots_with_options(
             continue;
         }
         if let Some(since_mtime_nanos) = options.since_mtime_nanos {
-            let metadata = match fs::metadata(&file) {
+            let metadata = match fs::metadata(file) {
                 Ok(metadata) => metadata,
                 Err(error) => {
-                    record_file_error(&mut result, &file, &error.into());
+                    record_file_error(&mut result, file, &error.into());
                     continue;
                 }
             };
@@ -706,8 +716,8 @@ pub fn index_roots_with_options(
         }
         match index_file_with_options(
             pool,
-            &file,
-            detect_source_kind(&file).as_str(),
+            file,
+            detect_source_kind(file).as_str(),
             IndexFileOptions {
                 force: options.force,
                 scan_budget: source_budget,
@@ -737,7 +747,7 @@ pub fn index_roots_with_options(
                 result.next_scan_cursor = Some(file.clone());
                 classify_path_error(&error, &mut result);
                 tracing::warn!(path = %file.display(), error = %error, "Transcript file indexing failed");
-                record_file_error(&mut result, &file, &error);
+                record_file_error(&mut result, file, &error);
             }
         }
     }
@@ -796,21 +806,21 @@ pub fn index_file_with_options(
     // Every provider first crosses this bounded, read-only acquisition
     // boundary. The timeout applies before source identity, imports, or
     // checkpoints are touched; the main thread is the only persistence owner.
-    let snapshot = if let Some(budget) = options.scan_budget {
+    // The snapshot boundary prevents late persistence for sources that fit in
+    // one bounded acquisition. Larger JSONL transcripts instead use the
+    // existing chunk writer with a checkpointed byte continuation below. They
+    // must not be retried forever from byte zero just because they exceed the
+    // watcher allowance.
+    let snapshot = if let Some(budget) = options.scan_budget
+        && current_metadata.size <= budget.per_source_max_bytes
+    {
         match snapshot_jsonl_source(
             canonical_path.clone(),
             budget.per_source_max_bytes,
             budget.per_source_deadline,
         )? {
             SnapshotOutcome::Complete(bytes) => Some(bytes),
-            SnapshotOutcome::ByteCap { scanned_bytes } => {
-                return Ok(IndexResult {
-                    discovered_files: 1,
-                    scanned_bytes,
-                    source_budget_cap_hits: 1,
-                    ..Default::default()
-                });
-            }
+            SnapshotOutcome::ByteCap => None,
             SnapshotOutcome::Deadline => {
                 return Ok(IndexResult {
                     discovered_files: 1,
@@ -894,7 +904,6 @@ pub fn index_file_with_options(
             &canonical,
             &current_metadata,
             &raw,
-            snapshot.as_ref().map_or(0, |bytes| bytes.len() as u64),
         );
     }
     let append_start = if !options.force {
@@ -944,6 +953,7 @@ pub fn index_file_with_options(
     };
     let source_started_at = Instant::now();
     let mut source_complete = true;
+    let mut partial_metadata = None;
 
     loop {
         if let Some(budget) = options.scan_budget
@@ -953,6 +963,13 @@ pub fn index_file_with_options(
             source_complete = false;
             break;
         }
+        let offset_before_line = (!snapshot_complete)
+            // `BufReader` can read ahead to the end of a small file. Its
+            // underlying reader's position would then skip unconsumed lines
+            // on the next pass; use the buffered reader's logical position.
+            .then(|| reader.stream_position())
+            .transpose()?;
+        let hash_before_line = (!snapshot_complete).then(|| hasher.clone());
         let Some(read_line) = read_bounded_line(&mut reader, Some(&mut hasher))? else {
             break;
         };
@@ -960,9 +977,25 @@ pub fn index_file_with_options(
             let line_bytes = read_line.text.len() as u64;
             if let Some(budget) = options.scan_budget
                 && result.scanned_bytes.saturating_add(line_bytes) > budget.per_source_max_bytes
+                // Always make at least one-record progress from a checkpoint.
+                // A record itself may exceed the allowance; deferring it just
+                // because it is not at file offset zero would recreate the
+                // same permanent retry loop this continuation prevents.
+                && result.scanned_bytes > 0
             {
                 result.source_budget_cap_hits += 1;
                 source_complete = false;
+                partial_metadata = Some(
+                    current_metadata.clone().with_hash_from_hex(hex_digest(
+                        &hash_before_line
+                            .expect("streaming source has a prefix hash")
+                            .finalize(),
+                    )),
+                );
+                partial_metadata
+                    .as_mut()
+                    .expect("partial metadata set")
+                    .size = offset_before_line.expect("streaming source has an offset");
                 break;
             }
             result.scanned_bytes = result.scanned_bytes.saturating_add(line_bytes);
@@ -1150,6 +1183,7 @@ pub fn index_file_with_options(
     let completion_metadata = (source_complete && unchanged_during_scan)
         .then_some(file_metadata)
         .filter(|_| result.parse_errors == 0);
+    let checkpoint_metadata = completion_metadata.as_ref().or(partial_metadata.as_ref());
     if result.parse_errors > 0 {
         flush_chunk(
             pool,
@@ -1179,7 +1213,7 @@ pub fn index_file_with_options(
         &mut imports,
         &mut skill_sources,
         &mut mcp_sources,
-        completion_metadata.as_ref(),
+        checkpoint_metadata,
         &mut result,
     )?;
     Ok(result)
@@ -1494,7 +1528,11 @@ fn collect_supported_files(path: &Path, files: &mut Vec<PathBuf>, result: &mut I
 /// Discover one provider root without granting the worker any persistence
 /// capability. A root that blocks in filesystem discovery can be abandoned at
 /// the deadline; a later provider root still receives its own bounded turn.
-fn discover_root_bounded(path: PathBuf, budget: DiscoveryBudget) -> Result<DiscoveryResult> {
+fn discover_root_bounded(
+    path: PathBuf,
+    start_after: Option<&Path>,
+    budget: DiscoveryBudget,
+) -> Result<DiscoveryResult> {
     if !reserve_discovery_worker() {
         return Ok(DiscoveryResult {
             capped: true,
@@ -1502,6 +1540,7 @@ fn discover_root_bounded(path: PathBuf, budget: DiscoveryBudget) -> Result<Disco
         });
     }
     let deadline = budget.deadline;
+    let start_after = start_after.map(Path::to_path_buf);
     let (sender, receiver) = mpsc::sync_channel(1);
     let worker = std::thread::Builder::new()
         .name("cortex-transcript-discovery".to_string())
@@ -1517,11 +1556,12 @@ fn discover_root_bounded(path: PathBuf, budget: DiscoveryBudget) -> Result<Disco
                 &mut result,
                 &mut entries,
                 &mut path_bytes,
+                start_after.as_deref(),
                 &budget,
                 started,
             );
-            let _ = sender.send(result);
             DISCOVERY_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+            let _ = sender.send(result);
         });
     if worker.is_err() {
         DISCOVERY_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
@@ -1563,6 +1603,7 @@ fn collect_supported_files_bounded(
     result: &mut DiscoveryResult,
     entries: &mut usize,
     path_bytes: &mut usize,
+    start_after: Option<&Path>,
     budget: &DiscoveryBudget,
     started: Instant,
 ) {
@@ -1606,12 +1647,17 @@ fn collect_supported_files_bounded(
         match entry {
             Ok(entry) => {
                 let child = entry.path();
+                if start_after.is_some_and(|cursor| child <= cursor && !cursor.starts_with(&child))
+                {
+                    continue;
+                }
                 *entries += 1;
                 *path_bytes = path_bytes.saturating_add(child.as_os_str().len());
                 if *path_bytes > budget.max_path_bytes {
                     result.capped = true;
                     break;
                 }
+                result.next_cursor = Some(child.clone());
                 children.push(child);
             }
             Err(error) => {
@@ -1625,7 +1671,15 @@ fn collect_supported_files_bounded(
             break;
         }
         if child.is_dir() {
-            collect_supported_files_bounded(&child, result, entries, path_bytes, budget, started);
+            collect_supported_files_bounded(
+                &child,
+                result,
+                entries,
+                path_bytes,
+                start_after,
+                budget,
+                started,
+            );
         } else if supported_discovered_file(&child) {
             result.files.push(child);
         } else {
@@ -1787,14 +1841,13 @@ fn index_gemini_file(
     canonical: &str,
     current_metadata: &FileMetadata,
     raw: &str,
-    scanned_bytes: u64,
 ) -> Result<IndexResult> {
     let checkpoint_store = checkpoint::CheckpointStore::new(pool);
-    let file_hash = hash_text(&raw);
-    let parsed = gemini::parse_file(&raw, path)?;
+    let file_hash = hash_text(raw);
+    let parsed = gemini::parse_file(raw, path)?;
     let mut result = IndexResult {
         discovered_files: 1,
-        scanned_bytes,
+        scanned_bytes: raw.len() as u64,
         ..Default::default()
     };
 

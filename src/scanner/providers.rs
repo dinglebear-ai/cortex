@@ -240,8 +240,8 @@ pub struct ProviderLaneHealth {
 
 /// Return the bounded provider-runtime view used by scanner health callers.
 ///
-/// Only `transcript_sources` is inspected: one grouped query, then a fixed
-/// four-provider/fourteen-lane maximum in memory. Forwarding, Observatory,
+/// Only `transcript_sources` is inspected: one source-kind aggregate query,
+/// then a fixed four-provider/fourteen-lane maximum in memory. Forwarding, Observatory,
 /// and OTLP consumers are deliberately not reported as wired until their
 /// corresponding beads call this registry themselves.
 pub fn runtime_health(pool: &crate::db::DbPool) -> Result<Vec<ProviderRuntimeHealth>> {
@@ -255,37 +255,47 @@ pub fn runtime_health(pool: &crate::db::DbPool) -> Result<Vec<ProviderRuntimeHea
 pub(crate) fn runtime_health_conn(
     conn: &rusqlite::Connection,
 ) -> Result<Vec<ProviderRuntimeHealth>> {
+    // Source kinds are assigned before a source is persisted, so status need
+    // not read or materialize the (potentially unbounded) canonical paths.
+    // This returns at most one row for each transcript provider kind. EXISTS
+    // also avoids expanding source rows by their import-record count.
     let mut stmt = conn.prepare(
-        "SELECT s.canonical_path,
-                s.last_error,
-                COUNT(r.id) AS imported_records
+        "SELECT s.source_kind,
+                COUNT(*) AS source_count,
+                SUM(CASE
+                    WHEN s.last_error IS NULL
+                     AND EXISTS (
+                        SELECT 1
+                        FROM transcript_import_records r
+                        WHERE r.source_id = s.id
+                     )
+                    THEN 1 ELSE 0
+                END) AS successful_sources,
+                SUM(CASE WHEN s.last_error IS NOT NULL THEN 1 ELSE 0 END) AS failed_sources
          FROM transcript_sources s
-         LEFT JOIN transcript_import_records r ON r.source_id = s.id
-         GROUP BY s.id
-         ORDER BY s.canonical_path ASC",
+         WHERE s.source_kind IN ('claude_project', 'codex_session', 'gemini_session')
+         GROUP BY s.source_kind",
     )?;
     let rows = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let mut counts = [(0usize, 0usize, 0usize); 4];
-    for (path, error, imported_records) in rows {
-        let Some(provider) = provider_for_path(Path::new(&path)) else {
+    for (source_kind, source_count, successful_sources, failed_sources) in rows {
+        let Some(provider) = provider_for_source_kind(&source_kind) else {
             continue;
         };
         let count = &mut counts[provider_index(provider)];
-        count.0 += 1;
-        if imported_records > 0 && error.is_none() {
-            count.1 += 1;
-        } else if error.is_some() {
-            count.2 += 1;
-        }
+        count.0 += usize::try_from(source_count)?;
+        count.1 += usize::try_from(successful_sources)?;
+        count.2 += usize::try_from(failed_sources)?;
     }
 
     Ok(definitions()
@@ -335,6 +345,15 @@ fn provider_index(provider: Provider) -> usize {
         Provider::Codex => 1,
         Provider::Gemini => 2,
         Provider::Antigravity => 3,
+    }
+}
+
+fn provider_for_source_kind(source_kind: &str) -> Option<Provider> {
+    match source_kind {
+        "claude_project" => Some(Provider::Claude),
+        "codex_session" => Some(Provider::Codex),
+        "gemini_session" => Some(Provider::Gemini),
+        _ => None,
     }
 }
 

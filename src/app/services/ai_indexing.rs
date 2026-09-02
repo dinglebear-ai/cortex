@@ -43,7 +43,6 @@ impl CortexService {
                     scan_budget,
                     start_after,
                     discovery_start_after,
-                    ..Default::default()
                 },
                 Some(&storage),
             )

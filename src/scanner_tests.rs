@@ -1512,7 +1512,7 @@ fn snapshot_bytes_count_when_gemini_utf8_validation_fails_before_records() {
     std::fs::create_dir_all(&root).unwrap();
     let invalid = root.join("session-invalid.json");
     let later = root.join("session-later.json");
-    std::fs::write(&invalid, [b'{', b'\xff', b'}']).unwrap();
+    std::fs::write(&invalid, *b"{\xff}").unwrap();
     std::fs::write(
         &later,
         r#"{"sessionId":"later","messages":[{"id":"later","content":"must defer after invalid bytes"}]}"#,
@@ -1552,6 +1552,13 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
     for index in 0..=MAX_DISCOVERY_ENTRIES_PER_ROOT {
         std::fs::write(huge_root.join(format!("noise-{index:04}.txt")), "noise").unwrap();
     }
+    let deferred_claude = huge_root.join("zz-late-project/session.jsonl");
+    std::fs::create_dir_all(deferred_claude.parent().unwrap()).unwrap();
+    std::fs::write(
+        &deferred_claude,
+        r#"{"sessionId":"late-claude","content":"deferred root continuation completed"}"#,
+    )
+    .unwrap();
     let gemini_root = dir.path().join(".gemini/tmp/hash/chats");
     std::fs::create_dir_all(&gemini_root).unwrap();
     std::fs::write(
@@ -1559,7 +1566,7 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
         r#"{"sessionId":"later-provider","messages":[{"id":"later","content":"later provider discovered despite huge root"}]}"#,
     )
     .unwrap();
-    let _delay = SnapshotDelayGuard::for_file("projects", std::time::Duration::from_millis(180));
+    let _delay = SnapshotDelayGuard::for_file("projects", std::time::Duration::from_secs(3));
     let started = std::time::Instant::now();
 
     let result = index_roots_with_options(
@@ -1578,9 +1585,12 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
 
     assert_eq!(result.discovery_cap_hits, 1, "result={result:#?}");
     assert_eq!(result.discovery_deferred_roots, 1, "result={result:#?}");
-    assert!(result.next_discovery_cursor.is_some());
+    let cursor = result
+        .next_discovery_cursor
+        .clone()
+        .expect("capped discovery records its last visited entry");
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(120),
+        started.elapsed() < std::time::Duration::from_millis(1_500),
         "a slow provider-root discovery blocked the later provider root"
     );
     let later_provider_rows: i64 = pool
@@ -1590,9 +1600,60 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
             "SELECT COUNT(*) FROM logs WHERE message = 'later provider discovered despite huge root'",
             [],
             |row| row.get(0),
+    )
+    .unwrap();
+    assert_eq!(later_provider_rows, 1);
+
+    // Only the first pass models a stalled root. Subsequent incremental work
+    // must prove that the recorded entry cursor itself, not another timeout,
+    // reaches the deferred descendant.
+    drop(_delay);
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    let mut continuation = cursor;
+    for _ in 0..4 {
+        let pass = index_roots_with_options(
+            &pool,
+            IndexOptions {
+                discovery_start_after: Some(continuation),
+                scan_budget: Some(ScanBudget {
+                    per_source_max_bytes: 4_096,
+                    scan_max_bytes: 16_384,
+                    per_source_deadline: std::time::Duration::from_secs(1),
+                }),
+                ..Default::default()
+            },
+            None,
         )
         .unwrap();
-    assert_eq!(later_provider_rows, 1);
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'deferred root continuation completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 1 {
+            break;
+        }
+        continuation = pass
+            .next_discovery_cursor
+            .expect("incomplete discovery produces a continuation cursor");
+    }
+    let continued_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'deferred root continuation completed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        continued_rows, 1,
+        "capped root resumes past its prior cursor"
+    );
 }
 
 #[test]
@@ -1750,6 +1811,94 @@ fn bounded_root_scan_reports_scan_wide_cap_and_defers_remaining_sources() {
     assert_eq!(
         deferred_ingested, 1,
         "the next bounded scan begins after the last attempted source"
+    );
+}
+
+#[test]
+fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("oversized-session.jsonl");
+    std::fs::write(
+        &file,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"oversized"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"first bounded chunk"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"second bounded chunk becomes visible later"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let options = IndexFileOptions {
+        scan_budget: Some(ScanBudget {
+            per_source_max_bytes: 120,
+            scan_max_bytes: 1_000,
+            per_source_deadline: std::time::Duration::from_secs(1),
+        }),
+        ..Default::default()
+    };
+
+    let first =
+        index_file_with_options(&pool, &file, "codex_session", options.clone(), None).unwrap();
+    assert_eq!(first.source_budget_cap_hits, 1, "result={first:#?}");
+    let checkpoint = list_checkpoints(
+        &pool,
+        &CheckpointListOptions {
+            errors_only: false,
+            missing_only: false,
+            limit: Some(10),
+        },
+    )
+    .unwrap();
+    assert!(checkpoint[0].last_offset.unwrap_or_default() > 0);
+    assert!(
+        checkpoint[0].file_size.unwrap_or_default()
+            < std::fs::metadata(&file).unwrap().len() as i64,
+        "first bounded pass must checkpoint only its consumed prefix: {checkpoint:#?}"
+    );
+
+    let mut pass_results = Vec::new();
+    for _ in 0..3 {
+        let pass =
+            index_file_with_options(&pool, &file, "codex_session", options.clone(), None).unwrap();
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'second bounded chunk becomes visible later'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 1 {
+            break;
+        }
+        pass_results.push(pass.clone());
+        assert_eq!(pass.source_budget_cap_hits, 1, "result={pass:#?}");
+    }
+    let later_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'second bounded chunk becomes visible later'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        later_rows,
+        1,
+        "first={first:#?} passes={pass_results:#?} checkpoint={:#?}",
+        list_checkpoints(
+            &pool,
+            &CheckpointListOptions {
+                errors_only: false,
+                missing_only: false,
+                limit: Some(10),
+            },
+        )
+        .unwrap()
     );
 }
 

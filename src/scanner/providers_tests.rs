@@ -126,6 +126,143 @@ fn empty_install_runtime_json_does_not_promote_static_adapter_support() {
 }
 
 #[test]
+fn runtime_health_aggregates_provider_source_kinds_without_reading_paths() {
+    use rusqlite::{
+        hooks::{AuthAction, Authorization},
+        params,
+    };
+
+    let db = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(db.path().join("test.db"))).unwrap();
+    let conn = pool.get().unwrap();
+
+    for (path, source_kind, last_error) in [
+        (
+            "/private/transcripts/claude-success.jsonl",
+            "claude_project",
+            None,
+        ),
+        (
+            "/private/transcripts/claude-failed.jsonl",
+            "claude_project",
+            Some("bad json"),
+        ),
+        (
+            "/private/transcripts/codex-quiet.jsonl",
+            "codex_session",
+            None,
+        ),
+        (
+            "/private/transcripts/gemini-success.json",
+            "gemini_session",
+            None,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO transcript_sources (canonical_path, source_kind, last_error)
+             VALUES (?1, ?2, ?3)",
+            params![path, source_kind, last_error],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO transcript_import_records (source_id, record_key)
+         SELECT id, 'claude-receipt' FROM transcript_sources
+         WHERE source_kind = 'claude_project' AND last_error IS NULL",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO transcript_import_records (source_id, record_key)
+         SELECT id, 'gemini-receipt' FROM transcript_sources
+         WHERE source_kind = 'gemini_session'",
+        [],
+    )
+    .unwrap();
+
+    // Reject any status-query attempt to access canonical_path. The health
+    // projection must derive its fixed provider counters from source kind and
+    // receipts alone, even when those paths cannot be read.
+    conn.authorizer(Some(
+        |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+            AuthAction::Read {
+                table_name: "transcript_sources",
+                column_name: "canonical_path",
+            } => Authorization::Deny,
+            _ => Authorization::Allow,
+        },
+    ))
+    .unwrap();
+    let health = runtime_health_conn(&conn).unwrap();
+    conn.authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> Authorization>)
+        .unwrap();
+
+    let claude = health
+        .iter()
+        .find(|entry| entry.provider == "claude")
+        .unwrap();
+    assert_eq!(
+        (
+            claude.source_count,
+            claude.successful_sources,
+            claude.failed_sources
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!(
+        claude
+            .lanes
+            .iter()
+            .find(|lane| lane.lane == "transcript")
+            .unwrap()
+            .coverage,
+        "partial"
+    );
+    let codex = health
+        .iter()
+        .find(|entry| entry.provider == "codex")
+        .unwrap();
+    assert_eq!(
+        (
+            codex.source_count,
+            codex.successful_sources,
+            codex.failed_sources
+        ),
+        (1, 0, 0)
+    );
+    assert_eq!(
+        codex
+            .lanes
+            .iter()
+            .find(|lane| lane.lane == "transcript")
+            .unwrap()
+            .coverage,
+        "not_observed"
+    );
+    let gemini = health
+        .iter()
+        .find(|entry| entry.provider == "gemini")
+        .unwrap();
+    assert_eq!(
+        (
+            gemini.source_count,
+            gemini.successful_sources,
+            gemini.failed_sources
+        ),
+        (1, 1, 0)
+    );
+    assert_eq!(
+        gemini
+            .lanes
+            .iter()
+            .find(|lane| lane.lane == "mcp_events")
+            .unwrap()
+            .coverage,
+        "not_observed"
+    );
+}
+
+#[test]
 #[serial]
 fn runtime_health_uses_real_scanner_outcomes_and_isolates_a_bad_provider_source() {
     let home = tempfile::tempdir().unwrap();
@@ -262,7 +399,11 @@ fn runtime_health_uses_real_scanner_outcomes_and_isolates_a_bad_provider_source(
         .into_iter()
         .find(|entry| entry.provider == "antigravity")
         .unwrap();
-    assert_eq!(failed_antigravity.failed_sources, 1);
+    // Antigravity has no transcript source kind or receipt-backed transcript
+    // adapter yet. A manually-created generic checkpoint must not promote its
+    // SQLite metadata descriptor into observed scanner evidence.
+    assert_eq!(failed_antigravity.source_count, 0);
+    assert_eq!(failed_antigravity.failed_sources, 0);
     assert!(
         failed_antigravity
             .lanes
