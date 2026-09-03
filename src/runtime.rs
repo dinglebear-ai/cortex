@@ -60,6 +60,21 @@ pub struct RuntimeCore {
     fatal_shutdown: CancellationToken,
 }
 
+fn forwarding_agent_tokens(config: &Config) -> std::collections::HashMap<String, String> {
+    config
+        .mcp
+        .forwarding_agents
+        .iter()
+        .filter_map(|(identity, secret)| {
+            secret
+                .0
+                .as_ref()
+                .filter(|token| !token.trim().is_empty())
+                .map(|token| (token.clone(), identity.clone()))
+        })
+        .collect()
+}
+
 pub struct MaintenanceHandles {
     /// Cooperative cancellation signal. Cancelling this token requests all
     /// background task loops to break at their next `select!` iteration.
@@ -495,6 +510,7 @@ impl RuntimeCore {
         let state = crate::ai_transcript_ingest::AiTranscriptIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
         );
         crate::ai_transcript_ingest::router(state)
@@ -505,6 +521,7 @@ impl RuntimeCore {
         let state = crate::syslog_forward_ingest::SyslogForwardIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
         );
         crate::syslog_forward_ingest::router(state)

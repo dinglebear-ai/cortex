@@ -10,12 +10,14 @@ use std::{
 
 use axum::{
     Router,
-    body::Bytes,
+    body::{Body, Bytes},
+    extract::connect_info::MockConnectInfo,
     extract::{ConnectInfo, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Request, StatusCode, header},
     response::{IntoResponse, Response},
     routing::post,
 };
+use tower::ServiceExt;
 
 #[derive(Clone)]
 struct ReceiptLossServerState {
@@ -108,6 +110,7 @@ async fn sender_replays_an_authenticated_receipt_loss_once_after_outage_and_rest
     let receiver = SyslogForwardIngestState::new(
         Arc::clone(&pool),
         Some(token),
+        Default::default(),
         crate::mcp::AuthPolicy::TrustedGatewayUnscoped,
     );
     let loss_state = ReceiptLossServerState {
@@ -204,6 +207,114 @@ fn gap_rejects_an_unrecognized_reason_code() {
     }));
 }
 
+#[tokio::test]
+async fn unsafe_gap_reason_is_rejected_before_persistence_or_fts() {
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join("unsafe-gap.db");
+    let pool =
+        Arc::new(crate::db::init_pool(&crate::config::StorageConfig::for_test(database)).unwrap());
+    let app = router(SyslogForwardIngestState::new(
+        Arc::clone(&pool),
+        Some("forward-token".into()),
+        Default::default(),
+        crate::mcp::AuthPolicy::TrustedGatewayUnscoped,
+    ))
+    .layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let body = serde_json::to_string(&SyslogForwardRequest {
+        records: vec![],
+        gaps: vec![SyslogForwardGap {
+            source_instance: "host-a".into(),
+            source_epoch: 1,
+            from_sequence: 1,
+            to_sequence: 1,
+            idempotency_key: "unsafe-gap".into(),
+            observed_at: "2026-01-01T00:00:00Z".into(),
+            reason_code: "token=gap-reason-canary".into(),
+        }],
+    })
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/syslog-forward")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer forward-token")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let conn = pool.get().unwrap();
+    let logs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get(0))
+        .unwrap();
+    let fts_canary_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs_fts WHERE logs_fts MATCH 'canary'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(logs, 0);
+    assert_eq!(fts_canary_count, 0);
+}
+
+#[tokio::test]
+async fn named_syslog_forwarder_is_server_derived_when_host_claim_differs() {
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join("named-forwarder.db");
+    let pool =
+        Arc::new(crate::db::init_pool(&crate::config::StorageConfig::for_test(database)).unwrap());
+    let app = router(SyslogForwardIngestState::new(
+        Arc::clone(&pool),
+        Some("shared-token".into()),
+        HashMap::from([("agent-a-token".into(), "agent-a".into())]),
+        crate::mcp::AuthPolicy::TrustedGatewayUnscoped,
+    ))
+    .layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let body = serde_json::to_string(&SyslogForwardRequest {
+        records: vec![SyslogForwardRecord {
+            source_instance: "host-b".into(),
+            source_epoch: 1,
+            sequence: 1,
+            idempotency_key: "agent-a-host-b".into(),
+            observed_at: "2026-01-01T00:00:00Z".into(),
+            line: "<134>1 2026-01-01T00:00:00Z host-b app - - - provenance-proof".into(),
+        }],
+        gaps: vec![],
+    })
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/syslog-forward")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer agent-a-token")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let conn = pool.get().unwrap();
+    let (hostname, metadata): (String, String) = conn
+        .query_row(
+            "SELECT hostname, metadata_json FROM logs LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(hostname, "agent-agent-a");
+    assert!(metadata.contains("host-b"));
+    assert!(metadata.contains("agent-a"));
+    assert!(metadata.contains("verified_forwarder_claimed_host"));
+}
+
 #[test]
 fn duplicate_replay_returns_receipt_without_duplicate_canonical_evidence() {
     let dir = tempfile::tempdir().unwrap();
@@ -224,8 +335,8 @@ fn duplicate_replay_returns_receipt_without_duplicate_canonical_evidence() {
         }],
         gaps: vec![],
     };
-    let first = persist_request(&pool, request.clone(), "127.0.0.1").unwrap();
-    let replay = persist_request(&pool, request, "127.0.0.1").unwrap();
+    let first = persist_request(&pool, request.clone(), "127.0.0.1", "shared_bearer").unwrap();
+    let replay = persist_request(&pool, request, "127.0.0.1", "shared_bearer").unwrap();
     assert_eq!(first, replay);
     let conn = pool.get().unwrap();
     let logs: i64 = conn
@@ -268,6 +379,7 @@ fn receiver_never_persists_a_path_like_source_identity() {
             gaps: vec![],
         },
         "127.0.0.1",
+        "shared_bearer",
     )
     .unwrap();
     let conn = pool.get().unwrap();

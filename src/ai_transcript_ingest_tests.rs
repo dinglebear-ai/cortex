@@ -26,7 +26,12 @@ fn test_app_with(
     let dir = tempfile::tempdir().unwrap();
     let storage = StorageConfig::for_test(dir.path().join("ai-transcript-ingest-test.db"));
     let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
-    let state = AiTranscriptIngestState::new(pool, token.map(str::to_string), auth_policy);
+    let state = AiTranscriptIngestState::new(
+        pool,
+        token.map(str::to_string),
+        Default::default(),
+        auth_policy,
+    );
     let app = router(state).layer(MockConnectInfo(peer));
     (app, dir)
 }
@@ -124,6 +129,49 @@ async fn accepts_batch_with_valid_bearer_token_and_inserts_rows() {
     let value: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(value["accepted"], 1);
     assert_eq!(value["receipts"][0]["disposition"], "accepted");
+}
+
+#[tokio::test]
+async fn named_forwarder_identity_is_server_derived_and_host_is_retained_as_a_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("named-forwarder.db"));
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let state = AiTranscriptIngestState::new(
+        pool,
+        Some("shared-token".into()),
+        std::collections::HashMap::from([("agent-a-token".into(), "agent-a".into())]),
+        AuthPolicy::Mounted { auth_state: None },
+    );
+    let app = router(state).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let mut record = sample_record();
+    record["envelope"]["hostname"] = serde_json::json!("host-b");
+    let body = serde_json::to_string(&serde_json::json!({"records": [record]})).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer agent-a-token")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let conn = rusqlite::Connection::open(dir.path().join("named-forwarder.db")).unwrap();
+    let (hostname, metadata): (String, String) = conn
+        .query_row(
+            "SELECT hostname, metadata_json FROM logs LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(hostname, "agent-agent-a");
+    assert!(metadata.contains("agent-a"));
+    assert!(metadata.contains("host-b"));
+    assert!(metadata.contains("verified_forwarder_claimed_host"));
 }
 
 #[tokio::test]
@@ -279,6 +327,10 @@ async fn receiver_scrubs_hostile_envelope_fields_before_persistence() {
         "hostname".into(),
         serde_json::json!("host TOKEN=host-canary"),
     );
+    envelope.insert(
+        "timestamp".into(),
+        serde_json::json!("token=timestamp-canary"),
+    );
     envelope["source"]["title"] = serde_json::json!("secret=title-canary");
     envelope["source"]["native_session_id"] = serde_json::json!("sk-session-canary");
     envelope["diagnostics"] = serde_json::json!([
@@ -314,6 +366,7 @@ async fn receiver_scrubs_hostile_envelope_fields_before_persistence() {
         "sk-session-canary",
         "diagnostic-canary",
         "sk-diagnostic-canary",
+        "timestamp-canary",
     ] {
         assert!(
             !persisted.contains(canary),

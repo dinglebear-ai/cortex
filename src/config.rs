@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -753,6 +753,13 @@ pub struct McpConfig {
     /// Optional bearer token for authenticating MCP requests.
     #[serde(default)]
     pub api_token: Secret,
+    /// Named bearer credentials accepted only by the evidence-forwarding
+    /// endpoints. The map key is the server-authoritative agent principal;
+    /// its secret value is never serialized or exposed to browsers. A generic
+    /// `CORTEX_TOKEN` remains migration-compatible but is deliberately
+    /// classified as shared/unverified provenance.
+    #[serde(default)]
+    pub forwarding_agents: BTreeMap<String, Secret>,
     /// Optional additional Host header values accepted by RMCP Host validation.
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
@@ -1306,6 +1313,7 @@ impl Default for McpConfig {
             no_auth: false,
             trusted_gateway_no_auth: false,
             api_token: Secret(None),
+            forwarding_agents: BTreeMap::new(),
             allowed_hosts: Vec::new(),
             allowed_origins: Vec::new(),
             auth: AuthConfig::default(),

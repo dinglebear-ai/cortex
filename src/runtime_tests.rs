@@ -84,6 +84,7 @@ fn loopback_mcp() -> McpConfig {
         allowed_hosts: Vec::new(),
         allowed_origins: Vec::new(),
         auth: AuthConfig::default(),
+        forwarding_agents: Default::default(),
         static_token_is_admin: false,
     }
 }

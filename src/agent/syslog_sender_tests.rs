@@ -300,6 +300,22 @@ fn unreadable_spool_is_retained_and_remains_visible_after_delivery_recovers() {
 }
 
 #[test]
+fn spool_save_succeeds_after_a_failed_atomic_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spool.json");
+    std::fs::create_dir(&path).unwrap();
+
+    // `save_spool` creates its temporary sibling before the rename. A
+    // destination-directory failure therefore verifies that the temporary is
+    // cleaned, rather than permanently blocking the next save with EEXIST.
+    assert!(save_spool(&path, &SpoolState::default()).is_err());
+    std::fs::remove_dir(&path).unwrap();
+
+    save_spool(&path, &SpoolState::default()).unwrap();
+    assert!(path.is_file());
+}
+
+#[test]
 fn aggregate_cap_bounds_high_cardinality_sources_and_records_each_loss_window() {
     let records = (0..=MAX_SPOOL_RECORDS)
         .map(|index| {

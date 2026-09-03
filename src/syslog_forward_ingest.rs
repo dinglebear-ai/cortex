@@ -6,6 +6,7 @@
 //! idempotency key.  The receiver commits the canonical log row and receipt in
 //! one SQLite transaction, so a lost HTTP response is safe to retry.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -75,14 +76,21 @@ pub struct SyslogForwardResponse {
 pub struct SyslogForwardIngestState {
     pool: Arc<DbPool>,
     api_token: Option<String>,
+    forwarding_agent_tokens: Arc<HashMap<String, String>>,
     auth_policy: AuthPolicy,
 }
 
 impl SyslogForwardIngestState {
-    pub fn new(pool: Arc<DbPool>, api_token: Option<String>, auth_policy: AuthPolicy) -> Self {
+    pub fn new(
+        pool: Arc<DbPool>,
+        api_token: Option<String>,
+        forwarding_agent_tokens: HashMap<String, String>,
+        auth_policy: AuthPolicy,
+    ) -> Self {
         Self {
             pool,
             api_token,
+            forwarding_agent_tokens: Arc::new(forwarding_agent_tokens),
             auth_policy,
         }
     }
@@ -102,9 +110,9 @@ async fn ingest_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !is_authorized(&state, &peer, &headers) {
+    let Some(forwarder_identity) = authenticated_forwarder(&state, &peer, &headers) else {
         return unauthorized();
-    }
+    };
     let request: SyslogForwardRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
         Err(_) => {
@@ -131,7 +139,11 @@ async fn ingest_handler(
     }
     let pool = Arc::clone(&state.pool);
     let peer_ip = peer.ip().to_string();
-    match tokio::task::spawn_blocking(move || persist_request(&pool, request, &peer_ip)).await {
+    match tokio::task::spawn_blocking(move || {
+        persist_request(&pool, request, &peer_ip, &forwarder_identity)
+    })
+    .await
+    {
         Ok(Ok(receipts)) => {
             (StatusCode::OK, Json(SyslogForwardResponse { receipts })).into_response()
         }
@@ -191,6 +203,7 @@ fn persist_request(
     pool: &DbPool,
     request: SyslogForwardRequest,
     peer_ip: &str,
+    forwarder_identity: &str,
 ) -> anyhow::Result<Vec<String>> {
     let mut conn = db::write_conn(pool)?;
     let tx = conn.transaction()?;
@@ -203,6 +216,14 @@ fn persist_request(
             continue;
         }
         let mut entry = parse_syslog(&record.line, format!("agent-syslog://{peer_ip}"));
+        let claimed_hostname = entry.hostname.clone();
+        entry.hostname = format!("agent-{forwarder_identity}");
+        entry.metadata_json = Some(forwarded_metadata(
+            entry.metadata_json.as_deref(),
+            forwarder_identity,
+            peer_ip,
+            claimed_hostname,
+        ));
         stamp_source_kind(&mut entry, SourceKind::SyslogTcp);
         let ids = db::insert_logs_batch_in_tx(&tx, &[entry])?;
         insert_receipt(
@@ -269,6 +290,28 @@ fn persist_request(
     Ok(receipts)
 }
 
+fn forwarded_metadata(
+    existing: Option<&str>,
+    forwarder_identity: &str,
+    peer_ip: &str,
+    hostname_claim: String,
+) -> String {
+    let mut metadata = existing
+        .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    metadata.insert(
+        "forwarded_provenance".into(),
+        json!({
+            "authenticated_forwarder": forwarder_identity,
+            "transport_peer": peer_ip,
+            "hostname_claim": hostname_claim,
+            "trust": if forwarder_identity == "shared_bearer" { "claimed" } else { "verified_forwarder_claimed_host" },
+        }),
+    );
+    crate::ingest_metadata::bounded_metadata_json(Value::Object(metadata))
+}
+
 fn opaque_receipt_value(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     hex::encode(&digest[..16])
@@ -295,18 +338,30 @@ fn insert_receipt(
     Ok(())
 }
 
-fn is_authorized(state: &SyslogForwardIngestState, peer: &SocketAddr, headers: &HeaderMap) -> bool {
+fn authenticated_forwarder(
+    state: &SyslogForwardIngestState,
+    peer: &SocketAddr,
+    headers: &HeaderMap,
+) -> Option<String> {
     if matches!(state.auth_policy, AuthPolicy::LoopbackDev) {
-        return peer.ip().is_loopback();
+        return peer.ip().is_loopback().then(|| "loopback".to_string());
     }
-    let Some(expected) = state.api_token.as_deref() else {
-        return false;
-    };
-    headers
+    let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(parse_bearer_token)
-        .is_some_and(|token| tokens_equal(&token, expected))
+        .and_then(parse_bearer_token)?;
+    if let Some(identity) = state
+        .forwarding_agent_tokens
+        .iter()
+        .find_map(|(expected, identity)| tokens_equal(&token, expected).then(|| identity.clone()))
+    {
+        return Some(identity);
+    }
+    state
+        .api_token
+        .as_deref()
+        .filter(|expected| tokens_equal(&token, expected))
+        .map(|_| "shared_bearer".to_string())
 }
 
 fn unauthorized() -> Response {

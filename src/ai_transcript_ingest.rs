@@ -18,6 +18,7 @@
 //! (`src/heartbeat.rs`): static `CORTEX_TOKEN` bearer when configured,
 //! loopback-only otherwise.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -165,14 +166,21 @@ pub enum ReceiptDisposition {
 pub struct AiTranscriptIngestState {
     pool: Arc<DbPool>,
     api_token: Option<String>,
+    forwarding_agent_tokens: Arc<HashMap<String, String>>,
     auth_policy: AuthPolicy,
 }
 
 impl AiTranscriptIngestState {
-    pub fn new(pool: Arc<DbPool>, api_token: Option<String>, auth_policy: AuthPolicy) -> Self {
+    pub fn new(
+        pool: Arc<DbPool>,
+        api_token: Option<String>,
+        forwarding_agent_tokens: HashMap<String, String>,
+        auth_policy: AuthPolicy,
+    ) -> Self {
         Self {
             pool,
             api_token,
+            forwarding_agent_tokens: Arc::new(forwarding_agent_tokens),
             auth_policy,
         }
     }
@@ -186,11 +194,15 @@ pub fn router(state: AiTranscriptIngestState) -> Router {
         .with_state(state)
 }
 
-fn to_log_batch_entry(envelope: EvidenceEnvelope) -> LogBatchEntry {
+fn to_log_batch_entry(
+    envelope: EvidenceEnvelope,
+    forwarder_identity: &str,
+    peer: &SocketAddr,
+) -> LogBatchEntry {
     let timestamp = envelope
         .timestamp
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    let source_ip = format!("agent-ai-transcript://{}", envelope.hostname);
+    let source_ip = format!("agent-ai-transcript://{}", peer.ip());
     let metadata_json = crate::ingest_metadata::bounded_metadata_json(serde_json::json!({
         "source_type": "transcript",
         "evidence_envelope_version": envelope.version,
@@ -199,11 +211,17 @@ fn to_log_batch_entry(envelope: EvidenceEnvelope) -> LogBatchEntry {
         "capabilities": envelope.capabilities,
         "diagnostics": envelope.diagnostics,
         "event_kind": envelope.event_kind.as_deref().unwrap_or("unknown"),
+        "provenance": {
+            "authenticated_forwarder": forwarder_identity,
+            "transport_peer": peer.ip().to_string(),
+            "hostname_claim": envelope.hostname,
+            "trust": if forwarder_identity == "shared_bearer" { "claimed" } else { "verified_forwarder_claimed_host" },
+        },
         "content_scrubbed": true,
     }));
     LogBatchEntry {
         timestamp,
-        hostname: envelope.hostname,
+        hostname: format!("agent-{forwarder_identity}"),
         facility: None,
         severity: "info".to_string(),
         app_name: Some(format!("{}-transcript", envelope.source.provider)),
@@ -326,6 +344,8 @@ fn safe_timestamp(value: &str) -> Option<String> {
 fn insert_envelopes_with_receipts(
     pool: &DbPool,
     records: Vec<AiTranscriptRecord>,
+    forwarder_identity: String,
+    peer: SocketAddr,
 ) -> anyhow::Result<Vec<AiTranscriptReceipt>> {
     let mut conn = db::write_conn(pool)?;
     let tx = conn.transaction()?;
@@ -349,7 +369,11 @@ fn insert_envelopes_with_receipts(
             continue;
         }
 
-        let entries = [to_log_batch_entry(envelope.clone())];
+        let entries = [to_log_batch_entry(
+            envelope.clone(),
+            &forwarder_identity,
+            &peer,
+        )];
         let ids = db::insert_logs_batch_in_tx(&tx, &entries)?;
         let log_id = ids
             .into_iter()
@@ -389,9 +413,9 @@ async fn ingest_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !is_authorized(&state, &peer, &headers) {
+    let Some(forwarder_identity) = authenticated_forwarder(&state, &peer, &headers) else {
         return unauthorized();
-    }
+    };
 
     let request: AiTranscriptIngestRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -435,8 +459,10 @@ async fn ingest_handler(
         }
     };
     let pool = Arc::clone(&state.pool);
-    let join_result =
-        tokio::task::spawn_blocking(move || insert_envelopes_with_receipts(&pool, records)).await;
+    let join_result = tokio::task::spawn_blocking(move || {
+        insert_envelopes_with_receipts(&pool, records, forwarder_identity, peer)
+    })
+    .await;
 
     match join_result {
         Ok(Ok(receipts)) => (
@@ -466,20 +492,30 @@ async fn ingest_handler(
     }
 }
 
-fn is_authorized(state: &AiTranscriptIngestState, peer: &SocketAddr, headers: &HeaderMap) -> bool {
+fn authenticated_forwarder(
+    state: &AiTranscriptIngestState,
+    peer: &SocketAddr,
+    headers: &HeaderMap,
+) -> Option<String> {
     if matches!(state.auth_policy, AuthPolicy::LoopbackDev) {
-        return peer.ip().is_loopback();
+        return peer.ip().is_loopback().then(|| "loopback".to_string());
     }
-    let Some(expected) = state.api_token.as_deref() else {
-        return false;
-    };
-    let Some(auth) = headers
+    let auth = headers
         .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    parse_bearer_token(auth).is_some_and(|token| tokens_equal(&token, expected))
+        .and_then(|value| value.to_str().ok())?;
+    let token = parse_bearer_token(auth)?;
+    if let Some(identity) = state
+        .forwarding_agent_tokens
+        .iter()
+        .find_map(|(expected, identity)| tokens_equal(&token, expected).then(|| identity.clone()))
+    {
+        return Some(identity);
+    }
+    state
+        .api_token
+        .as_deref()
+        .filter(|expected| tokens_equal(&token, expected))
+        .map(|_| "shared_bearer".to_string())
 }
 
 fn unauthorized() -> Response {
