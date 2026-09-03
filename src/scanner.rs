@@ -16,9 +16,12 @@ use crate::db::{
 use crate::ingest_metadata::bounded_metadata_json;
 use crate::receiver::enrichment::{project_from_transcript_path, scrub_ai_message};
 use crate::scanner::hook_events::extract_claude_hook_events;
-use crate::scanner::mcp_events::{extract_claude_mcp_events, extract_codex_mcp_events};
+use crate::scanner::mcp_events::{
+    extract_antigravity_mcp_events, extract_claude_mcp_events, extract_codex_mcp_events,
+};
 use crate::scanner::skill_events::{extract_claude_skill_events, extract_codex_skill_events};
 
+pub(crate) mod antigravity;
 mod checkpoint;
 mod claude;
 mod codex;
@@ -100,6 +103,7 @@ enum ChunkSkillSource {
 enum ChunkMcpSource {
     Claude(serde_json::Value),
     Codex(serde_json::Value),
+    Antigravity(serde_json::Value),
     None,
 }
 
@@ -220,6 +224,8 @@ pub(crate) enum SourceKind {
     ClaudeProject,
     CodexSession,
     GeminiSession,
+    AntigravityDesktop,
+    AntigravityCli,
     ExplicitFile,
 }
 
@@ -229,6 +235,8 @@ impl SourceKind {
             Self::ClaudeProject => "claude_project",
             Self::CodexSession => "codex_session",
             Self::GeminiSession => "gemini_session",
+            Self::AntigravityDesktop => "antigravity_desktop",
+            Self::AntigravityCli => "antigravity_cli",
             Self::ExplicitFile => "explicit_file",
         }
     }
@@ -338,6 +346,8 @@ fn is_known_transcript_root(path: &Path) -> bool {
         home.join(".codex/sessions"),
         home.join(".codex/worktrees"),
         home.join(".gemini/tmp"),
+        home.join(".gemini/antigravity/brain"),
+        home.join(".gemini/antigravity-cli/brain"),
     ];
     allowed
         .iter()
@@ -345,7 +355,10 @@ fn is_known_transcript_root(path: &Path) -> bool {
 }
 
 fn test_temp_path(path: &Path) -> bool {
-    cfg!(test) && path.starts_with(std::env::temp_dir())
+    cfg!(test)
+        && std::env::temp_dir()
+            .canonicalize()
+            .is_ok_and(|temp| path.starts_with(temp))
 }
 
 pub fn index_roots(pool: &DbPool, root_override: Option<&Path>) -> Result<IndexResult> {
@@ -613,7 +626,9 @@ pub fn index_file_with_options(
                             _ => ChunkSkillSource::None,
                         }
                     }
-                    SourceKind::GeminiSession => ChunkSkillSource::None,
+                    SourceKind::GeminiSession
+                    | SourceKind::AntigravityDesktop
+                    | SourceKind::AntigravityCli => ChunkSkillSource::None,
                 };
                 // Perf fix: gate the clone behind a cheap substring
                 // pre-check, mirroring the skill-source gate above.
@@ -627,7 +642,10 @@ pub fn index_file_with_options(
                 // the (common) case of a tool-call-heavy transcript.
                 let mcp_source = match source_kind {
                     SourceKind::CodexSession => match &parsed.raw_value {
-                        Some(value) if line_text.contains("function_call") => {
+                        Some(value)
+                            if line_text.contains("function_call")
+                                || line_text.contains("custom_tool_call") =>
+                        {
                             ChunkMcpSource::Codex(value.clone())
                         }
                         _ => ChunkMcpSource::None,
@@ -642,6 +660,14 @@ pub fn index_file_with_options(
                         }
                         _ => ChunkMcpSource::None,
                     },
+                    SourceKind::AntigravityDesktop | SourceKind::AntigravityCli => {
+                        match &parsed.raw_value {
+                            Some(value) if line_text.contains("tool_calls") => {
+                                ChunkMcpSource::Antigravity(value.clone())
+                            }
+                            _ => ChunkMcpSource::None,
+                        }
+                    }
                     SourceKind::GeminiSession => ChunkMcpSource::None,
                 };
                 let message = scrub_ai_message(&parsed.message, None);
@@ -674,6 +700,7 @@ pub fn index_file_with_options(
                     &canonical,
                     &mut result,
                 );
+                let session_metadata = parsed.session_metadata.scrubbed();
                 let metadata_json = bounded_metadata_json(serde_json::json!({
                     "source_type": "transcript",
                     "source_kind": source_kind.as_str(),
@@ -682,6 +709,7 @@ pub fn index_file_with_options(
                     "line_no": line_no,
                     "record_key": record_key,
                     "event_kind": parsed.event_kind,
+                    "session": (!session_metadata.is_empty()).then_some(session_metadata),
                     "content_scrubbed": true,
                 }));
                 let entry = LogBatchEntry {
@@ -976,6 +1004,7 @@ fn flush_chunk(
             let extracted_mcp = match mcp_source {
                 ChunkMcpSource::Claude(value) => extract_claude_mcp_events(value),
                 ChunkMcpSource::Codex(value) => extract_codex_mcp_events(value),
+                ChunkMcpSource::Antigravity(value) => extract_antigravity_mcp_events(value),
                 ChunkMcpSource::None => Vec::new(),
             };
             for event in extracted_mcp {
@@ -1084,11 +1113,15 @@ fn collect_supported_files(path: &Path, files: &mut Vec<PathBuf>, result: &mut I
 }
 
 fn supported_discovered_file(path: &Path) -> bool {
-    matches!(path.extension().and_then(|ext| ext.to_str()), Some("jsonl"))
+    antigravity::is_transcript_file(path)
+        || matches!(path.extension().and_then(|ext| ext.to_str()), Some("jsonl"))
         || gemini::is_chat_file(path)
 }
 
 fn detect_explicit_file_source_kind(path: &Path) -> Result<SourceKind> {
+    if antigravity::is_transcript_file(path) {
+        return Ok(detect_source_kind(path));
+    }
     if gemini::is_chat_file(path) {
         return Ok(SourceKind::GeminiSession);
     }
@@ -1141,6 +1174,10 @@ pub(crate) fn detect_source_kind(path: &Path) -> SourceKind {
         SourceKind::CodexSession
     } else if display.contains(".gemini/tmp") {
         SourceKind::GeminiSession
+    } else if display.contains(".gemini/antigravity-cli/") {
+        SourceKind::AntigravityCli
+    } else if display.contains(".gemini/antigravity/") {
+        SourceKind::AntigravityDesktop
     } else if display.contains(".claude/projects") {
         SourceKind::ClaudeProject
     } else {
@@ -1154,6 +1191,8 @@ impl SourceKind {
             "codex_session" => Self::CodexSession,
             "claude_project" => Self::ClaudeProject,
             "gemini_session" => Self::GeminiSession,
+            "antigravity_desktop" => Self::AntigravityDesktop,
+            "antigravity_cli" => Self::AntigravityCli,
             _ => detect_source_kind(path),
         }
     }
@@ -1162,6 +1201,8 @@ impl SourceKind {
         match self {
             Self::CodexSession => "codex",
             Self::GeminiSession => "gemini",
+            Self::AntigravityDesktop => "antigravity",
+            Self::AntigravityCli => "antigravity-cli",
             Self::ClaudeProject | Self::ExplicitFile => "claude",
         }
     }
@@ -1182,6 +1223,9 @@ pub(crate) fn parse_line_for_source(
         SourceKind::GeminiSession => {
             unreachable!("gemini sessions are indexed whole-file by index_gemini_file")
         }
+        SourceKind::AntigravityDesktop | SourceKind::AntigravityCli => {
+            antigravity::parse_line(line, path, line_no)
+        }
         SourceKind::ClaudeProject | SourceKind::ExplicitFile => {
             claude::parse_line(line, path, line_no)
         }
@@ -1193,6 +1237,7 @@ pub(crate) fn project_for_file(source_kind: SourceKind, path: &Path) -> Option<S
         SourceKind::ClaudeProject => project_from_transcript_path(&path.to_string_lossy()),
         SourceKind::CodexSession => None,
         SourceKind::GeminiSession => None,
+        SourceKind::AntigravityDesktop | SourceKind::AntigravityCli => None,
         SourceKind::ExplicitFile => std::env::current_dir()
             .ok()
             .map(|path| normalize_local_ai_project_path(&path.to_string_lossy())),
@@ -1327,6 +1372,7 @@ fn index_gemini_file(
             canonical,
             &mut result,
         );
+        let session_metadata = record.session_metadata.scrubbed();
         let metadata_json = bounded_metadata_json(serde_json::json!({
             "source_type": "transcript",
             "source_kind": SourceKind::GeminiSession.as_str(),
@@ -1335,6 +1381,7 @@ fn index_gemini_file(
             "record_index": record_index,
             "record_key": record_key,
             "event_kind": record.event_kind,
+            "session": (!session_metadata.is_empty()).then_some(session_metadata),
             "content_scrubbed": true,
         }));
         let entry = LogBatchEntry {
@@ -1699,6 +1746,8 @@ fn default_roots() -> Vec<PathBuf> {
                 home.join(".codex/sessions"),
                 home.join(".codex/worktrees"),
                 home.join(".gemini/tmp"),
+                home.join(".gemini/antigravity/brain"),
+                home.join(".gemini/antigravity-cli/brain"),
             ]
         })
         .unwrap_or_default()
@@ -1716,13 +1765,57 @@ pub(crate) struct ParsedTranscriptRecord {
     pub session_id: Option<String>,
     pub ai_project: Option<String>,
     pub event_kind: String,
-    /// The already-parsed raw JSON value for Claude transcript lines (`None`
-    /// for Codex/Gemini, which don't need it — Codex's skill-tag scanner
-    /// reads `message` directly; Gemini never produces skill events). Lets
-    /// skill-event extraction (Task 6) reuse the JSON parse `parse_line`
-    /// already did internally, instead of re-parsing `line_text` a second
-    /// time (eng review Fix 1 — see Task 2).
+    /// Bounded, provider-authored session metadata carried separately from
+    /// transcript content. Callers must scrub and size-bound string values
+    /// before persistence or forwarding.
+    pub session_metadata: TranscriptSessionMetadata,
+    /// The already-parsed raw provider record. Structured skill, tool, and
+    /// hook extractors consume this side channel before scrubbed transcript
+    /// text is persisted; it must never be serialized directly to clients.
     pub raw_value: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptSessionMetadata {
+    pub title: Option<String>,
+    pub title_provenance: Option<String>,
+    pub agent_name: Option<String>,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub client_version: Option<String>,
+    pub git_branch: Option<String>,
+    pub entrypoint: Option<String>,
+    pub effort: Option<String>,
+    pub source: Option<String>,
+    pub thread_source: Option<String>,
+    pub source_format: Option<String>,
+}
+
+impl TranscriptSessionMetadata {
+    pub(crate) fn scrubbed(mut self) -> Self {
+        for value in [
+            &mut self.title,
+            &mut self.agent_name,
+            &mut self.model,
+            &mut self.model_provider,
+            &mut self.client_version,
+            &mut self.git_branch,
+            &mut self.entrypoint,
+            &mut self.effort,
+            &mut self.source,
+            &mut self.thread_source,
+            &mut self.source_format,
+        ] {
+            if let Some(text) = value {
+                *text = scrub_ai_message(text, None);
+            }
+        }
+        self
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 pub(crate) fn transcript_event_kind(value: &serde_json::Value) -> String {

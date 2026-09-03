@@ -70,16 +70,17 @@ pub(crate) fn print_sessions_response(
     println!(
         "{}",
         muted(&format!(
-            "{:<40} {:<10} {:<36} {:<15} COUNT",
-            "PROJECT", "TOOL", "SESSION ID", "HOST"
+            "{:<32} {:<10} {:<32} {:<24} {:<15} COUNT",
+            "PROJECT", "TOOL", "TITLE", "SESSION ID", "HOST"
         ))
     );
     for s in &response.sessions {
         println!(
-            "{:<40} {:<10} {:<36} {:<15} {}",
-            primary(&truncate(&s.project, 39)),
+            "{:<32} {:<10} {:<32} {:<24} {:<15} {}",
+            primary(&truncate(&s.project, 31)),
             violet(&s.tool),
-            muted(&s.session_id),
+            primary(&truncate(s.title.as_deref().unwrap_or("-"), 31)),
+            muted(&truncate(&s.session_id, 23)),
             cyan(&s.hostname),
             cyan(&s.event_count.to_string())
         );
@@ -113,15 +114,16 @@ pub(crate) fn print_search_sessions_response(
     println!(
         "{}",
         muted(&format!(
-            "{:<10} {:<30} {:<20} {:<6} MATCH",
-            "TOOL", "PROJECT", "SESSION ID", "EVENTS"
+            "{:<10} {:<26} {:<32} {:<20} {:<6} MATCH",
+            "TOOL", "PROJECT", "TITLE", "SESSION ID", "EVENTS"
         ))
     );
     for session in &response.sessions {
         println!(
-            "{:<10} {:<30} {:<20} {:<6} {}",
+            "{:<10} {:<26} {:<32} {:<20} {:<6} {}",
             violet(&session.tool),
-            primary(&truncate(&session.project, 29)),
+            primary(&truncate(&session.project, 25)),
+            primary(&truncate(session.title.as_deref().unwrap_or("-"), 31)),
             muted(&truncate(&session.session_id, 19)),
             cyan(&session.event_count.to_string()),
             cyan(&session.match_count.to_string())

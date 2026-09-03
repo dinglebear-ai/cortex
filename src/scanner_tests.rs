@@ -49,6 +49,32 @@ fn index_file_is_idempotent() {
 }
 
 #[test]
+fn claude_custom_title_is_exposed_on_session_inventory() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("claude-title.jsonl");
+    std::fs::write(
+        &file,
+        "{\"type\":\"custom-title\",\"sessionId\":\"sess-title\",\"customTitle\":\"Repair Cortex ingestion\",\"timestamp\":\"2026-09-03T00:00:00Z\"}\n{\"sessionId\":\"sess-title\",\"content\":\"working\",\"timestamp\":\"2026-09-03T00:00:01Z\"}\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        index_file(&pool, &file, "explicit_file").unwrap().ingested,
+        2
+    );
+    let sessions = list_ai_sessions(&pool, &crate::db::ListAiSessionsParams::default()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(
+        sessions[0].title.as_deref(),
+        Some("Repair Cortex ingestion")
+    );
+    assert_eq!(
+        sessions[0].title_provenance.as_deref(),
+        Some("claude.custom-title")
+    );
+}
+
+#[test]
 fn force_reindexes_file_without_duplicate_logs() {
     let (pool, dir) = test_pool();
     let file = dir.path().join("force.jsonl");
@@ -152,7 +178,14 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
     assert_eq!(missing.len(), 1);
     assert_eq!(
         missing[0].canonical_path,
-        missing_file.display().to_string()
+        missing_file
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join(missing_file.file_name().unwrap())
+            .display()
+            .to_string()
     );
 
     let dry_run = prune_checkpoints(
@@ -192,7 +225,7 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(
         remaining[0].canonical_path,
-        present_file.display().to_string()
+        present_file.canonicalize().unwrap().display().to_string()
     );
 }
 
@@ -1072,7 +1105,10 @@ fn explicit_file_normalizes_current_dir_worktree_project() {
         },
     )
     .unwrap();
-    assert_eq!(search.sessions[0].ai_project, project.to_string_lossy());
+    assert_eq!(
+        search.sessions[0].ai_project,
+        project.canonicalize().unwrap().to_string_lossy()
+    );
 }
 
 #[test]

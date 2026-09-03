@@ -68,6 +68,8 @@ pub struct ListAiSessionsParams {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AiSessionEntry {
+    pub title: Option<String>,
+    pub title_provenance: Option<String>,
     pub ai_project: String,
     pub ai_tool: String,
     pub ai_session_id: String,
@@ -194,6 +196,8 @@ pub struct DbStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchedAiSessionEntry {
+    pub title: Option<String>,
+    pub title_provenance: Option<String>,
     pub ai_project: String,
     pub ai_tool: String,
     pub ai_session_id: String,

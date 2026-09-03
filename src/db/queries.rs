@@ -312,7 +312,9 @@ pub(crate) fn page_agent_projection_logs(
     after_id: i64,
     limit: usize,
 ) -> Result<Vec<LogEntry>> {
-    if after_id < 0 || !(1..=500).contains(&limit) {
+    if after_id < 0
+        || !(1..=crate::agent_observatory::AGENT_OBSERVATORY_LOG_PAGE_MAX).contains(&limit)
+    {
         anyhow::bail!("projection log cursor/limit out of bounds");
     }
     let conn = pool.get()?;
@@ -750,6 +752,8 @@ pub fn list_ai_sessions_live(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
         Ok(AiSessionEntry {
+            title: None,
+            title_provenance: None,
             ai_project: row.get(0)?,
             ai_tool: row.get(1)?,
             ai_session_id: row.get(2)?,
@@ -760,7 +764,9 @@ pub fn list_ai_sessions_live(
             event_count: row.get(7)?,
         })
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut sessions = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    hydrate_ai_session_titles(&conn, &mut sessions)?;
+    Ok(sessions)
 }
 
 /// Indexed read from the `ai_session_rollup` materialization (no time window).
@@ -803,6 +809,8 @@ fn list_ai_sessions_from_rollup(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
         Ok(AiSessionEntry {
+            title: None,
+            title_provenance: None,
             ai_project: row.get(0)?,
             ai_tool: row.get(1)?,
             ai_session_id: row.get(2)?,
@@ -813,7 +821,41 @@ fn list_ai_sessions_from_rollup(
             event_count: row.get(7)?,
         })
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut sessions = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    hydrate_ai_session_titles(&conn, &mut sessions)?;
+    Ok(sessions)
+}
+
+fn hydrate_ai_session_titles(
+    conn: &rusqlite::Connection,
+    sessions: &mut [AiSessionEntry],
+) -> Result<()> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT json_extract(metadata_json, '$.session.title'),
+                json_extract(metadata_json, '$.session.title_provenance')
+         FROM logs
+         WHERE ai_project = ?1 AND ai_tool = ?2 AND ai_session_id = ?3 AND hostname = ?4
+           AND json_type(metadata_json, '$.session.title') = 'text'
+         ORDER BY id DESC LIMIT 1",
+    )?;
+    for session in sessions {
+        if let Some((title, provenance)) = stmt
+            .query_row(
+                rusqlite::params![
+                    session.ai_project,
+                    session.ai_tool,
+                    session.ai_session_id,
+                    session.hostname
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+        {
+            session.title = Some(title);
+            session.title_provenance = provenance;
+        }
+    }
+    Ok(())
 }
 
 /// True once the rollup has been refreshed at least once (`refreshed_at` set).
@@ -1251,6 +1293,8 @@ pub fn search_ai_sessions(
         total_candidates = row.get::<_, i64>(9)? as usize;
         raw_candidate_count = row.get::<_, i64>(10)? as usize;
         Ok(SearchedAiSessionEntry {
+            title: None,
+            title_provenance: None,
             ai_project: row.get(0)?,
             ai_tool: row.get(1)?,
             ai_session_id: row.get(2)?,
@@ -1262,7 +1306,27 @@ pub fn search_ai_sessions(
             best_snippet: row.get(8)?,
         })
     })?;
-    let sessions = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut sessions = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut title_targets = sessions
+        .iter()
+        .map(|session| AiSessionEntry {
+            title: None,
+            title_provenance: None,
+            ai_project: session.ai_project.clone(),
+            ai_tool: session.ai_tool.clone(),
+            ai_session_id: session.ai_session_id.clone(),
+            ai_transcript_path: None,
+            hostname: session.hostname.clone(),
+            first_seen: session.first_seen.clone(),
+            last_seen: session.last_seen.clone(),
+            event_count: session.event_count,
+        })
+        .collect::<Vec<_>>();
+    hydrate_ai_session_titles(&conn, &mut title_targets)?;
+    for (session, title) in sessions.iter_mut().zip(title_targets) {
+        session.title = title.title;
+        session.title_provenance = title.title_provenance;
+    }
 
     Ok(SearchAiSessionsResult {
         total_candidates,
@@ -3960,6 +4024,8 @@ pub fn incident_context_summary(
         let rows = ai_stmt
             .query_map(rusqlite::params_from_iter(ai_bindings.iter()), |row| {
                 Ok(super::models::AiSessionEntry {
+                    title: None,
+                    title_provenance: None,
                     ai_project: row.get(0)?,
                     ai_tool: row.get(1)?,
                     ai_session_id: row.get(2)?,

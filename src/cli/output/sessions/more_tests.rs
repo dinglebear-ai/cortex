@@ -172,6 +172,8 @@ fn human_ai_more_outputs_accept_representative_payloads() {
                 project: "/home/jmagar/workspace/cortex".to_string(),
                 tool: "codex".to_string(),
                 session_id: "sess-1".to_string(),
+                title: None,
+                title_provenance: None,
                 transcript_path: None,
                 hostname: "devhost".to_string(),
                 first_seen: "2026-06-13T12:00:00Z".to_string(),

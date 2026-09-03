@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::{ParsedTranscriptRecord, record_key_from_line};
+use super::{ParsedTranscriptRecord, TranscriptSessionMetadata, record_key_from_line};
+
+const MAX_SESSION_METADATA_CHARS: usize = 512;
 
 pub fn parse_line(
     line: &str,
@@ -12,9 +14,11 @@ pub fn parse_line(
 ) -> Result<Option<ParsedTranscriptRecord>> {
     let value: Value = serde_json::from_str(line)?;
     let message = extract_message(&value);
-    if message.is_empty() {
+    let mut session_metadata = extract_session_metadata(&value);
+    if message.is_empty() && session_metadata == TranscriptSessionMetadata::default() {
         return Ok(None);
     }
+    session_metadata.source_format = Some("codex_rollout_jsonl".to_string());
     let payload = payload(&value);
     let session_id = session_id_from_value(&value);
     let ai_project = extract_project(&value);
@@ -30,6 +34,7 @@ pub fn parse_line(
         session_id,
         ai_project,
         event_kind,
+        session_metadata,
         // `raw_value` is `Some` here (unlike the historical `None`) because
         // MCP event extraction (GH #104) needs the full `payload.arguments`/
         // `payload.output`/`payload.call_id` structure for `function_call`/
@@ -38,6 +43,52 @@ pub fn parse_line(
         // still reads `message` directly and is unaffected.
         raw_value: Some(value),
     }))
+}
+
+fn extract_session_metadata(value: &Value) -> TranscriptSessionMetadata {
+    let payload = payload(value);
+    let record_type = value.get("type").and_then(Value::as_str);
+    let is_session_meta = record_type == Some("session_meta");
+    let is_turn_context = record_type == Some("turn_context");
+
+    TranscriptSessionMetadata {
+        title: None,
+        title_provenance: None,
+        agent_name: None,
+        model: is_turn_context
+            .then(|| metadata_string(payload.get("model")))
+            .flatten(),
+        model_provider: is_session_meta
+            .then(|| metadata_string(payload.get("model_provider")))
+            .flatten(),
+        client_version: is_session_meta
+            .then(|| metadata_string(payload.get("cli_version")))
+            .flatten(),
+        git_branch: is_session_meta
+            .then(|| metadata_string(payload.pointer("/git/branch")))
+            .flatten(),
+        entrypoint: is_session_meta
+            .then(|| metadata_string(payload.get("originator")))
+            .flatten(),
+        effort: is_turn_context
+            .then(|| metadata_string(payload.get("effort")))
+            .flatten(),
+        source: is_session_meta
+            .then(|| metadata_string(payload.get("source")))
+            .flatten(),
+        thread_source: is_session_meta
+            .then(|| metadata_string(payload.get("thread_source")))
+            .flatten(),
+        source_format: None,
+    }
+}
+
+fn metadata_string(value: Option<&Value>) -> Option<String> {
+    let value = value?.as_str()?.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value.chars().take(MAX_SESSION_METADATA_CHARS).collect())
 }
 
 pub fn session_id_from_line(line: &str) -> Option<String> {
@@ -140,19 +191,19 @@ fn extract_message(value: &Value) -> String {
     // the full structured payload is separately available via `raw_value`.
     if let Some(payload_type) = value.pointer("/payload/type").and_then(Value::as_str) {
         match payload_type {
-            "function_call" => {
+            "function_call" | "custom_tool_call" => {
                 let name = value
                     .pointer("/payload/name")
                     .and_then(Value::as_str)
                     .unwrap_or("?");
-                return format!("[function_call {name}]");
+                return format!("[{payload_type} {name}]");
             }
-            "function_call_output" => {
+            "function_call_output" | "custom_tool_call_output" => {
                 let call_id = value
                     .pointer("/payload/call_id")
                     .and_then(Value::as_str)
                     .unwrap_or("?");
-                return format!("[function_call_output {call_id}]");
+                return format!("[{payload_type} {call_id}]");
             }
             _ => {}
         }

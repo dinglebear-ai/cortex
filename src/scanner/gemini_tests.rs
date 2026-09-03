@@ -135,10 +135,71 @@ fn is_chat_file_matches_gemini_session_chat_path() {
     assert!(is_chat_file(Path::new(
         "/home/jmagar/.gemini/tmp/hash/chats/session-2026-04-02T22-02-da13.json"
     )));
+    assert!(is_chat_file(Path::new(
+        "/home/jmagar/.gemini/tmp/hash/chats/session-2026-09-01T03-43-116bee75.jsonl"
+    )));
     assert!(!is_chat_file(Path::new(
         "/home/jmagar/.gemini/tmp/hash/chats/notes.json"
     )));
     assert!(!is_chat_file(Path::new(
         "/home/jmagar/.gemini/tmp/hash/other/session-2026-04-02T22-02-da13.json"
     )));
+}
+
+#[test]
+fn parse_file_replays_current_gemini_jsonl_patch_journal() {
+    let raw = concat!(
+        r#"{"sessionId":"gemini-current","projectHash":"project-hash","startTime":"2026-09-01T03:43:00Z","kind":"chat"}"#,
+        "\n",
+        r#"{"$set":{"lastUpdated":"2026-09-01T03:44:00Z","messages":[{"id":"user-1","timestamp":"2026-09-01T03:43:01Z","type":"user","content":[{"text":"hello"}]}]}}"#,
+        "\n",
+        r#"{"$set":{"messages":[{"id":"assistant-1","timestamp":"2026-09-01T03:43:02Z","type":"assistant","content":[{"text":"world"}]}]}}"#,
+        "\n",
+    );
+
+    let parsed = parse_file(raw, Path::new("session-current.jsonl")).unwrap();
+
+    assert!(!parsed.missing_messages);
+    assert_eq!(parsed.records.len(), 2);
+    assert_eq!(parsed.records[0].message, "hello");
+    assert_eq!(parsed.records[1].message, "world");
+    assert_eq!(
+        parsed.records[0].session_id.as_deref(),
+        Some("gemini-current")
+    );
+    assert_eq!(
+        parsed.records[0].session_metadata.source_format.as_deref(),
+        Some("gemini-patch-jsonl")
+    );
+    assert!(parsed.records[0].raw_value.is_some());
+}
+
+#[test]
+fn parse_file_deduplicates_messages_repeated_by_patch_snapshots() {
+    let raw = concat!(
+        r#"{"sessionId":"s","messages":[{"id":"one","type":"user","content":"first"}]}"#,
+        "\n",
+        r#"{"$set":{"messages":[{"id":"one","type":"user","content":"first"},{"id":"two","type":"assistant","content":"second"}]}}"#,
+    );
+
+    let parsed = parse_file(raw, Path::new("session-current.jsonl")).unwrap();
+    assert_eq!(
+        parsed
+            .records
+            .iter()
+            .map(|record| record.record_key.as_str())
+            .collect::<Vec<_>>(),
+        ["id:one", "id:two"]
+    );
+}
+
+#[test]
+fn parse_file_reports_the_malformed_jsonl_line() {
+    let error = parse_file(
+        "{\"sessionId\":\"s\"}\n{not-json}\n",
+        Path::new("session-current.jsonl"),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("line 2"));
 }

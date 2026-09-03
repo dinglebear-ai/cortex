@@ -94,10 +94,16 @@ struct GeminiParseFailure {
 }
 
 fn load_checkpoint(path: &Path) -> Checkpoint {
-    fs::read(path)
+    match fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    {
+        Some(value) => value,
+        None => fs::read(path.with_extension("json.bak"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default(),
+    }
 }
 
 fn save_checkpoint(path: &Path, checkpoint: &Checkpoint) -> Result<()> {
@@ -106,7 +112,7 @@ fn save_checkpoint(path: &Path, checkpoint: &Checkpoint) -> Result<()> {
             .with_context(|| format!("failed to create checkpoint dir {}", parent.display()))?;
     }
     let bytes = serde_json::to_vec(checkpoint)?;
-    fs::write(path, bytes)
+    crate::setup::heartbeat_agent_env::atomic_checkpoint_write(path, &bytes)
         .with_context(|| format!("failed to write checkpoint file {}", path.display()))
 }
 
@@ -264,10 +270,22 @@ async fn scan_and_forward(
     client: &reqwest::Client,
     checkpoint: &mut Checkpoint,
 ) -> Result<usize> {
+    let scan_started = Instant::now();
     let mut files = Vec::new();
     for root in &config.roots {
         collect_files(root, &mut files);
     }
+    // Prefer recently modified sessions so an old corpus backlog cannot starve
+    // the active conversation. Stable path ordering makes equal mtimes deterministic.
+    files.sort_by(|a, b| {
+        let am = fs::metadata(a).and_then(|m| m.modified()).ok();
+        let bm = fs::metadata(b).and_then(|m| m.modified()).ok();
+        bm.cmp(&am).then_with(|| a.cmp(b))
+    });
+    let corpus_bytes: u64 = files
+        .iter()
+        .filter_map(|p| fs::metadata(p).ok().map(|m| m.len()))
+        .sum();
     evict_missing_gemini_failures(
         checkpoint,
         &files
@@ -351,6 +369,8 @@ async fn scan_and_forward(
                     ai_session_id: parsed_record.session_id,
                     ai_transcript_path: key.clone(),
                     event_kind: Some(parsed_record.event_kind),
+                    session_metadata: (!parsed_record.session_metadata.is_empty())
+                        .then_some(parsed_record.session_metadata.scrubbed()),
                     message: crate::receiver::enrichment::scrub_ai_message(
                         &parsed_record.message,
                         None,
@@ -408,6 +428,8 @@ async fn scan_and_forward(
                         ai_session_id,
                         ai_transcript_path: key.clone(),
                         event_kind: Some(parsed.event_kind),
+                        session_metadata: (!parsed.session_metadata.is_empty())
+                            .then_some(parsed.session_metadata.scrubbed()),
                         message: crate::receiver::enrichment::scrub_ai_message(
                             &parsed.message,
                             None,
@@ -424,10 +446,21 @@ async fn scan_and_forward(
     }
 
     if records.is_empty() {
+        let elapsed = scan_started.elapsed();
+        tracing::info!(
+            corpus_files = files.len(),
+            corpus_bytes,
+            records = 0,
+            scan_duration_ms = elapsed.as_millis() as u64,
+            throughput_bytes_per_sec =
+                corpus_bytes.saturating_mul(1000) / elapsed.as_millis().max(1) as u64,
+            "ai transcript scan metrics"
+        );
         return Ok(0);
     }
 
     let sent = records.len();
+    let legacy_records = records.clone();
     let mut url = config.target.trim_end_matches('/').to_string();
     url.push_str("/v1/ai-transcripts");
     let mut request = client
@@ -438,11 +471,44 @@ async fn scan_and_forward(
     }
     let response = request.send().await.context("ai transcript POST failed")?;
     if !response.status().is_success() {
-        anyhow::bail!(
-            "ai transcript forward rejected: {} {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        );
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::BAD_REQUEST && body.contains("unknown field `event_kind`")
+        {
+            let records = legacy_records
+                .into_iter()
+                .map(|record| {
+                    let mut value = serde_json::to_value(record).expect("record serializes");
+                    value
+                        .as_object_mut()
+                        .expect("record serializes as object")
+                        .remove("event_kind");
+                    value
+                })
+                .collect::<Vec<_>>();
+            let mut retry = client
+                .post(&url)
+                .json(&serde_json::json!({ "records": records }));
+            if let Some(token) = &config.token {
+                retry = retry.bearer_auth(token);
+            }
+            let retry = retry
+                .send()
+                .await
+                .context("legacy-compatible ai transcript POST failed")?;
+            if !retry.status().is_success() {
+                anyhow::bail!(
+                    "legacy-compatible ai transcript forward rejected: {} {}",
+                    retry.status(),
+                    retry.text().await.unwrap_or_default()
+                );
+            }
+            tracing::warn!(
+                "server lacks ai transcript event_kind support; used legacy-compatible payload"
+            );
+        } else {
+            anyhow::bail!("ai transcript forward rejected: {status} {body}");
+        }
     }
 
     // Only advance the checkpoint after a successful forward, so a failed
@@ -451,6 +517,16 @@ async fn scan_and_forward(
         checkpoint.files.insert(key, total);
     }
     save_checkpoint(&config.checkpoint_path, checkpoint)?;
+    let elapsed = scan_started.elapsed();
+    tracing::info!(
+        corpus_files = files.len(),
+        corpus_bytes,
+        records = sent,
+        scan_duration_ms = elapsed.as_millis() as u64,
+        throughput_bytes_per_sec =
+            corpus_bytes.saturating_mul(1000) / elapsed.as_millis().max(1) as u64,
+        "ai transcript scan metrics"
+    );
     Ok(sent)
 }
 

@@ -77,6 +77,8 @@ fn human_ai_inventory_outputs_accept_truncated_and_context_payloads() {
                 project: "cortex".to_string(),
                 tool: "codex".to_string(),
                 session_id: "session-1".to_string(),
+                title: Some("Fix transcript ingestion".to_string()),
+                title_provenance: Some("claude.custom-title".to_string()),
                 transcript_path: Some("/tmp/session.jsonl".to_string()),
                 hostname: "host-a".to_string(),
                 first_seen: "2026-06-12T00:00:00Z".to_string(),
@@ -170,6 +172,8 @@ fn human_correlate_and_ai_search_outputs_accept_contextual_payloads() {
             candidate_window_truncated: true,
             truncated: true,
             sessions: vec![cortex::app::SearchedSessionEntry {
+                title: Some("Investigate parser fidelity".to_string()),
+                title_provenance: Some("claude.custom-title".to_string()),
                 session_key: "key".to_string(),
                 project: "cortex".to_string(),
                 tool: "codex".to_string(),

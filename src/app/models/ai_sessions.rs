@@ -32,6 +32,10 @@ pub struct AiSessionEntry {
     pub project: String,
     pub tool: String,
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_provenance: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
     pub hostname: String,
@@ -53,6 +57,8 @@ impl From<db::AiSessionEntry> for AiSessionEntry {
             project: value.ai_project,
             tool: value.ai_tool,
             session_id: value.ai_session_id,
+            title: value.title,
+            title_provenance: value.title_provenance,
             transcript_path: value.ai_transcript_path,
             hostname: value.hostname,
             first_seen: value.first_seen,
@@ -80,6 +86,10 @@ pub struct SearchedSessionEntry {
     pub project: String,
     pub tool: String,
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_provenance: Option<String>,
     pub hostname: String,
     pub first_seen: String,
     pub last_seen: String,
@@ -102,6 +112,8 @@ impl From<db::SearchedAiSessionEntry> for SearchedSessionEntry {
             project: value.ai_project,
             tool: value.ai_tool,
             session_id: value.ai_session_id,
+            title: value.title,
+            title_provenance: value.title_provenance,
             hostname: value.hostname,
             first_seen: value.first_seen,
             last_seen: value.last_seen,
