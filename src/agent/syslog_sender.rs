@@ -5,13 +5,11 @@
 //! receiver, and removed only after their exact idempotency receipt arrives.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
 use getrandom::fill as random_fill;
 use serde::{Deserialize, Serialize};
@@ -65,7 +63,10 @@ pub(super) struct SpoolState {
 
 #[path = "syslog_sender/spool.rs"]
 mod spool;
-use spool::{evict_aggregate_to_quota, evict_source_to_quota, next_source_key, source_key_of};
+use spool::{
+    evict_aggregate_to_quota, evict_source_to_quota, load_spool, next_source_key, save_spool,
+    source_key_of,
+};
 
 fn default_epoch() -> u64 {
     1
@@ -89,6 +90,10 @@ impl Default for SpoolState {
 struct SenderState {
     spool_path: PathBuf,
     spool: SpoolState,
+    /// An unreadable original spool is an operator-recovery condition, not a
+    /// transient delivery error. Retain the status signal even after later
+    /// batches succeed through the separate recovery spool.
+    recovery_required: bool,
     last_error_code: Option<&'static str>,
 }
 
@@ -105,10 +110,12 @@ pub struct SyslogSender {
 
 impl SyslogSender {
     pub fn new(target: String, token: Option<String>, spool_path: PathBuf) -> Self {
+        let loaded = load_spool(&spool_path);
         let state = Arc::new(Mutex::new(SenderState {
-            spool: load_spool(&spool_path),
-            spool_path,
-            last_error_code: None,
+            spool: loaded.spool,
+            spool_path: loaded.spool_path,
+            recovery_required: loaded.error_code.is_some(),
+            last_error_code: loaded.error_code,
         }));
         let notify = Arc::new(Notify::new());
         let delivery_task = tokio::spawn(delivery_loop(
@@ -262,7 +269,7 @@ async fn delivery_loop(
         match call.send().await {
             Ok(response) if response.status().is_success() => {
                 match response.json::<SyslogForwardResponse>().await {
-                    Ok(response) => match apply_receipts(&state, &response.receipts) {
+                    Ok(response) => match apply_receipts(&state, &request, &response.receipts) {
                         Ok(()) => {
                             attempt = 0;
                             set_error(&state, "none");
@@ -350,8 +357,21 @@ fn next_request(state: &Arc<Mutex<SenderState>>) -> Option<SyslogForwardRequest>
     Some(SyslogForwardRequest { records, gaps })
 }
 
-fn apply_receipts(state: &Arc<Mutex<SenderState>>, receipts: &[String]) -> Result<()> {
+fn apply_receipts(
+    state: &Arc<Mutex<SenderState>>,
+    request: &SyslogForwardRequest,
+    receipts: &[String],
+) -> Result<()> {
+    let outbound_keys: HashSet<&str> = request
+        .records
+        .iter()
+        .map(|record| record.idempotency_key.as_str())
+        .chain(request.gaps.iter().map(|gap| gap.idempotency_key.as_str()))
+        .collect();
     let keys: HashSet<&str> = receipts.iter().map(String::as_str).collect();
+    if !keys.is_subset(&outbound_keys) {
+        anyhow::bail!("syslog receiver acknowledged a record outside the submitted batch");
+    }
     let mut state = state.lock().expect("syslog sender state poisoned");
     state
         .spool
@@ -397,10 +417,12 @@ async fn retry_sleep(attempt: &mut u32, delay: u64) {
     sleep(Duration::from_millis(delay)).await;
 }
 fn set_error(state: &Arc<Mutex<SenderState>>, code: &'static str) {
-    state
-        .lock()
-        .expect("syslog sender state poisoned")
-        .last_error_code = (code != "none").then_some(code);
+    let mut state = state.lock().expect("syslog sender state poisoned");
+    state.last_error_code = if state.recovery_required {
+        Some("spool_recovery_required")
+    } else {
+        (code != "none").then_some(code)
+    };
 }
 fn backoff_ms(attempt: u32) -> u64 {
     500u64
@@ -428,35 +450,6 @@ fn random_u64() -> u64 {
     random_fill(&mut bytes).expect("OS random retry jitter");
     u64::from_le_bytes(bytes)
 }
-fn load_spool(path: &Path) -> SpoolState {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
-fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create syslog spool dir {}", parent.display()))?;
-    }
-    let temp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = options
-        .open(&temp)
-        .with_context(|| format!("create syslog spool {}", temp.display()))?;
-    file.write_all(&serde_json::to_vec(spool)?)
-        .with_context(|| format!("write syslog spool {}", temp.display()))?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&temp, path).with_context(|| format!("replace syslog spool {}", path.display()))
-}
-
 pub fn format_rfc5424(
     pri: u8,
     timestamp: &str,

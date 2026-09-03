@@ -54,9 +54,19 @@ fn exact_receipt_advances_only_the_matching_record() {
             evicted_records: 0,
             last_dispatched_source: None,
         },
+        recovery_required: false,
         last_error_code: None,
     }));
-    apply_receipts(&state, &[delivery_key("host-a:syslog", 1, 1, "record")]).unwrap();
+    let request = SyslogForwardRequest {
+        records: vec![record(1)],
+        gaps: vec![],
+    };
+    apply_receipts(
+        &state,
+        &request,
+        &[delivery_key("host-a:syslog", 1, 1, "record")],
+    )
+    .unwrap();
     let state = state.lock().unwrap();
     assert_eq!(state.spool.records.len(), 1);
     assert_eq!(state.spool.records.front().unwrap().sequence, 2);
@@ -82,29 +92,34 @@ fn lost_partial_reordered_and_unknown_receipts_keep_every_unmatched_record_durab
             evicted_records: 0,
             last_dispatched_source: None,
         },
+        recovery_required: false,
         last_error_code: None,
     }));
 
     // A lost response is equivalent to no receipts: no local data may move.
-    apply_receipts(&state, &[]).unwrap();
+    let request = SyslogForwardRequest {
+        records: vec![first.clone(), second.clone()],
+        gaps: vec![],
+    };
+    apply_receipts(&state, &request, &[]).unwrap();
     assert_eq!(state.lock().unwrap().spool.records.len(), 3);
 
-    // Reordered/partial responses can acknowledge only their exact known IDs.
-    apply_receipts(
-        &state,
-        &[
-            "unknown-receipt".into(),
-            third.idempotency_key,
-            first.idempotency_key,
-        ],
-    )
-    .unwrap();
-    let state = state.lock().unwrap();
-    assert_eq!(state.spool.records.len(), 1);
-    assert_eq!(
-        state.spool.records.front().unwrap().idempotency_key,
-        second.idempotency_key
+    // A response may acknowledge only request IDs. An unsent local record or
+    // an unknown key is a protocol violation, not an acknowledgement.
+    assert!(
+        apply_receipts(
+            &state,
+            &request,
+            &[
+                "unknown-receipt".into(),
+                third.idempotency_key,
+                first.idempotency_key,
+            ],
+        )
+        .is_err()
     );
+    let state = state.lock().unwrap();
+    assert_eq!(state.spool.records.len(), 3);
 }
 
 #[test]
@@ -129,6 +144,7 @@ fn receiver_failure_plans_are_bounded_and_leave_spool_records_untouched() {
             evicted_records: 0,
             last_dispatched_source: None,
         },
+        recovery_required: false,
         last_error_code: None,
     }));
     // Failure paths intentionally call no receipt application.
@@ -248,6 +264,7 @@ fn path_like_source_key_is_never_serialized_into_spool_or_delivery_request() {
     let state = Arc::new(Mutex::new(SenderState {
         spool_path: PathBuf::from("/unused"),
         spool,
+        recovery_required: false,
         last_error_code: None,
     }));
     let request = next_request(&state).unwrap();
@@ -255,6 +272,30 @@ fn path_like_source_key_is_never_serialized_into_spool_or_delivery_request() {
         !serde_json::to_string(&request)
             .unwrap()
             .contains(raw_source)
+    );
+}
+
+#[test]
+fn unreadable_spool_is_retained_and_remains_visible_after_delivery_recovers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spool.json");
+    std::fs::write(&path, b"not-json").unwrap();
+
+    let loaded = load_spool(&path);
+    assert_eq!(loaded.error_code, Some("spool_recovery_required"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"not-json");
+    assert_ne!(loaded.spool_path, path);
+
+    let state = Arc::new(Mutex::new(SenderState {
+        spool_path: loaded.spool_path,
+        spool: loaded.spool,
+        recovery_required: true,
+        last_error_code: loaded.error_code,
+    }));
+    set_error(&state, "none");
+    assert_eq!(
+        state.lock().unwrap().last_error_code,
+        Some("spool_recovery_required")
     );
 }
 

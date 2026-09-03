@@ -99,7 +99,7 @@ pub(super) fn forward_source_kind(path: &Path) -> scanner::SourceKind {
     }
 }
 
-/// Return up to `limit` new lines starting at `from_line` (0-indexed), plus
+/// Return up to `limit` complete newline-terminated records starting at `from_line` (0-indexed), plus
 /// the checkpoint value to resume from next time.
 ///
 /// The returned line count is deliberately NOT the file's true EOF line
@@ -137,13 +137,11 @@ pub(super) fn read_bounded_jsonl_line(reader: &mut BufReader<fs::File>) -> Resul
     loop {
         let available = reader.fill_buf()?;
         if available.is_empty() {
-            return if line.is_empty() {
-                Ok(None)
-            } else {
-                String::from_utf8(line)
-                    .context("transcript line is not UTF-8")
-                    .map(Some)
-            };
+            // A writer may have appended only part of its final JSONL record.
+            // It is not a record until the terminating newline arrives: handing
+            // it to the caller would let a successful earlier batch advance the
+            // line checkpoint past evidence that will be completed next poll.
+            return Ok(None);
         }
         let take = available
             .iter()

@@ -14,7 +14,6 @@ use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::post,
 };
 use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};
@@ -28,6 +27,7 @@ use crate::db::{self, DbPool};
 use crate::enrich::{SourceKind, stamp_source_kind};
 use crate::mcp::AuthPolicy;
 use crate::receiver::parser::parse_syslog;
+use crate::surfaces::post;
 
 pub const SYSLOG_FORWARD_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_RECORDS_PER_BATCH: usize = 200;
@@ -89,8 +89,9 @@ impl SyslogForwardIngestState {
 }
 
 pub fn router(state: SyslogForwardIngestState) -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/v1/syslog-forward", post(ingest_handler))
+        .contract_route("POST /v1/syslog-forward", post(ingest_handler))
         .layer(RequestBodyLimitLayer::new(SYSLOG_FORWARD_BODY_LIMIT_BYTES))
         .with_state(state)
 }
@@ -179,7 +180,10 @@ fn invalid_gap(gap: &SyslogForwardGap) -> bool {
         || gap.source_epoch > i64::MAX as u64
         || gap.to_sequence > i64::MAX as u64
         || gap.observed_at.len() > 64
-        || gap.reason_code.len() > 64
+        || !matches!(
+            gap.reason_code.as_str(),
+            "local_retention_quota" | "aggregate_retention_quota" | "record_too_large"
+        )
         || gap.from_sequence > gap.to_sequence
 }
 

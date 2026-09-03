@@ -187,6 +187,22 @@ fn read_new_lines_respects_limit_and_reports_checkpoint_at_cutoff_not_eof() {
 }
 
 #[test]
+fn read_new_lines_defers_an_incomplete_jsonl_tail_without_advancing_the_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    fs::write(&path, "{\"complete\":true}\n{\"partial\":").unwrap();
+
+    let (lines, checkpoint) = read_new_lines(&path, 0, 10).unwrap();
+    assert_eq!(lines, vec![(0, "{\"complete\":true}".into())]);
+    assert_eq!(checkpoint, 1);
+
+    fs::write(&path, "{\"complete\":true}\n{\"partial\":false}\n").unwrap();
+    let (lines, checkpoint) = read_new_lines(&path, checkpoint, 10).unwrap();
+    assert_eq!(lines, vec![(1, "{\"partial\":false}".into())]);
+    assert_eq!(checkpoint, 2);
+}
+
+#[test]
 fn checkpoint_round_trips_through_disk() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint_path = dir.path().join("checkpoint.json");

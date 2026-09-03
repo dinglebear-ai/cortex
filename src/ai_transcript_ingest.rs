@@ -46,6 +46,7 @@ pub const AI_TRANSCRIPT_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RECORDS_PER_BATCH: usize = 2_000;
 pub const EVIDENCE_ENVELOPE_VERSION: u16 = 1;
 const MAX_TEXT_CHARS: usize = 16 * 1024;
+const MAX_TIMESTAMP_CHARS: usize = 128;
 const MAX_IDENTIFIER_CHARS: usize = 512;
 const MAX_DIAGNOSTICS: usize = 16;
 const MAX_DIAGNOSTIC_CHARS: usize = 1_024;
@@ -294,6 +295,7 @@ fn scrub_envelope(mut envelope: EvidenceEnvelope) -> Result<EvidenceEnvelope, &'
         .as_deref()
         .map(|value| scrub_text(value, MAX_IDENTIFIER_CHARS));
     envelope.event_kind = envelope.event_kind.as_deref().map(safe_identifier);
+    envelope.timestamp = envelope.timestamp.as_deref().and_then(safe_timestamp);
     envelope.message = scrub_text(&envelope.message, MAX_TEXT_CHARS);
     envelope.diagnostics.truncate(MAX_DIAGNOSTICS);
     for diagnostic in &mut envelope.diagnostics {
@@ -304,6 +306,18 @@ fn scrub_envelope(mut envelope: EvidenceEnvelope) -> Result<EvidenceEnvelope, &'
             .map(|value| scrub_text(value, MAX_DIAGNOSTIC_CHARS));
     }
     Ok(envelope)
+}
+
+/// Timestamps arrive from an authenticated but untrusted forwarding client.
+/// Treat them like every other evidence scalar: scrub/bound before attempting
+/// to parse, then retain only a canonical RFC3339 representation. A malformed
+/// value becomes `None`, so the canonical log uses receipt time rather than
+/// preserving attacker-controlled text in an indexed field.
+fn safe_timestamp(value: &str) -> Option<String> {
+    let scrubbed = scrub_text(value, MAX_TIMESTAMP_CHARS);
+    chrono::DateTime::parse_from_rfc3339(&scrubbed)
+        .ok()
+        .map(|timestamp| timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 /// Commit each canonical log insert and its source-record receipt in one

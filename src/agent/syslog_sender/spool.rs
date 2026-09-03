@@ -1,6 +1,80 @@
 //! Bounded durable spool retention and source round-robin helpers.
 
 use super::*;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
+
+pub(super) struct LoadedSpool {
+    pub(super) spool: SpoolState,
+    pub(super) spool_path: PathBuf,
+    pub(super) error_code: Option<&'static str>,
+}
+
+pub(super) fn load_spool(path: &Path) -> LoadedSpool {
+    match fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(spool) => LoadedSpool {
+                spool,
+                spool_path: path.to_path_buf(),
+                error_code: None,
+            },
+            Err(error) => recover_unreadable_spool(path, error),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => LoadedSpool {
+            spool: SpoolState::default(),
+            spool_path: path.to_path_buf(),
+            error_code: None,
+        },
+        Err(error) => recover_unreadable_spool(path, error),
+    }
+}
+
+fn recover_unreadable_spool(path: &Path, error: impl std::fmt::Display) -> LoadedSpool {
+    let recovery_path = path.with_extension(format!("recovery-{}", random_u64()));
+    tracing::error!(
+        spool = %path.display(),
+        recovery_spool = %recovery_path.display(),
+        error = %error,
+        "syslog spool is unreadable; retaining original and starting a separate recovery spool"
+    );
+    LoadedSpool {
+        spool: SpoolState::default(),
+        spool_path: recovery_path,
+        error_code: Some("spool_recovery_required"),
+    }
+}
+
+pub(super) fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create syslog spool dir {}", parent.display()))?;
+    }
+    let temp = path.with_extension(format!("tmp-{}-{}", std::process::id(), random_u64()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let result = (|| {
+        let mut file = options
+            .open(&temp)
+            .with_context(|| format!("create syslog spool {}", temp.display()))?;
+        file.write_all(&serde_json::to_vec(spool)?)
+            .with_context(|| format!("write syslog spool {}", temp.display()))?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp, path).with_context(|| format!("replace syslog spool {}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
 
 pub(super) fn evict_source_to_quota(spool: &mut SpoolState, source_key: &str) {
     let cutoff = Utc::now() - chrono::Duration::seconds(MAX_SPOOL_AGE_SECS);

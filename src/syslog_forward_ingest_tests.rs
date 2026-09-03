@@ -192,6 +192,19 @@ fn gap_rejects_reversed_window() {
 }
 
 #[test]
+fn gap_rejects_an_unrecognized_reason_code() {
+    assert!(invalid_gap(&SyslogForwardGap {
+        source_instance: "host-a".into(),
+        source_epoch: 1,
+        from_sequence: 1,
+        to_sequence: 1,
+        idempotency_key: "gap".into(),
+        observed_at: "2026-01-01T00:00:00Z".into(),
+        reason_code: "token=gap-reason-canary".into(),
+    }));
+}
+
+#[test]
 fn duplicate_replay_returns_receipt_without_duplicate_canonical_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(

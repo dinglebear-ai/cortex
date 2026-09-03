@@ -334,6 +334,16 @@ async fn receiver_scrubs_hostile_envelope_fields_before_persistence() {
     );
 }
 
+#[test]
+fn transcript_timestamp_is_scrubbed_bounded_and_canonicalized_before_persistence() {
+    assert_eq!(
+        safe_timestamp("2026-07-09T00:00:00Z"),
+        Some("2026-07-09T00:00:00.000Z".into())
+    );
+    assert_eq!(safe_timestamp("token=timestamp-canary"), None);
+    assert_eq!(safe_timestamp(&"x".repeat(MAX_TIMESTAMP_CHARS + 1)), None);
+}
+
 #[tokio::test]
 async fn rejects_batch_over_record_limit() {
     let (app, _dir) = test_app(Some("secret"));
