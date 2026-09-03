@@ -39,18 +39,23 @@ docker run -d --name "$container" \
 http_port=$(docker port "$container" 3100/tcp | sed 's/.*://')
 tcp_port=$(docker port "$container" 1514/tcp | sed 's/.*://')
 udp_port=$(docker port "$container" 1514/udp | sed 's/.*://')
+# The image serves Cortex on port 3100. Docker's random host publication is
+# only a test-harness transport detail; it must not become the HTTP Host
+# authority presented to RMCP's DNS-rebinding protection.
+http_host='127.0.0.1:3100'
 
 for _ in $(seq 1 60); do
-  curl -fsS "http://127.0.0.1:${http_port}/health" >/dev/null && break
+  curl -fsS -H "Host: ${http_host}" "http://127.0.0.1:${http_port}/health" >/dev/null && break
   sleep 1
 done
-curl -fsS "http://127.0.0.1:${http_port}/health" >/dev/null
+curl -fsS -H "Host: ${http_host}" "http://127.0.0.1:${http_port}/health" >/dev/null
 
 printf '<13>Aug 29 00:00:00 release-smoke smokeapp: %stcp\n' "$marker" | nc -w 2 127.0.0.1 "$tcp_port"
 printf '<13>Aug 29 00:00:00 release-smoke smokeapp: %sudp\n' "$marker" | nc -u -w 2 127.0.0.1 "$udp_port"
 response=
 for _ in $(seq 1 30); do
   response=$(curl -fsS -X POST "http://127.0.0.1:${http_port}/mcp" \
+    -H "Host: ${http_host}" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H 'Authorization: Bearer release-smoke-mcp' \

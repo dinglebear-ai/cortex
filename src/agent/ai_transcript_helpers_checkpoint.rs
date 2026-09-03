@@ -1,0 +1,143 @@
+//! Durable transcript-forwarder checkpoint and parse-warning state.
+
+use super::*;
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub(in crate::agent::ai_transcript) struct Checkpoint {
+    /// Canonical path string -> lines already forwarded.
+    pub(in crate::agent::ai_transcript) files: HashMap<String, usize>,
+    /// Bounded source-prefix fingerprints. A changed prefix resets that
+    /// file's local cursor; receipt IDs keep the replay safe.
+    #[serde(default)]
+    pub(in crate::agent::ai_transcript) fingerprints: HashMap<String, String>,
+    /// Per-root discovery cursors. Discovery is intentionally bounded, so a
+    /// busy provider tree cannot permanently hide its later transcript files.
+    /// The cursor only moves after the scan is either durably checkpointed or
+    /// has nothing to submit; a failed network delivery always retries the
+    /// same discovery window.
+    #[serde(default)]
+    pub(in crate::agent::ai_transcript) discovery_cursors: HashMap<String, String>,
+    /// In-process record of malformed Gemini transcripts, keyed by canonical
+    /// path. Deliberately not persisted: a restart should re-warn rather than
+    /// inherit suppression from a previous process.
+    ///
+    /// Suppression is bounded in both directions. Warning on every poll cycle
+    /// floods journald, but warning only once per content revision lets a file
+    /// that goes malformed and then stops changing — a truncated write, a
+    /// crashed session, on-disk corruption — go silent for the lifetime of the
+    /// agent while its data is never forwarded. So a warning repeats when the
+    /// content changes *or* when [`GEMINI_REWARN_INTERVAL`] has elapsed.
+    #[serde(skip)]
+    pub(in crate::agent::ai_transcript) gemini_parse_failures: HashMap<String, GeminiParseFailure>,
+}
+
+/// How long a persistently malformed Gemini transcript stays quiet between
+/// warnings. Long enough not to be noise, short enough that an operator
+/// scanning a day of logs cannot miss it.
+pub(in crate::agent::ai_transcript) const GEMINI_REWARN_INTERVAL: Duration =
+    Duration::from_secs(3600);
+
+#[derive(Debug, Clone)]
+pub(in crate::agent::ai_transcript) struct GeminiParseFailure {
+    fingerprint: u64,
+    last_warned: Instant,
+}
+
+pub(in crate::agent::ai_transcript) fn load_checkpoint(path: &Path) -> Checkpoint {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub(in crate::agent::ai_transcript) fn save_checkpoint(
+    path: &Path,
+    checkpoint: &Checkpoint,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create checkpoint dir {}", parent.display()))?;
+    }
+    let bytes = serde_json::to_vec(checkpoint)?;
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).context("failed to generate checkpoint temp-file nonce")?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let tmp_path = path.with_extension(format!("tmp-{}-{nonce}", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(&tmp_path).with_context(|| {
+        format!(
+            "failed to create checkpoint temp file {}",
+            tmp_path.display()
+        )
+    })?;
+    file.write_all(&bytes).with_context(|| {
+        format!(
+            "failed to write checkpoint temp file {}",
+            tmp_path.display()
+        )
+    })?;
+    file.sync_all()
+        .with_context(|| format!("failed to sync checkpoint temp file {}", tmp_path.display()))?;
+    drop(file);
+    fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "failed to atomically replace checkpoint file {}",
+            path.display()
+        )
+    })
+}
+
+pub(in crate::agent::ai_transcript) fn gemini_content_fingerprint(raw: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    raw.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Returns true when this parse failure should be logged: the content changed
+/// since the last warning, or the re-warn interval has elapsed. `now` is a
+/// parameter so tests can advance the clock without sleeping.
+pub(in crate::agent::ai_transcript) fn should_warn_gemini_parse_failure(
+    checkpoint: &mut Checkpoint,
+    key: &str,
+    raw: &str,
+    now: Instant,
+) -> bool {
+    let fingerprint = gemini_content_fingerprint(raw);
+    let warn = match checkpoint.gemini_parse_failures.get(key) {
+        Some(previous) => {
+            previous.fingerprint != fingerprint
+                || now.duration_since(previous.last_warned) >= GEMINI_REWARN_INTERVAL
+        }
+        None => true,
+    };
+    if warn {
+        checkpoint.gemini_parse_failures.insert(
+            key.to_string(),
+            GeminiParseFailure {
+                fingerprint,
+                last_warned: now,
+            },
+        );
+    }
+    warn
+}
+
+/// Drop records for transcripts that no longer exist, so a long-lived agent
+/// with rotating sessions does not accumulate entries for deleted files.
+pub(in crate::agent::ai_transcript) fn evict_missing_gemini_failures(
+    checkpoint: &mut Checkpoint,
+    present: &HashSet<String>,
+) {
+    checkpoint
+        .gemini_parse_failures
+        .retain(|key, _| present.contains(key));
+}

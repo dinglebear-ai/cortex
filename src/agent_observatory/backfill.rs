@@ -6,14 +6,17 @@ use crate::db::agent_observatory::{
     AgentSourceKind, GitCommitRow, list_git_commits, page_agent_sources,
 };
 use crate::db::{
-    DbPool, finish_maintenance_job, get_maintenance_job, insert_maintenance_job_with_result,
-    page_agent_projection_logs, update_maintenance_job_progress,
+    DbPool, get_maintenance_job, insert_maintenance_job_with_result, page_agent_projection_logs,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+
+#[path = "backfill/persistence.rs"]
+mod persistence;
+use persistence::persist;
 
 const JOB_KIND: &str = "agent_observatory_backfill";
 const STATE_VERSION: u32 = 1;
@@ -459,15 +462,6 @@ fn process_observations(
     let done =
         progress.cursors.repository_observations >= progress.high_water.repository_observations;
     Ok((consumed, done))
-}
-
-fn persist(pool: &DbPool, job_id: i64, progress: &AgentBackfillProgress) -> Result<()> {
-    let encoded = encode(progress)?;
-    if progress.done {
-        finish_maintenance_job(pool, job_id, "done", &encoded)
-    } else {
-        update_maintenance_job_progress(pool, job_id, &encoded)
-    }
 }
 
 /// Process at most `row_budget` durable source/HEAD rows and persist progress.

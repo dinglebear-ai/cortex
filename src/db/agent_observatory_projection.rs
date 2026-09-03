@@ -24,8 +24,11 @@ pub(crate) use lookup::{
 mod refs;
 #[path = "agent_observatory_projection_sql.rs"]
 mod sql;
+#[path = "agent_observatory_projection/summary.rs"]
+mod summary;
 #[path = "agent_observatory_projection_tie_break.rs"]
 mod tie_break;
+pub(crate) use summary::projection_event_has_summary;
 
 use super::AgentRunRow;
 use crate::agent_observatory::identity::{actor_key, canonical_tool, event_key, run_key};
@@ -227,26 +230,6 @@ fn outbox_key(input: &AgentProjectionWriteInput) -> Result<String> {
 
 fn existing_run_event_outbox_key(event_key: &str) -> String {
     digest_key("repository_observation_outbox", &[event_key])
-}
-
-pub(crate) fn projection_event_has_summary(
-    pool: &DbPool,
-    source_kind: &str,
-    source_id: &str,
-    projection_variant: &str,
-    summary: &str,
-) -> Result<bool> {
-    let key = event_key(source_kind, source_id, projection_variant)?;
-    let connection = pool.get().context("acquire database connection")?;
-    let exists: i64 = connection.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM agent_run_events
-              WHERE event_key = ?1 AND summary = ?2
-         )",
-        rusqlite::params![key, summary],
-        |row| row.get(0),
-    )?;
-    Ok(exists != 0)
 }
 
 fn write_inner(

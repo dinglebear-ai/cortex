@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use cortex::app::{IncidentResponse, ServiceLogsResponse};
 use cortex::scanner::{
     AiDoctorReport, CheckpointEntry, IndexResult, ParseErrorEntry, PruneCheckpointsResult,
@@ -9,6 +9,10 @@ use super::super::color::{cyan, error, muted, primary, success, violet, warn};
 use super::super::sessions_watch::AiSmokeWatchReport;
 use super::common::{local_ts, print_json, truncate};
 use cortex::app::AiWatchStatusReport;
+
+#[path = "sessions/validation.rs"]
+mod validation;
+pub(crate) use validation::{ensure_ai_doctor_success, ensure_index_success};
 
 pub(crate) fn print_checkpoints_response(response: &[CheckpointEntry], json: bool) -> Result<()> {
     if json {
@@ -477,50 +481,6 @@ pub(crate) fn print_index_response(response: &IndexResult, json: bool) -> Result
             primary(&e.path),
             e.error
         );
-    }
-    Ok(())
-}
-
-pub(crate) fn ensure_index_success(response: &IndexResult) -> Result<()> {
-    if response.file_errors.is_empty()
-        && response.storage_blocked_chunks == 0
-        && response.parse_errors == 0
-    {
-        if response.dropped_metadata_fields > 0 {
-            eprintln!(
-                "warning: {} transcript metadata field(s) were dropped",
-                response.dropped_metadata_fields
-            );
-        }
-        Ok(())
-    } else if response.storage_blocked_chunks > 0 {
-        bail!(
-            "{} transcript chunk(s) blocked by storage guardrails",
-            response.storage_blocked_chunks
-        )
-    } else if response.parse_errors > 0 {
-        bail!(
-            "{} transcript record(s) failed to parse",
-            response.parse_errors
-        )
-    } else {
-        bail!(
-            "{} transcript file(s) failed to index",
-            response.file_errors.len()
-        )
-    }
-}
-
-pub(crate) fn ensure_ai_doctor_success(
-    response: &AiDoctorReport,
-    strict_permissions: bool,
-) -> Result<()> {
-    if strict_permissions
-        && ((response.claude_root.exists && !response.claude_root.strict_ok)
-            || (response.codex_root.exists && !response.codex_root.strict_ok)
-            || (response.gemini_root.exists && !response.gemini_root.strict_ok))
-    {
-        bail!("AI transcript root permission check failed");
     }
     Ok(())
 }

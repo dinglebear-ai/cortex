@@ -12,7 +12,7 @@ pub(super) const MAX_SUMMARY_BYTES: usize = 1024;
 const MAX_FIELD_BYTES: usize = 4096;
 pub(super) const MAX_PAYLOAD_BYTES: usize = 16 * 1024;
 
-pub(super) struct ProjectionParts {
+pub(in crate::agent_observatory::projector) struct ProjectionParts {
     pub kind: AgentSourceKind,
     pub source_cursor: String,
     pub provider_sequence: Option<i64>,
