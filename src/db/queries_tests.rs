@@ -890,6 +890,153 @@ fn search_logs_filters_by_source_ip_prefix_without_fts() {
 }
 
 #[test]
+fn search_logs_filters_by_multiple_source_prefixes_with_indexed_or() {
+    let (pool, _dir) = test_pool();
+    let mut direct = make_entry(
+        "2026-01-01T00:00:00Z",
+        "devhost",
+        "info",
+        "direct shell history",
+    );
+    direct.source_ip = "shell-history://devhost/user/zsh".into();
+    direct.app_name = Some("zsh".into());
+
+    let mut forwarded = make_entry(
+        "2026-01-01T00:00:01Z",
+        "devhost",
+        "info",
+        "forwarded shell history",
+    );
+    forwarded.source_ip = "agent-shell-history://devhost/user/bash".into();
+    forwarded.app_name = Some("zsh".into());
+
+    let mut boundary = make_entry(
+        "2026-01-01T00:00:02Z",
+        "devhost",
+        "info",
+        "prefix boundary neighbor",
+    );
+    boundary.source_ip = "shell-historz://devhost/user/zsh".into();
+    boundary.app_name = Some("zsh".into());
+    insert_logs_batch(&pool, &[direct, forwarded, boundary]).unwrap();
+
+    let params = SearchParams {
+        host: Some("devhost".into()),
+        app: Some("zsh".into()),
+        source_ip_prefixes: Some(vec![
+            "shell-history://".into(),
+            "agent-shell-history://".into(),
+        ]),
+        ..Default::default()
+    };
+    let rows = search_logs(&pool, &params).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|row| row.message != "prefix boundary neighbor")
+    );
+
+    let mut sql = String::from("SELECT l.id FROM logs l WHERE 1=1");
+    let mut bindings = Vec::new();
+    let mut idx = 1;
+    append_filters(&mut sql, &mut bindings, &mut idx, &params);
+    assert!(sql.contains("l.source_ip >= ?2 AND l.source_ip < ?3"));
+    assert!(sql.contains("l.source_ip >= ?4 AND l.source_ip < ?5"));
+    assert_eq!(
+        bindings,
+        vec![
+            rusqlite::types::Value::Text("devhost".into()),
+            rusqlite::types::Value::Text("shell-history://".into()),
+            rusqlite::types::Value::Text("shell-history:/0".into()),
+            rusqlite::types::Value::Text("agent-shell-history://".into()),
+            rusqlite::types::Value::Text("agent-shell-history:/0".into()),
+            rusqlite::types::Value::Text("zsh".into()),
+        ]
+    );
+
+    let plan_params = SearchParams {
+        source_ip_prefixes: params.source_ip_prefixes.clone(),
+        ..Default::default()
+    };
+    let mut plan_sql = String::from("SELECT l.id FROM logs l WHERE 1=1");
+    let mut plan_bindings = Vec::new();
+    let mut plan_idx = 1;
+    append_filters(
+        &mut plan_sql,
+        &mut plan_bindings,
+        &mut plan_idx,
+        &plan_params,
+    );
+    let plan = query_plan(&pool, &plan_sql, &plan_bindings);
+    assert!(
+        plan.contains("MULTI-INDEX OR"),
+        "expected indexed OR plan:\n{plan}"
+    );
+    assert!(
+        plan.matches("idx_logs_source_ip_timestamp").count() >= 2,
+        "both prefix arms must use the source index:\n{plan}"
+    );
+    assert!(
+        !plan.contains("SCAN l"),
+        "must not scan the logs table:\n{plan}"
+    );
+}
+
+#[test]
+fn empty_source_prefixes_neither_match_all_nor_select_the_fts_fast_path() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[make_entry(
+            "2026-01-01T00:00:00Z",
+            "devhost",
+            "info",
+            "must not be returned",
+        )],
+    )
+    .unwrap();
+
+    for prefixes in [
+        vec![],
+        vec![String::new()],
+        vec![String::new(), String::new()],
+    ] {
+        let params = SearchParams {
+            source_ip_prefixes: Some(prefixes),
+            ..Default::default()
+        };
+        assert!(!params.has_indexed_equality_filter());
+
+        let mut sql = String::from("SELECT l.id FROM logs l WHERE 1=1");
+        let mut bindings = Vec::new();
+        let mut idx = 1;
+        append_filters(&mut sql, &mut bindings, &mut idx, &params);
+        assert_eq!(sql, "SELECT l.id FROM logs l WHERE 1=1");
+        assert!(bindings.is_empty());
+        assert_eq!(idx, 1);
+
+        let error = search_logs(&pool, &params).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("source prefixes must be non-empty")
+        );
+    }
+
+    let singular = SearchParams {
+        source_ip_prefix: Some(String::new()),
+        ..Default::default()
+    };
+    assert!(!singular.has_indexed_equality_filter());
+    let error = search_logs(&pool, &singular).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("source prefixes must be non-empty")
+    );
+}
+
+#[test]
 fn search_logs_filters_by_event_action_column() {
     let (pool, _dir) = test_pool();
     let mut die = make_entry(

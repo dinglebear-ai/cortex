@@ -250,6 +250,19 @@ fn push_ai_scope_filters(
 
 /// Search logs with flexible filtering + FTS
 pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>> {
+    if params
+        .source_ip_prefix
+        .as_ref()
+        .is_some_and(|prefix| prefix.is_empty())
+        || params
+            .source_ip_prefixes
+            .as_ref()
+            .is_some_and(|prefixes| prefixes.is_empty() || prefixes.iter().any(String::is_empty))
+    {
+        return Err(anyhow::Error::new(crate::app::ServiceError::InvalidInput(
+            "source prefixes must be non-empty".to_string(),
+        )));
+    }
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
 
@@ -1551,6 +1564,7 @@ pub fn search_ai_related_logs(
         host: params.host.clone(),
         source: params.source.clone(),
         source_ip_prefix: None,
+        source_ip_prefixes: None,
         severity: None,
         severity_in: Some(params.severity_in.clone()),
         app: params.app.clone(),
@@ -3229,7 +3243,9 @@ fn append_filters(
         bindings.push(rusqlite::types::Value::Text(source_ip.clone()));
         *idx += 1;
     }
-    if let Some(ref prefix) = params.source_ip_prefix {
+    if let Some(ref prefix) = params.source_ip_prefix
+        && !prefix.is_empty()
+    {
         sql.push_str(&format!(" AND l.source_ip >= ?{}", *idx));
         bindings.push(rusqlite::types::Value::Text(prefix.clone()));
         *idx += 1;
@@ -3237,6 +3253,30 @@ fn append_filters(
             sql.push_str(&format!(" AND l.source_ip < ?{}", *idx));
             bindings.push(rusqlite::types::Value::Text(upper));
             *idx += 1;
+        }
+    }
+    if let Some(ref prefixes) = params.source_ip_prefixes {
+        let prefixes = prefixes
+            .iter()
+            .filter(|prefix| !prefix.is_empty())
+            .collect::<Vec<_>>();
+        if !prefixes.is_empty() {
+            sql.push_str(" AND (");
+            for (position, prefix) in prefixes.iter().enumerate() {
+                if position > 0 {
+                    sql.push_str(" OR ");
+                }
+                sql.push_str(&format!("(l.source_ip >= ?{}", *idx));
+                bindings.push(rusqlite::types::Value::Text((*prefix).clone()));
+                *idx += 1;
+                if let Some(upper) = prefix_upper_bound(prefix) {
+                    sql.push_str(&format!(" AND l.source_ip < ?{}", *idx));
+                    bindings.push(rusqlite::types::Value::Text(upper));
+                    *idx += 1;
+                }
+                sql.push(')');
+            }
+            sql.push(')');
         }
     }
     if let Some(ref s) = params.severity {
