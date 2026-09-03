@@ -39,8 +39,8 @@ pub(in crate::agent::ai_transcript) const GEMINI_REWARN_INTERVAL: Duration =
 
 #[derive(Debug, Clone)]
 pub(in crate::agent::ai_transcript) struct GeminiParseFailure {
-    fingerprint: u64,
-    last_warned: Instant,
+    pub(in crate::agent::ai_transcript) fingerprint: u64,
+    pub(in crate::agent::ai_transcript) last_warned: Instant,
 }
 
 pub(in crate::agent::ai_transcript) fn load_checkpoint(path: &Path) -> Checkpoint {
