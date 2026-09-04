@@ -104,11 +104,27 @@ async fn scan_and_forward(
             .get(&root_key)
             .map(PathBuf::from);
         let mut root_files = Vec::new();
-        collect_files_after(root, &mut root_files, cursor.as_deref());
+        if let Err(error) = collect_files_after(root, &mut root_files, cursor.as_deref()) {
+            tracing::warn!(
+                root = %root.display(),
+                error = format!("{error:#}"),
+                reason_code = "transcript_discovery_failed",
+                "AI transcript root could not be scanned"
+            );
+            continue;
+        }
         if root_files.is_empty() && cursor.is_some() {
             // Reached the end of this stable traversal: wrap so ongoing
             // sessions near the beginning remain observable.
-            collect_files(root, &mut root_files);
+            if let Err(error) = collect_files(root, &mut root_files) {
+                tracing::warn!(
+                    root = %root.display(),
+                    error = format!("{error:#}"),
+                    reason_code = "transcript_discovery_failed",
+                    "AI transcript root could not be scanned after cursor wrap"
+                );
+                continue;
+            }
         }
         root_files.sort();
         if let Some(last) = root_files.last() {
@@ -356,11 +372,18 @@ async fn scan_and_forward(
     }
     let response = request.send().await.context("ai transcript POST failed")?;
     if !response.status().is_success() {
-        anyhow::bail!(
-            "ai transcript forward rejected: {} {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        );
+        let status = response.status();
+        let detail = response
+            .text()
+            .await
+            .map(|body| {
+                crate::receiver::enrichment::scrub_ai_message(
+                    &truncate_utf8(body.trim(), 1_024),
+                    None,
+                )
+            })
+            .unwrap_or_else(|error| format!("response_body_read_failed: {error}"));
+        anyhow::bail!("ai transcript forward rejected: {} {}", status, detail);
     }
     let receipt: AiTranscriptIngestResponse = response
         .json()
@@ -404,7 +427,7 @@ pub async fn run(config: AiTranscriptForwardConfig) -> Result<()> {
         .timeout(Duration::from_secs(30))
         .build()
         .context("failed to build ai transcript forwarder http client")?;
-    let mut checkpoint = load_checkpoint(&config.checkpoint_path);
+    let mut checkpoint = load_checkpoint(&config.checkpoint_path)?;
     loop {
         match scan_and_forward(&config, &client, &mut checkpoint).await {
             Ok(0) => {}

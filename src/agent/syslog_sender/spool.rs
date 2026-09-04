@@ -70,8 +70,16 @@ pub(super) fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
         drop(file);
         fs::rename(&temp, path).with_context(|| format!("replace syslog spool {}", path.display()))
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
+    if let Err(primary_error) = &result
+        && let Err(cleanup_error) = fs::remove_file(&temp)
+        && cleanup_error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::error!(
+            temp = %temp.display(),
+            error = %cleanup_error,
+            primary_error = format!("{primary_error:#}"),
+            "failed to clean up syslog spool temporary file"
+        );
     }
     result
 }

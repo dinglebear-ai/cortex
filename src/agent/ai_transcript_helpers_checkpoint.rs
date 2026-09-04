@@ -43,11 +43,15 @@ pub(in crate::agent::ai_transcript) struct GeminiParseFailure {
     pub(in crate::agent::ai_transcript) last_warned: Instant,
 }
 
-pub(in crate::agent::ai_transcript) fn load_checkpoint(path: &Path) -> Checkpoint {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+pub(in crate::agent::ai_transcript) fn load_checkpoint(path: &Path) -> Result<Checkpoint> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .with_context(|| format!("failed to decode checkpoint file {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Checkpoint::default()),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to read checkpoint file {}", path.display()))
+        }
+    }
 }
 
 pub(in crate::agent::ai_transcript) fn save_checkpoint(

@@ -268,15 +268,17 @@ async fn delivery_loop(
         }
         match call.send().await {
             Ok(response) if response.status().is_success() => {
+                let status = response.status();
                 match response.json::<SyslogForwardResponse>().await {
                     Ok(response) => match apply_receipts(&state, &request, &response.receipts) {
                         Ok(()) => {
                             attempt = 0;
                             set_error(&state, "none");
                         }
-                        Err(_) => {
+                        Err(error) => {
                             tracing::error!(
                                 reason_code = "local_spool_persist_failed",
+                                error = format!("{error:#}"),
                                 "syslog receipt could not be checkpointed"
                             );
                             set_error(&state, "local_spool_persist_failed");
@@ -284,9 +286,11 @@ async fn delivery_loop(
                             retry_sleep(&mut attempt, delay).await;
                         }
                     },
-                    Err(_) => {
+                    Err(error) => {
                         tracing::warn!(
                             reason_code = "invalid_receipt_response",
+                            status = %status,
+                            error = %error,
                             "syslog receiver response rejected"
                         );
                         set_error(&state, "invalid_receipt_response");
@@ -311,9 +315,10 @@ async fn delivery_loop(
                 set_error(&state, plan.reason_code);
                 retry_sleep(&mut attempt, plan.delay_ms).await;
             }
-            Err(_) => {
+            Err(error) => {
                 tracing::warn!(
                     reason_code = "transport_unavailable",
+                    error = %error,
                     "syslog forwarding deferred"
                 );
                 set_error(&state, "transport_unavailable");

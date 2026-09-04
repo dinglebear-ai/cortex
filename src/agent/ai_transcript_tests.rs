@@ -34,7 +34,7 @@ fn collect_files_finds_supported_and_skips_unsupported() {
     write_file(&claude_dir.join("readme.txt"), "not a transcript\n");
 
     let mut out = Vec::new();
-    collect_files(dir.path(), &mut out);
+    collect_files(dir.path(), &mut out).unwrap();
     assert_eq!(out.len(), 1);
     assert!(out[0].ends_with("session.jsonl"));
 }
@@ -50,11 +50,11 @@ fn bounded_discovery_cursor_reaches_later_transcripts() {
     write_file(&second, "{}\n");
 
     let mut after_first = Vec::new();
-    collect_files_after(dir.path(), &mut after_first, Some(&first));
+    collect_files_after(dir.path(), &mut after_first, Some(&first)).unwrap();
     assert_eq!(after_first, vec![second.clone()]);
 
     let mut after_last = Vec::new();
-    collect_files_after(dir.path(), &mut after_last, Some(&second));
+    collect_files_after(dir.path(), &mut after_last, Some(&second)).unwrap();
     assert!(
         after_last.is_empty(),
         "the caller can wrap after the final file"
@@ -77,7 +77,7 @@ fn collect_files_skips_build_artifact_directories() {
     write_file(&cache.join("transient-not-a-transcript.jsonl"), "{}\n");
 
     let mut out = Vec::new();
-    collect_files(dir.path(), &mut out);
+    collect_files(dir.path(), &mut out).unwrap();
 
     assert_eq!(out.len(), 1);
     assert!(out[0].ends_with("rollout-session.jsonl"));
@@ -141,7 +141,7 @@ fn collect_files_never_follows_symlinked_transcript() {
     symlink(&transcript, root.path().join("session.jsonl")).unwrap();
 
     let mut files = Vec::new();
-    collect_files(root.path(), &mut files);
+    collect_files(root.path(), &mut files).unwrap();
     assert!(files.is_empty());
 }
 
@@ -223,7 +223,7 @@ fn checkpoint_round_trips_through_disk() {
     );
     save_checkpoint(&checkpoint_path, &checkpoint).unwrap();
 
-    let loaded = load_checkpoint(&checkpoint_path);
+    let loaded = load_checkpoint(&checkpoint_path).unwrap();
     assert_eq!(loaded.files.get("/tmp/foo.jsonl"), Some(&42));
     assert_eq!(
         loaded
@@ -242,6 +242,23 @@ fn checkpoint_round_trips_through_disk() {
     assert!(
         loaded.gemini_parse_failures.is_empty(),
         "parse-warning suppression is process-local and must not be persisted"
+    );
+}
+
+#[test]
+fn missing_checkpoint_starts_empty_but_corrupt_checkpoint_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint_path = dir.path().join("checkpoint.json");
+
+    assert!(load_checkpoint(&checkpoint_path).unwrap().files.is_empty());
+    write_file(&checkpoint_path, "{not-json");
+
+    let error = load_checkpoint(&checkpoint_path).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("failed to decode checkpoint file"),
+        "unexpected error: {error:#}"
     );
 }
 
@@ -605,60 +622,6 @@ async fn scan_and_forward_retries_after_rate_limit_and_server_error_without_chec
     );
     assert_eq!(
         checkpoint
-            .files
-            .get(&transcript_path.to_string_lossy().to_string()),
-        Some(&1)
-    );
-}
-
-#[tokio::test]
-async fn scan_and_forward_recovers_from_corrupt_checkpoint_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let claude_dir = dir.path().join(".claude/projects/foo");
-    fs::create_dir_all(&claude_dir).unwrap();
-    let transcript_path = claude_dir.join("session.jsonl");
-    write_file(
-        &transcript_path,
-        &format!(
-            "{}\n",
-            serde_json::json!({
-                "type": "user",
-                "sessionId": "sess-corrupt-checkpoint",
-                "message": {"role": "user", "content": "recover checkpoint"}
-            })
-        ),
-    );
-    let checkpoint_path = dir.path().join("checkpoint.json");
-    write_file(&checkpoint_path, "{not-json");
-
-    let server = wiremock::MockServer::start().await;
-    wiremock::Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path("/v1/ai-transcripts"))
-        .respond_with(accepted_receipt_response)
-        .expect(1)
-        .mount(&server)
-        .await;
-    let config = AiTranscriptForwardConfig {
-        roots: vec![dir.path().to_path_buf()],
-        target: server.uri(),
-        token: None,
-        hostname: "test-host".to_string(),
-        checkpoint_path: checkpoint_path.clone(),
-        poll_interval: Duration::from_secs(15),
-    };
-    let client = reqwest::Client::new();
-    let mut checkpoint = load_checkpoint(&checkpoint_path);
-    assert!(checkpoint.files.is_empty());
-
-    assert_eq!(
-        scan_and_forward(&config, &client, &mut checkpoint)
-            .await
-            .unwrap(),
-        1
-    );
-    let persisted = load_checkpoint(&checkpoint_path);
-    assert_eq!(
-        persisted
             .files
             .get(&transcript_path.to_string_lossy().to_string()),
         Some(&1)

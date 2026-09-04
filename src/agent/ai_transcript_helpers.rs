@@ -10,72 +10,94 @@ pub(super) use checkpoint::*;
 /// `scanner`'s discovery rules via the public `is_supported_transcript_file`
 /// predicate, without pulling in the local-indexing `IndexResult` coupling
 /// that `scanner::collect_supported_files` carries).
-pub(super) fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
-    collect_files_after(root, out, None);
+pub(super) fn collect_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    collect_files_after(root, out, None)
 }
 
 /// Collect one stable discovery window after `after`. Directories are always
 /// traversed, because a directory whose own path precedes the cursor can
 /// contain later files. File paths are sorted at every level so a persisted
 /// cursor rotates predictably across a large transcript tree.
-pub(super) fn collect_files_after(root: &Path, out: &mut Vec<PathBuf>, after: Option<&Path>) {
+pub(super) fn collect_files_after(
+    root: &Path,
+    out: &mut Vec<PathBuf>,
+    after: Option<&Path>,
+) -> Result<()> {
     if out.len() >= MAX_FORWARD_FILES {
-        return;
+        return Ok(());
     }
-    if !root.exists() {
-        return;
-    }
-    if fs::symlink_metadata(root)
-        .ok()
-        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    if !root
+        .try_exists()
+        .with_context(|| format!("check transcript path {}", root.display()))?
     {
+        return Ok(());
+    }
+    let root_metadata = fs::symlink_metadata(root)
+        .with_context(|| format!("inspect transcript path {}", root.display()))?;
+    if root_metadata.file_type().is_symlink() {
         // Forwarder roots are local operator configuration, but their
         // descendants are still hostile filesystem input. Never traverse a
         // symlink into an unrelated home/cache tree or forward its locator.
-        return;
+        return Ok(());
     }
-    if root.is_file() {
+    if root_metadata.file_type().is_file() {
         if scanner::is_supported_transcript_file(root)
             && after.is_none_or(|cursor| root > cursor)
-            && (!scanner::gemini::is_chat_file(root)
-                || root
-                    .metadata()
-                    .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES))
+            && transcript_file_within_limit(root)?
         {
             out.push(root.to_path_buf());
         }
-        return;
+        return Ok(());
     }
     if !scanner::should_descend_transcript_dir(root) {
-        return;
+        return Ok(());
     }
-    let Ok(read_dir) = fs::read_dir(root) else {
-        return;
-    };
-    let mut paths = read_dir
-        .flatten()
-        .map(|entry| entry.path())
-        .collect::<Vec<_>>();
+    let mut paths = fs::read_dir(root)
+        .with_context(|| format!("read transcript directory {}", root.display()))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .with_context(|| format!("read entry in transcript directory {}", root.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
     paths.sort();
     for path in paths {
-        if fs::symlink_metadata(&path)
-            .ok()
-            .is_some_and(|metadata| metadata.file_type().is_symlink())
-        {
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("inspect transcript path {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
             continue;
         }
-        if path.is_dir() {
-            collect_files_after(&path, out, after);
+        if metadata.file_type().is_dir() {
+            collect_files_after(&path, out, after)?;
         } else if scanner::is_supported_transcript_file(&path)
             && after.is_none_or(|cursor| path > cursor)
-            && (!scanner::gemini::is_chat_file(&path)
-                || path
-                    .metadata()
-                    .is_ok_and(|metadata| metadata.len() <= MAX_TRANSCRIPT_FILE_BYTES))
+            && transcript_file_within_limit(&path)?
         {
             out.push(path);
         }
     }
+    Ok(())
+}
+
+fn transcript_file_within_limit(path: &Path) -> Result<bool> {
+    if !scanner::gemini::is_chat_file(path) {
+        return Ok(true);
+    }
+    let size = path
+        .metadata()
+        .with_context(|| format!("read transcript metadata {}", path.display()))?
+        .len();
+    if size > MAX_TRANSCRIPT_FILE_BYTES {
+        tracing::warn!(
+            path = %path.display(),
+            size,
+            limit = MAX_TRANSCRIPT_FILE_BYTES,
+            reason_code = "transcript_file_too_large",
+            "AI transcript file skipped"
+        );
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// The scanner's provider registry intentionally recognizes only configured
