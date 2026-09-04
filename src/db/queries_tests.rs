@@ -3360,6 +3360,37 @@ fn bench_stats_and_sessions() {
     }
 
     let speedup = sessions_live_latency.p50_ms / sessions_rollup_latency.p50_ms.max(0.001);
+    let minimum_speedup = crate::env::var("CORTEX_BENCH_MIN_SESSION_SPEEDUP")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    assert!(
+        speedup >= minimum_speedup,
+        "session rollup speedup {speedup:.2}x is below the {minimum_speedup:.2}x release threshold"
+    );
+    if let Ok(value) = crate::env::var("CORTEX_BENCH_MAX_SESSION_P95_MS") {
+        let maximum = value
+            .parse::<f64>()
+            .expect("CORTEX_BENCH_MAX_SESSION_P95_MS must be a number");
+        assert!(
+            sessions_rollup_latency.p95_ms <= maximum,
+            "session rollup p95 {:.1}ms exceeds the {maximum:.1}ms release threshold",
+            sessions_rollup_latency.p95_ms
+        );
+    }
+    if let Ok(path) = crate::env::var("CORTEX_BENCH_ARTIFACT") {
+        let artifact = serde_json::json!({
+            "rows": rows,
+            "stats_default": {"p50_ms": stats_latency.p50_ms, "p95_ms": stats_latency.p95_ms},
+            "stats_fts": {"p50_ms": stats_fts_latency.p50_ms, "p95_ms": stats_fts_latency.p95_ms},
+            "sessions_live": {"p50_ms": sessions_live_latency.p50_ms, "p95_ms": sessions_live_latency.p95_ms},
+            "sessions_rollup": {"p50_ms": sessions_rollup_latency.p50_ms, "p95_ms": sessions_rollup_latency.p95_ms},
+            "refresh": {"p50_ms": refresh_latency.p50_ms, "p95_ms": refresh_latency.p95_ms},
+            "session_speedup": speedup,
+            "minimum_session_speedup": minimum_speedup,
+        });
+        std::fs::write(path, serde_json::to_vec_pretty(&artifact).unwrap()).unwrap();
+    }
     eprintln!(
         "[bench] SUMMARY rows={rows} \
          stats_default_p50_ms={:.1} stats_default_p95_ms={:.1} \

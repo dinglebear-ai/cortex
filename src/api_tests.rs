@@ -1106,6 +1106,26 @@ async fn durable_stream_routes_require_auth_and_negotiate_sse() {
 }
 
 #[tokio::test]
+async fn durable_stream_route_enforces_sixty_four_clients_and_recovers_after_disconnect() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state.with_stream_client_limit(64));
+    let mut responses = Vec::with_capacity(64);
+
+    for _ in 0..64 {
+        let response = get_response(app.clone(), "/api/streams/logs", Some("secret")).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        responses.push(response);
+    }
+
+    let rejected = get_response(app.clone(), "/api/streams/logs", Some("secret")).await;
+    assert_eq!(rejected.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+    drop(responses.pop());
+    let recovered = get_response(app, "/api/streams/logs", Some("secret")).await;
+    assert_eq!(recovered.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
 async fn rendered_session_pages_are_ordered_bounded_and_resumable() {
     let (state, pool, _dir) = test_state(Some("secret".into()));
     let mut newest_timestamp_first = entry(

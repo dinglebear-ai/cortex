@@ -185,6 +185,7 @@ pub struct ApiState {
     /// as the `notifications_test` MCP action.
     pub notifications_config: NotificationsConfig,
     pub cursor_keys: crate::stream::CursorKeys,
+    pub stream_client_permits: Arc<Semaphore>,
     pub integration_profile: Arc<serde_json::Value>,
 }
 
@@ -232,6 +233,7 @@ impl ApiState {
             static_token_is_admin,
             notifications_config,
             cursor_keys,
+            stream_client_permits: crate::stream::shared_client_permits(),
             integration_profile: Arc::new(integration_profile),
         })
     }
@@ -244,6 +246,12 @@ impl ApiState {
     #[cfg(test)]
     pub fn with_isolated_maintenance_permit(mut self) -> Self {
         self.maintenance_permit = Arc::new(Semaphore::new(1));
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_stream_client_limit(mut self, limit: usize) -> Self {
+        self.stream_client_permits = Arc::new(Semaphore::new(limit));
         self
     }
 
@@ -972,9 +980,15 @@ async fn log_stream(
     if request.cursor.is_none() {
         request.cursor = last_event_id(&headers);
     }
-    crate::stream::log_stream(state.service, auth, request, state.cursor_keys)
-        .await
-        .into_response()
+    crate::stream::log_stream_with_clients(
+        state.service,
+        auth,
+        request,
+        state.cursor_keys,
+        state.stream_client_permits,
+    )
+    .await
+    .into_response()
 }
 
 async fn session_stream(
