@@ -206,20 +206,21 @@ pub(super) fn seed_codex_prefix_fallbacks(
     from_line: usize,
     fallback_project: &mut Option<String>,
     fallback_session_id: &mut Option<String>,
-) {
+) -> Result<()> {
     if source_kind != scanner::SourceKind::CodexSession
         || from_line == 0
         || (fallback_project.is_some() && fallback_session_id.is_some())
     {
-        return;
+        return Ok(());
     }
 
-    let Ok(file) = fs::File::open(path) else {
-        return;
-    };
+    let file = fs::File::open(path)
+        .with_context(|| format!("open Codex prefix metadata {}", path.display()))?;
     let reader = BufReader::new(file);
     let scan_limit = from_line.min(CODEX_PREFIX_METADATA_SCAN_LINES);
-    for line in reader.lines().take(scan_limit).flatten() {
+    for line in reader.lines().take(scan_limit) {
+        let line =
+            line.with_context(|| format!("read Codex prefix metadata {}", path.display()))?;
         scanner::update_codex_fallbacks(
             source_kind,
             line.trim_end_matches(['\r', '\n']),
@@ -230,6 +231,7 @@ pub(super) fn seed_codex_prefix_fallbacks(
             break;
         }
     }
+    Ok(())
 }
 
 pub(super) fn sha256_id(parts: impl IntoIterator<Item = impl AsRef<[u8]>>) -> String {

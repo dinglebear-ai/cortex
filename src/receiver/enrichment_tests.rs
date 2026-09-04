@@ -285,9 +285,9 @@ fn scrub_generic_credential_assignments() {
         "private_key=ordinary-value",
         "\"token\":\"ordinary-value\"",
     ];
-    for secret in cases {
-        let scrubbed = scrub_ai_message(&format!("before {secret} after"), None);
-        assert_eq!(scrubbed, "before [REDACTED] after", "case: {secret}");
+    for credential_case in cases {
+        let scrubbed = scrub_ai_message(&format!("before {credential_case} after"), None);
+        assert_eq!(scrubbed, "before [REDACTED] after");
         assert!(!scrubbed.contains("ordinary-value"));
     }
 }

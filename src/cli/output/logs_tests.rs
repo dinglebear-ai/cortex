@@ -19,6 +19,14 @@ fn session_title_display_escapes_terminal_controls_from_legacy_rows() {
 }
 
 #[test]
+fn session_fields_redact_credentials_before_terminal_output() {
+    assert_eq!(
+        safe_session_field("project token=do-not-print"),
+        "project [REDACTED]"
+    );
+}
+
+#[test]
 fn human_log_summary_outputs_accept_representative_payloads() {
     print_search_response(
         &cortex::app::SearchLogsResponse {

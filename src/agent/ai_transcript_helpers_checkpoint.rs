@@ -77,27 +77,44 @@ pub(in crate::agent::ai_transcript) fn save_checkpoint(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    let mut file = options.open(&tmp_path).with_context(|| {
-        format!(
-            "failed to create checkpoint temp file {}",
-            tmp_path.display()
-        )
-    })?;
-    file.write_all(&bytes).with_context(|| {
-        format!(
-            "failed to write checkpoint temp file {}",
-            tmp_path.display()
-        )
-    })?;
-    file.sync_all()
-        .with_context(|| format!("failed to sync checkpoint temp file {}", tmp_path.display()))?;
-    drop(file);
-    fs::rename(&tmp_path, path).with_context(|| {
-        format!(
-            "failed to atomically replace checkpoint file {}",
-            path.display()
-        )
-    })
+    let result = (|| {
+        let mut file = options.open(&tmp_path).with_context(|| {
+            format!(
+                "failed to create checkpoint temp file {}",
+                tmp_path.display()
+            )
+        })?;
+        file.write_all(&bytes).with_context(|| {
+            format!(
+                "failed to write checkpoint temp file {}",
+                tmp_path.display()
+            )
+        })?;
+        file.sync_all().with_context(|| {
+            format!("failed to sync checkpoint temp file {}", tmp_path.display())
+        })?;
+        drop(file);
+        fs::rename(&tmp_path, path).with_context(|| {
+            format!(
+                "failed to atomically replace checkpoint file {}",
+                path.display()
+            )
+        })
+    })();
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(primary_error) => match fs::remove_file(&tmp_path) {
+            Ok(()) => Err(primary_error),
+            Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => {
+                Err(primary_error)
+            }
+            Err(cleanup_error) => Err(anyhow::anyhow!(
+                "{primary_error:#}; failed to clean checkpoint temp file {}: {cleanup_error}",
+                tmp_path.display()
+            )),
+        },
+    }
 }
 
 /// Apply cursor updates, persist them atomically, and roll them back in memory

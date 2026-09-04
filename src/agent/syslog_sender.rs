@@ -146,9 +146,11 @@ impl SyslogSender {
     }
 
     pub fn try_send_from(&self, source_key: &str, line: String) {
-        if self.enqueue(source_key, line).is_err() {
+        if let Err(error) = self.enqueue(source_key, line) {
             tracing::error!(
                 reason_code = "local_spool_persist_failed",
+                source_key = %stable_source_key(source_key),
+                error = format!("{error:#}"),
                 "syslog frame could not be retained"
             );
         }

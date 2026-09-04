@@ -265,13 +265,20 @@ async fn scan_and_forward(
         }
         let mut fallback_project = scanner::project_for_file(source_kind, path);
         let mut fallback_session_id = codex_fallback_session_id(path, source_kind);
-        seed_codex_prefix_fallbacks(
+        if let Err(error) = seed_codex_prefix_fallbacks(
             path,
             source_kind,
             from_line,
             &mut fallback_project,
             &mut fallback_session_id,
-        );
+        ) {
+            tracing::warn!(
+                path = %path.display(),
+                error = format!("{error:#}"),
+                reason_code = "codex_prefix_recovery_failed",
+                "ai transcript forwarder could not recover Codex prefix metadata"
+            );
+        }
         let remaining_budget = MAX_BATCH_RECORDS - records.len();
         let (new_lines, total_lines) = match read_new_lines(path, from_line, remaining_budget) {
             Ok(result) => result,

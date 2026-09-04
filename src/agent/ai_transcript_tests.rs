@@ -246,6 +246,49 @@ fn checkpoint_round_trips_through_disk() {
 }
 
 #[test]
+fn failed_checkpoint_replacement_removes_temporary_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint_path = dir.path().join("checkpoint.json");
+    fs::create_dir(&checkpoint_path).unwrap();
+
+    let error = save_checkpoint(&checkpoint_path, &Checkpoint::default()).unwrap_err();
+    assert!(error.to_string().contains("atomically replace checkpoint"));
+
+    let temporary_files = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("checkpoint.tmp-"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        temporary_files.is_empty(),
+        "left behind: {temporary_files:?}"
+    );
+}
+
+#[test]
+fn codex_prefix_recovery_reports_file_open_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.jsonl");
+    let mut project = None;
+    let mut session_id = None;
+
+    let error = seed_codex_prefix_fallbacks(
+        &missing,
+        scanner::SourceKind::CodexSession,
+        1,
+        &mut project,
+        &mut session_id,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("open Codex prefix metadata"));
+}
+
+#[test]
 fn missing_checkpoint_starts_empty_but_corrupt_checkpoint_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint_path = dir.path().join("checkpoint.json");
