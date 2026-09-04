@@ -2132,6 +2132,11 @@ pub(crate) fn validate_agent_observatory_config(
             ));
         }
     }
+    if config.projector_page_rows > 500 {
+        return Err(anyhow::anyhow!(
+            "agent_observatory.projector_page_rows must be between 1 and 500"
+        ));
+    }
     if config.stale_after_secs <= config.active_window_secs {
         return Err(anyhow::anyhow!(
             "agent_observatory.stale_after_secs must be greater than active_window_secs"
