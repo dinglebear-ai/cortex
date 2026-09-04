@@ -2166,6 +2166,7 @@ fn index_gemini_file(
             canonical,
             &mut result,
         );
+        let session_metadata = record.session_metadata.scrubbed();
         let metadata_json = bounded_metadata_json(serde_json::json!({
             "source_type": "transcript",
             "source_kind": SourceKind::GeminiSession.as_str(),
@@ -2174,6 +2175,7 @@ fn index_gemini_file(
             "record_index": record_index,
             "record_key": record_key,
             "event_kind": record.event_kind,
+            "session": (!session_metadata.is_empty()).then_some(session_metadata),
             "content_scrubbed": true,
         }));
         let entry = LogBatchEntry {

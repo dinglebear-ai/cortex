@@ -191,6 +191,26 @@ fn stdout_preview_secrets_shaped_as_json_are_redacted() {
 }
 
 #[test]
+fn stdout_preview_generic_credentials_are_redacted_by_key_recursively() {
+    let value = json!({
+        "attachment": {
+            "type": "hook_success",
+            "hookEvent": "PostToolUse",
+            "stdout": "{\"outer\":{\"credential\":\"plain-value\"},\"private_key\":\"plain-key\",\"safe\":\"visible\"}"
+        }
+    });
+    let preview = extract_claude_hook_events(&value)[0]
+        .stdout_preview
+        .as_deref()
+        .unwrap()
+        .to_string();
+    assert!(!preview.contains("plain-value"));
+    assert!(!preview.contains("plain-key"));
+    assert!(preview.contains("visible"));
+    assert_eq!(preview.matches("[REDACTED]").count(), 2);
+}
+
+#[test]
 fn stdout_preview_bare_json_string_secret_is_redacted() {
     // Eng review fix (adversarial re-verify): stdout that is itself a bare
     // JSON string (quotes included, not wrapped in an object/array) parses

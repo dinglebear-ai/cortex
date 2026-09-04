@@ -299,6 +299,33 @@ fn claude_secrets_shaped_as_json_values_are_redacted() {
 }
 
 #[test]
+fn claude_generic_credentials_are_redacted_by_key_recursively() {
+    let value = json!({
+        "message": {"content": [{
+            "type": "tool_use",
+            "id": "toolu_generic_secret",
+            "name": "configure",
+            "input": {
+                "nested": {"access_token": "ordinary-looking-value"},
+                "client-secret": "another-ordinary-value",
+                "credentials": {"user": "alice"},
+                "safe": "retained"
+            }
+        }]}
+    });
+    let args = extract_claude_mcp_events(&value)[0]
+        .arguments_json
+        .as_deref()
+        .unwrap()
+        .to_string();
+    assert!(!args.contains("ordinary-looking-value"));
+    assert!(!args.contains("another-ordinary-value"));
+    assert!(!args.contains("alice"));
+    assert!(args.contains("\"safe\":\"retained\""));
+    assert_eq!(args.matches("[REDACTED]").count(), 3);
+}
+
+#[test]
 fn claude_bare_json_string_secret_in_arguments_is_redacted() {
     // Eng review fix (adversarial re-verify): a scalar `input` value that
     // is itself a bare JSON string (not wrapped in an object/array) parses

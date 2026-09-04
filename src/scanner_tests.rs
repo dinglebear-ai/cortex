@@ -1138,6 +1138,44 @@ fn index_file_normalizes_gemini_cwd_worktree_project() {
 }
 
 #[test]
+fn index_file_persists_scrubbed_gemini_session_metadata() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("session-gemini-metadata.json");
+    std::fs::write(
+        &file,
+        r#"{
+          "sessionId": "gemini-metadata",
+          "title": "Useful session title",
+          "model": "gemini-test",
+          "version": "1.2.3",
+          "messages": [{
+            "id": "gemini-metadata-message",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "content": "hello"
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    let result = index_file(&pool, &file, "gemini_session").unwrap();
+    assert_eq!(result.ingested, 1);
+    let conn = pool.get().unwrap();
+    let raw: String = conn
+        .query_row(
+            "SELECT metadata_json FROM logs WHERE ai_session_id = 'gemini-metadata'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(metadata["session"]["title"], "Useful session title");
+    assert_eq!(metadata["session"]["title_provenance"], "provider");
+    assert_eq!(metadata["session"]["model"], "gemini-test");
+    assert_eq!(metadata["session"]["client_version"], "1.2.3");
+    assert_eq!(metadata["session"]["source_format"], "gemini-legacy-json");
+}
+
+#[test]
 fn explicit_file_detects_codex_transcript_shape_outside_codex_root() {
     let (pool, dir) = test_pool();
     let file = dir.path().join("exported-codex.jsonl");
