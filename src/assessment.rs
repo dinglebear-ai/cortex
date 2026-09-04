@@ -485,9 +485,13 @@ fn is_secret_key(key: &str) -> bool {
     matches!(
         normalized.as_str(),
         "token"
+            | "authtoken"
+            | "bearertoken"
             | "accesstoken"
             | "refreshtoken"
             | "idtoken"
+            | "authorization"
+            | "proxyauthorization"
             | "apikey"
             | "secret"
             | "clientsecret"

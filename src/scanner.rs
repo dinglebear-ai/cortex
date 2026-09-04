@@ -1905,9 +1905,25 @@ fn collect_supported_files_bounded(
 }
 
 fn supported_discovered_file(path: &Path) -> bool {
-    antigravity::is_transcript_file(path)
-        || matches!(path.extension().and_then(|ext| ext.to_str()), Some("jsonl"))
+    // Antigravity's brain tree contains user-authored and generated JSONL
+    // artifacts in addition to the provider's redacted transcript projection.
+    // Once a path is under that provider root, keep the privacy boundary
+    // narrow instead of letting the generic JSONL rule admit every artifact.
+    if is_under_antigravity_brain(path) {
+        return antigravity::is_transcript_file(path);
+    }
+
+    matches!(path.extension().and_then(|ext| ext.to_str()), Some("jsonl"))
         || gemini::is_chat_file(path)
+}
+
+fn is_under_antigravity_brain(path: &Path) -> bool {
+    let segments = path.iter().collect::<Vec<_>>();
+    segments.windows(3).any(|parts| {
+        parts[0] == ".gemini"
+            && (parts[1] == "antigravity" || parts[1] == "antigravity-cli")
+            && parts[2] == "brain"
+    })
 }
 
 fn detect_explicit_file_source_kind(path: &Path) -> Result<SourceKind> {

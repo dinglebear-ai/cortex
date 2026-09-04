@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::StorageConfig;
 use crate::db::{
-    SearchAiSessionsParams, SearchParams, init_pool, list_ai_sessions, search_ai_sessions,
-    search_logs, tail_logs,
+    ListAiSessionsParams, SearchAiSessionsParams, SearchParams, init_pool, list_ai_sessions,
+    search_ai_sessions, search_logs, tail_logs,
 };
 use serial_test::serial;
 
@@ -675,6 +675,58 @@ fn scanner_exposes_default_roots_and_supported_file_policy() {
     assert!(!is_supported_transcript_file(std::path::Path::new(
         ".gemini/tmp/hash/chats/notes.json"
     )));
+    assert!(is_supported_transcript_file(std::path::Path::new(
+        "/mounted/.gemini/antigravity/brain/session/.system_generated/logs/transcript.jsonl"
+    )));
+    assert!(!is_supported_transcript_file(std::path::Path::new(
+        "/mounted/.gemini/antigravity/brain/session/private-notes.jsonl"
+    )));
+}
+
+#[test]
+#[serial]
+fn antigravity_discovery_is_narrow_and_sessions_remain_queryable() {
+    let (pool, home) = test_pool();
+    let _home = HomeOverride::set(home.path());
+    let brain = home.path().join(".gemini/antigravity/brain");
+    let transcript = brain.join("session-1/.system_generated/logs/transcript.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"source":"USER","type":"USER_INPUT","content":"investigate storage"}"#,
+            "\n",
+            r#"{"source":"MODEL","type":"PLANNER_RESPONSE","content":"checking storage"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        brain.join("session-1/unrelated.jsonl"),
+        r#"{"source":"USER","content":"private unrelated artifact"}"#,
+    )
+    .unwrap();
+
+    let result = index_roots(&pool, Some(&brain)).unwrap();
+    assert_eq!(result.ingested, 2);
+    assert_eq!(result.unsupported_files, 1);
+
+    let sessions = list_ai_sessions(&pool, &ListAiSessionsParams::default()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].ai_project, "antigravity://desktop");
+    assert_eq!(sessions[0].ai_session_id, "session-1");
+    assert_eq!(sessions[0].event_count, 2);
+
+    let leaked: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message LIKE '%private unrelated artifact%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(leaked, 0);
 }
 
 #[test]

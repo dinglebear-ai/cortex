@@ -86,6 +86,15 @@ pub(crate) fn parse_file(raw: &str, path: &Path) -> Result<AntigravityParse> {
     } else {
         "antigravity"
     };
+    // Antigravity's redacted projection does not expose a workspace path.
+    // Retain that uncertainty while still giving session inventory a stable,
+    // honest provider namespace (session queries intentionally exclude rows
+    // with no project identity).
+    let ai_project = if source_name == "antigravity-cli" {
+        "antigravity://cli"
+    } else {
+        "antigravity://desktop"
+    };
     let session_metadata = TranscriptSessionMetadata {
         agent_name: Some("antigravity".to_string()),
         model_provider: Some("google".to_string()),
@@ -133,7 +142,7 @@ pub(crate) fn parse_file(raw: &str, path: &Path) -> Result<AntigravityParse> {
                 timestamp: string(&value, "created_at").or_else(|| string(&value, "timestamp")),
                 message,
                 session_id: session_id.clone(),
-                ai_project: None,
+                ai_project: Some(ai_project.to_string()),
                 event_kind,
                 session_metadata: session_metadata.clone(),
                 raw_value: Some(value),
@@ -151,13 +160,22 @@ pub(crate) fn parse_file(raw: &str, path: &Path) -> Result<AntigravityParse> {
 pub(crate) fn parse_line(
     line: &str,
     path: &Path,
-    _line_no: usize,
+    line_no: usize,
 ) -> Result<Option<ParsedTranscriptRecord>> {
-    Ok(parse_file(line, path)?
-        .records
-        .into_iter()
-        .next()
-        .map(|record| record.transcript))
+    let mut record = parse_file(line, path)?.records.into_iter().next();
+    if let Some(record) = &mut record
+        && record.step_index.is_none()
+    {
+        let serialized = serde_json::to_string(
+            record
+                .transcript
+                .raw_value
+                .as_ref()
+                .expect("Antigravity records retain their parsed value"),
+        )?;
+        record.transcript.record_key = format!("line:{line_no}:hash:{}", hash_text(&serialized));
+    }
+    Ok(record.map(|record| record.transcript))
 }
 
 fn string(value: &Value, key: &str) -> Option<String> {

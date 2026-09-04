@@ -46,6 +46,10 @@ fn parses_typed_records_and_tool_calls_without_flattening_arguments() {
 
     assert_eq!(parsed.records.len(), 2);
     assert_eq!(parsed.records[0].transcript.event_kind, "user");
+    assert_eq!(
+        parsed.records[0].transcript.ai_project.as_deref(),
+        Some("antigravity://desktop")
+    );
     assert_eq!(parsed.records[1].transcript.event_kind, "tool");
     assert_eq!(parsed.records[1].tool_calls[0].name, "run_command");
     assert_eq!(
@@ -91,6 +95,10 @@ fn identifies_cli_source_and_reports_malformed_line_number() {
             .as_deref(),
         Some("antigravity-cli")
     );
+    assert_eq!(
+        parsed.records[0].transcript.ai_project.as_deref(),
+        Some("antigravity://cli")
+    );
 
     let error = parse_file("{}\n{broken}\n", cli).unwrap_err();
     assert!(error.to_string().contains("line 2"));
@@ -122,4 +130,19 @@ fn same_step_records_have_distinct_stable_keys() {
         parsed.records[0].transcript.record_key,
         parsed.records[1].transcript.record_key
     );
+}
+
+#[test]
+fn single_line_parser_preserves_caller_line_number_for_identical_records() {
+    let line = r#"{"source":"MODEL","content":"same status"}"#;
+    let first = parse_line(line, Path::new(DESKTOP_PATH), 7)
+        .unwrap()
+        .unwrap();
+    let second = parse_line(line, Path::new(DESKTOP_PATH), 8)
+        .unwrap()
+        .unwrap();
+
+    assert!(first.record_key.starts_with("line:7:hash:"));
+    assert!(second.record_key.starts_with("line:8:hash:"));
+    assert_ne!(first.record_key, second.record_key);
 }
