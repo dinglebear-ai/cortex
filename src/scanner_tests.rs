@@ -2630,3 +2630,35 @@ fn read_transcript_lines_recovers_requested_lines_and_skips_oversized() {
     assert!(!got.contains_key(&3), "out-of-range line must be omitted");
     assert_eq!(got.len(), 2);
 }
+
+#[test]
+fn session_metadata_scrubbing_neutralizes_terminal_controls_and_bounds_labels() {
+    let metadata = TranscriptSessionMetadata {
+        title: Some(format!("safe\u{1b}[31m title\nnext {}", "x".repeat(600))),
+        title_provenance: Some("provider\r\nspoofed".to_string()),
+        ..Default::default()
+    }
+    .scrubbed();
+
+    let title = metadata.title.expect("safe title should be retained");
+    let provenance = metadata
+        .title_provenance
+        .expect("safe provenance should be retained");
+    assert!(!title.chars().any(char::is_control));
+    assert!(!provenance.chars().any(char::is_control));
+    assert!(title.chars().count() <= MAX_SESSION_METADATA_CHARS);
+    assert!(provenance.contains("provider  spoofed"));
+}
+
+#[test]
+fn session_metadata_scrubbing_drops_control_only_labels() {
+    let metadata = TranscriptSessionMetadata {
+        title: Some("\u{1b}\n\r".to_string()),
+        title_provenance: Some("\t".to_string()),
+        ..Default::default()
+    }
+    .scrubbed();
+
+    assert!(metadata.title.is_none());
+    assert!(metadata.title_provenance.is_none());
+}

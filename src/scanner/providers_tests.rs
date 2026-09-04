@@ -39,17 +39,18 @@ fn aliases_and_antigravity_lane_coverage_are_explicit() {
     assert_eq!(Provider::from_alias("unknown"), None);
 
     let antigravity = definition(Provider::Antigravity);
-    assert_eq!(
-        antigravity.support(ProviderLane::SessionMetadata),
-        AdapterSupport::Partial
-    );
     for lane in [
+        ProviderLane::SessionMetadata,
         ProviderLane::Transcript,
         ProviderLane::ToolCalls,
-        ProviderLane::McpEvents,
-        ProviderLane::Skills,
-        ProviderLane::Hooks,
     ] {
+        assert_eq!(antigravity.support(lane), AdapterSupport::Supported);
+    }
+    assert_eq!(
+        antigravity.support(ProviderLane::McpEvents),
+        AdapterSupport::Partial
+    );
+    for lane in [ProviderLane::Skills, ProviderLane::Hooks] {
         assert_eq!(antigravity.support(lane), AdapterSupport::Unsupported);
     }
     assert_eq!(Coverage::NotObserved.as_str(), "not_observed");
@@ -72,7 +73,14 @@ fn registry_is_the_single_source_for_source_kinds_and_forwarding_lanes() {
         );
     }
 
-    assert_eq!(source_kind_for_provider(Provider::Antigravity), None);
+    assert_eq!(
+        source_kind_for_provider(Provider::Antigravity),
+        Some("antigravity_desktop")
+    );
+    assert_eq!(
+        provider_for_source_kind("antigravity_cli"),
+        Some(Provider::Antigravity)
+    );
     assert_eq!(provider_for_source_kind("explicit_file"), None);
     assert_eq!(
         definition(Provider::Codex).forwarding_coverage(ProviderLane::Hooks),
@@ -138,15 +146,21 @@ fn codex_active_archive_and_alternate_roots_are_safe_and_classified() {
 
 #[test]
 #[serial]
-fn antigravity_paths_are_classified_but_never_promoted_to_transcript_roots() {
+fn antigravity_transcript_projections_have_narrow_roots() {
     let home = tempfile::tempdir().unwrap();
     let _home = EnvOverride::set("HOME", home.path());
-    let path = home
+    let database = home
         .path()
         .join(".gemini/antigravity/conversations/example.db");
+    let root = home.path().join(".gemini/antigravity/brain");
+    let transcript = root.join("session/.system_generated/logs/transcript.jsonl");
 
-    assert_eq!(provider_for_path(&path), Some(Provider::Antigravity));
-    assert!(!transcript_roots().iter().any(|root| path.starts_with(root)));
+    assert_eq!(provider_for_path(&database), Some(Provider::Antigravity));
+    assert!(transcript_roots().contains(&root));
+    assert_eq!(
+        provider_for_transcript_layout(&transcript),
+        Some(Provider::Antigravity)
+    );
 }
 
 #[test]

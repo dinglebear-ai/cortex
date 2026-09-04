@@ -222,6 +222,8 @@ async fn scan_and_forward(
                         ai_session_id: parsed_record.session_id,
                         event_kind: Some(parsed_record.event_kind),
                         message: parsed_record.message,
+                        title: parsed_record.session_metadata.title,
+                        title_provenance: parsed_record.session_metadata.title_provenance,
                     },
                 ));
             }
@@ -294,6 +296,8 @@ async fn scan_and_forward(
                             ai_session_id,
                             event_kind: Some(parsed.event_kind),
                             message: parsed.message,
+                            title: parsed.session_metadata.title,
+                            title_provenance: parsed.session_metadata.title_provenance,
                         },
                     ));
                 }
@@ -317,8 +321,13 @@ async fn scan_and_forward(
     if records.is_empty() {
         // Advancing an all-quiet window is still essential: otherwise a
         // checkpointed first 1,024 files would starve every later file.
-        checkpoint.discovery_cursors.extend(discovery_updates);
-        save_checkpoint(&config.checkpoint_path, checkpoint)?;
+        save_checkpoint_updates(
+            &config.checkpoint_path,
+            checkpoint,
+            HashMap::new(),
+            HashMap::new(),
+            discovery_updates,
+        )?;
         return Ok(0);
     }
 
@@ -376,12 +385,13 @@ async fn scan_and_forward(
     // Only advance after the server supplied an exact receipt for every
     // submitted source-record ID. A lost/malformed response leaves the local
     // cursor untouched; a retry is deduplicated by the server receipt table.
-    for (key, total) in new_totals {
-        checkpoint.files.insert(key, total);
-    }
-    checkpoint.fingerprints.extend(new_fingerprints);
-    checkpoint.discovery_cursors.extend(discovery_updates);
-    save_checkpoint(&config.checkpoint_path, checkpoint)?;
+    save_checkpoint_updates(
+        &config.checkpoint_path,
+        checkpoint,
+        new_totals,
+        new_fingerprints,
+        discovery_updates,
+    )?;
     Ok(sent)
 }
 

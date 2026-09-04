@@ -270,6 +270,8 @@ fn envelope_identity_survives_an_archive_move_when_native_session_is_available()
             ai_session_id: Some("native-session".to_string()),
             event_kind: Some("user".to_string()),
             message: "same record".to_string(),
+            title: None,
+            title_provenance: None,
         },
     );
     let archived = root
@@ -288,6 +290,8 @@ fn envelope_identity_survives_an_archive_move_when_native_session_is_available()
             ai_session_id: Some("native-session".to_string()),
             event_kind: Some("user".to_string()),
             message: "same record".to_string(),
+            title: None,
+            title_provenance: None,
         },
     );
     assert_eq!(
@@ -324,6 +328,8 @@ fn transcript_record_bounds_every_variable_wire_field() {
             ai_session_id: None,
             event_kind: Some("e".repeat(MAX_FORWARDED_IDENTIFIER_BYTES + 1)),
             message: "m".repeat(MAX_FORWARDED_MESSAGE_BYTES + 1),
+            title: None,
+            title_provenance: None,
         },
     );
     assert!(record.envelope.hostname.len() <= MAX_FORWARDED_IDENTIFIER_BYTES + 3);
@@ -531,6 +537,265 @@ async fn scan_and_forward_retries_after_lost_or_incomplete_receipt_response() {
             .files
             .get(&transcript_path.to_string_lossy().to_string()),
         Some(&1)
+    );
+}
+
+#[tokio::test]
+async fn scan_and_forward_retries_after_rate_limit_and_server_error_without_checkpointing() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    write_file(
+        &transcript_path,
+        &format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "timestamp": "2026-07-09T00:00:00Z",
+                "sessionId": "sess-retry-status",
+                "message": {"role": "user", "content": "retry after status"}
+            })
+        ),
+    );
+
+    let server = wiremock::MockServer::start().await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(move |request: &wiremock::Request| {
+            match calls_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => wiremock::ResponseTemplate::new(429).set_body_string("rate limited"),
+                1 => wiremock::ResponseTemplate::new(503).set_body_string("unavailable"),
+                _ => accepted_receipt_response(request),
+            }
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+
+    for expected_status in ["429", "503"] {
+        let error = scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(expected_status), "{error:#}");
+        assert!(checkpoint.files.is_empty());
+        assert!(checkpoint.fingerprints.is_empty());
+        assert!(checkpoint.discovery_cursors.is_empty());
+        assert!(!config.checkpoint_path.exists());
+    }
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&transcript_path.to_string_lossy().to_string()),
+        Some(&1)
+    );
+}
+
+#[tokio::test]
+async fn scan_and_forward_recovers_from_corrupt_checkpoint_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    write_file(
+        &transcript_path,
+        &format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "sess-corrupt-checkpoint",
+                "message": {"role": "user", "content": "recover checkpoint"}
+            })
+        ),
+    );
+    let checkpoint_path = dir.path().join("checkpoint.json");
+    write_file(&checkpoint_path, "{not-json");
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: checkpoint_path.clone(),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = load_checkpoint(&checkpoint_path);
+    assert!(checkpoint.files.is_empty());
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    let persisted = load_checkpoint(&checkpoint_path);
+    assert_eq!(
+        persisted
+            .files
+            .get(&transcript_path.to_string_lossy().to_string()),
+        Some(&1)
+    );
+}
+
+#[tokio::test]
+async fn scan_and_forward_retries_when_checkpoint_parent_was_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    write_file(
+        &transcript_path,
+        &format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "sess-blocked-checkpoint",
+                "message": {"role": "user", "content": "retry durable checkpoint"}
+            })
+        ),
+    );
+    let checkpoint_parent = dir.path().join("checkpoint-parent");
+    write_file(&checkpoint_parent, "blocks directory creation");
+    let checkpoint_path = checkpoint_parent.join("checkpoint.json");
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .expect(2)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: checkpoint_path.clone(),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+
+    let error = scan_and_forward(&config, &client, &mut checkpoint)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("failed to create checkpoint dir"),
+        "{error:#}"
+    );
+    assert!(
+        checkpoint.files.is_empty(),
+        "a non-durable checkpoint must remain eligible for retry"
+    );
+
+    fs::remove_file(&checkpoint_parent).unwrap();
+    fs::create_dir(&checkpoint_parent).unwrap();
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&transcript_path.to_string_lossy().to_string()),
+        Some(&1)
+    );
+    assert!(checkpoint_path.exists());
+}
+
+#[tokio::test]
+async fn malformed_source_does_not_prevent_valid_source_from_forwarding() {
+    let dir = tempfile::tempdir().unwrap();
+    let gemini_dir = dir.path().join(".gemini/tmp/broken/chats");
+    let claude_dir = dir.path().join(".claude/projects/valid");
+    fs::create_dir_all(&gemini_dir).unwrap();
+    fs::create_dir_all(&claude_dir).unwrap();
+    let broken_path = gemini_dir.join("session-broken.json");
+    let valid_path = claude_dir.join("session.jsonl");
+    write_file(&broken_path, "{not-json");
+    write_file(
+        &valid_path,
+        &format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "sess-valid",
+                "message": {"role": "user", "content": "still forward me"}
+            })
+        ),
+    );
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&valid_path.to_string_lossy().to_string()),
+        Some(&1)
+    );
+    assert!(
+        !checkpoint
+            .files
+            .contains_key(&broken_path.to_string_lossy().to_string())
+    );
+    assert!(
+        checkpoint
+            .gemini_parse_failures
+            .contains_key(&broken_path.to_string_lossy().to_string())
     );
 }
 

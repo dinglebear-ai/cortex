@@ -387,6 +387,43 @@ async fn receiver_scrubs_hostile_envelope_fields_before_persistence() {
     );
 }
 
+#[tokio::test]
+async fn receiver_neutralizes_controls_in_session_title_and_provenance() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    record["envelope"]["source"]["title"] = serde_json::json!("safe\u{1b}[31m title\nsecond line");
+    record["envelope"]["source"]["title_provenance"] = serde_json::json!("provider\r\nspoofed");
+    let body = serde_json::to_string(&serde_json::json!({"records": [record]})).unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let metadata: String = conn
+        .query_row("SELECT metadata_json FROM logs LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    let title = metadata["source"]["title"].as_str().unwrap();
+    let provenance = metadata["source"]["title_provenance"].as_str().unwrap();
+    assert!(!title.chars().any(char::is_control));
+    assert!(!provenance.chars().any(char::is_control));
+    assert_eq!(title, "safe [31m title second line");
+    assert_eq!(provenance, "provider spoofed");
+}
+
 #[test]
 fn transcript_timestamp_is_scrubbed_bounded_and_canonicalized_before_persistence() {
     assert_eq!(

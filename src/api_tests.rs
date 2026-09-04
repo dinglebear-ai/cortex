@@ -1000,6 +1000,8 @@ async fn capabilities_advertise_bounded_polling_and_native_streams() {
     let (state, _pool, _dir) = test_state(Some("secret".into()));
     let (status, value) = get_json(test_router(state), "/api/capabilities", Some("secret")).await;
     assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["contract_version"], "1.0.0");
+    assert_eq!(value["generation"], 1);
     assert_eq!(value["sessions"]["rendered_pages"], true);
     assert_eq!(value["sessions"]["native_stream"], true);
     assert_eq!(value["logs"]["native_stream"], true);

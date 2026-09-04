@@ -327,6 +327,8 @@ pub(super) struct TranscriptRecordDetails {
     pub(super) ai_session_id: Option<String>,
     pub(super) event_kind: Option<String>,
     pub(super) message: String,
+    pub(super) title: Option<String>,
+    pub(super) title_provenance: Option<String>,
 }
 
 pub(super) fn transcript_record(
@@ -376,7 +378,15 @@ pub(super) fn transcript_record(
                 source_revision,
                 locator,
                 native_session_id: safe_provenance_id("session", details.ai_session_id.clone()),
-                title: None,
+                title: details.title.map(|title| {
+                    crate::receiver::enrichment::scrub_ai_message(
+                        &truncate_utf8(&title, MAX_FORWARDED_IDENTIFIER_BYTES),
+                        None,
+                    )
+                }),
+                title_provenance: details
+                    .title_provenance
+                    .map(|provenance| truncate_utf8(&provenance, MAX_FORWARDED_IDENTIFIER_BYTES)),
             },
             timestamp: details
                 .timestamp

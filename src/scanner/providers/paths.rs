@@ -21,6 +21,12 @@ pub fn provider_for_transcript_layout(path: &Path) -> Option<Provider> {
         Some(Provider::Claude)
     } else if has_segment(".gemini") && has_segment("tmp") {
         Some(Provider::Gemini)
+    } else if has_segment(".gemini")
+        && (has_segment("antigravity") || has_segment("antigravity-cli"))
+        && has_segment("brain")
+        && path.file_name().and_then(|name| name.to_str()) == Some("transcript.jsonl")
+    {
+        Some(Provider::Antigravity)
     } else {
         None
     }
@@ -28,15 +34,17 @@ pub fn provider_for_transcript_layout(path: &Path) -> Option<Provider> {
 
 /// Safe roots that the JSON transcript scanner may recursively inspect.
 ///
-/// Antigravity is deliberately excluded: its approved adapter is currently
-/// SQLite metadata only, and treating its workspace transcript artifacts as a
-/// supported transcript lane would overclaim capability and duplicate chunks.
 pub(crate) fn transcript_roots() -> Vec<PathBuf> {
     let Some(home) = crate::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };
 
-    let mut roots = vec![home.join(".claude/projects"), home.join(".gemini/tmp")];
+    let mut roots = vec![
+        home.join(".claude/projects"),
+        home.join(".gemini/tmp"),
+        home.join(".gemini/antigravity/brain"),
+        home.join(".gemini/antigravity-cli/brain"),
+    ];
     for codex_home in codex_homes(&home) {
         roots.extend([
             codex_home.join("sessions"),

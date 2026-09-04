@@ -96,6 +96,54 @@ pub(in crate::agent::ai_transcript) fn save_checkpoint(
     })
 }
 
+/// Apply cursor updates, persist them atomically, and roll them back in memory
+/// when persistence fails. This preserves retry semantics without cloning the
+/// potentially large historical checkpoint on every poll.
+pub(in crate::agent::ai_transcript) fn save_checkpoint_updates(
+    path: &Path,
+    checkpoint: &mut Checkpoint,
+    files: HashMap<String, usize>,
+    fingerprints: HashMap<String, String>,
+    discovery_cursors: HashMap<String, String>,
+) -> Result<()> {
+    let old_files = apply_updates(&mut checkpoint.files, files);
+    let old_fingerprints = apply_updates(&mut checkpoint.fingerprints, fingerprints);
+    let old_discovery = apply_updates(&mut checkpoint.discovery_cursors, discovery_cursors);
+    if let Err(error) = save_checkpoint(path, checkpoint) {
+        restore_updates(&mut checkpoint.files, old_files);
+        restore_updates(&mut checkpoint.fingerprints, old_fingerprints);
+        restore_updates(&mut checkpoint.discovery_cursors, old_discovery);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_updates<V>(
+    target: &mut HashMap<String, V>,
+    updates: HashMap<String, V>,
+) -> Vec<(String, Option<V>)> {
+    updates
+        .into_iter()
+        .map(|(key, value)| {
+            let previous = target.insert(key.clone(), value);
+            (key, previous)
+        })
+        .collect()
+}
+
+fn restore_updates<V>(target: &mut HashMap<String, V>, previous: Vec<(String, Option<V>)>) {
+    for (key, value) in previous {
+        match value {
+            Some(value) => {
+                target.insert(key, value);
+            }
+            None => {
+                target.remove(&key);
+            }
+        }
+    }
+}
+
 pub(in crate::agent::ai_transcript) fn gemini_content_fingerprint(raw: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     raw.hash(&mut hasher);

@@ -1,4 +1,41 @@
 use super::*;
+
+#[test]
+fn antigravity_tool_calls_preserve_arguments_and_mcp_classification() {
+    let value = serde_json::json!({
+        "step_index": 7,
+        "status": "completed",
+        "tool_calls": [{
+            "id": "call-7",
+            "name": "mcp__cortex__search_sessions",
+            "args": {"query": "timeout"}
+        }]
+    });
+    let events = extract_antigravity_mcp_events(&value);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].call_id, "call-7");
+    assert_eq!(events[0].mcp_server.as_deref(), Some("cortex"));
+    assert_eq!(events[0].mcp_tool.as_deref(), Some("search_sessions"));
+    assert_eq!(
+        events[0].arguments_json.as_deref(),
+        Some("{\"query\":\"timeout\"}")
+    );
+    assert_eq!(events[0].status.as_deref(), Some("completed"));
+}
+
+#[test]
+fn antigravity_fallback_call_ids_distinguish_records_without_steps() {
+    let first = json!({"content":"first","tool_calls":[{"name":"run_command","args":{}}]});
+    let second = json!({"content":"second","tool_calls":[{"name":"run_command","args":{}}]});
+    let first_id = extract_antigravity_mcp_events(&first)[0].call_id.clone();
+    let second_id = extract_antigravity_mcp_events(&second)[0].call_id.clone();
+    assert_ne!(first_id, second_id);
+    assert_eq!(
+        first_id,
+        extract_antigravity_mcp_events(&first)[0].call_id,
+        "fallback identity must be replay-stable"
+    );
+}
 use serde_json::json;
 
 #[test]
@@ -333,6 +370,28 @@ fn codex_function_call_extracts_call_event() {
 }
 
 #[test]
+fn codex_custom_tool_call_extracts_generic_call_event() {
+    let value = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "input": "{\"cmd\":\"pwd\"}",
+            "call_id": "call_custom",
+            "status": "completed"
+        }
+    });
+    let events = extract_codex_mcp_events(&value);
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.call_id, "call_custom");
+    assert_eq!(event.tool_name, "exec");
+    assert_eq!(event.mcp_server, None);
+    assert_eq!(event.status.as_deref(), Some("completed"));
+    assert!(event.arguments_json.is_some());
+}
+
+#[test]
 fn codex_function_call_mcp_style_name_classifies() {
     let value = json!({
         "type": "response_item",
@@ -404,6 +463,51 @@ fn codex_function_call_output_plain_string_without_metadata() {
     assert_eq!(
         events[0].output_preview.as_deref(),
         Some("plain text output, not json")
+    );
+}
+
+#[test]
+fn codex_custom_tool_call_output_extracts_only_text_blocks() {
+    let value = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output",
+            "call_id": "call_custom",
+            "output": [
+                {"type": "text", "text": "first"},
+                {"type": "image", "data": "large-unwanted-payload"},
+                {"type": "text", "text": "second"}
+            ]
+        }
+    });
+    let events = extract_codex_mcp_events(&value);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_kind, McpEventKind::Result);
+    assert_eq!(events[0].output_preview.as_deref(), Some("first second"));
+    assert!(
+        !events[0]
+            .output_preview
+            .as_deref()
+            .unwrap()
+            .contains("large-unwanted-payload")
+    );
+}
+
+#[test]
+fn codex_custom_tool_output_is_bounded_before_projection() {
+    let value = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output",
+            "call_id": "call_large",
+            "output": [{"type":"text", "text":"x".repeat(MAX_RAW_OUTPUT_CHARS * 4)}]
+        }
+    });
+    let events = extract_codex_mcp_events(&value);
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].output_preview.as_deref().unwrap().chars().count(),
+        MAX_PREVIEW_CHARS
     );
 }
 

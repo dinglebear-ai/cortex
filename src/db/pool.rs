@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 54;
+pub const KNOWN_SCHEMA_VERSION: i64 = 55;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3384,6 +3384,26 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              COMMIT;",
         )?;
         tracing::info!("Migration 54: created versioned OTLP trace/run relations");
+    }
+
+    // Migration 55: keep bounded session-title provenance in the materialized
+    // rollup. Reading it from raw logs per returned session would make the
+    // indexed rollup path scale with transcript event volume again.
+    if !migration_applied(&conn, 55)? {
+        let tx = conn.transaction()?;
+        // The rollup is a rebuildable cache. Legacy recovery databases can
+        // carry the migration-21 marker without the optional table, so an
+        // additive cache migration must not block the rest of their recovery.
+        if table_exists(&tx, "ai_session_rollup")? {
+            add_column_if_missing(&tx, "ai_session_rollup", "title", "TEXT")?;
+            add_column_if_missing(&tx, "ai_session_rollup", "title_provenance", "TEXT")?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (55)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 55: added session title provenance to AI session rollup");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

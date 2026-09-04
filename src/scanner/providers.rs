@@ -274,7 +274,7 @@ const PROVIDERS: &[ProviderDefinition] = &[
         canonical_name: "gemini",
         aliases: &["gemini-cli", "gemini-transcript"],
         source_kind: Some("gemini_session"),
-        adapter_version: "gemini-chat-json-v1",
+        adapter_version: "gemini-chat-json-v2",
         privacy_policy: "scrub-before-persist",
         checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
         lanes: &[
@@ -319,32 +319,29 @@ const PROVIDERS: &[ProviderDefinition] = &[
         provider: Provider::Antigravity,
         canonical_name: "antigravity",
         aliases: &["agy", "antigravity-cli"],
-        source_kind: None,
-        adapter_version: "antigravity-sqlite-metadata-v1",
-        privacy_policy: "metadata-only-until-parser-is-reviewed",
+        source_kind: Some("antigravity_desktop"),
+        adapter_version: "antigravity-transcript-jsonl-v1",
+        privacy_policy: "redacted-projection-scrub-before-persist",
         checkpoint: CONTENT_FINGERPRINT_CHECKPOINT,
         lanes: &[
-            // The SQLite stores can establish session/usage lifecycle
-            // metadata. They do not establish transcript or extracted event
-            // content, so those lanes must remain visibly unavailable.
             lane(
                 ProviderLane::SessionMetadata,
-                AdapterSupport::Partial,
+                AdapterSupport::Supported,
                 Coverage::NotObserved,
             ),
             lane(
                 ProviderLane::Transcript,
-                AdapterSupport::Unsupported,
+                AdapterSupport::Supported,
                 Coverage::NotObserved,
             ),
             lane(
                 ProviderLane::ToolCalls,
-                AdapterSupport::Unsupported,
+                AdapterSupport::Supported,
                 Coverage::NotObserved,
             ),
             lane(
                 ProviderLane::McpEvents,
-                AdapterSupport::Unsupported,
+                AdapterSupport::Partial,
                 Coverage::NotObserved,
             ),
             lane(
@@ -381,14 +378,16 @@ pub fn definition(provider: Provider) -> &'static ProviderDefinition {
 /// Resolve the provider represented by one persisted scanner source kind.
 /// Unknown and generic files intentionally do not inherit Claude support.
 pub fn provider_for_source_kind(source_kind: &str) -> Option<Provider> {
+    if source_kind == "antigravity_cli" {
+        return Some(Provider::Antigravity);
+    }
     definitions()
         .iter()
         .find(|definition| definition.source_kind == Some(source_kind))
         .map(|definition| definition.provider)
 }
 
-/// Resolve the persisted scanner source kind for a provider. Antigravity is
-/// deliberately `None`: metadata discovery is not a transcript source.
+/// Resolve the provider's primary persisted scanner source kind.
 pub fn source_kind_for_provider(provider: Provider) -> Option<&'static str> {
     definition(provider).source_kind
 }

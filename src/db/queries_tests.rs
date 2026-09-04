@@ -1947,6 +1947,121 @@ fn ai_session_queries_respect_filters() {
 }
 
 #[test]
+fn ai_session_list_and_search_surface_redacted_title_provenance() {
+    let (pool, _dir) = test_pool();
+    let mut entry = make_ai_entry(
+        "2026-01-01T00:00:00Z",
+        "host-a",
+        "codex",
+        "/tmp/project",
+        "session-title",
+        "storage latency investigation",
+    );
+    entry.metadata_json = Some(
+        serde_json::json!({
+            "session": {
+                "title": "Investigate storage latency",
+                "title_provenance": "user"
+            }
+        })
+        .to_string(),
+    );
+    insert_logs_batch(&pool, &[entry]).unwrap();
+
+    let listed = list_ai_sessions(
+        &pool,
+        &ListAiSessionsParams {
+            since: Some("2025-12-31T00:00:00Z".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        listed[0].title.as_deref(),
+        Some("Investigate storage latency")
+    );
+    assert_eq!(listed[0].title_provenance.as_deref(), Some("user"));
+
+    refresh_ai_session_rollup(&pool).unwrap();
+    let rolled_up = list_ai_sessions(&pool, &ListAiSessionsParams::default()).unwrap();
+    assert_eq!(
+        rolled_up[0].title.as_deref(),
+        Some("Investigate storage latency")
+    );
+    assert_eq!(rolled_up[0].title_provenance.as_deref(), Some("user"));
+
+    let searched = search_ai_sessions(
+        &pool,
+        &SearchAiSessionsParams {
+            query: "latency".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        searched.sessions[0].title.as_deref(),
+        Some("Investigate storage latency")
+    );
+    assert_eq!(
+        searched.sessions[0].title_provenance.as_deref(),
+        Some("user")
+    );
+}
+
+#[test]
+fn live_ai_session_list_keeps_title_and_provenance_from_latest_title_row() {
+    let (pool, _dir) = test_pool();
+    let mut older = make_ai_entry(
+        "2026-01-01T00:00:00Z",
+        "host-a",
+        "claude",
+        "/tmp/project",
+        "session-title-history",
+        "older event",
+    );
+    older.metadata_json = Some(
+        serde_json::json!({
+            "session": {
+                "title": "Zulu older title",
+                "title_provenance": "aaa-old"
+            }
+        })
+        .to_string(),
+    );
+    let mut latest = make_ai_entry(
+        "2026-01-01T00:01:00Z",
+        "host-a",
+        "claude",
+        "/tmp/project",
+        "session-title-history",
+        "latest event",
+    );
+    latest.metadata_json = Some(
+        serde_json::json!({
+            "session": {
+                "title": "Alpha latest title",
+                "title_provenance": "zzz-new"
+            }
+        })
+        .to_string(),
+    );
+    insert_logs_batch(&pool, &[older, latest]).unwrap();
+
+    let listed = list_ai_sessions_live(
+        &pool,
+        &ListAiSessionsParams {
+            since: Some("2025-12-31T00:00:00Z".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].title.as_deref(), Some("Alpha latest title"));
+    assert_eq!(listed[0].title_provenance.as_deref(), Some("zzz-new"));
+}
+
+#[test]
 fn list_ai_tool_and_project_inventory() {
     let (pool, _dir) = test_pool();
     insert_logs_batch(

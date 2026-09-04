@@ -100,6 +100,8 @@ pub struct EvidenceSource {
     pub native_session_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
+    pub title_provenance: Option<String>,
 }
 
 /// Versioned, redacted data-plane record. A stable `source_record_id` is the
@@ -268,6 +270,16 @@ fn safe_identifier(value: &str) -> String {
     scrub_text(&text, MAX_IDENTIFIER_CHARS)
 }
 
+fn safe_session_label(value: &str) -> Option<String> {
+    let scrubbed = scrub_text(value, MAX_IDENTIFIER_CHARS);
+    let terminal_safe = scrubbed
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
+    let terminal_safe = terminal_safe.trim();
+    (!terminal_safe.is_empty()).then(|| terminal_safe.to_string())
+}
+
 fn is_sha256_id(value: &str) -> bool {
     let Some(hex) = value.strip_prefix("sha256:") else {
         return false;
@@ -303,7 +315,12 @@ fn scrub_envelope(mut envelope: EvidenceEnvelope) -> Result<EvidenceEnvelope, &'
         .source
         .title
         .as_deref()
-        .map(|value| scrub_text(value, MAX_IDENTIFIER_CHARS));
+        .and_then(safe_session_label);
+    envelope.source.title_provenance = envelope
+        .source
+        .title_provenance
+        .as_deref()
+        .and_then(safe_session_label);
     envelope.ai_project = envelope
         .ai_project
         .as_deref()
