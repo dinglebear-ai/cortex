@@ -17,7 +17,7 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 | Area | What Cortex provides |
 | --- | --- |
 | Ingest | UDP/TCP syslog, OTLP/HTTP logs, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
-| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 54 sequential schema migrations |
+| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 55 sequential schema migrations |
 | Investigation | Search, filtering, context, timelines, patterns, anomaly comparison, cross-source correlation, recurring error signatures, deterministic incident bundles, and graph explanations |
 | Fleet intelligence | SSH and API inventory collectors, host state, service topology, container and route relationships, redacted evidence, and rebuildable graph projections |
 | AI operations | Claude, Codex, and Gemini session indexing; skill, MCP, and hook event extraction; incident clustering; and guarded local LLM assessments |
@@ -464,7 +464,7 @@ The CLI supports direct/local operation and HTTP operation. REST-backed mode is 
 
 ### MCP
 
-Cortex exposes one MCP tool named `cortex`. Its required `action` field selects an action from a single authoritative Rust registry. The mechanically generated current count is published in [the live coverage inventory](tests/TEST_COVERAGE.md).
+Cortex exposes one MCP tool named `cortex`. Its required `action` field selects an action from a single authoritative Rust registry. The mechanically generated current count is published in [the live coverage inventory](../../tests/TEST_COVERAGE.md).
 
 The current scope split is:
 
@@ -671,7 +671,7 @@ Cortex uses SQLite with:
 - Online backup support
 - Integrity checks, checkpoints, and vacuum workflows
 
-The current schema history contains 54 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry.
+The current schema history contains 55 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry.
 
 ### Authoritative and derived data
 
@@ -865,7 +865,7 @@ just validate-plugin
 cargo xtask pre-push
 ```
 
-`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
+`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](../../docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
 
 CI gates include:
 
