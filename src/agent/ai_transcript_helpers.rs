@@ -156,6 +156,7 @@ pub(super) fn read_new_lines(
 
 pub(super) fn read_bounded_jsonl_line(reader: &mut BufReader<fs::File>) -> Result<Option<String>> {
     let mut line = Vec::new();
+    let mut oversized = false;
     loop {
         let available = reader.fill_buf()?;
         if available.is_empty() {
@@ -169,9 +170,17 @@ pub(super) fn read_bounded_jsonl_line(reader: &mut BufReader<fs::File>) -> Resul
             .iter()
             .position(|byte| *byte == b'\n')
             .map_or(available.len(), |index| index + 1);
-        if line.len().saturating_add(take) > MAX_JSONL_LINE_BYTES {
+        if !oversized && line.len().saturating_add(take) > MAX_JSONL_LINE_BYTES {
+            oversized = true;
+            line.clear();
+        }
+        if oversized {
+            let terminated = available[..take].ends_with(b"\n");
             reader.consume(take);
-            bail!("transcript line exceeds {MAX_JSONL_LINE_BYTES} bytes");
+            if terminated {
+                return Ok(Some(OVERSIZED_JSONL_GAP_RECORD.to_string()));
+            }
+            continue;
         }
         line.extend_from_slice(&available[..take]);
         reader.consume(take);

@@ -219,6 +219,28 @@ fn read_new_lines_accepts_provider_records_larger_than_64_kib() {
 }
 
 #[test]
+fn read_new_lines_emits_a_gap_and_advances_past_an_oversized_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    write_file(
+        &path,
+        &format!(
+            "{}\n{{\"type\":\"user\",\"message\":\"after gap\"}}\n",
+            "x".repeat(MAX_JSONL_LINE_BYTES + 1)
+        ),
+    );
+
+    let (lines, checkpoint) = read_new_lines(&path, 0, 10).unwrap();
+
+    assert_eq!(checkpoint, 2);
+    assert_eq!(lines[0], (0, OVERSIZED_JSONL_GAP_RECORD.to_string()));
+    assert_eq!(
+        lines[1],
+        (1, r#"{"type":"user","message":"after gap"}"#.to_string())
+    );
+}
+
+#[test]
 fn checkpoint_round_trips_through_disk() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint_path = dir.path().join("checkpoint.json");
@@ -305,7 +327,7 @@ fn codex_prefix_recovery_reports_file_open_failure() {
 }
 
 #[test]
-fn codex_prefix_recovery_rejects_an_oversized_line_without_unbounded_reading() {
+fn codex_prefix_recovery_skips_an_oversized_line_without_unbounded_reading() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("oversized-prefix.jsonl");
     write_file(
@@ -315,17 +337,17 @@ fn codex_prefix_recovery_rejects_an_oversized_line_without_unbounded_reading() {
     let mut project = None;
     let mut session_id = None;
 
-    let error = seed_codex_prefix_fallbacks(
+    seed_codex_prefix_fallbacks(
         &path,
         scanner::SourceKind::CodexSession,
         1,
         &mut project,
         &mut session_id,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(error.to_string().contains("Codex prefix metadata"));
-    assert!(format!("{error:#}").contains("transcript line exceeds"));
+    assert_eq!(project, None);
+    assert_eq!(session_id, None);
 }
 
 #[test]

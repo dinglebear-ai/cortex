@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -53,6 +53,8 @@ const MAX_TRANSCRIPT_FILE_BYTES: u64 = 1024 * 1024;
 // finite while leaving enough room for those provider-native records. The
 // forwarded message is independently reduced to MAX_FORWARDED_MESSAGE_BYTES.
 const MAX_JSONL_LINE_BYTES: usize = 8 * 1024 * 1024;
+const OVERSIZED_JSONL_GAP_RECORD: &str =
+    r#"{"type":"status","message":"[Cortex skipped an oversized transcript record]"}"#;
 // At 500 records, a 3 KiB message can at worst double while JSON escaping.
 // Together with the explicitly bounded scalar fields below, that remains
 // under the receiver's 4 MiB request budget without an unbounded retry loop.
