@@ -241,6 +241,176 @@ fn read_new_lines_emits_a_gap_and_advances_past_an_oversized_record() {
 }
 
 #[test]
+fn seekable_jsonl_position_reads_only_the_appended_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let historical = format!("{}\n", "x".repeat(MAX_JSONL_LINE_BYTES + 1));
+    write_file(&path, &historical);
+    let offset = historical.len() as u64;
+    let position = JsonlPosition {
+        line: 1,
+        byte_offset: offset,
+        source_epoch: source_epoch(&path),
+        prefix_guard: jsonl_prefix_guard(&path, offset).unwrap(),
+        prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
+        observed_len: offset,
+        modified_ns: path.metadata().ok().and_then(|m| file_modified_ns(&m)),
+    };
+    assert!(jsonl_position_is_current(&path, &position));
+
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(b"tail\n").unwrap();
+    drop(file);
+
+    let (lines, line, next_offset) =
+        read_new_lines_from_offset(&path, position.line, position.byte_offset, 10).unwrap();
+    assert_eq!(lines, vec![(1, "tail".to_string())]);
+    assert_eq!(line, 2);
+    assert_eq!(next_offset, offset + 5);
+}
+
+#[test]
+fn seekable_jsonl_position_rejects_replacement_truncation_and_prefix_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    write_file(&path, "first\nsecond\n");
+    let offset = fs::metadata(&path).unwrap().len();
+    let position = JsonlPosition {
+        line: 2,
+        byte_offset: offset,
+        source_epoch: source_epoch(&path),
+        prefix_guard: jsonl_prefix_guard(&path, offset).unwrap(),
+        prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
+        observed_len: offset,
+        modified_ns: path.metadata().ok().and_then(|m| file_modified_ns(&m)),
+    };
+
+    write_file(&path, "short\n");
+    assert!(!jsonl_position_is_current(&path, &position));
+
+    write_file(&path, "other\nsecond\n");
+    assert!(!jsonl_position_is_current(&path, &position));
+}
+
+#[test]
+fn seekable_jsonl_position_rejects_a_middle_only_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let original = format!(
+        "{}{}{}",
+        "a".repeat(5 * 1024),
+        "b".repeat(4 * 1024),
+        "c".repeat(5 * 1024)
+    );
+    write_file(&path, &original);
+    let metadata = path.metadata().unwrap();
+    let offset = metadata.len();
+    let position = JsonlPosition {
+        line: 1,
+        byte_offset: offset,
+        source_epoch: source_epoch(&path),
+        prefix_guard: jsonl_prefix_guard(&path, offset).unwrap(),
+        prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
+        observed_len: offset,
+        modified_ns: file_modified_ns(&metadata),
+    };
+
+    let rewritten = format!(
+        "{}{}{}",
+        "a".repeat(5 * 1024),
+        "x".repeat(4 * 1024),
+        "c".repeat(5 * 1024)
+    );
+    write_file(&path, &rewritten);
+    let changed_time = filetime::FileTime::from_unix_time(
+        metadata
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + 1,
+        0,
+    );
+    filetime::set_file_mtime(&path, changed_time).unwrap();
+
+    assert_eq!(path.metadata().unwrap().len(), offset);
+    assert_eq!(
+        jsonl_prefix_guard(&path, offset).unwrap(),
+        position.prefix_guard,
+        "the rewrite must remain outside both sampled guard windows"
+    );
+    assert!(!jsonl_position_is_current(&path, &position));
+}
+
+#[test]
+fn seekable_jsonl_position_rejects_a_middle_rewrite_followed_by_append() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let original = format!(
+        "{}{}{}",
+        "a".repeat(5 * 1024),
+        "b".repeat(4 * 1024),
+        "c".repeat(5 * 1024)
+    );
+    write_file(&path, &original);
+    let metadata = path.metadata().unwrap();
+    let offset = metadata.len();
+    let position = JsonlPosition {
+        line: 1,
+        byte_offset: offset,
+        source_epoch: source_epoch(&path),
+        prefix_guard: jsonl_prefix_guard(&path, offset).unwrap(),
+        prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
+        observed_len: offset,
+        modified_ns: file_modified_ns(&metadata),
+    };
+
+    let rewritten_and_appended = format!(
+        "{}{}{}tail\n",
+        "a".repeat(5 * 1024),
+        "x".repeat(4 * 1024),
+        "c".repeat(5 * 1024)
+    );
+    write_file(&path, &rewritten_and_appended);
+
+    assert!(path.metadata().unwrap().len() > position.observed_len);
+    assert_eq!(
+        jsonl_prefix_guard(&path, offset).unwrap(),
+        position.prefix_guard,
+        "the rewrite must remain outside both sampled guard windows"
+    );
+    let rewritten_digest = jsonl_prefix_digest(&path, offset).unwrap();
+    assert_ne!(
+        Some(rewritten_digest.as_str()),
+        position.prefix_digest.as_deref(),
+        "the exact digest must cover the unsampled middle"
+    );
+    assert!(!jsonl_position_is_current(&path, &position));
+}
+
+#[test]
+fn seekable_jsonl_position_invalidates_a_legacy_position_without_exact_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    write_file(&path, "record\n");
+    let metadata = path.metadata().unwrap();
+    let offset = metadata.len();
+    let legacy = serde_json::json!({
+        "line": 1,
+        "byte_offset": offset,
+        "source_epoch": source_epoch(&path),
+        "prefix_guard": jsonl_prefix_guard(&path, offset).unwrap(),
+        "observed_len": offset,
+        "modified_ns": file_modified_ns(&metadata)
+    });
+    let position: JsonlPosition = serde_json::from_value(legacy).unwrap();
+
+    assert_eq!(position.prefix_digest, None);
+    assert!(!jsonl_position_is_current(&path, &position));
+}
+
+#[test]
 fn checkpoint_round_trips_through_disk() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint_path = dir.path().join("checkpoint.json");
@@ -249,6 +419,18 @@ fn checkpoint_round_trips_through_disk() {
     checkpoint
         .fingerprints
         .insert("/tmp/foo.jsonl".to_string(), "sha256:prefix".to_string());
+    checkpoint.jsonl_positions.insert(
+        "/tmp/foo.jsonl".to_string(),
+        JsonlPosition {
+            line: 42,
+            byte_offset: 1234,
+            source_epoch: "sha256:epoch".to_string(),
+            prefix_guard: "sha256:guard".to_string(),
+            prefix_digest: Some("sha256:digest".to_string()),
+            observed_len: 1234,
+            modified_ns: Some(123),
+        },
+    );
     checkpoint
         .discovery_cursors
         .insert("/tmp/root".to_string(), "/tmp/root/later.jsonl".to_string());
@@ -269,6 +451,10 @@ fn checkpoint_round_trips_through_disk() {
             .get("/tmp/foo.jsonl")
             .map(String::as_str),
         Some("sha256:prefix")
+    );
+    assert_eq!(
+        loaded.jsonl_positions.get("/tmp/foo.jsonl"),
+        checkpoint.jsonl_positions.get("/tmp/foo.jsonl")
     );
     assert_eq!(
         loaded
@@ -394,6 +580,7 @@ fn envelope_identity_survives_an_archive_move_when_native_session_is_available()
             message: "same record".to_string(),
             title: None,
             title_provenance: None,
+            diagnostics: Vec::new(),
         },
     );
     let archived = root
@@ -414,6 +601,7 @@ fn envelope_identity_survives_an_archive_move_when_native_session_is_available()
             message: "same record".to_string(),
             title: None,
             title_provenance: None,
+            diagnostics: Vec::new(),
         },
     );
     assert_eq!(
@@ -452,6 +640,7 @@ fn transcript_record_bounds_every_variable_wire_field() {
             message: "m".repeat(MAX_FORWARDED_MESSAGE_BYTES + 1),
             title: None,
             title_provenance: None,
+            diagnostics: Vec::new(),
         },
     );
     assert!(record.envelope.hostname.len() <= MAX_FORWARDED_IDENTIFIER_BYTES + 3);
@@ -590,6 +779,122 @@ async fn scan_and_forward_sends_new_lines_and_advances_checkpoint() {
         .await
         .unwrap();
     assert_eq!(sent_again, 0);
+}
+
+#[tokio::test]
+async fn scan_and_forward_replaces_parse_failures_with_receipt_backed_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    let valid = |content: &str| {
+        serde_json::json!({
+            "type": "user",
+            "timestamp": "2026-07-09T00:00:00Z",
+            "sessionId": "sess-1",
+            "message": {"role": "user", "content": content}
+        })
+        .to_string()
+    };
+    write_file(
+        &transcript_path,
+        &format!("{}\n{{not-json\n{}\n", valid("before"), valid("after")),
+    );
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&transcript_path.to_string_lossy().to_string()),
+        Some(&3)
+    );
+    let requests = server.received_requests().await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let diagnostic = &payload["records"][1]["envelope"];
+    assert_eq!(diagnostic["event_kind"], "parse_gap");
+    assert_eq!(
+        diagnostic["message"],
+        "[Cortex skipped an unparseable transcript record]"
+    );
+    assert_eq!(
+        diagnostic["diagnostics"][0]["code"],
+        "malformed_transcript_record"
+    );
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn scan_and_forward_checkpoints_an_all_invalid_file_only_after_gap_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    write_file(&transcript_path, "{not-json\n");
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&transcript_path.to_string_lossy().to_string()),
+        Some(&1)
+    );
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -732,6 +1037,98 @@ async fn scan_and_forward_retries_after_lost_or_incomplete_receipt_response() {
             .get(&transcript_path.to_string_lossy().to_string()),
         Some(&1)
     );
+}
+
+#[tokio::test]
+async fn scan_and_forward_retries_oversized_gap_until_receipt_then_checkpoints() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript_dir = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&transcript_dir).unwrap();
+    let transcript_path = transcript_dir.join("oversized.jsonl");
+    write_file(
+        &transcript_path,
+        &format!(
+            "{}\n{}\n",
+            "x".repeat(MAX_JSONL_LINE_BYTES + 1),
+            serde_json::json!({
+                "type": "response_item",
+                "timestamp": "2026-09-04T20:00:00Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": "after oversized record"
+                }
+            })
+        ),
+    );
+
+    let server = wiremock::MockServer::start().await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(move |request: &wiremock::Request| {
+            if calls_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"accepted": 2, "receipts": []}))
+            } else {
+                accepted_receipt_response(request)
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+
+    assert!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .is_err()
+    );
+    assert!(
+        checkpoint.files.is_empty(),
+        "no receipt means no checkpoint"
+    );
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&transcript_path.to_string_lossy().to_string()),
+        Some(&2)
+    );
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        let records = body["records"].as_array().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0]["envelope"]["message"],
+            "[Cortex skipped an oversized transcript record]"
+        );
+        assert_eq!(records[1]["envelope"]["message"], "after oversized record");
+    }
 }
 
 #[tokio::test]

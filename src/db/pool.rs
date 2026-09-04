@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 56;
+pub const KNOWN_SCHEMA_VERSION: i64 = 57;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3425,6 +3425,27 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         )?;
         tx.commit()?;
         tracing::info!("Migration 56: bound syslog forwarding receipts to request fingerprints");
+    }
+
+    // Migration 57: bind transcript replay receipts to the complete scrubbed
+    // evidence envelope. The idempotency key alone cannot distinguish an
+    // exact retry from a buggy or hostile sender reusing the ID for new data.
+    if !migration_applied(&conn, 57)? {
+        let tx = conn.transaction()?;
+        if table_exists(&tx, "ai_transcript_forward_receipts")? {
+            add_column_if_missing(
+                &tx,
+                "ai_transcript_forward_receipts",
+                "request_fingerprint",
+                "TEXT",
+            )?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (57)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 57: bound transcript receipts to request fingerprints");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

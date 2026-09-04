@@ -10,12 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::{SecondsFormat, Utc};
-use getrandom::fill as random_fill;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
-use tokio::time::sleep;
 
 use crate::syslog_forward_ingest::{
     SyslogForwardGap, SyslogForwardRecord, SyslogForwardRequest, SyslogForwardResponse,
@@ -25,6 +22,7 @@ pub(super) const MAX_SOURCE_SPOOL_RECORDS: usize = 1_024;
 pub(super) const MAX_SOURCE_SPOOL_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_SPOOL_RECORDS: usize = 4_096;
 pub(super) const MAX_SPOOL_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_SPOOL_GAPS: usize = 512;
 pub(super) const MAX_SPOOL_AGE_SECS: i64 = 86_400;
 const MAX_BATCH_RECORDS: usize = 100;
 const MAX_BATCH_BYTES: usize = 512 * 1024;
@@ -37,6 +35,7 @@ pub struct SyslogForwardStatus {
     pub queued_records: usize,
     pub queued_bytes: usize,
     pub pending_gaps: usize,
+    pub gap_overflow_intervals: u64,
     pub oldest_age_secs: Option<u64>,
     pub evicted_records: u64,
     pub last_error_code: Option<&'static str>,
@@ -55,6 +54,15 @@ pub(super) struct SpoolState {
     records: VecDeque<SyslogForwardRecord>,
     #[serde(default)]
     gaps: VecDeque<SyslogForwardGap>,
+    /// Gap identities become immutable after their first dispatch. Persisting
+    /// this set keeps a lost response plus restart from changing the retry ID.
+    #[serde(default)]
+    dispatched_gap_keys: HashSet<String>,
+    /// Number of loss intervals that could not be retained because the gap
+    /// queue itself reached its hard bound. This is durable degradation
+    /// telemetry; it never pretends the omitted interval was delivered.
+    #[serde(default)]
+    gap_overflow_intervals: u64,
     #[serde(default)]
     evicted_records: u64,
     #[serde(default)]
@@ -63,9 +71,11 @@ pub(super) struct SpoolState {
 
 #[path = "syslog_sender/spool.rs"]
 mod spool;
+#[cfg(test)]
+use spool::should_report_gap_overflow;
 use spool::{
-    evict_aggregate_to_quota, evict_source_to_quota, load_spool, next_source_key, save_spool,
-    source_key_of,
+    evict_aggregate_to_quota, evict_source_to_quota, gap_footprint_bytes, load_spool,
+    next_source_key, push_gap, save_spool, source_key_of,
 };
 
 fn default_epoch() -> u64 {
@@ -81,6 +91,8 @@ impl Default for SpoolState {
             next_sequences: HashMap::new(),
             records: VecDeque::new(),
             gaps: VecDeque::new(),
+            dispatched_gap_keys: HashSet::new(),
+            gap_overflow_intervals: 0,
             evicted_records: 0,
             last_dispatched_source: None,
         }
@@ -170,11 +182,27 @@ impl SyslogSender {
         });
         SyslogForwardStatus {
             queued_records: state.spool.records.len(),
-            queued_bytes: state.spool.records.iter().map(|r| r.line.len()).sum(),
+            queued_bytes: state
+                .spool
+                .records
+                .iter()
+                .map(|r| r.line.len())
+                .sum::<usize>()
+                + state
+                    .spool
+                    .gaps
+                    .iter()
+                    .map(gap_footprint_bytes)
+                    .sum::<usize>(),
             pending_gaps: state.spool.gaps.len(),
+            gap_overflow_intervals: state.spool.gap_overflow_intervals,
             oldest_age_secs,
             evicted_records: state.spool.evicted_records,
-            last_error_code: state.last_error_code,
+            last_error_code: if state.spool.gap_overflow_intervals > 0 {
+                Some("gap_evidence_overflow")
+            } else {
+                state.last_error_code
+            },
         }
     }
 
@@ -198,19 +226,19 @@ impl SyslogSender {
         let source_instance = format!("{}:{source_key}", state.spool.source_instance);
         let epoch = state.spool.source_epoch;
         if line.len() > MAX_FORWARD_RECORD_BYTES {
-            state.spool.gaps.push_back(SyslogForwardGap {
-                source_instance: source_instance.clone(),
-                source_epoch: epoch,
-                from_sequence: sequence,
-                to_sequence: sequence,
-                idempotency_key: delivery_key(&source_instance, epoch, sequence, "gap"),
-                observed_at: now(),
-                reason_code: "record_too_large".into(),
-            });
+            push_gap(
+                &mut state.spool,
+                SyslogForwardGap {
+                    source_instance: source_instance.clone(),
+                    source_epoch: epoch,
+                    from_sequence: sequence,
+                    to_sequence: sequence,
+                    idempotency_key: delivery_key(&source_instance, epoch, sequence, "gap"),
+                    observed_at: now(),
+                    reason_code: "record_too_large".into(),
+                },
+            );
             state.spool.evicted_records = state.spool.evicted_records.saturating_add(1);
-            while state.spool.gaps.len() > 256 {
-                state.spool.gaps.pop_front();
-            }
         } else {
             state.spool.records.push_back(SyslogForwardRecord {
                 source_instance: source_instance.clone(),
@@ -262,9 +290,23 @@ async fn delivery_loop(
             notify.notified().await;
             continue;
         }
-        let Some(request) = next_request(&state) else {
-            notify.notified().await;
-            continue;
+        let request = match next_request(&state) {
+            Ok(Some(request)) => request,
+            Ok(None) => {
+                notify.notified().await;
+                continue;
+            }
+            Err(error) => {
+                tracing::error!(
+                    reason_code = "local_spool_persist_failed",
+                    error = format!("{error:#}"),
+                    "syslog dispatch state could not be retained"
+                );
+                set_error(&state, "local_spool_persist_failed");
+                let delay = retry_delay_ms(attempt, None, random_u64());
+                retry_sleep(&mut attempt, delay).await;
+                continue;
+            }
         };
         let mut call = client
             .post(format!(
@@ -285,12 +327,19 @@ async fn delivery_loop(
                             set_error(&state, "none");
                         }
                         Err(error) => {
+                            let invalid_receipts =
+                                error.downcast_ref::<InvalidReceiptSet>().is_some();
+                            let reason_code = if invalid_receipts {
+                                "invalid_receipt_response"
+                            } else {
+                                "local_spool_persist_failed"
+                            };
                             tracing::error!(
-                                reason_code = "local_spool_persist_failed",
+                                reason_code,
                                 error = format!("{error:#}"),
                                 "syslog receipt could not be checkpointed"
                             );
-                            set_error(&state, "local_spool_persist_failed");
+                            set_error(&state, reason_code);
                             let delay = retry_delay_ms(attempt, None, random_u64());
                             retry_sleep(&mut attempt, delay).await;
                         }
@@ -338,9 +387,11 @@ async fn delivery_loop(
     }
 }
 
-fn next_request(state: &Arc<Mutex<SenderState>>) -> Option<SyslogForwardRequest> {
+fn next_request(state: &Arc<Mutex<SenderState>>) -> Result<Option<SyslogForwardRequest>> {
     let mut state = state.lock().expect("syslog sender state poisoned");
-    let source_key = next_source_key(&state.spool)?;
+    let Some(source_key) = next_source_key(&state.spool) else {
+        return Ok(None);
+    };
     let mut bytes = 0usize;
     let records = state
         .spool
@@ -359,7 +410,7 @@ fn next_request(state: &Arc<Mutex<SenderState>>) -> Option<SyslogForwardRequest>
         .take(MAX_BATCH_RECORDS)
         .cloned()
         .collect();
-    let gaps = state
+    let gaps: Vec<SyslogForwardGap> = state
         .spool
         .gaps
         .iter()
@@ -368,7 +419,12 @@ fn next_request(state: &Arc<Mutex<SenderState>>) -> Option<SyslogForwardRequest>
         .cloned()
         .collect();
     state.spool.last_dispatched_source = Some(source_key);
-    Some(SyslogForwardRequest { records, gaps })
+    state
+        .spool
+        .dispatched_gap_keys
+        .extend(gaps.iter().map(|gap| gap.idempotency_key.clone()));
+    save_spool(&state.spool_path, &state.spool)?;
+    Ok(Some(SyslogForwardRequest { records, gaps }))
 }
 
 fn apply_receipts(
@@ -383,8 +439,11 @@ fn apply_receipts(
         .chain(request.gaps.iter().map(|gap| gap.idempotency_key.as_str()))
         .collect();
     let keys: HashSet<&str> = receipts.iter().map(String::as_str).collect();
-    if !keys.is_subset(&outbound_keys) {
-        anyhow::bail!("syslog receiver acknowledged a record outside the submitted batch");
+    if receipts.len() != outbound_keys.len()
+        || keys.len() != receipts.len()
+        || keys != outbound_keys
+    {
+        return Err(anyhow::Error::new(InvalidReceiptSet));
     }
     let mut state = state.lock().expect("syslog sender state poisoned");
     state
@@ -395,75 +454,17 @@ fn apply_receipts(
         .spool
         .gaps
         .retain(|gap| !keys.contains(gap.idempotency_key.as_str()));
+    state
+        .spool
+        .dispatched_gap_keys
+        .retain(|key| !keys.contains(key.as_str()));
     save_spool(&state.spool_path, &state.spool)
 }
 
-struct RetryPlan {
-    reason_code: &'static str,
-    delay_ms: u64,
-}
+#[path = "syslog_sender/retry.rs"]
+mod retry;
+use retry::*;
 
-fn retry_plan(status: u16, attempt: u32, retry_after: Option<u64>, entropy: u64) -> RetryPlan {
-    let reason_code = if status == 429 {
-        "receiver_backpressure"
-    } else if (500..=599).contains(&status) {
-        "receiver_unavailable"
-    } else {
-        "receiver_rejected"
-    };
-    RetryPlan {
-        reason_code,
-        delay_ms: retry_delay_ms(attempt, retry_after, entropy),
-    }
-}
-
-fn retry_delay_ms(attempt: u32, retry_after: Option<u64>, entropy: u64) -> u64 {
-    if let Some(seconds) = retry_after {
-        return seconds.saturating_mul(1_000).min(RECONNECT_MAX_MS);
-    }
-    let backoff = backoff_ms(attempt);
-    let jitter_window = (backoff / 10).max(1);
-    backoff.saturating_add(entropy % (jitter_window + 1))
-}
-
-async fn retry_sleep(attempt: &mut u32, delay: u64) {
-    *attempt = attempt.saturating_add(1);
-    sleep(Duration::from_millis(delay)).await;
-}
-fn set_error(state: &Arc<Mutex<SenderState>>, code: &'static str) {
-    let mut state = state.lock().expect("syslog sender state poisoned");
-    state.last_error_code = if state.recovery_required {
-        Some("spool_recovery_required")
-    } else {
-        (code != "none").then_some(code)
-    };
-}
-fn backoff_ms(attempt: u32) -> u64 {
-    500u64
-        .saturating_mul(1u64 << attempt.min(6))
-        .min(RECONNECT_MAX_MS)
-}
-pub(super) fn delivery_key(source: &str, epoch: u64, sequence: u64, kind: &str) -> String {
-    format!("{source}:{epoch}:{sequence}:{kind}")
-}
-fn stable_source_key(source_key: &str) -> String {
-    let digest = Sha256::digest(source_key.as_bytes());
-    format!("source-{}", hex::encode(&digest[..12]))
-}
-pub(super) fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-fn random_source_instance() -> String {
-    let mut bytes = [0; 16];
-    random_fill(&mut bytes).expect("OS random source identity");
-    hex::encode(bytes)
-}
-
-fn random_u64() -> u64 {
-    let mut bytes = [0; 8];
-    random_fill(&mut bytes).expect("OS random retry jitter");
-    u64::from_le_bytes(bytes)
-}
 pub fn format_rfc5424(
     pri: u8,
     timestamp: &str,

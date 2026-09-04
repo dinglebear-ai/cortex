@@ -10,6 +10,10 @@ pub(in crate::agent::ai_transcript) struct Checkpoint {
     /// file's local cursor; receipt IDs keep the replay safe.
     #[serde(default)]
     pub(in crate::agent::ai_transcript) fingerprints: HashMap<String, String>,
+    /// Seekable cursors for append-only JSONL sources. Older checkpoints omit
+    /// this map and take the legacy line/fingerprint path once to migrate.
+    #[serde(default)]
+    pub(in crate::agent::ai_transcript) jsonl_positions: HashMap<String, JsonlPosition>,
     /// Per-root discovery cursors. Discovery is intentionally bounded, so a
     /// busy provider tree cannot permanently hide its later transcript files.
     /// The cursor only moves after the scan is either durably checkpointed or
@@ -29,6 +33,26 @@ pub(in crate::agent::ai_transcript) struct Checkpoint {
     /// content changes *or* when [`GEMINI_REWARN_INTERVAL`] has elapsed.
     #[serde(skip)]
     pub(in crate::agent::ai_transcript) gemini_parse_failures: HashMap<String, GeminiParseFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(in crate::agent::ai_transcript) struct JsonlPosition {
+    pub(in crate::agent::ai_transcript) line: usize,
+    pub(in crate::agent::ai_transcript) byte_offset: u64,
+    pub(in crate::agent::ai_transcript) source_epoch: String,
+    pub(in crate::agent::ai_transcript) prefix_guard: String,
+    /// Exact SHA-256 digest of every acknowledged byte. Growth verifies this
+    /// prior prefix before seeking into the append, catching rewrite+append.
+    #[serde(default)]
+    pub(in crate::agent::ai_transcript) prefix_digest: Option<String>,
+    /// File size when this cursor was persisted. A later larger size is the
+    /// normal append case; a same-size metadata change is a rewrite.
+    #[serde(default)]
+    pub(in crate::agent::ai_transcript) observed_len: u64,
+    /// Nanoseconds since the Unix epoch for the persisted file modification.
+    /// Missing legacy values invalidate once and are rewritten in this form.
+    #[serde(default)]
+    pub(in crate::agent::ai_transcript) modified_ns: Option<u64>,
 }
 
 /// How long a persistently malformed Gemini transcript stays quiet between
@@ -125,14 +149,17 @@ pub(in crate::agent::ai_transcript) fn save_checkpoint_updates(
     checkpoint: &mut Checkpoint,
     files: HashMap<String, usize>,
     fingerprints: HashMap<String, String>,
+    jsonl_positions: HashMap<String, JsonlPosition>,
     discovery_cursors: HashMap<String, String>,
 ) -> Result<()> {
     let old_files = apply_updates(&mut checkpoint.files, files);
     let old_fingerprints = apply_updates(&mut checkpoint.fingerprints, fingerprints);
+    let old_jsonl_positions = apply_updates(&mut checkpoint.jsonl_positions, jsonl_positions);
     let old_discovery = apply_updates(&mut checkpoint.discovery_cursors, discovery_cursors);
     if let Err(error) = save_checkpoint(path, checkpoint) {
         restore_updates(&mut checkpoint.files, old_files);
         restore_updates(&mut checkpoint.fingerprints, old_fingerprints);
+        restore_updates(&mut checkpoint.jsonl_positions, old_jsonl_positions);
         restore_updates(&mut checkpoint.discovery_cursors, old_discovery);
         return Err(error);
     }

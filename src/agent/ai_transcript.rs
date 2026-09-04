@@ -1,10 +1,10 @@
-//! Forwards local AI transcript changes (Claude/Codex/Gemini) to the central
+//! Forwards local AI transcript changes (Claude/Codex/Gemini/Antigravity) to the central
 //! cortex server via `POST /v1/ai-transcripts`, mirroring the local-only
 //! `cortex sessions watch` path but over the network — one more supervised
 //! stream inside `cortex agent`, alongside docker/journald/file-tail.
 //!
-//! Claude/Codex are append-only JSONL — tailed by byte/line offset via
-//! `read_new_lines`. Gemini sessions are a single whole-file JSON object
+//! Claude, Codex, and Antigravity projections are append-only JSONL — tailed
+//! with seekable line/byte checkpoints. Gemini sessions are a single whole-file JSON object
 //! (new messages appended, not a growing log file), so they're handled
 //! separately in `scan_and_forward`: re-parsed in full each cycle via
 //! `scanner::gemini::parse_file`, with the checkpoint tracking a *record
@@ -12,7 +12,7 @@
 //!
 //! Unlike the local watcher (`ai_watch.rs`, notify-based, debounced), this
 //! forwarder polls on a fixed interval and tracks a simple per-file
-//! "already forwarded" checkpoint (lines for Claude/Codex, records for
+//! "already forwarded" checkpoint (lines for JSONL providers, records for
 //! Gemini) in a local JSON state file. Polling (rather than filesystem
 //! notify) keeps the agent's dependency footprint small and matches the
 //! reliability bar of the other agent streams, which all tolerate
@@ -34,7 +34,7 @@ use crate::ai_project::normalize_local_ai_project_path;
 use crate::ai_transcript_ingest::{
     AI_TRANSCRIPT_BODY_LIMIT_BYTES, AiTranscriptIngestRequest, AiTranscriptIngestResponse,
     AiTranscriptRecord, EVIDENCE_ENVELOPE_VERSION, EvidenceCapabilityCoverage, EvidenceCoverage,
-    EvidenceEnvelope, EvidenceSource,
+    EvidenceDiagnostic, EvidenceEnvelope, EvidenceSource,
 };
 use crate::scanner;
 
@@ -160,6 +160,7 @@ async fn scan_and_forward(
     let mut records = Vec::new();
     let mut new_totals: HashMap<String, usize> = HashMap::new();
     let mut new_fingerprints: HashMap<String, String> = HashMap::new();
+    let mut new_jsonl_positions: HashMap<String, JsonlPosition> = HashMap::new();
     for path in &files {
         // Cap the aggregate batch across ALL files, not just per-file — a
         // host with a large never-forwarded backlog (many past sessions)
@@ -255,6 +256,7 @@ async fn scan_and_forward(
                         message: parsed_record.message,
                         title: parsed_record.session_metadata.title,
                         title_provenance: parsed_record.session_metadata.title_provenance,
+                        diagnostics: Vec::new(),
                     },
                 ));
             }
@@ -264,19 +266,38 @@ async fn scan_and_forward(
         }
 
         let mut from_line = checkpoint.files.get(&key).copied().unwrap_or(0);
-        let fingerprint = match file_prefix_fingerprint(path, from_line) {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => {
-                tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to fingerprint file");
-                continue;
+        let mut byte_offset = 0;
+        if let Some(position) = checkpoint.jsonl_positions.get(&key) {
+            if jsonl_position_is_current(path, position) {
+                from_line = position.line;
+                byte_offset = position.byte_offset;
+            } else {
+                from_line = 0;
             }
-        };
-        if checkpoint
-            .fingerprints
-            .get(&key)
-            .is_some_and(|previous| previous != &fingerprint)
-        {
-            from_line = 0;
+        } else {
+            // One-time migration for checkpoints written before seekable JSONL
+            // positions existed. Preserve the exact historical rewrite check.
+            let fingerprint = match file_prefix_fingerprint(path, from_line) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to fingerprint file");
+                    continue;
+                }
+            };
+            if checkpoint
+                .fingerprints
+                .get(&key)
+                .is_some_and(|previous| previous != &fingerprint)
+            {
+                from_line = 0;
+            }
+            byte_offset = match jsonl_offset_after_lines(path, from_line) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to migrate JSONL cursor");
+                    continue;
+                }
+            };
         }
         let mut fallback_project = scanner::project_for_file(source_kind, path);
         let mut fallback_session_id = codex_fallback_session_id(path, source_kind);
@@ -304,16 +325,18 @@ async fn scan_and_forward(
         let mut supplemental_lookup_session_id = None;
         let mut supplemental_title = None;
         let remaining_budget = MAX_BATCH_RECORDS - records.len();
-        let (new_lines, total_lines) = match read_new_lines(path, from_line, remaining_budget) {
+        let (new_lines, total_lines, acknowledged_offset) = match read_new_lines_from_offset(
+            path,
+            from_line,
+            byte_offset,
+            remaining_budget,
+        ) {
             Ok(result) => result,
             Err(error) => {
                 tracing::warn!(path = %path.display(), error = format!("{error:#}"), "ai transcript forwarder failed to read file");
                 continue;
             }
         };
-        if new_lines.is_empty() {
-            continue;
-        }
         for (line_no, line) in &new_lines {
             scanner::update_codex_fallbacks(
                 source_kind,
@@ -363,24 +386,76 @@ async fn scan_and_forward(
                             message: parsed.message,
                             title,
                             title_provenance,
+                            diagnostics: Vec::new(),
                         },
                     ));
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::debug!(path = %path.display(), line = line_no, error = %error, "ai transcript forwarder: unparseable line, skipping");
+                    tracing::warn!(
+                        path = %path.display(),
+                        line = line_no,
+                        error = %error,
+                        reason_code = "transcript_record_parse_failed",
+                        "ai transcript forwarder replaced an unparseable record with a diagnostic"
+                    );
+                    records.push(transcript_record(
+                        config,
+                        path,
+                        source_kind,
+                        TranscriptRecordDetails {
+                            revision: format!("parse-gap:{line_no}:{line}"),
+                            timestamp: None,
+                            ai_project: fallback_project.clone(),
+                            ai_session_id: fallback_session_id.clone(),
+                            event_kind: Some("parse_gap".to_string()),
+                            message: "[Cortex skipped an unparseable transcript record]"
+                                .to_string(),
+                            title: None,
+                            title_provenance: None,
+                            diagnostics: vec![EvidenceDiagnostic {
+                                code: "malformed_transcript_record".to_string(),
+                                detail: Some(format!("line {line_no}")),
+                            }],
+                        },
+                    ));
                 }
             }
         }
-        let acknowledged_fingerprint = match file_prefix_fingerprint(path, total_lines) {
+        let prefix_guard = match jsonl_prefix_guard(path, acknowledged_offset) {
             Ok(value) => value,
             Err(error) => {
-                tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to fingerprint acknowledged prefix");
+                tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to guard acknowledged prefix");
+                continue;
+            }
+        };
+        let prefix_digest = match jsonl_prefix_digest(path, acknowledged_offset) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to digest acknowledged prefix");
                 continue;
             }
         };
         new_totals.insert(key.clone(), total_lines);
-        new_fingerprints.insert(key, acknowledged_fingerprint);
+        let (observed_len, modified_ns) = path
+            .metadata()
+            .map(|metadata| (metadata.len(), file_modified_ns(&metadata)))
+            .unwrap_or((0, None));
+        new_jsonl_positions.insert(
+            key,
+            JsonlPosition {
+                line: total_lines,
+                byte_offset: acknowledged_offset,
+                source_epoch: source_epoch(path),
+                prefix_guard,
+                prefix_digest: Some(prefix_digest),
+                observed_len,
+                modified_ns,
+            },
+        );
+        if new_lines.is_empty() {
+            continue;
+        }
     }
 
     if records.is_empty() {
@@ -389,8 +464,9 @@ async fn scan_and_forward(
         save_checkpoint_updates(
             &config.checkpoint_path,
             checkpoint,
-            HashMap::new(),
-            HashMap::new(),
+            new_totals,
+            new_fingerprints,
+            new_jsonl_positions,
             discovery_updates,
         )?;
         return Ok(0);
@@ -462,6 +538,7 @@ async fn scan_and_forward(
         checkpoint,
         new_totals,
         new_fingerprints,
+        new_jsonl_positions,
         discovery_updates,
     )?;
     Ok(sent)

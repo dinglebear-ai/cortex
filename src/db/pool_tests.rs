@@ -1,11 +1,5 @@
 use super::*;
 
-#[test]
-fn documented_schema_count_matches_known_version() {
-    assert_eq!(KNOWN_SCHEMA_VERSION, 56);
-    assert!(include_str!("../../README.md").contains("56 sequential schema migrations"));
-    assert!(include_str!("../../docs/architecture.md").contains("56 sequential migrations"));
-}
 use crate::config::StorageConfig;
 use crate::db::{
     ENTITY_TYPES, EVIDENCE_SOURCE_KINDS, LogBatchEntry, REASON_CODES, RELATIONSHIP_TYPES,
@@ -13,6 +7,38 @@ use crate::db::{
     is_known_reason_code, is_known_relationship_type, is_known_trust_level,
 };
 use rusqlite::OptionalExtension;
+
+#[test]
+fn documented_schema_count_matches_known_version() {
+    assert_eq!(KNOWN_SCHEMA_VERSION, 57);
+    assert!(include_str!("../../README.md").contains("57 sequential schema migrations"));
+    assert!(include_str!("../../docs/architecture.md").contains("57 sequential migrations"));
+}
+
+#[test]
+fn migration_57_adds_transcript_receipt_fingerprints() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&test_storage_config(dir.path().join("migration-57.db"))).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(ai_transcript_forward_receipts)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "request_fingerprint"));
+
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 57",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+}
 
 fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
     StorageConfig::for_test(db_path)

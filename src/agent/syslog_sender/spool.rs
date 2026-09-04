@@ -33,7 +33,34 @@ pub(super) fn load_spool(path: &Path) -> LoadedSpool {
 }
 
 fn recover_unreadable_spool(path: &Path, error: impl std::fmt::Display) -> LoadedSpool {
-    let recovery_path = path.with_extension(format!("recovery-{}", random_u64()));
+    // Keep the recovery path stable so a restart continues delivering records
+    // accepted after the primary spool became unreadable. A random path here
+    // strands the previous process's durable recovery queue on every restart.
+    let recovery_path = path.with_extension("recovery");
+    let recovery_spool = match fs::read(&recovery_path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(spool) => spool,
+            Err(recovery_error) => {
+                tracing::error!(
+                    recovery_spool = %recovery_path.display(),
+                    error = %recovery_error,
+                    "syslog recovery spool is unreadable; operator recovery is required"
+                );
+                return load_or_create_recovery_generation(path, error);
+            }
+        },
+        Err(recovery_error) if recovery_error.kind() == std::io::ErrorKind::NotFound => {
+            SpoolState::default()
+        }
+        Err(recovery_error) => {
+            tracing::error!(
+                recovery_spool = %recovery_path.display(),
+                error = %recovery_error,
+                "syslog recovery spool could not be read; operator recovery is required"
+            );
+            return load_or_create_recovery_generation(path, error);
+        }
+    };
     tracing::error!(
         spool = %path.display(),
         recovery_spool = %recovery_path.display(),
@@ -41,8 +68,60 @@ fn recover_unreadable_spool(path: &Path, error: impl std::fmt::Display) -> Loade
         "syslog spool is unreadable; retaining original and starting a separate recovery spool"
     );
     LoadedSpool {
-        spool: SpoolState::default(),
+        spool: recovery_spool,
         spool_path: recovery_path,
+        error_code: Some("spool_recovery_required"),
+    }
+}
+
+fn load_or_create_recovery_generation(
+    path: &Path,
+    primary_error: impl std::fmt::Display,
+) -> LoadedSpool {
+    let mut generation_number = 2_u32;
+    let mut latest_valid = None;
+    let (generation, spool) = loop {
+        let candidate = path.with_extension(format!("recovery-{generation_number}"));
+        match fs::read(&candidate) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(spool) => latest_valid = Some((candidate, spool)),
+                Err(error) => {
+                    // This existing generation superseded every lower one.
+                    // If it cannot be resumed, an older valid generation is
+                    // stale and must not become writable again.
+                    latest_valid = None;
+                    tracing::error!(
+                        recovery_spool = %candidate.display(),
+                        error = %error,
+                        "syslog recovery generation is unreadable; preserving it"
+                    );
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                break latest_valid.unwrap_or_else(|| (candidate, SpoolState::default()));
+            }
+            Err(error) => {
+                latest_valid = None;
+                tracing::error!(
+                    recovery_spool = %candidate.display(),
+                    error = %error,
+                    "syslog recovery generation could not be read; preserving it"
+                );
+            }
+        }
+        generation_number = generation_number
+            .checked_add(1)
+            .expect("recovery generation space exhausted");
+    };
+    tracing::error!(
+        spool = %path.display(),
+        recovery_spool = %generation.display(),
+        error = %primary_error,
+        "primary and current recovery spools are unreadable; starting a new recovery generation"
+    );
+    LoadedSpool {
+        spool,
+        spool_path: generation,
         error_code: Some("spool_recovery_required"),
     }
 }
@@ -125,18 +204,18 @@ pub(super) fn evict_source_to_quota(spool: &mut SpoolState, source_key: &str) {
     }
     if let (Some(from_sequence), Some(to_sequence)) = (from, to) {
         let source = format!("{}:{source_key}", spool.source_instance);
-        spool.gaps.push_back(SyslogForwardGap {
-            source_instance: source.clone(),
-            source_epoch: spool.source_epoch,
-            from_sequence,
-            to_sequence,
-            idempotency_key: delivery_key(&source, spool.source_epoch, to_sequence, "gap"),
-            observed_at: now(),
-            reason_code: "local_retention_quota".into(),
-        });
-        while spool.gaps.len() > 256 {
-            spool.gaps.pop_front();
-        }
+        push_gap(
+            spool,
+            SyslogForwardGap {
+                source_instance: source.clone(),
+                source_epoch: spool.source_epoch,
+                from_sequence,
+                to_sequence,
+                idempotency_key: delivery_key(&source, spool.source_epoch, to_sequence, "gap"),
+                observed_at: now(),
+                reason_code: "local_retention_quota".into(),
+            },
+        );
     }
 }
 fn pop_evicted_at(
@@ -171,19 +250,76 @@ pub(super) fn evict_aggregate_to_quota(spool: &mut SpoolState) {
             .or_insert((record.sequence, record.sequence));
     }
     for (source_instance, (from_sequence, to_sequence)) in windows {
-        spool.gaps.push_back(SyslogForwardGap {
-            idempotency_key: delivery_key(&source_instance, spool.source_epoch, to_sequence, "gap"),
-            source_instance,
-            source_epoch: spool.source_epoch,
-            from_sequence,
-            to_sequence,
-            observed_at: now(),
-            reason_code: "aggregate_retention_quota".into(),
-        });
+        push_gap(
+            spool,
+            SyslogForwardGap {
+                idempotency_key: delivery_key(
+                    &source_instance,
+                    spool.source_epoch,
+                    to_sequence,
+                    "gap",
+                ),
+                source_instance,
+                source_epoch: spool.source_epoch,
+                from_sequence,
+                to_sequence,
+                observed_at: now(),
+                reason_code: "aggregate_retention_quota".into(),
+            },
+        );
     }
-    while spool.gaps.len() > 256 {
-        spool.gaps.pop_front();
+}
+
+/// Compact compatible unsent intervals without changing a dispatched gap's
+/// identity. At the hard queue bound, retain bounded durable degradation
+/// telemetry even though the exact new interval can no longer be stored.
+pub(super) fn push_gap(spool: &mut SpoolState, gap: SyslogForwardGap) {
+    let dispatched = &spool.dispatched_gap_keys;
+    if let Some(existing) = spool.gaps.iter_mut().find(|existing| {
+        !dispatched.contains(&existing.idempotency_key)
+            && existing.source_instance == gap.source_instance
+            && existing.source_epoch == gap.source_epoch
+            && existing.reason_code == gap.reason_code
+            && gap.from_sequence <= existing.to_sequence.saturating_add(1)
+            && existing.from_sequence <= gap.to_sequence.saturating_add(1)
+    }) {
+        existing.from_sequence = existing.from_sequence.min(gap.from_sequence);
+        existing.to_sequence = existing.to_sequence.max(gap.to_sequence);
+        existing.observed_at = gap.observed_at;
+        existing.idempotency_key = delivery_key(
+            &existing.source_instance,
+            existing.source_epoch,
+            existing.to_sequence,
+            "gap",
+        );
+        return;
     }
+    if spool.gaps.len() >= MAX_SPOOL_GAPS {
+        spool.gap_overflow_intervals = spool.gap_overflow_intervals.saturating_add(1);
+        if should_report_gap_overflow(spool.gap_overflow_intervals) {
+            tracing::error!(
+                reason_code = "gap_evidence_overflow",
+                omitted_intervals = spool.gap_overflow_intervals,
+                retained_gaps = spool.gaps.len(),
+                max_gaps = MAX_SPOOL_GAPS,
+                "syslog forwarding gap evidence exceeded its durable bound"
+            );
+        }
+        return;
+    }
+    spool.gaps.push_back(gap);
+}
+
+pub(super) fn should_report_gap_overflow(omitted_intervals: u64) -> bool {
+    omitted_intervals.is_power_of_two()
+}
+
+pub(super) fn gap_footprint_bytes(gap: &SyslogForwardGap) -> usize {
+    gap.source_instance.len()
+        + gap.idempotency_key.len()
+        + gap.observed_at.len()
+        + gap.reason_code.len()
+        + std::mem::size_of::<u64>() * 4
 }
 pub(super) fn next_source_key(spool: &SpoolState) -> Option<String> {
     let mut sources = BTreeSet::new();

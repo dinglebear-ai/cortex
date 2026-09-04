@@ -1,10 +1,13 @@
 //! Checkpoint, discovery, and record-normalization helpers.
 
 use super::*;
+use std::io::{Read, Seek, SeekFrom};
 
 #[path = "ai_transcript_helpers_checkpoint.rs"]
 mod checkpoint;
 pub(super) use checkpoint::*;
+
+pub(super) type JsonlReadWindow = (Vec<(usize, String)>, usize, u64);
 
 /// Recursively collect supported transcript files under `root` (mirrors
 /// `scanner`'s discovery rules via the public `is_supported_transcript_file`
@@ -131,6 +134,7 @@ pub(super) fn forward_source_kind(path: &Path) -> scanner::SourceKind {
 /// forever (a real bug this signature previously had: it read at most
 /// `limit` lines into the batch but always reported the file's full line
 /// count as the new checkpoint).
+#[cfg(test)]
 pub(super) fn read_new_lines(
     path: &Path,
     from_line: usize,
@@ -152,6 +156,31 @@ pub(super) fn read_new_lines(
         line_no += 1;
     }
     Ok((out, line_no))
+}
+
+pub(super) fn read_new_lines_from_offset(
+    path: &Path,
+    from_line: usize,
+    byte_offset: u64,
+    limit: usize,
+) -> Result<JsonlReadWindow> {
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    file.seek(SeekFrom::Start(byte_offset))?;
+    let mut reader = BufReader::new(file);
+    let mut out = Vec::new();
+    let mut line_no = from_line;
+    while out.len() < limit {
+        let before = reader.stream_position()?;
+        let Some(line) = read_bounded_jsonl_line(&mut reader)? else {
+            // Preserve the last complete-record boundary when the writer has
+            // only appended part of its next JSONL record.
+            reader.seek(SeekFrom::Start(before))?;
+            break;
+        };
+        out.push((line_no, line));
+        line_no += 1;
+    }
+    Ok((out, line_no, reader.stream_position()?))
 }
 
 pub(super) fn read_bounded_jsonl_line(reader: &mut BufReader<fs::File>) -> Result<Option<String>> {
@@ -289,6 +318,84 @@ pub(super) fn file_prefix_fingerprint(path: &Path, acknowledged_lines: usize) ->
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+pub(super) fn jsonl_offset_after_lines(path: &Path, acknowledged_lines: usize) -> Result<u64> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    for _ in 0..acknowledged_lines {
+        if read_bounded_jsonl_line(&mut reader)?.is_none() {
+            break;
+        }
+    }
+    reader.stream_position().map_err(Into::into)
+}
+
+const PREFIX_GUARD_WINDOW_BYTES: u64 = 4 * 1024;
+
+/// A bounded identity for an acknowledged append-only prefix. The source
+/// epoch detects replacement; sampling both ends detects truncation and the
+/// common in-place rewrite cases without rereading the historical body.
+pub(super) fn jsonl_prefix_guard(path: &Path, byte_offset: u64) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(byte_offset.to_le_bytes());
+    let first_len = byte_offset.min(PREFIX_GUARD_WINDOW_BYTES) as usize;
+    let mut buffer = vec![0; first_len];
+    file.read_exact(&mut buffer)?;
+    hasher.update(&buffer);
+    if byte_offset > PREFIX_GUARD_WINDOW_BYTES {
+        let tail_len = byte_offset.min(PREFIX_GUARD_WINDOW_BYTES);
+        file.seek(SeekFrom::Start(byte_offset - tail_len))?;
+        buffer.resize(tail_len as usize, 0);
+        file.read_exact(&mut buffer)?;
+        hasher.update(&buffer);
+    }
+    Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
+pub(super) fn jsonl_prefix_digest(path: &Path, byte_offset: u64) -> Result<String> {
+    let file = fs::File::open(path)?;
+    let mut reader = file.take(byte_offset);
+    let mut hasher = Sha256::new();
+    let copied = std::io::copy(&mut reader, &mut hasher)?;
+    anyhow::ensure!(
+        copied == byte_offset,
+        "transcript became shorter while hashing acknowledged prefix"
+    );
+    Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
+pub(super) fn file_modified_ns(metadata: &fs::Metadata) -> Option<u64> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos()
+        .try_into()
+        .ok()
+}
+
+pub(super) fn jsonl_position_is_current(path: &Path, position: &JsonlPosition) -> bool {
+    path.metadata().is_ok_and(|metadata| {
+        let len = metadata.len();
+        len >= position.byte_offset
+            && len >= position.observed_len
+            && position.observed_len != 0
+            && position.prefix_digest.is_some()
+            && if len > position.observed_len {
+                position.prefix_digest.as_ref().is_some_and(|expected| {
+                    jsonl_prefix_digest(path, position.byte_offset)
+                        .is_ok_and(|actual| actual == *expected)
+                })
+            } else {
+                position.modified_ns.is_some()
+                    && file_modified_ns(&metadata) == position.modified_ns
+            }
+    }) && source_epoch(path) == position.source_epoch
+        && jsonl_prefix_guard(path, position.byte_offset)
+            .is_ok_and(|guard| guard == position.prefix_guard)
+}
+
 /// Returns a fingerprint for the acknowledged logical prefix of a Gemini
 /// transcript. Gemini persists an entire JSON snapshot on every turn, so a
 /// byte prefix changes even when the already-forwarded messages have not.
@@ -360,6 +467,7 @@ pub(super) struct TranscriptRecordDetails {
     pub(super) message: String,
     pub(super) title: Option<String>,
     pub(super) title_provenance: Option<String>,
+    pub(super) diagnostics: Vec<EvidenceDiagnostic>,
 }
 
 pub(super) fn transcript_record(
@@ -433,7 +541,7 @@ pub(super) fn transcript_record(
                 None,
             ),
             capabilities: capability_coverage(source_kind),
-            diagnostics: Vec::new(),
+            diagnostics: details.diagnostics,
         },
     }
 }

@@ -315,6 +315,257 @@ async fn replay_returns_duplicate_receipt_without_duplicate_log_row() {
 }
 
 #[tokio::test]
+async fn reused_source_record_id_with_changed_payload_is_a_conflict() {
+    let (app, dir) = test_app(Some("secret"));
+    let original = sample_record();
+    let first_body = serde_json::to_string(&serde_json::json!({"records": [original]})).unwrap();
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(first_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let mut changed = sample_record();
+    changed["envelope"]["message"] = serde_json::json!("different evidence");
+    let changed_body = serde_json::to_string(&serde_json::json!({"records": [changed]})).unwrap();
+    let conflict = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(changed_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let bytes = axum::body::to_bytes(conflict.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "idempotency_conflict");
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn legacy_receipt_binds_fingerprint_only_after_an_exact_replay() {
+    let (app, dir) = test_app(Some("secret"));
+    let body = serde_json::to_string(&serde_json::json!({"records": [sample_record()]})).unwrap();
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let db_path = dir.path().join("ai-transcript-ingest-test.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = NULL",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let replay = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(replay.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["receipts"][0]["disposition"], "duplicate");
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let fingerprint: Option<String> = conn
+        .query_row(
+            "SELECT request_fingerprint FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(fingerprint.is_some());
+}
+
+#[tokio::test]
+async fn changed_replay_cannot_claim_a_legacy_null_fingerprint_receipt() {
+    let (app, dir) = test_app(Some("secret"));
+    let original =
+        serde_json::to_string(&serde_json::json!({"records": [sample_record()]})).unwrap();
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(original))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let db_path = dir.path().join("ai-transcript-ingest-test.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = NULL",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut changed = sample_record();
+    changed["envelope"]["message"] = serde_json::json!("changed legacy evidence");
+    let changed = serde_json::to_string(&serde_json::json!({"records": [changed]})).unwrap();
+    let conflict = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(changed))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let (logs, fingerprint): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM logs), request_fingerprint
+             FROM ai_transcript_forward_receipts",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(logs, 1);
+    assert!(fingerprint.is_none());
+}
+
+#[tokio::test]
+async fn timestamp_less_replay_cannot_claim_a_legacy_timestamped_receipt() {
+    let (app, dir) = test_app(Some("secret"));
+    let original =
+        serde_json::to_string(&serde_json::json!({"records": [sample_record()]})).unwrap();
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(original))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let db_path = dir.path().join("ai-transcript-ingest-test.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = NULL",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut ambiguous = sample_record();
+    ambiguous["envelope"]["timestamp"] = serde_json::Value::Null;
+    let body = serde_json::to_string(&serde_json::json!({"records": [ambiguous]})).unwrap();
+    let conflict = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let fingerprint: Option<String> = conn
+        .query_row(
+            "SELECT request_fingerprint FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(fingerprint.is_none());
+}
+
+#[tokio::test]
+async fn malformed_source_timestamp_is_rejected_explicitly() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    record["envelope"]["timestamp"] = serde_json::json!("not-a-timestamp");
+    let body = serde_json::to_string(&serde_json::json!({"records": [record]})).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "invalid_evidence_timestamp");
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn receiver_scrubs_hostile_envelope_fields_before_persistence() {
     let (app, dir) = test_app(Some("secret"));
     let mut record = sample_record();
@@ -326,10 +577,6 @@ async fn receiver_scrubs_hostile_envelope_fields_before_persistence() {
     envelope.insert(
         "hostname".into(),
         serde_json::json!("host TOKEN=host-canary"),
-    );
-    envelope.insert(
-        "timestamp".into(),
-        serde_json::json!("token=timestamp-canary"),
     );
     envelope["source"]["title"] = serde_json::json!("secret=title-canary");
     envelope["source"]["native_session_id"] = serde_json::json!("sk-session-canary");
@@ -428,10 +675,16 @@ async fn receiver_neutralizes_controls_in_session_title_and_provenance() {
 fn transcript_timestamp_is_scrubbed_bounded_and_canonicalized_before_persistence() {
     assert_eq!(
         safe_timestamp("2026-07-09T00:00:00Z"),
-        Some("2026-07-09T00:00:00.000Z".into())
+        Ok(Some("2026-07-09T00:00:00.000Z".into()))
     );
-    assert_eq!(safe_timestamp("token=timestamp-canary"), None);
-    assert_eq!(safe_timestamp(&"x".repeat(MAX_TIMESTAMP_CHARS + 1)), None);
+    assert_eq!(
+        safe_timestamp("token=timestamp-canary"),
+        Err("invalid_evidence_timestamp")
+    );
+    assert_eq!(
+        safe_timestamp(&"x".repeat(MAX_TIMESTAMP_CHARS + 1)),
+        Err("invalid_evidence_timestamp")
+    );
 }
 
 #[tokio::test]

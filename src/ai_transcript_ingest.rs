@@ -8,10 +8,10 @@
 //! a local SQLite file co-located with the server (`cortex::scanner` +
 //! `cortex::ai_watch`), which only works when the watcher and the server run
 //! on the same host. Once the server moves to a different host than the one
-//! running Claude/Codex/Gemini, that local-write path silently orphans all
-//! new transcript data. This endpoint gives every fleet host a way to forward
-//! its transcripts to wherever the server actually lives, the same way
-//! syslog/Docker/heartbeat data already does.
+//! running Claude/Codex/Gemini/Antigravity, that local-write path silently
+//! orphans all new transcript data. This endpoint gives every fleet host a way
+//! to forward its transcripts to wherever the server actually lives, the same
+//! way syslog/Docker/heartbeat data already does.
 //!
 //! Mounted on the shared HTTP listener (port 3100) next to MCP, OTLP,
 //! heartbeats, and agent-commands. Auth mirrors heartbeats/agent-commands
@@ -330,7 +330,12 @@ fn scrub_envelope(mut envelope: EvidenceEnvelope) -> Result<EvidenceEnvelope, &'
         .as_deref()
         .map(|value| scrub_text(value, MAX_IDENTIFIER_CHARS));
     envelope.event_kind = envelope.event_kind.as_deref().map(safe_identifier);
-    envelope.timestamp = envelope.timestamp.as_deref().and_then(safe_timestamp);
+    envelope.timestamp = envelope
+        .timestamp
+        .as_deref()
+        .map(safe_timestamp)
+        .transpose()?
+        .flatten();
     envelope.message = scrub_text(&envelope.message, MAX_TEXT_CHARS);
     envelope.diagnostics.truncate(MAX_DIAGNOSTICS);
     for diagnostic in &mut envelope.diagnostics {
@@ -345,84 +350,19 @@ fn scrub_envelope(mut envelope: EvidenceEnvelope) -> Result<EvidenceEnvelope, &'
 
 /// Timestamps arrive from an authenticated but untrusted forwarding client.
 /// Treat them like every other evidence scalar: scrub/bound before attempting
-/// to parse, then retain only a canonical RFC3339 representation. A malformed
-/// value becomes `None`, so the canonical log uses receipt time rather than
-/// preserving attacker-controlled text in an indexed field.
-fn safe_timestamp(value: &str) -> Option<String> {
+/// to parse, then retain only a canonical RFC3339 representation. Reject a
+/// malformed supplied value explicitly so the sender cannot mistake receipt
+/// time for the event time it attempted to provide.
+fn safe_timestamp(value: &str) -> Result<Option<String>, &'static str> {
     let scrubbed = scrub_text(value, MAX_TIMESTAMP_CHARS);
     chrono::DateTime::parse_from_rfc3339(&scrubbed)
-        .ok()
-        .map(|timestamp| timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .map(|timestamp| Some(timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)))
+        .map_err(|_| "invalid_evidence_timestamp")
 }
 
-/// Commit each canonical log insert and its source-record receipt in one
-/// SQLite transaction.  A retry after a lost HTTP response returns a
-/// `duplicate` receipt instead of materializing another log row.
-fn insert_envelopes_with_receipts(
-    pool: &DbPool,
-    records: Vec<AiTranscriptRecord>,
-    forwarder_identity: String,
-    peer: SocketAddr,
-) -> anyhow::Result<Vec<AiTranscriptReceipt>> {
-    let mut conn = db::write_conn(pool)?;
-    let tx = conn.transaction()?;
-    let mut receipts = Vec::with_capacity(records.len());
-
-    for record in records {
-        let envelope = scrub_envelope(record.envelope)
-            .map_err(|reason| anyhow::anyhow!("invalid transcript evidence envelope: {reason}"))?;
-        let already_accepted = tx
-            .query_row(
-                "SELECT 1 FROM ai_transcript_forward_receipts WHERE source_record_id = ?1",
-                [&envelope.source_record_id],
-                |_| Ok(()),
-            )
-            .optional()?;
-        if already_accepted.is_some() {
-            receipts.push(AiTranscriptReceipt {
-                source_record_id: envelope.source_record_id,
-                disposition: ReceiptDisposition::Duplicate,
-            });
-            continue;
-        }
-
-        let entries = [to_log_batch_entry(
-            envelope.clone(),
-            &forwarder_identity,
-            &peer,
-        )];
-        let ids = db::insert_logs_batch_in_tx(&tx, &entries)?;
-        let log_id = ids
-            .into_iter()
-            .next()
-            .expect("one transcript envelope must insert one log row");
-        tx.execute(
-            "INSERT INTO ai_transcript_forward_receipts
-                (source_record_id, envelope_version, log_id, provider,
-                 source_identity, source_epoch, source_revision, received_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
-                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-            rusqlite::params![
-                envelope.source_record_id,
-                i64::from(envelope.version),
-                log_id,
-                envelope.source.provider,
-                envelope.source.source_identity,
-                envelope.source.source_epoch,
-                envelope.source.source_revision,
-            ],
-        )?;
-        receipts.push(AiTranscriptReceipt {
-            source_record_id: envelope.source_record_id,
-            disposition: ReceiptDisposition::Accepted,
-        });
-    }
-    tx.commit()?;
-    if !receipts.is_empty() {
-        crate::db::agent_observatory::notify_projection_work();
-    }
-    Ok(receipts)
-}
+#[path = "ai_transcript_ingest/legacy_receipt.rs"]
+mod legacy_receipt;
+use legacy_receipt::*;
 
 async fn ingest_handler(
     State(state): State<AiTranscriptIngestState>,
@@ -488,6 +428,11 @@ async fn ingest_handler(
                 accepted: receipts.len(),
                 receipts,
             }),
+        )
+            .into_response(),
+        Ok(Err(error)) if error.downcast_ref::<IdempotencyConflict>().is_some() => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "idempotency_conflict"})),
         )
             .into_response(),
         Ok(Err(error)) => {
