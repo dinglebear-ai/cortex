@@ -2110,6 +2110,19 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
         "partial checkpoints retain full source metadata plus a separate cursor: {checkpoint:#?}"
     );
 
+    // Active transcripts normally grow between bounded passes. An append must
+    // preserve the already-imported prefix and continue from its exact line,
+    // rather than looking like an in-place rewrite and resetting to byte zero.
+    use std::io::Write as _;
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap(),
+        r#"{{"sessionId":"s","content":"appended while continuation is pending"}}"#
+    )
+    .unwrap();
+
     let mut pass_results = Vec::new();
     for _ in 0..3 {
         let pass =
@@ -2151,6 +2164,29 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
             },
         )
         .unwrap()
+    );
+    let conn = pool.get().unwrap();
+    let first_row_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'one'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        first_row_count, 1,
+        "append must not delete/replay the prefix"
+    );
+    let recovered_line_no: i64 = conn
+        .query_row(
+            "SELECT json_extract(metadata_json, '$.line_no') FROM logs WHERE message = 'second bounded chunk becomes visible later'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        recovered_line_no, 5,
+        "metadata retains physical line numbers"
     );
 }
 

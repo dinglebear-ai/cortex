@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 55;
+pub const KNOWN_SCHEMA_VERSION: i64 = 56;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3317,6 +3317,7 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
                  sequence        INTEGER NOT NULL,
                  canonical_log_id INTEGER NOT NULL,
                  receipt_kind    TEXT NOT NULL CHECK (receipt_kind IN ('record', 'gap')),
+                 request_fingerprint TEXT NOT NULL,
                  received_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
              );
              CREATE INDEX IF NOT EXISTS idx_syslog_forward_receipts_source_sequence
@@ -3404,6 +3405,26 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         )?;
         tx.commit()?;
         tracing::info!("Migration 55: added session title provenance to AI session rollup");
+    }
+
+    // Migration 56: bind syslog-forward replay receipts to the authenticated
+    // request tuple so conflicting idempotency-key reuse cannot drop evidence.
+    if !migration_applied(&conn, 56)? {
+        let tx = conn.transaction()?;
+        if table_exists(&tx, "syslog_forward_receipts")? {
+            add_column_if_missing(
+                &tx,
+                "syslog_forward_receipts",
+                "request_fingerprint",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (56)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 56: bound syslog forwarding receipts to request fingerprints");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

@@ -138,7 +138,7 @@ pub struct HeartbeatAgentConfig {
 }
 
 impl HeartbeatAgentConfig {
-    pub fn from_env(host_id_path: PathBuf) -> Self {
+    pub fn from_env(host_id_path: PathBuf) -> Result<Self> {
         let target = crate::env::var("CORTEX_HEARTBEAT_TARGET")
             .ok()
             .or_else(|| crate::env::var("CORTEX_URL").ok())
@@ -165,14 +165,16 @@ impl HeartbeatAgentConfig {
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
         let syslog_target = crate::env::var("CORTEX_SYSLOG_TARGET").ok();
-        let syslog_forward_spool_path = crate::env::var("CORTEX_AGENT_SYSLOG_FORWARD_SPOOL")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                crate::setup::cortex_home_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join("syslog-forward-spool.json")
-            });
+        let syslog_forward_spool_path = match crate::env::var(
+            "CORTEX_AGENT_SYSLOG_FORWARD_SPOOL",
+        ) {
+            Ok(path) => PathBuf::from(path),
+            Err(_) => crate::setup::cortex_home_dir()
+                .context(
+                    "cannot resolve a durable Cortex state directory for the syslog forwarding spool; set CORTEX_AGENT_SYSLOG_FORWARD_SPOOL explicitly",
+                )?
+                .join("syslog-forward-spool.json"),
+        };
         let current_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_ENV).ok();
         let legacy_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok();
         let transcript_forward = resolve_ai_transcript_forward_env(
@@ -229,7 +231,7 @@ impl HeartbeatAgentConfig {
                         .unwrap_or_else(|_| PathBuf::from("."))
                         .join("shell-history-forward-checkpoint.json")
                 });
-        Self {
+        Ok(Self {
             target,
             token,
             interval: Duration::from_secs(DEFAULT_INTERVAL_SECS),
@@ -253,7 +255,7 @@ impl HeartbeatAgentConfig {
             agent_command_spool_path,
             shell_history_forward,
             shell_history_checkpoint_path,
-        }
+        })
     }
 }
 

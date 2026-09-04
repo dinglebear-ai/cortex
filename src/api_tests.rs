@@ -222,7 +222,9 @@ async fn agent_observatory_routes_are_bearer_protected_and_return_bounded_pages(
     assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
     let (status, body) = get_json(app.clone(), "/api/repositories?limit=1", Some("secret")).await;
     assert_eq!(status, axum::http::StatusCode::OK);
-    assert_eq!(body["items"][0]["key"], "repo-one");
+    assert_eq!(body["repositories"][0]["key"], "repo-one");
+    assert_eq!(body["repositories"][0]["id"], "1");
+    assert!(body.get("items").is_none());
     assert_eq!(body["pagination"]["limit"], 1);
     let (status, body) = get_json(
         app.clone(),
@@ -247,6 +249,8 @@ async fn agent_observatory_routes_are_bearer_protected_and_return_bounded_pages(
     .await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(body["pagination"]["limit"], 50);
+    assert!(body["runs"].is_array());
+    assert!(body.get("items").is_none());
 }
 
 #[test]

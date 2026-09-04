@@ -401,3 +401,22 @@ fn format_rfc5424_replaces_newlines_and_keeps_valid_fields() {
         "<131>1 ts host app pid - - first second"
     );
 }
+
+#[tokio::test]
+async fn failed_spool_write_rolls_back_frame_and_sequence() {
+    let dir = tempfile::tempdir().unwrap();
+    let spool_path = dir.path().join("spool.json");
+    let sender = SyslogSender::new("http://127.0.0.1:9".to_string(), None, spool_path.clone());
+    std::fs::create_dir(&spool_path).unwrap();
+
+    assert!(
+        sender
+            .send_from("journald", "not-durable".into())
+            .await
+            .is_err()
+    );
+    let state = sender.state.lock().unwrap();
+    assert!(state.spool.records.is_empty());
+    assert!(state.spool.gaps.is_empty());
+    assert!(state.spool.next_sequences.is_empty());
+}

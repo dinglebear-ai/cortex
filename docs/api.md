@@ -31,7 +31,7 @@ busy response. Admin mutations are audited before the service call.
 All responses are JSON; error bodies are `{"error": "<message>"}`
 unless a route documents a structured diagnostic body.
 
-### Core queries and discovery (9)
+### Core queries, discovery, and streams (13)
 
 These existed before the epic; bead `.1` only added `/api/version`.
 They are documented here for completeness because the CLI now routes
@@ -59,7 +59,7 @@ to them by default.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/recurring-error-comparison` | read | query: `signature_hash?`, `since?`, `until?`, `window_minutes?` (5..1440), `limit?` (1..50), `include_acknowledged?` | `RecurringErrorComparisonResponse { focal_from, focal_to, baseline_from, baseline_to, candidate_rows, candidate_cap, candidate_window_truncated, results_truncated, privacy_policy, comparisons }` | 200, 400, 401, 503, 500 | Y | Compares canonical recurring-error signatures in the focal window against the adjacent baseline. Candidates are capped at 512 before deterministic ranking; response text is irreversibly scrubbed and bounded. Each bundle has a replayable SHA-256 identity over canonical source keys, evidence revision, window, and privacy policy, plus bounded graph evidence handles and an explicit next graph query. Boundary/retention/projection gaps are markers, not silent zeroes; rankings are evidence-led and do not claim causation. MCP: `recurring_error_comparison` (`cortex:read`). |
 
-### Agent Observatory (10)
+### Agent Observatory (5 canonical routes plus 5 compatibility aliases)
 
 All Agent Observatory endpoints are read-only, token-gated, cursor-paged, and
 return source-attributed, redacted projection data. The `/api/agent-observatory/*`
@@ -147,7 +147,7 @@ compatibility routes.
 | GET | `/api/graph/explain` | read | query: entity selector, `depth?` (clamped to 3), `beam_width?`, `max_chains?`, `evidence_sample_limit?`, `payload_budget?` | `GraphExplainResponse { resolved_entity, chains, narrative, open_questions, missing_evidence, next_queries, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Deterministic evidence-backed explanation; weak evidence becomes open questions, not causal claims. |
 | GET | `/api/graph/evidence` | read | query: `evidence_id` (REQUIRED, minimum 1), `payload_budget?` | `GraphEvidenceLookupResponse { evidence, relationship, src_entity, dst_entity, source_log_summary?, missing_source_reason?, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Proof lookup for one evidence row. Source summaries are redacted/truncated and exclude raw frames and raw metadata. |
 
-**Total: 71 routes** (current `src/api.rs` router surface, including syslog,
+**Total: 93 method/path bindings** (current surface registry, including syslog,
 surface-parity, AI, graph, compose, notification, error-ack, and DB routes;
 includes the 3 hook routes above, added alongside the `ai_hook_events`
 subsystem).

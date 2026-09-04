@@ -180,6 +180,10 @@ impl SyslogSender {
 
     fn enqueue(&self, source_key: &str, line: String) -> Result<()> {
         let mut state = self.state.lock().expect("syslog sender state poisoned");
+        // Persistence is the durability boundary. Keep an exact snapshot so a
+        // failed atomic write cannot consume a sequence, retain a memory-only
+        // frame, or apply quota eviction that was never committed to disk.
+        let previous_spool = state.spool.clone();
         let source_key = stable_source_key(source_key);
         let sequence = {
             let legacy_next = state.spool.next_sequence;
@@ -219,7 +223,10 @@ impl SyslogSender {
         }
         evict_source_to_quota(&mut state.spool, &source_key);
         evict_aggregate_to_quota(&mut state.spool);
-        save_spool(&state.spool_path, &state.spool)?;
+        if let Err(error) = save_spool(&state.spool_path, &state.spool) {
+            state.spool = previous_spool;
+            return Err(error);
+        }
         drop(state);
         self.notify.notify_one();
         Ok(())

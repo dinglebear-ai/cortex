@@ -193,7 +193,7 @@ fn config_from_env_honors_agent_stream_flags_and_fallbacks() {
     let _syslog_file = EnvGuard::set("CORTEX_AGENT_SYSLOG_FILE", "/var/log/syslog");
     let _syslog_target = EnvGuard::set("CORTEX_SYSLOG_TARGET", "127.0.0.1:1514");
 
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
 
     assert_eq!(
         config.target.as_deref(),
@@ -221,7 +221,7 @@ fn config_from_env_uses_cortex_url_and_token_fallbacks_and_ignores_blank_syslog_
     let _journald = EnvGuard::set("CORTEX_AGENT_JOURNALD", "0");
     let _syslog_file = EnvGuard::set("CORTEX_AGENT_SYSLOG_FILE", "   ");
 
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
 
     assert_eq!(
         config.target.as_deref(),
@@ -707,7 +707,7 @@ fn transcript_forward_env_resolution_precedence_is_stable() {
 fn transcript_forward_env_current_value_is_authoritative_in_config() {
     let _new = EnvGuard::set(AI_TRANSCRIPT_FORWARD_ENV, "false");
     let _legacy = EnvGuard::set(AI_TRANSCRIPT_FORWARD_LEGACY_ENV, "true");
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
     assert!(!config.ai_transcripts);
 }
 
@@ -716,7 +716,7 @@ fn transcript_forward_env_current_value_is_authoritative_in_config() {
 fn transcript_forward_env_legacy_value_is_honored_in_config() {
     let _new = EnvGuard::unset(AI_TRANSCRIPT_FORWARD_ENV);
     let _legacy = EnvGuard::set(AI_TRANSCRIPT_FORWARD_LEGACY_ENV, "true");
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
     assert!(config.ai_transcripts);
 }
 

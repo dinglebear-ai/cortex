@@ -216,17 +216,15 @@ pub(super) fn seed_codex_prefix_fallbacks(
 
     let file = fs::File::open(path)
         .with_context(|| format!("open Codex prefix metadata {}", path.display()))?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
     let scan_limit = from_line.min(CODEX_PREFIX_METADATA_SCAN_LINES);
-    for line in reader.lines().take(scan_limit) {
-        let line =
-            line.with_context(|| format!("read Codex prefix metadata {}", path.display()))?;
-        scanner::update_codex_fallbacks(
-            source_kind,
-            line.trim_end_matches(['\r', '\n']),
-            fallback_project,
-            fallback_session_id,
-        );
+    for _ in 0..scan_limit {
+        let Some(line) = read_bounded_jsonl_line(&mut reader)
+            .with_context(|| format!("read Codex prefix metadata {}", path.display()))?
+        else {
+            break;
+        };
+        scanner::update_codex_fallbacks(source_kind, &line, fallback_project, fallback_session_id);
         if fallback_project.is_some() && fallback_session_id.is_some() {
             break;
         }

@@ -39,16 +39,13 @@ fn git_reconcile_cursor_round_robins_sorted_repositories_and_replays_invalid_sta
         next_repository_index(&repositories, &GitReconcileCursor::default()),
         Some(0)
     );
-    let cursor = decode_git_reconcile_cursor(&encode_git_reconcile_cursor("/workspace/a"));
+    let cursor = decode_git_reconcile_cursor(&encode_git_reconcile_cursor("/workspace/a")).unwrap();
     assert_eq!(next_repository_index(&repositories, &cursor), Some(1));
-    let cursor = decode_git_reconcile_cursor(&encode_git_reconcile_cursor("/workspace/c"));
+    let cursor = decode_git_reconcile_cursor(&encode_git_reconcile_cursor("/workspace/c")).unwrap();
     assert_eq!(next_repository_index(&repositories, &cursor), Some(0));
-    assert_eq!(
-        next_repository_index(
-            &repositories,
-            &decode_git_reconcile_cursor("legacy timestamp")
-        ),
-        Some(0)
+    assert!(
+        decode_git_reconcile_cursor("legacy timestamp").is_err(),
+        "malformed persisted cursors must be surfaced instead of silently reset"
     );
 
     let (_directory, pool) = pool();
@@ -58,7 +55,10 @@ fn git_reconcile_cursor_round_robins_sorted_repositories_and_replays_invalid_sta
     let persisted = projection_cursor(&pool, "git").unwrap();
     assert_eq!(persisted, checkpoint);
     assert_eq!(
-        next_repository_index(&repositories, &decode_git_reconcile_cursor(&persisted)),
+        next_repository_index(
+            &repositories,
+            &decode_git_reconcile_cursor(&persisted).unwrap()
+        ),
         Some(2)
     );
 }

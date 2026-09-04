@@ -877,6 +877,12 @@ pub fn index_file_with_options(
         snapshot.is_none() && current_metadata.size > budget.per_source_max_bytes
     });
     let current_revision = source_revision_for_path(&canonical_path)?;
+    let bounded_source_identity = bounded_stream
+        .then(|| source_identity_for_path(&canonical_path))
+        .transpose()?;
+    let bounded_initial_fingerprint = bounded_stream
+        .then(|| source_boundary_fingerprint(&canonical_path, current_metadata.size))
+        .transpose()?;
     if !options.force
         && source_kind != SourceKind::ExplicitFile
         && if bounded_stream {
@@ -945,14 +951,13 @@ pub fn index_file_with_options(
     }
     let continuation = if bounded_stream {
         stored_metadata.as_ref().and_then(|metadata| {
-            let valid_revision = metadata.source_revision.as_deref()
-                == Some(current_revision.as_str())
-                && metadata.file_size == Some(current_metadata.size as i64)
-                && metadata.file_mtime == current_metadata.mtime
-                && metadata.last_error.is_none();
             let offset = metadata
                 .last_offset
                 .and_then(|offset| u64::try_from(offset).ok())?;
+            let valid_revision = metadata.source_revision.as_deref().is_some_and(|revision| {
+                partial_source_revision_matches(&canonical_path, offset, revision).unwrap_or(false)
+            }) && current_metadata.size >= offset
+                && metadata.last_error.is_none();
             valid_revision
                 .then_some((metadata.scan_state, offset))
                 .filter(|(state, _)| {
@@ -1005,7 +1010,11 @@ pub fn index_file_with_options(
             // deadline. Byte offsets remain stable record identities for the
             // resumed tail if a provider omitted an explicit event id.
             reader.get_mut().seek(SeekFrom::Start(offset))?;
-            usize::try_from(offset).unwrap_or(usize::MAX)
+            stored_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.source_revision.as_deref())
+                .and_then(partial_source_line_no)
+                .unwrap_or(0)
         } else {
             let counted = hash_prefix_and_count_lines(reader.get_mut(), &mut hasher, offset)?;
             let prefix_hash = hex_digest(&hasher.clone().finalize());
@@ -1315,8 +1324,17 @@ pub fn index_file_with_options(
 
     let final_metadata = FileMetadata::from_path_metadata(&canonical_path)?;
     let final_revision = source_revision_for_path(&canonical_path)?;
-    let unchanged_during_scan = current_metadata.same_size_and_mtime(&final_metadata)
-        && (!bounded_stream || final_revision == current_revision);
+    let unchanged_during_scan = if bounded_stream {
+        final_metadata.size >= current_metadata.size
+            && bounded_source_identity.as_deref()
+                == Some(source_identity_for_path(&canonical_path)?.as_str())
+            && bounded_initial_fingerprint.as_deref()
+                == Some(
+                    source_boundary_fingerprint(&canonical_path, current_metadata.size)?.as_str(),
+                )
+    } else {
+        current_metadata.same_size_and_mtime(&final_metadata)
+    };
     if bounded_stream && !unchanged_during_scan {
         // We might have already flushed a chunk before the source changed.
         // Resetting the source transactionally removes those receipts and rows
@@ -1326,17 +1344,22 @@ pub fn index_file_with_options(
         return Ok(result);
     }
     let file_metadata = if bounded_stream {
-        current_metadata.clone()
+        final_metadata.clone()
     } else {
         current_metadata.with_hash(&hasher.finalize())
     };
     let completion_metadata = (source_complete && unchanged_during_scan)
         .then_some(file_metadata)
         .filter(|_| result.parse_errors == 0);
+    let partial_revision = if let Some(offset) = partial_offset {
+        Some(partial_source_revision(&canonical_path, offset, line_no)?)
+    } else {
+        None
+    };
     let checkpoint_update = if let Some(metadata) = completion_metadata.as_ref() {
         Some(CheckpointUpdate::Complete {
             metadata,
-            revision: &current_revision,
+            revision: &final_revision,
         })
     } else if let (Some(metadata), Some(state), Some(offset)) = (
         partial_metadata.as_ref(),
@@ -1345,7 +1368,7 @@ pub fn index_file_with_options(
     ) {
         Some(CheckpointUpdate::Partial {
             metadata,
-            revision: &current_revision,
+            revision: partial_revision.as_deref().unwrap_or(&current_revision),
             state,
             offset,
         })
@@ -2770,6 +2793,59 @@ fn source_revision_for_path(path: &Path) -> Result<String> {
     // forces a restart whenever size or mtime changes.
     let metadata = fs::metadata(path)?;
     Ok(format!("{}:{:?}", metadata.len(), metadata.modified().ok()))
+}
+
+const SOURCE_BOUNDARY_FINGERPRINT_BYTES: u64 = 4 * 1024;
+
+fn partial_source_revision(path: &Path, offset: u64, line_no: usize) -> Result<String> {
+    Ok(format!(
+        "v2|{}|{line_no}|{}",
+        source_identity_for_path(path)?,
+        source_boundary_fingerprint(path, offset)?
+    ))
+}
+
+#[cfg(unix)]
+fn source_identity_for_path(path: &Path) -> Result<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::metadata(path)?;
+    Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn source_identity_for_path(path: &Path) -> Result<String> {
+    Ok(hash_text(path.canonicalize()?.to_string_lossy().as_ref()))
+}
+
+fn partial_source_line_no(revision: &str) -> Option<usize> {
+    let mut fields = revision.split('|');
+    (fields.next()? == "v2").then_some(())?;
+    fields.next()?;
+    fields.next()?.parse().ok()
+}
+
+fn partial_source_revision_matches(path: &Path, offset: u64, revision: &str) -> Result<bool> {
+    let Some(line_no) = partial_source_line_no(revision) else {
+        return Ok(false);
+    };
+    Ok(partial_source_revision(path, offset, line_no)? == revision)
+}
+
+fn source_boundary_fingerprint(path: &Path, offset: u64) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let prefix_len = offset.min(SOURCE_BOUNDARY_FINGERPRINT_BYTES);
+    let mut prefix = vec![0; usize::try_from(prefix_len).unwrap_or(0)];
+    file.read_exact(&mut prefix)?;
+    hasher.update(&prefix);
+    let tail_start = offset.saturating_sub(SOURCE_BOUNDARY_FINGERPRINT_BYTES);
+    file.seek(SeekFrom::Start(tail_start))?;
+    let tail_len = offset.saturating_sub(tail_start);
+    let mut tail = vec![0; usize::try_from(tail_len).unwrap_or(0)];
+    file.read_exact(&mut tail)?;
+    hasher.update(&tail);
+    Ok(hex_digest(&hasher.finalize()))
 }
 
 fn hex_digest(bytes: &[u8]) -> String {

@@ -18,7 +18,7 @@ use axum::{
 };
 use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -33,6 +33,17 @@ use crate::surfaces::post;
 pub const SYSLOG_FORWARD_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_RECORDS_PER_BATCH: usize = 200;
 pub const MAX_GAPS_PER_BATCH: usize = 50;
+
+#[derive(Debug)]
+struct IdempotencyConflict;
+
+impl std::fmt::Display for IdempotencyConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("idempotency_conflict")
+    }
+}
+
+impl std::error::Error for IdempotencyConflict {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +150,9 @@ async fn ingest_handler(
     }
     let pool = Arc::clone(&state.pool);
     let peer_ip = peer.ip().to_string();
+    let record_count = request.records.len();
+    let gap_count = request.gaps.len();
+    let diagnostic_identity = forwarder_identity.clone();
     match tokio::task::spawn_blocking(move || {
         persist_request(&pool, request, &peer_ip, &forwarder_identity)
     })
@@ -147,9 +161,19 @@ async fn ingest_handler(
         Ok(Ok(receipts)) => {
             (StatusCode::OK, Json(SyslogForwardResponse { receipts })).into_response()
         }
-        Ok(Err(_)) => {
+        Ok(Err(error)) if error.downcast_ref::<IdempotencyConflict>().is_some() => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "idempotency_conflict"})),
+        )
+            .into_response(),
+        Ok(Err(error)) => {
             tracing::error!(
                 reason_code = "syslog_forward_ingest_failed",
+                error = %error,
+                forwarder = %diagnostic_identity,
+                peer = %peer,
+                record_count,
+                gap_count,
                 "syslog forwarding ingest failed"
             );
             (
@@ -158,9 +182,14 @@ async fn ingest_handler(
             )
                 .into_response()
         }
-        Err(_) => {
+        Err(join_error) => {
             tracing::error!(
                 reason_code = "syslog_forward_ingest_task_failed",
+                error = %join_error,
+                forwarder = %diagnostic_identity,
+                peer = %peer,
+                record_count,
+                gap_count,
                 "syslog forwarding ingest task failed"
             );
             (
@@ -179,7 +208,7 @@ fn invalid_record(record: &SyslogForwardRecord) -> bool {
         || record.idempotency_key.len() > 256
         || record.source_epoch > i64::MAX as u64
         || record.sequence > i64::MAX as u64
-        || record.observed_at.len() > 64
+        || !valid_observed_at(&record.observed_at)
         || record.line.is_empty()
         || record.line.len() > 64 * 1024
 }
@@ -191,12 +220,16 @@ fn invalid_gap(gap: &SyslogForwardGap) -> bool {
         || gap.idempotency_key.len() > 256
         || gap.source_epoch > i64::MAX as u64
         || gap.to_sequence > i64::MAX as u64
-        || gap.observed_at.len() > 64
+        || !valid_observed_at(&gap.observed_at)
         || !matches!(
             gap.reason_code.as_str(),
             "local_retention_quota" | "aggregate_retention_quota" | "record_too_large"
         )
         || gap.from_sequence > gap.to_sequence
+}
+
+fn valid_observed_at(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 64 && chrono::DateTime::parse_from_rfc3339(value).is_ok()
 }
 
 fn persist_request(
@@ -210,8 +243,18 @@ fn persist_request(
     let mut receipts = Vec::with_capacity(request.records.len() + request.gaps.len());
     for record in request.records {
         let receipt_key = opaque_receipt_value(&record.idempotency_key);
-        let source_identity = opaque_receipt_value(&record.source_instance);
-        if receipt_exists(&tx, &receipt_key)? {
+        let source_identity =
+            opaque_receipt_value(&format!("{forwarder_identity}:{}", record.source_instance));
+        let fingerprint = request_fingerprint(forwarder_identity, &record)?;
+        if receipt_replay(
+            &tx,
+            &receipt_key,
+            &source_identity,
+            record.source_epoch,
+            record.sequence,
+            "record",
+            &fingerprint,
+        )? {
             receipts.push(record.idempotency_key);
             continue;
         }
@@ -223,7 +266,7 @@ fn persist_request(
             forwarder_identity,
             peer_ip,
             claimed_hostname,
-        ));
+        )?);
         stamp_source_kind(&mut entry, SourceKind::SyslogTcp);
         let ids = db::insert_logs_batch_in_tx(&tx, &[entry])?;
         insert_receipt(
@@ -234,13 +277,24 @@ fn persist_request(
             record.sequence,
             ids[0],
             "record",
+            &fingerprint,
         )?;
         receipts.push(record.idempotency_key);
     }
     for gap in request.gaps {
         let receipt_key = opaque_receipt_value(&gap.idempotency_key);
-        let source_identity = opaque_receipt_value(&gap.source_instance);
-        if receipt_exists(&tx, &receipt_key)? {
+        let source_identity =
+            opaque_receipt_value(&format!("{forwarder_identity}:{}", gap.source_instance));
+        let fingerprint = request_fingerprint(forwarder_identity, &gap)?;
+        if receipt_replay(
+            &tx,
+            &receipt_key,
+            &source_identity,
+            gap.source_epoch,
+            gap.to_sequence,
+            "gap",
+            &fingerprint,
+        )? {
             receipts.push(gap.idempotency_key);
             continue;
         }
@@ -282,6 +336,7 @@ fn persist_request(
             gap.to_sequence,
             ids[0],
             "gap",
+            &fingerprint,
         )?;
         receipts.push(gap.idempotency_key);
     }
@@ -295,11 +350,14 @@ fn forwarded_metadata(
     forwarder_identity: &str,
     peer_ip: &str,
     hostname_claim: String,
-) -> String {
-    let mut metadata = existing
-        .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
+) -> anyhow::Result<String> {
+    let mut metadata = match existing {
+        Some(encoded) => serde_json::from_str::<Value>(encoded)?
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("parsed syslog metadata is not a JSON object"))?,
+        None => serde_json::Map::new(),
+    };
     metadata.insert(
         "forwarded_provenance".into(),
         json!({
@@ -309,7 +367,9 @@ fn forwarded_metadata(
             "trust": if forwarder_identity == "shared_bearer" { "claimed" } else { "verified_forwarder_claimed_host" },
         }),
     );
-    crate::ingest_metadata::bounded_metadata_json(Value::Object(metadata))
+    Ok(crate::ingest_metadata::bounded_metadata_json(
+        Value::Object(metadata),
+    ))
 }
 
 fn opaque_receipt_value(value: &str) -> String {
@@ -317,14 +377,45 @@ fn opaque_receipt_value(value: &str) -> String {
     hex::encode(&digest[..16])
 }
 
-fn receipt_exists(tx: &rusqlite::Transaction<'_>, key: &str) -> anyhow::Result<bool> {
-    Ok(tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM syslog_forward_receipts WHERE idempotency_key = ?1)",
-        [key],
-        |row| row.get(0),
-    )?)
+fn request_fingerprint<T: Serialize>(identity: &str, value: &T) -> anyhow::Result<String> {
+    Ok(opaque_receipt_value(&format!(
+        "{identity}:{}",
+        serde_json::to_string(value)?
+    )))
 }
 
+fn receipt_replay(
+    tx: &rusqlite::Transaction<'_>,
+    key: &str,
+    source: &str,
+    epoch: u64,
+    sequence: u64,
+    kind: &str,
+    fingerprint: &str,
+) -> anyhow::Result<bool> {
+    let stored = tx
+        .query_row(
+            "SELECT source_instance, source_epoch, sequence, receipt_kind, request_fingerprint FROM syslog_forward_receipts WHERE idempotency_key = ?1",
+            [key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)),
+        )
+        .optional()?;
+    match stored {
+        None => Ok(false),
+        Some((stored_source, stored_epoch, stored_sequence, stored_kind, stored_fingerprint))
+            if stored_source == source
+                && stored_epoch == epoch as i64
+                && stored_sequence == sequence as i64
+                && stored_kind == kind
+                && (stored_fingerprint.is_empty() || stored_fingerprint == fingerprint) =>
+        {
+            Ok(true)
+        }
+        Some(_) => Err(anyhow::Error::new(IdempotencyConflict)),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn insert_receipt(
     tx: &rusqlite::Transaction<'_>,
     key: &str,
@@ -333,8 +424,9 @@ fn insert_receipt(
     sequence: u64,
     log_id: i64,
     kind: &str,
+    fingerprint: &str,
 ) -> anyhow::Result<()> {
-    tx.execute("INSERT INTO syslog_forward_receipts (idempotency_key, source_instance, source_epoch, sequence, canonical_log_id, receipt_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![key, source, epoch as i64, sequence as i64, log_id, kind])?;
+    tx.execute("INSERT INTO syslog_forward_receipts (idempotency_key, source_instance, source_epoch, sequence, canonical_log_id, receipt_kind, request_fingerprint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![key, source, epoch as i64, sequence as i64, log_id, kind, fingerprint])?;
     Ok(())
 }
 

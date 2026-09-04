@@ -72,11 +72,16 @@ async fn sender_replays_an_authenticated_receipt_loss_once_after_outage_and_rest
     let spool_path = dir.path().join("forward-spool.json");
     let token = "syslog-forward-test-token".to_owned();
 
-    // Reserve then release this address so the original sender experiences a
-    // genuine transport outage, not a mocked client error.
-    let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = reservation.local_addr().unwrap();
-    drop(reservation);
+    // Keep ownership of the ephemeral port for the entire test. The first
+    // accepted connection is deliberately dropped to model a transport
+    // outage; retaining the listener removes a port-release/rebind race.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let outage = tokio::spawn(async {
+        let (connection, _) = listener.accept().await.unwrap();
+        drop(connection);
+        listener
+    });
     let target = format!("http://{address}");
 
     let original_sender = crate::agent::syslog_sender::SyslogSender::new(
@@ -95,6 +100,7 @@ async fn sender_replays_an_authenticated_receipt_loss_once_after_outage_and_rest
         status.queued_records == 1 && status.last_error_code == Some("transport_unavailable")
     })
     .await;
+    let listener = outage.await.unwrap();
     assert!(spool_path.exists(), "outage must be durable before restart");
 
     // Dropping the previous agent stops its delivery task. A new process then
@@ -120,7 +126,6 @@ async fn sender_replays_an_authenticated_receipt_loss_once_after_outage_and_rest
     let app = Router::new()
         .route("/v1/syslog-forward", post(receipt_loss_handler))
         .with_state(loss_state);
-    let listener = tokio::net::TcpListener::bind(address).await.unwrap();
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let receiver_task = tokio::spawn(async move {
         axum::serve(
@@ -178,6 +183,28 @@ fn records_reject_unsafe_or_unbounded_inputs() {
     assert!(invalid_record(&SyslogForwardRecord {
         line: String::new(),
         ..valid
+    }));
+}
+
+#[test]
+fn forwarded_records_and_gaps_require_rfc3339_observation_times() {
+    let record = SyslogForwardRecord {
+        source_instance: "host-a".into(),
+        source_epoch: 1,
+        sequence: 1,
+        idempotency_key: "record-time".into(),
+        observed_at: "not-a-timestamp".into(),
+        line: "<134>1 2026-01-01T00:00:00Z host app - - - message".into(),
+    };
+    assert!(invalid_record(&record));
+    assert!(invalid_gap(&SyslogForwardGap {
+        source_instance: "host-a".into(),
+        source_epoch: 1,
+        from_sequence: 1,
+        to_sequence: 1,
+        idempotency_key: "gap-time".into(),
+        observed_at: "also-invalid".into(),
+        reason_code: "record_too_large".into(),
     }));
 }
 
@@ -356,6 +383,54 @@ fn duplicate_replay_returns_receipt_without_duplicate_canonical_evidence() {
 }
 
 #[test]
+fn conflicting_idempotency_replay_is_rejected_without_losing_new_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&crate::config::StorageConfig::for_test(
+            dir.path().join("syslog-forward-conflict.db"),
+        ))
+        .unwrap(),
+    );
+    let base = SyslogForwardRecord {
+        source_instance: "host-a".into(),
+        source_epoch: 1,
+        sequence: 1,
+        idempotency_key: "reused-key".into(),
+        observed_at: "2026-01-01T00:00:00Z".into(),
+        line: "<134>1 2026-01-01T00:00:00Z host-a app - - - first".into(),
+    };
+    persist_request(
+        &pool,
+        SyslogForwardRequest {
+            records: vec![base.clone()],
+            gaps: vec![],
+        },
+        "127.0.0.1",
+        "agent-a",
+    )
+    .unwrap();
+    let error = persist_request(
+        &pool,
+        SyslogForwardRequest {
+            records: vec![SyslogForwardRecord {
+                line: "<134>1 2026-01-01T00:00:00Z host-a app - - - second".into(),
+                ..base
+            }],
+            gaps: vec![],
+        },
+        "127.0.0.1",
+        "agent-a",
+    )
+    .unwrap_err();
+    assert!(error.downcast_ref::<IdempotencyConflict>().is_some());
+    let conn = pool.get().unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
 fn receiver_never_persists_a_path_like_source_identity() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(
@@ -399,4 +474,10 @@ fn receiver_never_persists_a_path_like_source_identity() {
         .unwrap();
     assert!(!receipt_source.contains(source));
     assert!(!receipt_key.contains(source));
+}
+
+#[test]
+fn forwarded_metadata_rejects_corrupt_or_non_object_input() {
+    assert!(forwarded_metadata(Some("{"), "agent-a", "127.0.0.1", "host-a".into()).is_err());
+    assert!(forwarded_metadata(Some("[]"), "agent-a", "127.0.0.1", "host-a".into()).is_err());
 }

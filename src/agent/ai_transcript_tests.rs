@@ -289,6 +289,30 @@ fn codex_prefix_recovery_reports_file_open_failure() {
 }
 
 #[test]
+fn codex_prefix_recovery_rejects_an_oversized_line_without_unbounded_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized-prefix.jsonl");
+    write_file(
+        &path,
+        &format!("{}\n", "x".repeat(MAX_JSONL_LINE_BYTES + 1)),
+    );
+    let mut project = None;
+    let mut session_id = None;
+
+    let error = seed_codex_prefix_fallbacks(
+        &path,
+        scanner::SourceKind::CodexSession,
+        1,
+        &mut project,
+        &mut session_id,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("Codex prefix metadata"));
+    assert!(format!("{error:#}").contains("transcript line exceeds"));
+}
+
+#[test]
 fn missing_checkpoint_starts_empty_but_corrupt_checkpoint_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint_path = dir.path().join("checkpoint.json");

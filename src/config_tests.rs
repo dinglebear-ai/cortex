@@ -123,6 +123,21 @@ fn receiver_toml_section_deserializes_into_receiver_field() {
 }
 
 #[test]
+fn named_forwarding_agents_deserialize_as_redacted_secrets() {
+    let cfg: Config = toml::from_str(
+        "[mcp.forwarding_agents]\nnode_a = \"agent-a-secret\"\nnode_b = \"agent-b-secret\"\n",
+    )
+    .expect("named forwarding credentials should parse");
+    assert_eq!(
+        cfg.mcp.forwarding_agents["node_a"].0.as_deref(),
+        Some("agent-a-secret")
+    );
+    let debug = format!("{:?}", cfg.mcp.forwarding_agents);
+    assert!(!debug.contains("agent-a-secret"));
+    assert!(debug.contains("[REDACTED]"));
+}
+
+#[test]
 fn storage_defaults_include_sqlite_memory_guardrails() {
     let storage = StorageConfig::default();
     assert_eq!(storage.pool_size, 8);

@@ -551,27 +551,78 @@ struct ObservatoryRepositoriesQuery {
     limit: Option<usize>,
 }
 
+#[derive(Serialize)]
+struct ObservatoryPage<T> {
+    #[serde(flatten)]
+    resources: T,
+    pagination: crate::app::agent_observatory::Pagination,
+    as_of: String,
+    stream_cursor: String,
+}
+
+#[derive(Serialize)]
+struct RepositoryResources<T> {
+    repositories: Vec<T>,
+}
+#[derive(Serialize)]
+struct WorktreeResources<T> {
+    worktrees: Vec<T>,
+}
+#[derive(Serialize)]
+struct RunResources<T> {
+    runs: Vec<T>,
+}
+#[derive(Serialize)]
+struct EventResources<T> {
+    run_key: String,
+    events: Vec<T>,
+}
+
+fn observatory_page<T, R>(
+    page: crate::app::agent_observatory::Page<T>,
+    resources: impl FnOnce(Vec<T>) -> R,
+) -> ObservatoryPage<R> {
+    let crate::app::agent_observatory::Page {
+        items,
+        pagination,
+        as_of,
+        stream_cursor,
+    } = page;
+
+    ObservatoryPage {
+        resources: resources(items),
+        pagination,
+        as_of,
+        stream_cursor,
+    }
+}
+
 async fn observatory_repositories(
     State(state): State<ApiState>,
     Query(query): Query<ObservatoryRepositoriesQuery>,
 ) -> impl IntoResponse {
-    respond(
-        state
-            .service
-            .observatory_repositories(
-                observatory::RepositoryQuery {
-                    host: query.host,
-                    query: query.query,
-                    active_runs_only: query.active_runs_only.unwrap_or(false),
-                    include_removed: query.include_removed.unwrap_or(false),
-                    since: query.since,
-                    until: query.until,
-                },
-                query.cursor,
-                query.limit.unwrap_or(50),
-            )
-            .await,
-    )
+    match state
+        .service
+        .observatory_repositories(
+            observatory::RepositoryQuery {
+                host: query.host,
+                query: query.query,
+                active_runs_only: query.active_runs_only.unwrap_or(false),
+                include_removed: query.include_removed.unwrap_or(false),
+                since: query.since,
+                until: query.until,
+            },
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |repositories| RepositoryResources {
+            repositories,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -599,19 +650,24 @@ async fn observatory_worktrees(
     State(state): State<ApiState>,
     Query(query): Query<ObservatoryWorktreesQuery>,
 ) -> impl IntoResponse {
-    respond(
-        state
-            .service
-            .observatory_worktrees(
-                query.repository_id,
-                query.branch,
-                query.dirty,
-                query.include_removed.unwrap_or(false),
-                query.cursor,
-                query.limit.unwrap_or(50),
-            )
-            .await,
-    )
+    match state
+        .service
+        .observatory_worktrees(
+            query.repository_id,
+            query.branch,
+            query.dirty,
+            query.include_removed.unwrap_or(false),
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |worktrees| WorktreeResources {
+            worktrees,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
 }
 
 async fn observatory_repository_worktrees(
@@ -619,19 +675,24 @@ async fn observatory_repository_worktrees(
     Path(repository_id): Path<i64>,
     serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryRepositoryWorktreesQuery>,
 ) -> impl IntoResponse {
-    respond(
-        state
-            .service
-            .observatory_worktrees(
-                repository_id,
-                query.branch,
-                query.dirty,
-                query.include_removed.unwrap_or(false),
-                query.cursor,
-                query.limit.unwrap_or(50),
-            )
-            .await,
-    )
+    match state
+        .service
+        .observatory_worktrees(
+            repository_id,
+            query.branch,
+            query.dirty,
+            query.include_removed.unwrap_or(false),
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |worktrees| WorktreeResources {
+            worktrees,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -657,27 +718,29 @@ async fn observatory_runs(
     State(state): State<ApiState>,
     serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryRunsQuery>,
 ) -> impl IntoResponse {
-    respond(
-        state
-            .service
-            .observatory_runs(
-                observatory::AgentRunQuery {
-                    repository_id: query.repository_id,
-                    worktree_id: query.worktree_id,
-                    branch: query.branch,
-                    statuses: query.status,
-                    tools: query.tool,
-                    host: query.host,
-                    query: query.query,
-                    since: query.since,
-                    until: query.until,
-                    active_only: query.active_only.unwrap_or(false),
-                },
-                query.cursor,
-                query.limit.unwrap_or(50),
-            )
-            .await,
-    )
+    match state
+        .service
+        .observatory_runs(
+            observatory::AgentRunQuery {
+                repository_id: query.repository_id,
+                worktree_id: query.worktree_id,
+                branch: query.branch,
+                statuses: query.status,
+                tools: query.tool,
+                host: query.host,
+                query: query.query,
+                since: query.since,
+                until: query.until,
+                active_only: query.active_only.unwrap_or(false),
+            },
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |runs| RunResources { runs })).into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -725,27 +788,34 @@ async fn observatory_events(
                 .into_response();
         }
     };
-    respond(
-        state
-            .service
-            .observatory_events(
-                run_key,
-                observatory::AgentEventQuery {
-                    kinds: query.kind,
-                    severity_min: query.severity_min,
-                    actor_key: query.actor_key,
-                    trace_id: query.trace_id,
-                    query: query.query,
-                    since: query.since,
-                    until: query.until,
-                    include_payload,
-                },
-                query.cursor,
-                query.limit.unwrap_or(100),
-                asc,
-            )
-            .await,
-    )
+    let response_run_key = run_key.clone();
+    match state
+        .service
+        .observatory_events(
+            run_key,
+            observatory::AgentEventQuery {
+                kinds: query.kind,
+                severity_min: query.severity_min,
+                actor_key: query.actor_key,
+                trace_id: query.trace_id,
+                query: query.query,
+                since: query.since,
+                until: query.until,
+                include_payload,
+            },
+            query.cursor,
+            query.limit.unwrap_or(100),
+            asc,
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |events| EventResources {
+            run_key: response_run_key,
+            events,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
 }
 
 #[derive(Debug, Deserialize)]

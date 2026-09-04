@@ -46,8 +46,11 @@ struct GitReconcileCursor {
     after_repository: Option<String>,
 }
 
-fn decode_git_reconcile_cursor(raw: &str) -> GitReconcileCursor {
-    serde_json::from_str(raw).unwrap_or_default()
+fn decode_git_reconcile_cursor(raw: &str) -> anyhow::Result<GitReconcileCursor> {
+    if raw.is_empty() {
+        return Ok(GitReconcileCursor::default());
+    }
+    serde_json::from_str(raw).map_err(Into::into)
 }
 
 fn encode_git_reconcile_cursor(repository: &str) -> String {
@@ -403,7 +406,14 @@ pub(super) fn spawn_git_reconcile(
                 })
                 .await
                 {
-                    Ok(Ok(raw)) => decode_git_reconcile_cursor(&raw),
+                    Ok(Ok(raw)) => match decode_git_reconcile_cursor(&raw) {
+                        Ok(cursor) => cursor,
+                        Err(error) => {
+                            healthy = false;
+                            tracing::error!(error = %error, "Agent Observatory Git cursor is malformed");
+                            GitReconcileCursor::default()
+                        }
+                    },
                     Ok(Err(error)) => {
                         healthy = false;
                         tracing::error!(error = %error, "Agent Observatory Git cursor load failed");
