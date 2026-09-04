@@ -1602,6 +1602,7 @@ fn saturated_snapshot_workers_defer_without_starving_later_source_on_retry() {
 }
 
 #[test]
+#[serial]
 fn snapshot_bytes_count_when_gemini_utf8_validation_fails_before_records() {
     let (pool, dir) = test_pool();
     let _home = HomeOverride::set(dir.path());
@@ -1901,6 +1902,7 @@ fn bounded_discovery_retains_continuations_for_multiple_capped_roots() {
 }
 
 #[test]
+#[serial]
 fn bounded_root_scan_yields_from_a_valid_slow_source_to_the_next_source() {
     let (pool, dir) = test_pool();
     let _home = HomeOverride::set(dir.path());
@@ -1965,6 +1967,7 @@ fn bounded_root_scan_yields_from_a_valid_slow_source_to_the_next_source() {
 }
 
 #[test]
+#[serial]
 fn bounded_root_scan_reports_scan_wide_cap_and_defers_remaining_sources() {
     let (pool, dir) = test_pool();
     let _home = HomeOverride::set(dir.path());
