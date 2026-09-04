@@ -203,6 +203,22 @@ fn read_new_lines_defers_an_incomplete_jsonl_tail_without_advancing_the_checkpoi
 }
 
 #[test]
+fn read_new_lines_accepts_provider_records_larger_than_64_kib() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let record = format!(
+        r#"{{"type":"tool_result","content":"{}"}}"#,
+        "x".repeat(128 * 1024)
+    );
+    write_file(&path, &format!("{record}\n"));
+
+    let (lines, checkpoint) = read_new_lines(&path, 0, 10).unwrap();
+
+    assert_eq!(lines, vec![(0, record)]);
+    assert_eq!(checkpoint, 1);
+}
+
+#[test]
 fn checkpoint_round_trips_through_disk() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint_path = dir.path().join("checkpoint.json");
@@ -555,6 +571,78 @@ async fn scan_and_forward_sends_new_lines_and_advances_checkpoint() {
 }
 
 #[tokio::test]
+async fn scan_and_forward_prioritizes_active_session_over_historical_backlog() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript_dir = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&transcript_dir).unwrap();
+    let historical_path = transcript_dir.join("a-historical.jsonl");
+    let active_path = transcript_dir.join("z-active.jsonl");
+    let historical = (0..MAX_BATCH_RECORDS)
+        .map(|index| {
+            serde_json::json!({
+                "type": "response_item",
+                "timestamp": "2026-07-09T00:00:00Z",
+                "payload": {"type": "message", "role": "user", "content": format!("old-{index}")}
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    write_file(&historical_path, &format!("{historical}\n"));
+    std::thread::sleep(Duration::from_millis(20));
+    write_file(
+        &active_path,
+        &format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "response_item",
+                "timestamp": "2026-09-04T20:00:00Z",
+                "payload": {"type": "message", "role": "user", "content": "active-now"}
+            })
+        ),
+    );
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: None,
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        MAX_BATCH_RECORDS
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&active_path.to_string_lossy().to_string()),
+        Some(&1),
+        "the newest session must enter the first saturated batch"
+    );
+    assert_eq!(
+        checkpoint
+            .files
+            .get(&historical_path.to_string_lossy().to_string()),
+        Some(&(MAX_BATCH_RECORDS - 1)),
+        "the historical backlog must remain eligible to drain"
+    );
+}
+
+#[tokio::test]
 async fn scan_and_forward_retries_after_lost_or_incomplete_receipt_response() {
     let dir = tempfile::tempdir().unwrap();
     let claude_dir = dir.path().join(".claude/projects/foo");
@@ -899,6 +987,14 @@ async fn scan_and_forward_preserves_codex_prefix_metadata_after_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let codex_dir = dir.path().join(".codex/sessions/2026/07/12");
     fs::create_dir_all(&codex_dir).unwrap();
+    let state = rusqlite::Connection::open(dir.path().join(".codex/state_5.sqlite")).unwrap();
+    state
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT);
+             INSERT INTO threads VALUES ('codex-sess-1', 'Generated title', 'Operator title');",
+        )
+        .unwrap();
+    drop(state);
     let transcript_path = codex_dir.join("rollout-2026-07-12T22-31-12-codex-sess-1.jsonl");
     write_file(
         &transcript_path,
@@ -960,6 +1056,11 @@ async fn scan_and_forward_preserves_codex_prefix_metadata_after_checkpoint() {
     assert_eq!(request.records.len(), 1);
     let envelope = &request.records[0].envelope;
     assert_eq!(envelope.source.provider, "codex");
+    assert_eq!(envelope.source.title.as_deref(), Some("Operator title"));
+    assert_eq!(
+        envelope.source.title_provenance.as_deref(),
+        Some("codex.user-assigned")
+    );
     assert!(
         envelope
             .ai_project

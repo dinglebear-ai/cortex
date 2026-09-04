@@ -48,7 +48,11 @@ const MAX_BATCH_RECORDS: usize = 500;
 /// the agent's recurring forwarder.
 const MAX_FORWARD_FILES: usize = 1_024;
 const MAX_TRANSCRIPT_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_JSONL_LINE_BYTES: usize = 64 * 1024;
+// Claude and Codex embed tool results (and occasionally encoded media) in a
+// single JSONL record. Real sessions routinely exceed 64 KiB; keep the read
+// finite while leaving enough room for those provider-native records. The
+// forwarded message is independently reduced to MAX_FORWARDED_MESSAGE_BYTES.
+const MAX_JSONL_LINE_BYTES: usize = 8 * 1024 * 1024;
 // At 500 records, a 3 KiB message can at worst double while JSON escaping.
 // Together with the explicitly bounded scalar fields below, that remains
 // under the receiver's 4 MiB request budget without an unbounded retry loop.
@@ -132,7 +136,16 @@ async fn scan_and_forward(
         }
         files.extend(root_files);
     }
-    files.sort();
+    // Surface active work before draining historical backlogs. A path-sorted
+    // archive can contain enough records to consume every bounded batch and
+    // otherwise keep a newly-written session invisible for many poll cycles.
+    // Path remains the deterministic tie-breaker when mtimes match.
+    files.sort_by(|left, right| {
+        let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
+        modified(right)
+            .cmp(&modified(left))
+            .then_with(|| left.cmp(right))
+    });
     files.dedup();
     evict_missing_gemini_failures(
         checkpoint,
@@ -279,6 +292,15 @@ async fn scan_and_forward(
                 "ai transcript forwarder could not recover Codex prefix metadata"
             );
         }
+        let codex_home = (source_kind == scanner::SourceKind::CodexSession)
+            .then(|| {
+                path.ancestors().find(|ancestor| {
+                    ancestor.file_name().and_then(|name| name.to_str()) == Some(".codex")
+                })
+            })
+            .flatten();
+        let mut supplemental_lookup_session_id = None;
+        let mut supplemental_title = None;
         let remaining_budget = MAX_BATCH_RECORDS - records.len();
         let (new_lines, total_lines) = match read_new_lines(path, from_line, remaining_budget) {
             Ok(result) => result,
@@ -308,6 +330,24 @@ async fn scan_and_forward(
                         .session_id
                         .clone()
                         .or_else(|| fallback_session_id.as_deref().map(ToString::to_string));
+                    if supplemental_lookup_session_id.as_deref() != ai_session_id.as_deref() {
+                        supplemental_title = codex_home.zip(ai_session_id.as_deref()).and_then(
+                            |(home, session_id)| {
+                                scanner::codex::lookup_supplemental_session_title(home, session_id)
+                            },
+                        );
+                        supplemental_lookup_session_id = ai_session_id.clone();
+                    }
+                    let title = parsed.session_metadata.title.or_else(|| {
+                        supplemental_title
+                            .as_ref()
+                            .map(|metadata| metadata.title.clone())
+                    });
+                    let title_provenance = parsed.session_metadata.title_provenance.or_else(|| {
+                        supplemental_title
+                            .as_ref()
+                            .map(|metadata| metadata.provenance.clone())
+                    });
                     records.push(transcript_record(
                         config,
                         path,
@@ -319,8 +359,8 @@ async fn scan_and_forward(
                             ai_session_id,
                             event_kind: Some(parsed.event_kind),
                             message: parsed.message,
-                            title: parsed.session_metadata.title,
-                            title_provenance: parsed.session_metadata.title_provenance,
+                            title,
+                            title_provenance,
                         },
                     ));
                 }

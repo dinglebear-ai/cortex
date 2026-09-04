@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::*;
+use rusqlite::Connection;
 
 #[test]
 fn parse_line_extracts_payload_content_items_and_project_from_arguments() {
@@ -125,4 +126,69 @@ fn project_from_line_reads_turn_context_cwd() {
         project_from_line(line).as_deref(),
         Some("/tmp/from-turn-context")
     );
+}
+
+#[test]
+fn supplemental_title_prefers_user_name_over_generated_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state_5.sqlite");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT);
+         INSERT INTO threads VALUES ('session-1', 'Generated title', 'My chosen title');",
+    )
+    .unwrap();
+    drop(conn);
+
+    assert_eq!(
+        lookup_supplemental_session_title(dir.path(), "session-1"),
+        Some(SupplementalSessionTitle {
+            title: "My chosen title".to_string(),
+            provenance: "codex.user-assigned".to_string(),
+        })
+    );
+}
+
+#[test]
+fn supplemental_title_falls_back_across_schema_versions_and_bounds_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state_4.sqlite");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)", [])
+        .unwrap();
+    let long_title = "x".repeat(MAX_SESSION_METADATA_CHARS + 20);
+    conn.execute(
+        "INSERT INTO threads (id, title) VALUES (?1, ?2)",
+        ("session-2", &long_title),
+    )
+    .unwrap();
+    drop(conn);
+
+    let title = lookup_supplemental_session_title(dir.path(), "session-2").unwrap();
+    assert_eq!(title.title.chars().count(), MAX_SESSION_METADATA_CHARS);
+    assert_eq!(title.provenance, "codex.generated");
+}
+
+#[test]
+fn supplemental_title_rejects_control_characters_and_handles_unavailable_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state_5.sqlite");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT);
+         INSERT INTO threads VALUES ('unsafe', 'also\nunsafe', 'spoof\rname');",
+    )
+    .unwrap();
+    drop(conn);
+
+    assert!(lookup_supplemental_session_title(dir.path(), "unsafe").is_none());
+    assert!(lookup_supplemental_session_title(dir.path(), "missing").is_none());
+
+    let drifted = tempfile::tempdir().unwrap();
+    Connection::open(drifted.path().join("state_99.sqlite"))
+        .unwrap()
+        .execute("CREATE TABLE conversations (identifier TEXT)", [])
+        .unwrap();
+    assert!(lookup_supplemental_session_title(drifted.path(), "unsafe").is_none());
+    assert!(lookup_supplemental_session_title(Path::new("/missing/codex"), "unsafe").is_none());
 }

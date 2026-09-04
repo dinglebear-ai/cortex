@@ -1,11 +1,126 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 
 use super::{ParsedTranscriptRecord, TranscriptSessionMetadata, record_key_from_line};
 
 const MAX_SESSION_METADATA_CHARS: usize = 512;
+const MAX_STATE_DATABASES: usize = 32;
+const STATE_DB_BUSY_TIMEOUT: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SupplementalSessionTitle {
+    pub title: String,
+    pub provenance: String,
+}
+
+/// Look up Codex's supplemental thread title without reading transcript content.
+///
+/// Codex keeps generated and user-assigned titles in a versioned state database,
+/// separate from rollout JSONL. State databases are opened read-only, newest
+/// first. Missing databases, lock contention, and schema drift are deliberately
+/// treated as unavailable metadata rather than transcript ingestion failures.
+pub(crate) fn lookup_supplemental_session_title(
+    codex_home: &Path,
+    session_id: &str,
+) -> Option<SupplementalSessionTitle> {
+    if session_id.is_empty() || session_id.len() > 128 || session_id.chars().any(char::is_control) {
+        return None;
+    }
+
+    for path in state_database_paths(codex_home) {
+        if let Some(title) = lookup_title_in_database(&path, session_id) {
+            return Some(title);
+        }
+    }
+    None
+}
+
+fn state_database_paths(codex_home: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(codex_home) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            (name.starts_with("state_") && name.ends_with(".sqlite")).then(|| {
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                (modified, path)
+            })
+        })
+        .collect::<Vec<_>>();
+    paths.sort_by(|left, right| right.cmp(left));
+    paths
+        .into_iter()
+        .take(MAX_STATE_DATABASES)
+        .map(|(_, path)| path)
+        .collect()
+}
+
+fn lookup_title_in_database(path: &Path, session_id: &str) -> Option<SupplementalSessionTitle> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.busy_timeout(STATE_DB_BUSY_TIMEOUT).ok()?;
+
+    let columns = conn
+        .prepare("PRAGMA table_info(threads)")
+        .ok()?
+        .query_map([], |row| row.get::<_, String>(1))
+        .ok()?
+        .filter_map(|column| column.ok())
+        .collect::<Vec<_>>();
+    if !columns.iter().any(|column| column == "id") {
+        return None;
+    }
+    let has_name = columns.iter().any(|column| column == "name");
+    let has_title = columns.iter().any(|column| column == "title");
+    if !has_name && !has_title {
+        return None;
+    }
+
+    let sql = match (has_name, has_title) {
+        (true, true) => "SELECT name, title FROM threads WHERE id = ?1 LIMIT 1",
+        (true, false) => "SELECT name, NULL FROM threads WHERE id = ?1 LIMIT 1",
+        (false, true) => "SELECT NULL, title FROM threads WHERE id = ?1 LIMIT 1",
+        (false, false) => return None,
+    };
+    let (name, title): (Option<String>, Option<String>) = conn
+        .query_row(sql, [session_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .optional()
+        .ok()??;
+
+    safe_title(name)
+        .map(|title| SupplementalSessionTitle {
+            title,
+            provenance: "codex.user-assigned".to_string(),
+        })
+        .or_else(|| {
+            safe_title(title).map(|title| SupplementalSessionTitle {
+                title,
+                provenance: "codex.generated".to_string(),
+            })
+        })
+}
+
+fn safe_title(value: Option<String>) -> Option<String> {
+    let value = value?.trim().to_string();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value.chars().take(MAX_SESSION_METADATA_CHARS).collect())
+}
 
 pub fn parse_line(
     line: &str,

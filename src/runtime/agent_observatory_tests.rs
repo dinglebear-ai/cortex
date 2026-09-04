@@ -64,6 +64,42 @@ fn git_reconcile_cursor_round_robins_sorted_repositories_and_replays_invalid_sta
 }
 
 #[test]
+fn malformed_git_reconcile_cursor_is_reset_once() {
+    let (_directory, pool) = pool();
+    projection_cursor(&pool, "git").unwrap();
+    advance_projection_cursor(&pool, "git", "2026-09-04T00:00:00Z").unwrap();
+
+    let (cursor, repaired_error) = load_git_reconcile_cursor(&pool).unwrap();
+    assert_eq!(cursor.after_repository, None);
+    assert!(
+        repaired_error.is_some(),
+        "the repair must remain observable"
+    );
+    assert_eq!(projection_cursor(&pool, "git").unwrap(), "");
+
+    let (cursor, repaired_error) = load_git_reconcile_cursor(&pool).unwrap();
+    assert_eq!(cursor.after_repository, None);
+    assert!(
+        repaired_error.is_none(),
+        "the repaired cursor must not be reported again"
+    );
+}
+
+#[test]
+fn valid_git_reconcile_cursor_is_preserved_when_loaded() {
+    let (_directory, pool) = pool();
+    projection_cursor(&pool, "git").unwrap();
+    let checkpoint = encode_git_reconcile_cursor("/workspace/b");
+    advance_projection_cursor(&pool, "git", &checkpoint).unwrap();
+
+    let (cursor, repaired_error) = load_git_reconcile_cursor(&pool).unwrap();
+
+    assert_eq!(cursor.after_repository.as_deref(), Some("/workspace/b"));
+    assert!(repaired_error.is_none());
+    assert_eq!(projection_cursor(&pool, "git").unwrap(), checkpoint);
+}
+
+#[test]
 fn workers_stay_dormant_when_agent_observatory_is_disabled() {
     let (_directory, pool) = pool();
     let config = AgentObservatoryConfig::default();

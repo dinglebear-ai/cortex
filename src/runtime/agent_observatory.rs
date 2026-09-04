@@ -60,6 +60,27 @@ fn encode_git_reconcile_cursor(repository: &str) -> String {
     .expect("Git reconcile cursor serialization cannot fail")
 }
 
+/// Load the durable Git cursor, replacing malformed legacy state with the
+/// canonical initial cursor before returning. The decode error is returned as
+/// metadata so the caller can report the repair once without retrying the same
+/// corrupt value on every reconcile interval.
+fn load_git_reconcile_cursor(
+    pool: &DbPool,
+) -> anyhow::Result<(GitReconcileCursor, Option<anyhow::Error>)> {
+    let raw = projection_cursor(pool, "git")?;
+    match decode_git_reconcile_cursor(&raw) {
+        Ok(cursor) => Ok((cursor, None)),
+        Err(decode_error) => {
+            advance_projection_cursor(pool, "git", "").map_err(|repair_error| {
+                anyhow::anyhow!(
+                    "failed to reset malformed Git cursor ({decode_error}): {repair_error}"
+                )
+            })?;
+            Ok((GitReconcileCursor::default(), Some(decode_error)))
+        }
+    }
+}
+
 fn next_repository_index(repositories: &[PathBuf], cursor: &GitReconcileCursor) -> Option<usize> {
     if repositories.is_empty() {
         return None;
@@ -402,18 +423,17 @@ pub(super) fn spawn_git_reconcile(
                 repositories.sort_by(|left, right| left.as_os_str().cmp(right.as_os_str()));
                 let cursor_pool = Arc::clone(&pool);
                 let cursor = match tokio::task::spawn_blocking(move || {
-                    projection_cursor(&cursor_pool, "git")
+                    load_git_reconcile_cursor(&cursor_pool)
                 })
                 .await
                 {
-                    Ok(Ok(raw)) => match decode_git_reconcile_cursor(&raw) {
-                        Ok(cursor) => cursor,
-                        Err(error) => {
-                            healthy = false;
-                            tracing::error!(error = %error, "Agent Observatory Git cursor is malformed");
-                            GitReconcileCursor::default()
-                        }
-                    },
+                    Ok(Ok((cursor, None))) => cursor,
+                    Ok(Ok((cursor, Some(error)))) => {
+                        healthy = false;
+                        tracing::warn!(error = %error,
+                            "Agent Observatory Git cursor was malformed and has been reset");
+                        cursor
+                    }
                     Ok(Err(error)) => {
                         healthy = false;
                         tracing::error!(error = %error, "Agent Observatory Git cursor load failed");

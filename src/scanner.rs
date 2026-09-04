@@ -29,7 +29,7 @@ use crate::scanner::skill_events::{extract_claude_skill_events, extract_codex_sk
 pub(crate) mod antigravity;
 mod checkpoint;
 mod claude;
-mod codex;
+pub(crate) mod codex;
 pub(crate) mod gemini;
 pub(crate) mod hook_events;
 pub(crate) mod mcp_events;
