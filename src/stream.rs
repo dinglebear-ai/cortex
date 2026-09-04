@@ -26,6 +26,14 @@ const MAX_CLIENTS: usize = 64;
 const MAX_CONNECTION_DURATION: Duration = Duration::from_secs(15 * 60);
 static CLIENTS: OnceLock<std::sync::Arc<Semaphore>> = OnceLock::new();
 
+fn acquire_client_permit(
+    clients: std::sync::Arc<Semaphore>,
+) -> Result<OwnedSemaphorePermit, StreamError> {
+    clients
+        .try_acquire_owned()
+        .map_err(|_| StreamError::Overloaded)
+}
+
 #[derive(Clone)]
 pub struct CursorKeys {
     current: std::sync::Arc<[u8]>,
@@ -202,11 +210,11 @@ async fn build_stream(
     contract: StreamContract,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
     require_read_scope(&auth)?;
-    let client_permit = CLIENTS
-        .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| StreamError::Overloaded)?;
+    let client_permit = acquire_client_permit(
+        CLIENTS
+            .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
+            .clone(),
+    )?;
     let principal = principal_key(&auth);
     let decoded = cursor
         .as_deref()

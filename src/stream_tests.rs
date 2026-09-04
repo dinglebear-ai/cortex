@@ -319,6 +319,24 @@ async fn connection_deadline_releases_admission_even_when_body_stalls() {
     drop(lease);
 }
 
+#[test]
+fn sixty_four_stream_burst_rejects_excess_and_recovers_after_disconnect() {
+    let clients = std::sync::Arc::new(Semaphore::new(MAX_CLIENTS));
+    let mut admitted = Vec::with_capacity(MAX_CLIENTS);
+
+    for _ in 0..MAX_CLIENTS {
+        admitted.push(acquire_client_permit(clients.clone()).unwrap());
+    }
+    assert_eq!(clients.available_permits(), 0);
+    assert!(matches!(
+        acquire_client_permit(clients.clone()),
+        Err(StreamError::Overloaded)
+    ));
+
+    drop(admitted.pop());
+    assert!(acquire_client_permit(clients).is_ok());
+}
+
 fn service() -> (
     CortexService,
     std::sync::Arc<crate::db::DbPool>,

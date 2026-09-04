@@ -3194,9 +3194,18 @@ fn bench_seed_rows(pool: &DbPool, n: usize) {
     );
 }
 
-/// Median of N timed runs of `f`, in milliseconds. One warm-up run first.
-fn bench_median_ms(runs: usize, mut f: impl FnMut()) -> f64 {
+#[derive(Debug)]
+struct BenchPercentiles {
+    p50_ms: f64,
+    p95_ms: f64,
+}
+
+/// p50/p95 of N timed runs of `f`, in milliseconds. One warm-up run first.
+/// Uses nearest-rank p95 so the emitted values remain reproducible from the
+/// captured sample count without interpolating measurements that never ran.
+fn bench_percentiles_ms(runs: usize, mut f: impl FnMut()) -> BenchPercentiles {
     use std::time::Instant;
+    assert!(runs > 0);
     f(); // warm-up
     let mut samples: Vec<f64> = Vec::with_capacity(runs);
     for _ in 0..runs {
@@ -3205,7 +3214,12 @@ fn bench_median_ms(runs: usize, mut f: impl FnMut()) -> f64 {
         samples.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    samples[samples.len() / 2]
+    let p50_index = (samples.len() - 1) / 2;
+    let p95_index = ((samples.len() * 95).div_ceil(100)).saturating_sub(1);
+    BenchPercentiles {
+        p50_ms: samples[p50_index],
+        p95_ms: samples[p95_index],
+    }
 }
 
 #[test]
@@ -3248,13 +3262,13 @@ fn bench_stats_and_sessions() {
 
     // --- stats (default: FTS diagnostic skipped) ---
     let mut last_stats = None;
-    let stats_ms = bench_median_ms(5, || {
+    let stats_latency = bench_percentiles_ms(20, || {
         last_stats = Some(get_stats(&pool, &cfg).unwrap());
     });
     let stats = last_stats.unwrap();
     eprintln!(
-        "[bench] get_stats (default, FTS skipped): {stats_ms:.1} ms  (total_logs={})",
-        stats.total_logs
+        "[bench] get_stats (default, FTS skipped): p50={:.1} ms p95={:.1} ms (total_logs={})",
+        stats_latency.p50_ms, stats_latency.p95_ms, stats.total_logs
     );
     assert_eq!(
         stats.total_logs, ground_truth,
@@ -3262,10 +3276,13 @@ fn bench_stats_and_sessions() {
     );
 
     // --- stats with FTS diagnostic ON (the expensive COUNT(*) FROM logs_fts) ---
-    let stats_fts_ms = bench_median_ms(3, || {
+    let stats_fts_latency = bench_percentiles_ms(20, || {
         let _ = get_stats_with_options(&pool, &cfg, true).unwrap();
     });
-    eprintln!("[bench] get_stats (FTS diagnostic ON): {stats_fts_ms:.1} ms");
+    eprintln!(
+        "[bench] get_stats (FTS diagnostic ON): p50={:.1} ms p95={:.1} ms",
+        stats_fts_latency.p50_ms, stats_fts_latency.p95_ms
+    );
 
     // --- sessions BEFORE: live aggregation (GROUP BY + temp-btree sort) ---
     let params = ListAiSessionsParams {
@@ -3277,29 +3294,32 @@ fn bench_stats_and_sessions() {
         limit: Some(100),
     };
     let mut live_rows = 0usize;
-    let sessions_live_ms = bench_median_ms(5, || {
+    let sessions_live_latency = bench_percentiles_ms(20, || {
         live_rows = list_ai_sessions_live(&pool, &params).unwrap().len();
     });
     eprintln!(
-        "[bench] BEFORE list_ai_sessions_live(limit=100): {sessions_live_ms:.1} ms  ({live_rows} rows)"
+        "[bench] BEFORE list_ai_sessions_live(limit=100): p50={:.1} ms p95={:.1} ms ({live_rows} rows)",
+        sessions_live_latency.p50_ms, sessions_live_latency.p95_ms
     );
 
     // --- refresh cost (background cadence; not on the request path) ---
     let mut rollup_total = 0usize;
-    let refresh_ms = bench_median_ms(3, || {
+    let refresh_latency = bench_percentiles_ms(10, || {
         rollup_total = refresh_ai_session_rollup(&pool).unwrap();
     });
     eprintln!(
-        "[bench] refresh_ai_session_rollup: {refresh_ms:.1} ms  ({rollup_total} session rows total)"
+        "[bench] refresh_ai_session_rollup: p50={:.1} ms p95={:.1} ms ({rollup_total} session rows total)",
+        refresh_latency.p50_ms, refresh_latency.p95_ms
     );
 
     // --- sessions AFTER: indexed read from the rollup materialization ---
     let mut rollup_rows = 0usize;
-    let sessions_rollup_ms = bench_median_ms(5, || {
+    let sessions_rollup_latency = bench_percentiles_ms(20, || {
         rollup_rows = list_ai_sessions(&pool, &params).unwrap().len();
     });
     eprintln!(
-        "[bench] AFTER list_ai_sessions(rollup, limit=100): {sessions_rollup_ms:.1} ms  ({rollup_rows} rows)"
+        "[bench] AFTER list_ai_sessions(rollup, limit=100): p50={:.1} ms p95={:.1} ms ({rollup_rows} rows)",
+        sessions_rollup_latency.p50_ms, sessions_rollup_latency.p95_ms
     );
 
     // Correctness: the rollup-served top-N must equal the live top-N. Both
@@ -3339,13 +3359,24 @@ fn bench_stats_and_sessions() {
         }
     }
 
-    let speedup = sessions_live_ms / sessions_rollup_ms.max(0.001);
+    let speedup = sessions_live_latency.p50_ms / sessions_rollup_latency.p50_ms.max(0.001);
     eprintln!(
         "[bench] SUMMARY rows={rows} \
-         stats_default_ms={stats_ms:.1} stats_fts_on_ms={stats_fts_ms:.1} \
-         sessions_BEFORE_live_ms={sessions_live_ms:.1} \
-         sessions_AFTER_rollup_ms={sessions_rollup_ms:.1} \
-         refresh_ms={refresh_ms:.1} sessions_speedup={speedup:.1}x"
+         stats_default_p50_ms={:.1} stats_default_p95_ms={:.1} \
+         stats_fts_on_p50_ms={:.1} stats_fts_on_p95_ms={:.1} \
+         sessions_BEFORE_live_p50_ms={:.1} sessions_BEFORE_live_p95_ms={:.1} \
+         sessions_AFTER_rollup_p50_ms={:.1} sessions_AFTER_rollup_p95_ms={:.1} \
+         refresh_p50_ms={:.1} refresh_p95_ms={:.1} sessions_p50_speedup={speedup:.1}x",
+        stats_latency.p50_ms,
+        stats_latency.p95_ms,
+        stats_fts_latency.p50_ms,
+        stats_fts_latency.p95_ms,
+        sessions_live_latency.p50_ms,
+        sessions_live_latency.p95_ms,
+        sessions_rollup_latency.p50_ms,
+        sessions_rollup_latency.p95_ms,
+        refresh_latency.p50_ms,
+        refresh_latency.p95_ms,
     );
 }
 

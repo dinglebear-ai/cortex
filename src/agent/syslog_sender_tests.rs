@@ -344,6 +344,27 @@ fn aggregate_cap_bounds_high_cardinality_sources_and_records_each_loss_window() 
 }
 
 #[tokio::test]
+async fn forward_status_reports_exact_spool_bytes_and_cumulative_evictions() {
+    let dir = tempfile::tempdir().unwrap();
+    let sender = SyslogSender::new(
+        "http://127.0.0.1:9".to_string(),
+        None,
+        dir.path().join("spool.json"),
+    );
+    sender.enqueue("alpha", "12345".into()).unwrap();
+    sender.enqueue("beta", "1234567".into()).unwrap();
+    {
+        let mut state = sender.state.lock().unwrap();
+        state.spool.evicted_records = 9;
+    }
+
+    let status = sender.status();
+    assert_eq!(status.queued_records, 2);
+    assert_eq!(status.queued_bytes, 12);
+    assert_eq!(status.evicted_records, 9);
+}
+
+#[tokio::test]
 async fn oversized_input_gaps_stay_bounded_during_a_receiver_outage() {
     let dir = tempfile::tempdir().unwrap();
     let sender = SyslogSender::new(
