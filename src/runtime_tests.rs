@@ -549,7 +549,10 @@ async fn maintenance_shutdown_is_unclean_when_file_tail_checkpoint_fails() {
         .unwrap();
     let runtime = RuntimeCore::for_server(config).await.unwrap();
     let handles = runtime.spawn_maintenance_tasks();
-    tokio::time::timeout(Duration::from_secs(3), async {
+    // The all-features suite runs thousands of CPU- and SQLite-heavy tests in
+    // parallel. Allow scheduler headroom while still bounding readiness; this
+    // assertion is about the checkpoint-failure shutdown result below.
+    tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if runtime
                 .file_tail_supervisor
