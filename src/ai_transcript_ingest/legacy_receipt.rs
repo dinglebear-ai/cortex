@@ -19,12 +19,24 @@ fn envelope_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
     Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
 }
 
+fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: bool) -> String {
+    if shared_bearer {
+        source_record_id.to_owned()
+    } else {
+        format!(
+            "principal:sha256:{:x}",
+            Sha256::digest(format!("{forwarder_identity}\0{source_record_id}").as_bytes())
+        )
+    }
+}
+
 /// Migration-53 receipts have no request fingerprint. Validate an incoming
 /// replay against the canonical log and metadata that receipt committed before
 /// binding its fingerprint. This prevents the first post-upgrade request from
 /// silently claiming a legacy ID with different evidence.
 fn legacy_receipt_matches(
     tx: &rusqlite::Transaction<'_>,
+    stored_receipt_key: &str,
     envelope: &EvidenceEnvelope,
 ) -> anyhow::Result<bool> {
     let stored = tx
@@ -36,7 +48,7 @@ fn legacy_receipt_matches(
              FROM ai_transcript_forward_receipts r
              JOIN logs l ON l.id = r.log_id
              WHERE r.source_record_id = ?1",
-            [&envelope.source_record_id],
+            [stored_receipt_key],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -121,10 +133,46 @@ fn legacy_receipt_matches(
 /// Commit each canonical log insert and its source-record receipt in one
 /// SQLite transaction.  A retry after a lost HTTP response returns a
 /// `duplicate` receipt instead of materializing another log row.
+#[cfg(test)]
 pub(super) fn insert_envelopes_with_receipts(
     pool: &DbPool,
     records: Vec<AiTranscriptRecord>,
     forwarder_identity: String,
+    peer: SocketAddr,
+) -> anyhow::Result<Vec<AiTranscriptReceipt>> {
+    let shared_bearer = forwarder_identity == "shared_bearer";
+    insert_envelopes_with_identity(
+        pool,
+        records,
+        &forwarder_identity,
+        &forwarder_identity,
+        shared_bearer,
+        peer,
+    )
+}
+
+pub(super) fn insert_envelopes_with_principal(
+    pool: &DbPool,
+    records: Vec<AiTranscriptRecord>,
+    principal: ForwardingPrincipal,
+    peer: SocketAddr,
+) -> anyhow::Result<Vec<AiTranscriptReceipt>> {
+    insert_envelopes_with_identity(
+        pool,
+        records,
+        &principal.receipt_namespace(),
+        principal.label(),
+        principal.is_shared(),
+        peer,
+    )
+}
+
+fn insert_envelopes_with_identity(
+    pool: &DbPool,
+    records: Vec<AiTranscriptRecord>,
+    receipt_namespace: &str,
+    display_identity: &str,
+    shared_bearer: bool,
     peer: SocketAddr,
 ) -> anyhow::Result<Vec<AiTranscriptReceipt>> {
     let mut conn = db::write_conn(pool)?;
@@ -135,10 +183,22 @@ pub(super) fn insert_envelopes_with_receipts(
         let envelope = scrub_envelope(record.envelope)
             .map_err(|reason| anyhow::anyhow!("invalid transcript evidence envelope: {reason}"))?;
         let request_fingerprint = envelope_fingerprint(&envelope)?;
+        let stored_receipt_key =
+            receipt_key(receipt_namespace, &envelope.source_record_id, shared_bearer);
+        // Retention can remove canonical evidence on a connection where
+        // foreign-key enforcement was unavailable. A receipt without its log
+        // cannot prove a replay, so remove it in this transaction and let the
+        // request create fresh canonical evidence.
+        tx.execute(
+            "DELETE FROM ai_transcript_forward_receipts
+             WHERE source_record_id = ?1
+               AND NOT EXISTS (SELECT 1 FROM logs WHERE id = log_id)",
+            [&stored_receipt_key],
+        )?;
         let already_accepted = tx
             .query_row(
                 "SELECT request_fingerprint FROM ai_transcript_forward_receipts WHERE source_record_id = ?1",
-                [&envelope.source_record_id],
+                [&stored_receipt_key],
                 |row| row.get::<_, Option<String>>(0),
             )
             .optional()?;
@@ -150,7 +210,7 @@ pub(super) fn insert_envelopes_with_receipts(
                 return Err(IdempotencyConflict.into());
             }
             if previous_fingerprint.is_none() {
-                if !legacy_receipt_matches(&tx, &envelope)? {
+                if !legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)? {
                     return Err(IdempotencyConflict.into());
                 }
                 // Migration-53 receipts predate request fingerprints. Bind an
@@ -159,7 +219,7 @@ pub(super) fn insert_envelopes_with_receipts(
                     "UPDATE ai_transcript_forward_receipts
                      SET request_fingerprint = ?2
                      WHERE source_record_id = ?1 AND request_fingerprint IS NULL",
-                    rusqlite::params![envelope.source_record_id, request_fingerprint],
+                    rusqlite::params![stored_receipt_key, request_fingerprint],
                 )?;
             }
             receipts.push(AiTranscriptReceipt {
@@ -171,7 +231,7 @@ pub(super) fn insert_envelopes_with_receipts(
 
         let entries = [to_log_batch_entry(
             envelope.clone(),
-            &forwarder_identity,
+            display_identity,
             &peer,
         )];
         let ids = db::insert_logs_batch_in_tx(&tx, &entries)?;
@@ -187,7 +247,7 @@ pub(super) fn insert_envelopes_with_receipts(
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                      strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             rusqlite::params![
-                envelope.source_record_id,
+                stored_receipt_key,
                 i64::from(envelope.version),
                 log_id,
                 envelope.source.provider,

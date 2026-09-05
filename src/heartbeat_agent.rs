@@ -35,6 +35,7 @@ pub const OPTIONAL_ENV_KEYS: &[&str] = &[
     "CORTEX_AGENT_SHELL_HISTORY_FORWARD",
     "CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT",
     "CORTEX_AGENT_SYSLOG_FORWARD_SPOOL",
+    "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
     "CORTEX_AGENT_AUTO_UPDATE",
 ];
 
@@ -120,6 +121,9 @@ pub struct HeartbeatAgentConfig {
     pub file_tails: Vec<crate::agent::syslog_file::FileTailSource>,
     /// Override TCP syslog target (`host:port`).  Derived from `target` when absent.
     pub syslog_target: Option<String>,
+    /// Explicit HTTP endpoint for receipt-backed syslog forwarding. When
+    /// absent, the heartbeat target is used.
+    pub syslog_forward_target: Option<String>,
     /// Local durable queue for receipt-backed syslog delivery.
     pub syslog_forward_spool_path: PathBuf,
     /// Forward local AI transcript (Claude/Codex) changes to the central
@@ -165,6 +169,22 @@ impl HeartbeatAgentConfig {
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
         let syslog_target = crate::env::var("CORTEX_SYSLOG_TARGET").ok();
+        let explicit_syslog_forward_target = crate::env::var("CORTEX_AGENT_SYSLOG_FORWARD_TARGET")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let syslog_forward_target = if explicit_syslog_forward_target.is_some() {
+            explicit_syslog_forward_target
+        } else if syslog_target.is_some() {
+            tracing::warn!(
+                warning_code = "legacy_syslog_target_migrated",
+                legacy_env = "CORTEX_SYSLOG_TARGET",
+                replacement_env = "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
+                "legacy TCP syslog target is ignored; durable forwarding uses the heartbeat HTTP target"
+            );
+            target.clone()
+        } else {
+            None
+        };
         let syslog_forward_spool_path = match crate::env::var(
             "CORTEX_AGENT_SYSLOG_FORWARD_SPOOL",
         ) {
@@ -248,6 +268,7 @@ impl HeartbeatAgentConfig {
             syslog_file,
             file_tails,
             syslog_target,
+            syslog_forward_target,
             syslog_forward_spool_path,
             ai_transcripts,
             ai_transcript_checkpoint_path,
@@ -1451,8 +1472,9 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
             file_tails: config.file_tails.clone(),
             syslog_target,
             syslog_forward_target: config
-                .target
+                .syslog_forward_target
                 .clone()
+                .or_else(|| config.target.clone())
                 .unwrap_or_else(|| DEFAULT_TARGET.to_string()),
             syslog_forward_token: config.token.clone(),
             syslog_forward_spool_path: config.syslog_forward_spool_path.clone(),

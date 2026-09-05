@@ -18,21 +18,51 @@ use axum::{
 };
 use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};
-use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::db::{self, DbPool};
-use crate::enrich::{SourceKind, stamp_source_kind};
+use crate::db::DbPool;
 use crate::mcp::AuthPolicy;
-use crate::receiver::parser::parse_syslog;
 use crate::surfaces::post;
 
 pub const SYSLOG_FORWARD_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_RECORDS_PER_BATCH: usize = 200;
 pub const MAX_GAPS_PER_BATCH: usize = 50;
+
+/// Server-derived authentication identity. Keeping the credential class in
+/// the type prevents a user-controlled principal label from becoming an
+/// internal system identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ForwardingPrincipal {
+    Loopback,
+    SharedBearer,
+    Named(String),
+}
+
+impl ForwardingPrincipal {
+    pub(crate) fn label(&self) -> &str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::SharedBearer => "shared_bearer",
+            Self::Named(label) => label,
+        }
+    }
+
+    pub(crate) fn receipt_namespace(&self) -> String {
+        match self {
+            // Preserve the legacy namespaces for system credentials so
+            // receipts written before named principals existed still replay.
+            Self::Loopback => "loopback".to_owned(),
+            Self::SharedBearer => "shared_bearer".to_owned(),
+            Self::Named(label) => format!("named:{}:{label}", label.len()),
+        }
+    }
+
+    pub(crate) fn is_shared(&self) -> bool {
+        matches!(self, Self::SharedBearer)
+    }
+}
 
 #[derive(Debug)]
 struct IdempotencyConflict;
@@ -152,9 +182,9 @@ async fn ingest_handler(
     let peer_ip = peer.ip().to_string();
     let record_count = request.records.len();
     let gap_count = request.gaps.len();
-    let diagnostic_identity = forwarder_identity.clone();
+    let diagnostic_identity = forwarder_identity.label().to_owned();
     match tokio::task::spawn_blocking(move || {
-        persist_request(&pool, request, &peer_ip, &forwarder_identity)
+        persist_authenticated_request(&pool, request, &peer_ip, &forwarder_identity)
     })
     .await
     {
@@ -232,211 +262,22 @@ fn valid_observed_at(value: &str) -> bool {
     !value.is_empty() && value.len() <= 64 && chrono::DateTime::parse_from_rfc3339(value).is_ok()
 }
 
-fn persist_request(
-    pool: &DbPool,
-    request: SyslogForwardRequest,
-    peer_ip: &str,
-    forwarder_identity: &str,
-) -> anyhow::Result<Vec<String>> {
-    let mut conn = db::write_conn(pool)?;
-    let tx = conn.transaction()?;
-    let mut receipts = Vec::with_capacity(request.records.len() + request.gaps.len());
-    for record in request.records {
-        let receipt_key = opaque_receipt_value(&record.idempotency_key);
-        let source_identity =
-            opaque_receipt_value(&format!("{forwarder_identity}:{}", record.source_instance));
-        let fingerprint = request_fingerprint(forwarder_identity, &record)?;
-        if receipt_replay(
-            &tx,
-            &receipt_key,
-            &source_identity,
-            record.source_epoch,
-            record.sequence,
-            "record",
-            &fingerprint,
-        )? {
-            receipts.push(record.idempotency_key);
-            continue;
-        }
-        let mut entry = parse_syslog(&record.line, format!("agent-syslog://{peer_ip}"));
-        let claimed_hostname = entry.hostname.clone();
-        entry.hostname = format!("agent-{forwarder_identity}");
-        entry.metadata_json = Some(forwarded_metadata(
-            entry.metadata_json.as_deref(),
-            forwarder_identity,
-            peer_ip,
-            claimed_hostname,
-        )?);
-        stamp_source_kind(&mut entry, SourceKind::SyslogTcp);
-        let ids = db::insert_logs_batch_in_tx(&tx, &[entry])?;
-        insert_receipt(
-            &tx,
-            &receipt_key,
-            &source_identity,
-            record.source_epoch,
-            record.sequence,
-            ids[0],
-            "record",
-            &fingerprint,
-        )?;
-        receipts.push(record.idempotency_key);
-    }
-    for gap in request.gaps {
-        let receipt_key = opaque_receipt_value(&gap.idempotency_key);
-        let source_identity =
-            opaque_receipt_value(&format!("{forwarder_identity}:{}", gap.source_instance));
-        let fingerprint = request_fingerprint(forwarder_identity, &gap)?;
-        if receipt_replay(
-            &tx,
-            &receipt_key,
-            &source_identity,
-            gap.source_epoch,
-            gap.to_sequence,
-            "gap",
-            &fingerprint,
-        )? {
-            receipts.push(gap.idempotency_key);
-            continue;
-        }
-        // This is deliberately payload-free: it makes the exact loss window
-        // queryable without leaking a dropped record into status/diagnostics.
-        let entry = crate::db::LogBatchEntry {
-            timestamp: gap.observed_at.clone(),
-            hostname: source_identity.clone(),
-            facility: Some("local0".into()),
-            severity: "warning".into(),
-            app_name: Some("cortex-agent-forward".into()),
-            process_id: None,
-            message: format!(
-                "syslog forwarding retention gap: sequence {} through {} ({})",
-                gap.from_sequence, gap.to_sequence, gap.reason_code
-            ),
-            raw: String::new(),
-            source_ip: format!("agent-syslog://{peer_ip}"),
-            docker_checkpoint: None,
-            ai_tool: None,
-            ai_project: None,
-            ai_session_id: None,
-            ai_transcript_path: None,
-            metadata_json: Some(crate::ingest_metadata::bounded_metadata_json(
-                json!({"source_kind":"syslog-forward-gap", "reason_code": gap.reason_code, "from_sequence": gap.from_sequence, "to_sequence": gap.to_sequence}),
-            )),
-            http_status: None,
-            auth_outcome: None,
-            dns_blocked: None,
-            event_action: None,
-            parse_error: None,
-        };
-        let ids = db::insert_logs_batch_in_tx(&tx, &[entry])?;
-        insert_receipt(
-            &tx,
-            &receipt_key,
-            &source_identity,
-            gap.source_epoch,
-            gap.to_sequence,
-            ids[0],
-            "gap",
-            &fingerprint,
-        )?;
-        receipts.push(gap.idempotency_key);
-    }
-    tx.commit()?;
-    crate::db::agent_observatory::notify_projection_work();
-    Ok(receipts)
-}
-
-fn forwarded_metadata(
-    existing: Option<&str>,
-    forwarder_identity: &str,
-    peer_ip: &str,
-    hostname_claim: String,
-) -> anyhow::Result<String> {
-    let mut metadata = match existing {
-        Some(encoded) => serde_json::from_str::<Value>(encoded)?
-            .as_object()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("parsed syslog metadata is not a JSON object"))?,
-        None => serde_json::Map::new(),
-    };
-    metadata.insert(
-        "forwarded_provenance".into(),
-        json!({
-            "authenticated_forwarder": forwarder_identity,
-            "transport_peer": peer_ip,
-            "hostname_claim": hostname_claim,
-            "trust": if forwarder_identity == "shared_bearer" { "claimed" } else { "verified_forwarder_claimed_host" },
-        }),
-    );
-    Ok(crate::ingest_metadata::bounded_metadata_json(
-        Value::Object(metadata),
-    ))
-}
-
-fn opaque_receipt_value(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    hex::encode(&digest[..16])
-}
-
-fn request_fingerprint<T: Serialize>(identity: &str, value: &T) -> anyhow::Result<String> {
-    Ok(opaque_receipt_value(&format!(
-        "{identity}:{}",
-        serde_json::to_string(value)?
-    )))
-}
-
-fn receipt_replay(
-    tx: &rusqlite::Transaction<'_>,
-    key: &str,
-    source: &str,
-    epoch: u64,
-    sequence: u64,
-    kind: &str,
-    fingerprint: &str,
-) -> anyhow::Result<bool> {
-    let stored = tx
-        .query_row(
-            "SELECT source_instance, source_epoch, sequence, receipt_kind, request_fingerprint FROM syslog_forward_receipts WHERE idempotency_key = ?1",
-            [key],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)),
-        )
-        .optional()?;
-    match stored {
-        None => Ok(false),
-        Some((stored_source, stored_epoch, stored_sequence, stored_kind, stored_fingerprint))
-            if stored_source == source
-                && stored_epoch == epoch as i64
-                && stored_sequence == sequence as i64
-                && stored_kind == kind
-                && (stored_fingerprint.is_empty() || stored_fingerprint == fingerprint) =>
-        {
-            Ok(true)
-        }
-        Some(_) => Err(anyhow::Error::new(IdempotencyConflict)),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn insert_receipt(
-    tx: &rusqlite::Transaction<'_>,
-    key: &str,
-    source: &str,
-    epoch: u64,
-    sequence: u64,
-    log_id: i64,
-    kind: &str,
-    fingerprint: &str,
-) -> anyhow::Result<()> {
-    tx.execute("INSERT INTO syslog_forward_receipts (idempotency_key, source_instance, source_epoch, sequence, canonical_log_id, receipt_kind, request_fingerprint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![key, source, epoch as i64, sequence as i64, log_id, kind, fingerprint])?;
-    Ok(())
-}
+#[path = "syslog_forward_ingest/persistence.rs"]
+mod persistence;
+use persistence::persist_authenticated_request;
+#[cfg(test)]
+use persistence::{forwarded_metadata, persist_request};
 
 fn authenticated_forwarder(
     state: &SyslogForwardIngestState,
     peer: &SocketAddr,
     headers: &HeaderMap,
-) -> Option<String> {
+) -> Option<ForwardingPrincipal> {
     if matches!(state.auth_policy, AuthPolicy::LoopbackDev) {
-        return peer.ip().is_loopback().then(|| "loopback".to_string());
+        return peer
+            .ip()
+            .is_loopback()
+            .then_some(ForwardingPrincipal::Loopback);
     }
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -447,13 +288,13 @@ fn authenticated_forwarder(
         .iter()
         .find_map(|(expected, identity)| tokens_equal(&token, expected).then(|| identity.clone()))
     {
-        return Some(identity);
+        return Some(ForwardingPrincipal::Named(identity));
     }
     state
         .api_token
         .as_deref()
         .filter(|expected| tokens_equal(&token, expected))
-        .map(|_| "shared_bearer".to_string())
+        .map(|_| ForwardingPrincipal::SharedBearer)
 }
 
 fn unauthorized() -> Response {

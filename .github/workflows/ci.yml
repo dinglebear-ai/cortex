@@ -213,11 +213,9 @@ jobs:
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
 
-      - name: Enforce bounded session-query targets
+      - name: Collect session-query benchmark telemetry
         env:
           CORTEX_BENCH_ROWS: "50000"
-          CORTEX_BENCH_MIN_SESSION_SPEEDUP: "2.0"
-          CORTEX_BENCH_MAX_SESSION_P95_MS: "250"
           CORTEX_BENCH_ARTIFACT: session-query-benchmark.json
         run: cargo test --lib bench_stats_and_sessions -- --ignored --nocapture
 

@@ -31,7 +31,7 @@ SQLite database and a service layer:
 | `config.rs` | all | Layered config: defaults → `config.toml` → `~/.cortex/.env` → process env; startup validation (non-loopback auth gate) |
 | `runtime.rs` + `runtime/` | all | `RuntimeCore`: wires pool, ingest, auth policy; spawns the maintenance tasks below |
 | `app/` | core | `CortexService` service layer — shared limits/validation for MCP, REST, and CLI |
-| `db/` | core | SQLite pool + 57 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
+| `db/` | core | SQLite pool + 58 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
 | `receiver/` + `receiver.rs` | core | UDP + TCP listeners (supervised with restart + backoff), RFC 3164/5424 + CEF parsing |
 | `ingest.rs` | core | mpsc channel + batch writer (one pool connection reserved for this writer) |
 | `otlp.rs` | core | OTLP/HTTP `POST /v1/logs` (protobuf, 4 MiB cap) |

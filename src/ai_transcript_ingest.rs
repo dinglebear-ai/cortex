@@ -38,6 +38,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::db::{self, DbPool, LogBatchEntry};
 use crate::mcp::AuthPolicy;
+use crate::syslog_forward_ingest::ForwardingPrincipal;
 
 pub const AI_TRANSCRIPT_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 
@@ -417,7 +418,7 @@ async fn ingest_handler(
     };
     let pool = Arc::clone(&state.pool);
     let join_result = tokio::task::spawn_blocking(move || {
-        insert_envelopes_with_receipts(&pool, records, forwarder_identity, peer)
+        insert_envelopes_with_principal(&pool, records, forwarder_identity, peer)
     })
     .await;
 
@@ -458,9 +459,12 @@ fn authenticated_forwarder(
     state: &AiTranscriptIngestState,
     peer: &SocketAddr,
     headers: &HeaderMap,
-) -> Option<String> {
+) -> Option<ForwardingPrincipal> {
     if matches!(state.auth_policy, AuthPolicy::LoopbackDev) {
-        return peer.ip().is_loopback().then(|| "loopback".to_string());
+        return peer
+            .ip()
+            .is_loopback()
+            .then_some(ForwardingPrincipal::Loopback);
     }
     let auth = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -471,13 +475,13 @@ fn authenticated_forwarder(
         .iter()
         .find_map(|(expected, identity)| tokens_equal(&token, expected).then(|| identity.clone()))
     {
-        return Some(identity);
+        return Some(ForwardingPrincipal::Named(identity));
     }
     state
         .api_token
         .as_deref()
         .filter(|expected| tokens_equal(&token, expected))
-        .map(|_| "shared_bearer".to_string())
+        .map(|_| ForwardingPrincipal::SharedBearer)
 }
 
 fn unauthorized() -> Response {

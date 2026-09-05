@@ -279,7 +279,9 @@ async fn follow_container(
             &container.id[..12],
             &msg,
         );
-        sender.try_send_from(&format!("docker:{}", container.id), line);
+        sender
+            .send_from(&format!("docker:{}", container.id), line)
+            .await?;
     }
     Ok(())
 }

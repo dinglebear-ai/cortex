@@ -65,12 +65,14 @@ fn forwarding_agent_tokens(config: &Config) -> std::collections::HashMap<String,
         .mcp
         .forwarding_agents
         .iter()
-        .filter_map(|(identity, secret)| {
-            secret
-                .0
-                .as_ref()
-                .filter(|token| !token.trim().is_empty())
-                .map(|token| (token.clone(), identity.clone()))
+        .map(|(identity, secret)| {
+            (
+                secret
+                    .0
+                    .clone()
+                    .expect("forwarding credentials are validated at runtime construction"),
+                identity.clone(),
+            )
         })
         .collect()
 }
@@ -1171,6 +1173,13 @@ impl RuntimeCore {
                     };
                     let global_deleted =
                         db::purge_old_logs(&pool, retention_days, fts_merge_pages)?;
+                    let receipt_deleted = db::purge_forward_receipts(&pool, cleanup_chunk_size)?;
+                    if receipt_deleted > 0 {
+                        tracing::info!(
+                            deleted = receipt_deleted,
+                            "Purged expired forwarding receipts"
+                        );
+                    }
                     // llm_invocations (migration 37) has no severity concept and no
                     // volume-driven need for its own hardcoded cap (unlike AdGuard
                     // tags/heartbeats above), so it rides the same global

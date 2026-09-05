@@ -10,9 +10,9 @@ use rusqlite::OptionalExtension;
 
 #[test]
 fn documented_schema_count_matches_known_version() {
-    assert_eq!(KNOWN_SCHEMA_VERSION, 57);
-    assert!(include_str!("../../README.md").contains("57 sequential schema migrations"));
-    assert!(include_str!("../../docs/architecture.md").contains("57 sequential migrations"));
+    assert_eq!(KNOWN_SCHEMA_VERSION, 58);
+    assert!(include_str!("../../README.md").contains("58 sequential schema migrations"));
+    assert!(include_str!("../../docs/architecture.md").contains("58 sequential migrations"));
 }
 
 #[test]
@@ -38,6 +38,191 @@ fn migration_57_adds_transcript_receipt_fingerprints() {
         )
         .unwrap();
     assert_eq!(marker_count, 1);
+}
+
+fn migration_test_log() -> LogBatchEntry {
+    LogBatchEntry {
+        timestamp: "2026-01-01T00:00:00Z".into(),
+        hostname: "migration-host".into(),
+        facility: None,
+        severity: "info".into(),
+        app_name: Some("migration-test".into()),
+        process_id: None,
+        message: "preserved migration evidence".into(),
+        raw: "preserved migration evidence".into(),
+        source_ip: "127.0.0.1".into(),
+        docker_checkpoint: None,
+        ai_tool: Some("codex".into()),
+        ai_project: Some("migration-project".into()),
+        ai_session_id: Some("migration-session".into()),
+        ai_transcript_path: None,
+        metadata_json: None,
+        http_status: None,
+        auth_outcome: None,
+        dns_blocked: None,
+        event_action: None,
+        parse_error: None,
+    }
+}
+
+#[test]
+fn populated_pre_56_syslog_receipts_upgrade_and_reopen_idempotently() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("populated-pre-56.db");
+    let config = test_storage_config(db_path.clone());
+    let pool = init_pool(&config).unwrap();
+    insert_logs_batch(&pool, &[migration_test_log()]).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         ALTER TABLE syslog_forward_receipts RENAME TO syslog_forward_receipts_new;
+         CREATE TABLE syslog_forward_receipts (
+             idempotency_key TEXT PRIMARY KEY,
+             source_instance TEXT NOT NULL,
+             source_epoch INTEGER NOT NULL,
+             sequence INTEGER NOT NULL,
+             canonical_log_id INTEGER NOT NULL,
+             receipt_kind TEXT NOT NULL CHECK (receipt_kind IN ('record', 'gap')),
+             received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         INSERT INTO syslog_forward_receipts
+             (idempotency_key, source_instance, source_epoch, sequence, canonical_log_id, receipt_kind, received_at)
+         VALUES ('legacy-syslog', 'legacy-host', 7, 42, 1, 'record', '2026-01-01T00:00:00Z');
+         DROP TABLE syslog_forward_receipts_new;
+         CREATE INDEX idx_syslog_forward_receipts_source_sequence
+             ON syslog_forward_receipts(source_instance, source_epoch, sequence);
+         DELETE FROM schema_migrations WHERE version = 56;
+         PRAGMA foreign_keys = ON;",
+    )
+    .unwrap();
+    drop(conn);
+    drop(pool);
+
+    for reopen in 0..2 {
+        let pool = init_pool(&config).unwrap();
+        let conn = pool.get().unwrap();
+        let receipt: (String, String, i64, i64, String) = conn
+            .query_row(
+                "SELECT source_instance, request_fingerprint, source_epoch, sequence, receipt_kind
+                 FROM syslog_forward_receipts WHERE idempotency_key = 'legacy-syslog'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            receipt,
+            ("legacy-host".into(), "".into(), 7, 42, "record".into())
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 56",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1,
+            "reopen {reopen}"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'preserved migration evidence'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn populated_pre_57_transcript_receipts_upgrade_and_reopen_idempotently() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("populated-pre-57.db");
+    let config = test_storage_config(db_path.clone());
+    let pool = init_pool(&config).unwrap();
+    insert_logs_batch(&pool, &[migration_test_log()]).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         ALTER TABLE ai_transcript_forward_receipts RENAME TO ai_transcript_forward_receipts_new;
+         CREATE TABLE ai_transcript_forward_receipts (
+             source_record_id TEXT PRIMARY KEY,
+             envelope_version INTEGER NOT NULL,
+             log_id INTEGER NOT NULL UNIQUE REFERENCES logs(id) ON DELETE CASCADE,
+             provider TEXT NOT NULL,
+             source_identity TEXT NOT NULL,
+             source_epoch TEXT NOT NULL,
+             source_revision TEXT NOT NULL,
+             received_at TEXT NOT NULL
+         );
+         INSERT INTO ai_transcript_forward_receipts
+             (source_record_id, envelope_version, log_id, provider, source_identity, source_epoch, source_revision, received_at)
+         VALUES ('legacy-record', 1, 1, 'codex', 'legacy-source', 'legacy-epoch', 'legacy-revision', '2026-01-01T00:00:00Z');
+         DROP TABLE ai_transcript_forward_receipts_new;
+         CREATE INDEX idx_ai_transcript_forward_receipts_source
+             ON ai_transcript_forward_receipts(provider, source_identity, source_epoch, source_revision);
+         DELETE FROM schema_migrations WHERE version = 57;
+         PRAGMA foreign_keys = ON;",
+    )
+    .unwrap();
+    drop(conn);
+    drop(pool);
+
+    for reopen in 0..2 {
+        let pool = init_pool(&config).unwrap();
+        let conn = pool.get().unwrap();
+        let receipt: (String, i64, Option<String>, String) = conn
+            .query_row(
+                "SELECT provider, log_id, request_fingerprint, source_revision
+                 FROM ai_transcript_forward_receipts WHERE source_record_id = 'legacy-record'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(receipt, ("codex".into(), 1, None, "legacy-revision".into()));
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 57",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1,
+            "reopen {reopen}"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'preserved migration evidence'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+    }
 }
 
 fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
@@ -1763,7 +1948,23 @@ fn migration_51_recovers_a_missing_transcript_sources_table() {
                  ai_session_id TEXT,
                  ai_transcript_path TEXT,
                  metadata_json TEXT
-             );",
+             );
+             CREATE TABLE transcript_import_records (
+                 id INTEGER PRIMARY KEY,
+                 source_id INTEGER NOT NULL,
+                 record_key TEXT NOT NULL,
+                 UNIQUE(source_id, record_key)
+             );
+             CREATE TABLE transcript_parse_errors (
+                 id INTEGER PRIMARY KEY,
+                 source_id INTEGER NOT NULL,
+                 line_no INTEGER NOT NULL,
+                 error TEXT NOT NULL,
+                 record_preview TEXT NOT NULL,
+                 UNIQUE(source_id, line_no, error, record_preview)
+             );
+             INSERT INTO transcript_import_records VALUES (1, 1, 'stale-record');
+             INSERT INTO transcript_parse_errors VALUES (1, 1, 1, 'stale-error', 'secret');",
         )
         .unwrap();
     }
@@ -1781,6 +1982,24 @@ fn migration_51_recovers_a_missing_transcript_sources_table() {
     assert!(columns.contains(&"canonical_path".to_string()));
     assert!(columns.contains(&"source_revision".to_string()));
     assert!(columns.contains(&"scan_state".to_string()));
+    for child in ["transcript_import_records", "transcript_parse_errors"] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {child}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "orphan rows in {child} must be swept");
+    }
+    conn.execute(
+        "INSERT INTO transcript_sources (canonical_path, source_kind) VALUES ('new', 'codex_session')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO transcript_import_records (source_id, record_key) VALUES (1, 'stale-record')",
+        [],
+    )
+    .expect("a new source must not collide with an orphaned dedupe receipt");
     assert_eq!(
         conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get::<_, i64>(0)
@@ -1979,6 +2198,54 @@ fn graph_schema_enforces_vocabulary_and_dedup_keys() {
         bad_same_window.is_err(),
         "same_window must not be a persisted v1 relationship type"
     );
+}
+
+#[test]
+fn recurring_error_evidence_lookup_has_covering_partial_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&test_storage_config(dir.path().join("evidence-index.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    let plan = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT id FROM graph_relationship_evidence
+             WHERE source_kind = 'error_signature'
+               AND source_signature_hash = 'hash'
+             ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|detail| { detail.contains("idx_graph_evidence_error_signature_hash_id") }),
+        "recurring-error evidence must use the covering index: {plan:?}"
+    );
+}
+
+#[test]
+fn migration_58_recovers_when_index_exists_without_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_storage_config(dir.path().join("migration-58-recovery.db"));
+    let pool = init_pool(&config).unwrap();
+    pool.get()
+        .unwrap()
+        .execute("DELETE FROM schema_migrations WHERE version = 58", [])
+        .unwrap();
+    drop(pool);
+
+    let reopened = init_pool(&config).unwrap();
+    let conn = reopened.get().unwrap();
+    let markers: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 58",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(markers, 1);
 }
 
 #[test]

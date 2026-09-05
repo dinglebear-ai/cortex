@@ -226,6 +226,16 @@ fn runtime_health_aggregates_provider_source_kinds_without_reading_paths() {
             "gemini_session",
             None,
         ),
+        (
+            "/private/transcripts/antigravity-success.jsonl",
+            "antigravity_desktop",
+            None,
+        ),
+        (
+            "/private/transcripts/antigravity-failed.jsonl",
+            "antigravity_cli",
+            Some("bad json"),
+        ),
     ] {
         conn.execute(
             "INSERT INTO transcript_sources (canonical_path, source_kind, last_error)
@@ -238,6 +248,13 @@ fn runtime_health_aggregates_provider_source_kinds_without_reading_paths() {
         "INSERT INTO transcript_import_records (source_id, record_key)
          SELECT id, 'claude-receipt' FROM transcript_sources
          WHERE source_kind = 'claude_project' AND last_error IS NULL",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO transcript_import_records (source_id, record_key)
+         SELECT id, 'antigravity-receipt' FROM transcript_sources
+         WHERE source_kind = 'antigravity_desktop'",
         [],
     )
     .unwrap();
@@ -328,6 +345,18 @@ fn runtime_health_aggregates_provider_source_kinds_without_reading_paths() {
             .unwrap()
             .coverage,
         "not_observed"
+    );
+    let antigravity = health
+        .iter()
+        .find(|entry| entry.provider == "antigravity")
+        .unwrap();
+    assert_eq!(
+        (
+            antigravity.source_count,
+            antigravity.successful_sources,
+            antigravity.failed_sources
+        ),
+        (2, 1, 1)
     );
 }
 

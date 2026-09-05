@@ -24,7 +24,8 @@ fn test_app_with(
     peer: SocketAddr,
 ) -> (Router, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let storage = StorageConfig::for_test(dir.path().join("ai-transcript-ingest-test.db"));
+    let mut storage = StorageConfig::for_test(dir.path().join("ai-transcript-ingest-test.db"));
+    storage.pool_size = 4;
     let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
     let state = AiTranscriptIngestState::new(
         pool,
@@ -65,6 +66,28 @@ fn sample_record() -> serde_json::Value {
             "diagnostics": [],
         }
     })
+}
+
+fn transcript_request(body: String) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/v1/ai-transcripts")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, "Bearer secret")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+async fn barrier_transcript_request(
+    app: Router,
+    barrier: Arc<tokio::sync::Barrier>,
+    body: String,
+) -> StatusCode {
+    barrier.wait().await;
+    app.oneshot(transcript_request(body))
+        .await
+        .unwrap()
+        .status()
 }
 
 #[tokio::test]
@@ -172,6 +195,48 @@ async fn named_forwarder_identity_is_server_derived_and_host_is_retained_as_a_cl
     assert!(metadata.contains("agent-a"));
     assert!(metadata.contains("host-b"));
     assert!(metadata.contains("verified_forwarder_claimed_host"));
+}
+
+#[tokio::test]
+async fn named_and_shared_transcript_credentials_have_disjoint_receipt_namespaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&StorageConfig::for_test(
+            dir.path().join("typed-principal-transcripts.db"),
+        ))
+        .unwrap(),
+    );
+    let state = AiTranscriptIngestState::new(
+        Arc::clone(&pool),
+        Some("shared-token-000".into()),
+        std::collections::HashMap::from([("named-token-0000".into(), "agent-a".into())]),
+        AuthPolicy::Mounted { auth_state: None },
+    );
+    let app = router(state).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let body = serde_json::to_string(&serde_json::json!({"records": [sample_record()]})).unwrap();
+    for token in ["named-token-0000", "shared-token-000"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/ai-transcripts")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    assert_eq!(
+        pool.get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -314,6 +379,125 @@ async fn replay_returns_duplicate_receipt_without_duplicate_log_row() {
     assert_eq!(receipt_count, 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_identical_replays_share_one_transcript_receipt() {
+    let (app, dir) = test_app(Some("secret"));
+    let body = serde_json::to_string(&serde_json::json!({"records": [sample_record()]})).unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let first = tokio::spawn(barrier_transcript_request(
+        app.clone(),
+        barrier.clone(),
+        body.clone(),
+    ));
+    let second = tokio::spawn(barrier_transcript_request(app, barrier.clone(), body));
+    barrier.wait().await;
+
+    assert_eq!(first.await.unwrap(), StatusCode::OK);
+    assert_eq!(second.await.unwrap(), StatusCode::OK);
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_conflicting_replays_return_success_and_conflict() {
+    let (app, dir) = test_app(Some("secret"));
+    let original = sample_record();
+    let mut changed = original.clone();
+    changed["envelope"]["message"] = serde_json::json!("concurrent conflicting evidence");
+    let first_body = serde_json::to_string(&serde_json::json!({"records": [original]})).unwrap();
+    let second_body = serde_json::to_string(&serde_json::json!({"records": [changed]})).unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let first = tokio::spawn(barrier_transcript_request(
+        app.clone(),
+        barrier.clone(),
+        first_body,
+    ));
+    let second = tokio::spawn(barrier_transcript_request(
+        app,
+        barrier.clone(),
+        second_body,
+    ));
+    barrier.wait().await;
+
+    let mut statuses = [first.await.unwrap(), second.await.unwrap()];
+    statuses.sort_by_key(|status| status.as_u16());
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn same_source_record_id_is_independent_across_authenticated_principals() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&crate::config::StorageConfig::for_test(
+            dir.path().join("principal-transcript-receipts.db"),
+        ))
+        .unwrap(),
+    );
+    let record: AiTranscriptRecord = serde_json::from_value(sample_record()).unwrap();
+    let peer: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+    insert_envelopes_with_receipts(&pool, vec![record.clone()], "agent-a".into(), peer).unwrap();
+    insert_envelopes_with_receipts(&pool, vec![record], "agent-b".into(), peer).unwrap();
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+}
+
 #[tokio::test]
 async fn reused_source_record_id_with_changed_payload_is_a_conflict() {
     let (app, dir) = test_app(Some("secret"));
@@ -418,6 +602,59 @@ async fn legacy_receipt_binds_fingerprint_only_after_an_exact_replay() {
         )
         .unwrap();
     assert!(fingerprint.is_some());
+}
+
+#[tokio::test]
+async fn stale_transcript_receipt_creates_fresh_canonical_evidence() {
+    let (app, dir) = test_app(Some("secret"));
+    let body = serde_json::to_string(&serde_json::json!({"records": [sample_record()]})).unwrap();
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(body.clone()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
+    let db_path = dir.path().join("ai-transcript-ingest-test.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+    conn.execute("DELETE FROM logs", []).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    drop(conn);
+
+    let replay = app.oneshot(transcript_request(body)).await.unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(replay.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["receipts"][0]["disposition"], "accepted");
+
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
 }
 
 #[tokio::test]

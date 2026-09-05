@@ -138,6 +138,73 @@ fn named_forwarding_agents_deserialize_as_redacted_secrets() {
 }
 
 #[test]
+fn named_forwarding_agents_fail_closed_without_disclosing_secrets() {
+    for (principal, left, right) in [
+        ("", "0123456789abcdef", "fedcba9876543210"),
+        ("shared_bearer", "0123456789abcdef", "fedcba9876543210"),
+        ("loopback", "0123456789abcdef", "fedcba9876543210"),
+        ("bad label", "0123456789abcdef", "fedcba9876543210"),
+        ("node-a", "short", "fedcba9876543210"),
+        ("node-a", " 0123456789abcdef", "fedcba9876543210"),
+        ("node-a", "0123456789abcdef", "0123456789abcdef"),
+    ] {
+        let mut config = Config::default();
+        config
+            .mcp
+            .forwarding_agents
+            .insert(principal.into(), Some(left.into()).into());
+        config
+            .mcp
+            .forwarding_agents
+            .insert("node-b".into(), Some(right.into()).into());
+        let message = validate_auth_config(&config, false)
+            .expect_err("invalid forwarding credentials must fail closed")
+            .to_string();
+        assert!(!message.contains(left));
+        assert!(!message.contains(right));
+    }
+
+    let mut config = Config::default();
+    config.mcp.forwarding_agents.insert(
+        "node-a.example".into(),
+        Some("0123456789abcdef".into()).into(),
+    );
+    config
+        .mcp
+        .forwarding_agents
+        .insert("node_b".into(), Some("fedcba9876543210".into()).into());
+    validate_auth_config(&config, false).expect("distinct strong mappings should be accepted");
+
+    let mut config = Config::default();
+    config.mcp.api_token = Some("0123456789abcdef".into()).into();
+    config
+        .mcp
+        .forwarding_agents
+        .insert("node-a".into(), Some("0123456789abcdef".into()).into());
+    let message = validate_auth_config(&config, false)
+        .expect_err("a named forwarding secret must not alias the shared bearer")
+        .to_string();
+    assert!(!message.contains("0123456789abcdef"));
+
+    for admin in [false, true] {
+        let mut config = Config::default();
+        if admin {
+            config.api.admin_token = Some("0123456789abcdef".into()).into();
+        } else {
+            config.api.api_token = Some("0123456789abcdef".into()).into();
+        }
+        config
+            .mcp
+            .forwarding_agents
+            .insert("node-a".into(), Some("0123456789abcdef".into()).into());
+        let message = validate_auth_config(&config, false)
+            .expect_err("forwarding secrets must not alias REST service tokens")
+            .to_string();
+        assert!(!message.contains("0123456789abcdef"));
+    }
+}
+
+#[test]
 fn storage_defaults_include_sqlite_memory_guardrails() {
     let storage = StorageConfig::default();
     assert_eq!(storage.pool_size, 8);

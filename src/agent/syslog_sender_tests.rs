@@ -139,6 +139,92 @@ fn incomplete_duplicate_and_unknown_receipts_fail_closed() {
     assert_eq!(state.spool.records.len(), 3);
 }
 
+#[test]
+fn receipt_save_failure_restores_records_gaps_and_dispatched_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spool.json");
+    std::fs::create_dir(&path).unwrap();
+    let item = record(1);
+    let loss = gap("host-a:syslog", 2);
+    let state = Arc::new(Mutex::new(SenderState {
+        spool_path: path,
+        spool: SpoolState {
+            records: VecDeque::from([item.clone()]),
+            gaps: VecDeque::from([loss.clone()]),
+            dispatched_gap_keys: HashSet::from([loss.idempotency_key.clone()]),
+            ..SpoolState::default()
+        },
+        recovery_required: false,
+        last_error_code: None,
+    }));
+    let request = SyslogForwardRequest {
+        records: vec![item.clone()],
+        gaps: vec![loss.clone()],
+    };
+
+    assert!(
+        apply_receipts(
+            &state,
+            &request,
+            &[item.idempotency_key.clone(), loss.idempotency_key.clone()]
+        )
+        .is_err()
+    );
+
+    let locked = state.lock().unwrap();
+    assert_eq!(locked.spool.records, VecDeque::from([item]));
+    assert_eq!(locked.spool.gaps, VecDeque::from([loss.clone()]));
+    assert!(
+        locked
+            .spool
+            .dispatched_gap_keys
+            .contains(&loss.idempotency_key)
+    );
+}
+
+#[test]
+fn source_quota_emits_only_maximal_contiguous_loss_intervals() {
+    let source_key = "source-000000000000000000000001";
+    let source = format!("host-a:{source_key}");
+    let other = "host-a:source-000000000000000000000002";
+    let old = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+    let mut records = VecDeque::new();
+    for sequence in [10, 12] {
+        let mut item = source_record(&source, sequence);
+        item.observed_at = old.clone();
+        records.push_back(item);
+        records.push_back(source_record(other, sequence));
+    }
+    let mut spool = SpoolState {
+        records,
+        ..SpoolState::default()
+    };
+
+    evict_source_to_quota(&mut spool, source_key);
+
+    let windows = spool
+        .gaps
+        .iter()
+        .map(|item| (item.from_sequence, item.to_sequence))
+        .collect::<Vec<_>>();
+    assert_eq!(windows, vec![(10, 10), (12, 12)]);
+}
+
+#[tokio::test]
+async fn status_uses_oldest_gap_when_no_records_are_queued() {
+    let dir = tempfile::tempdir().unwrap();
+    let sender = SyslogSender::new(String::new(), None, dir.path().join("spool.json"));
+    let old = (Utc::now() - chrono::Duration::seconds(90)).to_rfc3339();
+    {
+        let mut state = sender.state.lock().unwrap();
+        let mut loss = gap("host-a:syslog", 1);
+        loss.observed_at = old;
+        state.spool.gaps.push_back(loss);
+    }
+
+    assert!(sender.status().oldest_age_secs.unwrap() >= 89);
+}
+
 #[tokio::test]
 async fn incomplete_success_response_sets_error_and_backs_off() {
     use wiremock::matchers::{method, path};
@@ -532,11 +618,7 @@ fn aggregate_cap_bounds_high_cardinality_sources_and_records_each_loss_window() 
 #[tokio::test]
 async fn forward_status_reports_exact_spool_bytes_and_cumulative_evictions() {
     let dir = tempfile::tempdir().unwrap();
-    let sender = SyslogSender::new(
-        "http://127.0.0.1:9".to_string(),
-        None,
-        dir.path().join("spool.json"),
-    );
+    let sender = SyslogSender::new(String::new(), None, dir.path().join("spool.json"));
     sender.enqueue("alpha", "12345".into()).unwrap();
     sender.enqueue("beta", "1234567".into()).unwrap();
     {
@@ -553,14 +635,13 @@ async fn forward_status_reports_exact_spool_bytes_and_cumulative_evictions() {
 #[tokio::test]
 async fn oversized_input_gaps_compact_without_losing_the_loss_window() {
     let dir = tempfile::tempdir().unwrap();
-    let sender = SyslogSender::new(
-        "http://127.0.0.1:9".to_string(),
-        None,
-        dir.path().join("spool.json"),
-    );
+    let sender = SyslogSender::new(String::new(), None, dir.path().join("spool.json"));
     let oversized = "x".repeat(MAX_FORWARD_RECORD_BYTES + 1);
     for _ in 0..257 {
-        sender.try_send_from("journald", oversized.clone());
+        sender
+            .send_from("journald", oversized.clone())
+            .await
+            .unwrap();
     }
 
     let status = sender.status();

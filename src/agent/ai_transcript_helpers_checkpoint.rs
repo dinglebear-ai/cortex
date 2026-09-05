@@ -123,7 +123,15 @@ pub(in crate::agent::ai_transcript) fn save_checkpoint(
                 "failed to atomically replace checkpoint file {}",
                 path.display()
             )
-        })
+        })?;
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)
+                .with_context(|| format!("failed to open checkpoint dir {}", parent.display()))?
+                .sync_all()
+                .with_context(|| format!("failed to sync checkpoint dir {}", parent.display()))?;
+        }
+        Ok(())
     })();
 
     match result {

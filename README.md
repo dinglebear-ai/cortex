@@ -17,7 +17,7 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 | Area | What Cortex provides |
 | --- | --- |
 | Ingest | UDP/TCP syslog, OTLP/HTTP logs, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
-| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 57 sequential schema migrations |
+| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 58 sequential schema migrations |
 | Investigation | Search, filtering, context, timelines, patterns, anomaly comparison, cross-source correlation, recurring error signatures, deterministic incident bundles, and graph explanations |
 | Fleet intelligence | SSH and API inventory collectors, host state, service topology, container and route relationships, redacted evidence, and rebuildable graph projections |
 | AI operations | Claude, Codex, Gemini CLI, and Antigravity session indexing; skill, MCP, and hook event extraction where each provider exposes them; incident clustering; and guarded local LLM assessments |
@@ -673,7 +673,7 @@ Cortex uses SQLite with:
 - Online backup support
 - Integrity checks, checkpoints, and vacuum workflows
 
-The current schema history contains 57 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry.
+The current schema history contains 58 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry. Forwarding receipts have a seven-day replay horizon and are removed when their canonical evidence is deleted. Senders retain unacknowledged spool records; retries beyond the horizon are new ingestion attempts.
 
 ### Authoritative and derived data
 

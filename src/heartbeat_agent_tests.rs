@@ -192,6 +192,10 @@ fn config_from_env_honors_agent_stream_flags_and_fallbacks() {
     let _journald = EnvGuard::set("CORTEX_AGENT_JOURNALD", "true");
     let _syslog_file = EnvGuard::set("CORTEX_AGENT_SYSLOG_FILE", "/var/log/syslog");
     let _syslog_target = EnvGuard::set("CORTEX_SYSLOG_TARGET", "127.0.0.1:1514");
+    let _syslog_forward_target = EnvGuard::set(
+        "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
+        "https://durable.example.test",
+    );
 
     let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
 
@@ -208,6 +212,28 @@ fn config_from_env_honors_agent_stream_flags_and_fallbacks() {
         Some(Path::new("/var/log/syslog"))
     );
     assert_eq!(config.syslog_target.as_deref(), Some("127.0.0.1:1514"));
+    assert_eq!(
+        config.syslog_forward_target.as_deref(),
+        Some("https://durable.example.test")
+    );
+}
+
+#[test]
+#[serial]
+fn legacy_syslog_target_uses_heartbeat_http_target_for_compatible_upgrade() {
+    let _legacy = EnvGuard::set("CORTEX_SYSLOG_TARGET", "central.example.test:1514");
+    let _durable = EnvGuard::unset("CORTEX_AGENT_SYSLOG_FORWARD_TARGET");
+    let _heartbeat = EnvGuard::set(
+        "CORTEX_HEARTBEAT_TARGET",
+        "https://central.example.test:3100",
+    );
+
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
+
+    assert_eq!(
+        config.syslog_forward_target.as_deref(),
+        Some("https://central.example.test:3100")
+    );
 }
 
 #[test]

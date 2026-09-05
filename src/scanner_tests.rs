@@ -1706,8 +1706,6 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
     )
     .unwrap();
     let _delay = SnapshotDelayGuard::for_file("projects", std::time::Duration::from_secs(3));
-    let started = std::time::Instant::now();
-
     let result = index_roots_with_options(
         &pool,
         IndexOptions {
@@ -1730,8 +1728,8 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
         "capped discovery records its last visited entry"
     );
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(1_500),
-        "a slow provider-root discovery blocked the later provider root"
+        !snapshot_test_delay_completed("projects"),
+        "a slow provider-root discovery blocked until the delayed worker completed"
     );
     let later_provider_rows: i64 = pool
         .get()

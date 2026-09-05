@@ -66,6 +66,25 @@ async fn wait_for_sender(
     .expect("syslog sender did not reach the expected recovery state");
 }
 
+fn syslog_request(body: String) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/v1/syslog-forward")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, "Bearer forward-token")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+async fn barrier_syslog_request(
+    app: Router,
+    barrier: Arc<tokio::sync::Barrier>,
+    body: String,
+) -> StatusCode {
+    barrier.wait().await;
+    app.oneshot(syslog_request(body)).await.unwrap().status()
+}
+
 #[tokio::test]
 async fn sender_replays_an_authenticated_receipt_loss_once_after_outage_and_restart() {
     let dir = tempfile::tempdir().unwrap();
@@ -342,6 +361,59 @@ async fn named_syslog_forwarder_is_server_derived_when_host_claim_differs() {
     assert!(metadata.contains("verified_forwarder_claimed_host"));
 }
 
+#[tokio::test]
+async fn named_and_shared_syslog_credentials_have_disjoint_receipt_namespaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&crate::config::StorageConfig::for_test(
+            dir.path().join("typed-principal-syslog.db"),
+        ))
+        .unwrap(),
+    );
+    let state = SyslogForwardIngestState::new(
+        Arc::clone(&pool),
+        Some("shared-token-000".into()),
+        HashMap::from([("named-token-0000".into(), "agent-a".into())]),
+        crate::mcp::AuthPolicy::TrustedGatewayUnscoped,
+    );
+    let app = router(state).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let request = SyslogForwardRequest {
+        records: vec![SyslogForwardRecord {
+            source_instance: "same-source".into(),
+            source_epoch: 1,
+            sequence: 1,
+            idempotency_key: "same-client-key".into(),
+            observed_at: "2026-01-01T00:00:00Z".into(),
+            line: "<134>1 2026-01-01T00:00:00Z host-a app - - - typed principal".into(),
+        }],
+        gaps: vec![],
+    };
+    let body = serde_json::to_string(&request).unwrap();
+    for token in ["named-token-0000", "shared-token-000"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/syslog-forward")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    assert_eq!(
+        pool.get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
 #[test]
 fn duplicate_replay_returns_receipt_without_duplicate_canonical_evidence() {
     let dir = tempfile::tempdir().unwrap();
@@ -380,6 +452,115 @@ fn duplicate_replay_returns_receipt_without_duplicate_canonical_evidence() {
         .unwrap();
     assert_eq!(logs, 1);
     assert_eq!(receipts, 1);
+}
+
+fn sample_gap() -> SyslogForwardGap {
+    SyslogForwardGap {
+        source_instance: "host-a".into(),
+        source_epoch: 1,
+        from_sequence: 2,
+        to_sequence: 4,
+        idempotency_key: "host-a:1:2-4:gap".into(),
+        observed_at: "2026-01-01T00:00:00Z".into(),
+        reason_code: "quota_eviction".into(),
+    }
+}
+
+#[test]
+fn migrated_legacy_gap_binds_fingerprint_after_exact_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&crate::config::StorageConfig::for_test(
+            dir.path().join("legacy-gap.db"),
+        ))
+        .unwrap(),
+    );
+    let request = SyslogForwardRequest {
+        records: vec![],
+        gaps: vec![sample_gap()],
+    };
+    persist_request(&pool, request.clone(), "127.0.0.1", "shared_bearer").unwrap();
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE syslog_forward_receipts SET request_fingerprint = ''",
+            [],
+        )
+        .unwrap();
+
+    persist_request(&pool, request, "127.0.0.1", "shared_bearer").unwrap();
+    let fingerprint: String = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT request_fingerprint FROM syslog_forward_receipts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!fingerprint.is_empty());
+    assert_eq!(
+        pool.get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn changed_gap_cannot_claim_migrated_empty_fingerprint_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&crate::config::StorageConfig::for_test(
+            dir.path().join("legacy-gap-conflict.db"),
+        ))
+        .unwrap(),
+    );
+    let gap = sample_gap();
+    persist_request(
+        &pool,
+        SyslogForwardRequest {
+            records: vec![],
+            gaps: vec![gap.clone()],
+        },
+        "127.0.0.1",
+        "shared_bearer",
+    )
+    .unwrap();
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE syslog_forward_receipts SET request_fingerprint = ''",
+            [],
+        )
+        .unwrap();
+
+    let error = persist_request(
+        &pool,
+        SyslogForwardRequest {
+            records: vec![],
+            gaps: vec![SyslogForwardGap {
+                from_sequence: 3,
+                ..gap
+            }],
+        },
+        "127.0.0.1",
+        "shared_bearer",
+    )
+    .unwrap_err();
+    assert!(error.downcast_ref::<IdempotencyConflict>().is_some());
+    let conn = pool.get().unwrap();
+    let (logs, fingerprint): (i64, String) = conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM logs), request_fingerprint
+             FROM syslog_forward_receipts",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(logs, 1);
+    assert!(fingerprint.is_empty());
 }
 
 #[test]
@@ -428,6 +609,202 @@ fn conflicting_idempotency_replay_is_rejected_without_losing_new_evidence() {
         .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_identical_replays_share_one_syslog_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut storage =
+        crate::config::StorageConfig::for_test(dir.path().join("concurrent-syslog.db"));
+    storage.pool_size = 4;
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let app = router(SyslogForwardIngestState::new(
+        Arc::clone(&pool),
+        Some("forward-token".into()),
+        Default::default(),
+        crate::mcp::AuthPolicy::TrustedGatewayUnscoped,
+    ))
+    .layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let record = SyslogForwardRecord {
+        source_instance: "host-a".into(),
+        source_epoch: 1,
+        sequence: 1,
+        idempotency_key: "concurrent-key".into(),
+        observed_at: "2026-01-01T00:00:00Z".into(),
+        line: "<134>1 2026-01-01T00:00:00Z host-a app - - - concurrent-safe".into(),
+    };
+    let body = serde_json::to_string(&SyslogForwardRequest {
+        records: vec![record],
+        gaps: vec![],
+    })
+    .unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let first = tokio::spawn(barrier_syslog_request(
+        app.clone(),
+        barrier.clone(),
+        body.clone(),
+    ));
+    let second = tokio::spawn(barrier_syslog_request(app, barrier.clone(), body));
+    barrier.wait().await;
+    assert_eq!(first.await.unwrap(), StatusCode::OK);
+    assert_eq!(second.await.unwrap(), StatusCode::OK);
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM syslog_forward_receipts", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_conflicting_replays_return_success_and_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut storage =
+        crate::config::StorageConfig::for_test(dir.path().join("concurrent-syslog-conflict.db"));
+    storage.pool_size = 4;
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let app = router(SyslogForwardIngestState::new(
+        Arc::clone(&pool),
+        Some("forward-token".into()),
+        Default::default(),
+        crate::mcp::AuthPolicy::TrustedGatewayUnscoped,
+    ))
+    .layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+    let original = SyslogForwardRecord {
+        source_instance: "host-a".into(),
+        source_epoch: 1,
+        sequence: 1,
+        idempotency_key: "concurrent-conflict".into(),
+        observed_at: "2026-01-01T00:00:00Z".into(),
+        line: "<134>1 2026-01-01T00:00:00Z host-a app - - - first".into(),
+    };
+    let changed = SyslogForwardRecord {
+        line: "<134>1 2026-01-01T00:00:00Z host-a app - - - second".into(),
+        ..original.clone()
+    };
+    let first_body = serde_json::to_string(&SyslogForwardRequest {
+        records: vec![original],
+        gaps: vec![],
+    })
+    .unwrap();
+    let second_body = serde_json::to_string(&SyslogForwardRequest {
+        records: vec![changed],
+        gaps: vec![],
+    })
+    .unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let first = tokio::spawn(barrier_syslog_request(
+        app.clone(),
+        barrier.clone(),
+        first_body,
+    ));
+    let second = tokio::spawn(barrier_syslog_request(app, barrier.clone(), second_body));
+    barrier.wait().await;
+    let mut statuses = [first.await.unwrap(), second.await.unwrap()];
+    statuses.sort_by_key(|status| status.as_u16());
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM syslog_forward_receipts", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn deleted_canonical_evidence_is_not_acknowledged_by_a_stale_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&crate::config::StorageConfig::for_test(
+            dir.path().join("stale-receipt.db"),
+        ))
+        .unwrap(),
+    );
+    let request = SyslogForwardRequest {
+        records: vec![SyslogForwardRecord {
+            source_instance: "host-a".into(),
+            source_epoch: 1,
+            sequence: 1,
+            idempotency_key: "stale".into(),
+            observed_at: "2026-01-01T00:00:00Z".into(),
+            line: "<134>1 2026-01-01T00:00:00Z host-a app - - - restored".into(),
+        }],
+        gaps: vec![],
+    };
+    persist_request(&pool, request.clone(), "127.0.0.1", "agent-a").unwrap();
+    pool.get().unwrap().execute("DELETE FROM logs", []).unwrap();
+    persist_request(&pool, request, "127.0.0.1", "agent-a").unwrap();
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM syslog_forward_receipts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn same_client_key_is_independent_across_authenticated_principals() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = Arc::new(
+        crate::db::init_pool(&crate::config::StorageConfig::for_test(
+            dir.path().join("principal-receipts.db"),
+        ))
+        .unwrap(),
+    );
+    let request = SyslogForwardRequest {
+        records: vec![SyslogForwardRecord {
+            source_instance: "host-a".into(),
+            source_epoch: 1,
+            sequence: 1,
+            idempotency_key: "same".into(),
+            observed_at: "2026-01-01T00:00:00Z".into(),
+            line: "<134>1 2026-01-01T00:00:00Z host-a app - - - scoped".into(),
+        }],
+        gaps: vec![],
+    };
+    persist_request(&pool, request.clone(), "127.0.0.1", "agent-a").unwrap();
+    persist_request(&pool, request, "127.0.0.1", "agent-b").unwrap();
+    assert_eq!(
+        pool.get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM logs", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
 }
 
 #[test]

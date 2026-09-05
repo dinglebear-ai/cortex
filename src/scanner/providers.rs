@@ -456,7 +456,10 @@ pub(crate) fn runtime_health_conn(
                 END) AS successful_sources,
                 SUM(CASE WHEN s.last_error IS NOT NULL THEN 1 ELSE 0 END) AS failed_sources
          FROM transcript_sources s
-         WHERE s.source_kind IN ('claude_project', 'codex_session', 'gemini_session')
+         WHERE s.source_kind IN (
+             'claude_project', 'codex_session', 'gemini_session',
+             'antigravity_desktop', 'antigravity_cli'
+         )
          GROUP BY s.source_kind",
     )?;
     let rows = stmt

@@ -147,7 +147,16 @@ pub(super) fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
             .with_context(|| format!("write syslog spool {}", temp.display()))?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temp, path).with_context(|| format!("replace syslog spool {}", path.display()))
+        fs::rename(&temp, path)
+            .with_context(|| format!("replace syslog spool {}", path.display()))?;
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)
+                .with_context(|| format!("open syslog spool dir {}", parent.display()))?
+                .sync_all()
+                .with_context(|| format!("sync syslog spool dir {}", parent.display()))?;
+        }
+        Ok(())
     })();
     if let Err(primary_error) = &result
         && let Err(cleanup_error) = fs::remove_file(&temp)
@@ -165,108 +174,86 @@ pub(super) fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
 
 pub(super) fn evict_source_to_quota(spool: &mut SpoolState, source_key: &str) {
     let cutoff = Utc::now() - chrono::Duration::seconds(MAX_SPOOL_AGE_SECS);
-    let mut from = None;
-    let mut to = None;
-    while let Some(index) = spool.records.iter().position(|record| {
-        source_key_of(&record.source_instance).is_some_and(|key| key == source_key)
+    let mut source_count = 0usize;
+    let mut source_bytes = 0usize;
+    for record in &spool.records {
+        if source_key_of(&record.source_instance).is_some_and(|key| key == source_key) {
+            source_count += 1;
+            source_bytes = source_bytes.saturating_add(record.line.len());
+        }
+    }
+    let mut retained = VecDeque::with_capacity(spool.records.len());
+    let mut evicted = Vec::new();
+    while let Some(record) = spool.records.pop_front() {
+        let belongs = source_key_of(&record.source_instance).is_some_and(|key| key == source_key);
+        let expired = belongs
             && chrono::DateTime::parse_from_rfc3339(&record.observed_at)
                 .map(|at| at.with_timezone(&Utc) < cutoff)
-                .unwrap_or(true)
-    }) {
-        pop_evicted_at(spool, index, &mut from, &mut to);
+                .unwrap_or(true);
+        let over_quota = belongs
+            && (source_count > MAX_SOURCE_SPOOL_RECORDS || source_bytes > MAX_SOURCE_SPOOL_BYTES);
+        if expired || over_quota {
+            source_count -= 1;
+            source_bytes = source_bytes.saturating_sub(record.line.len());
+            evicted.push(record);
+        } else {
+            retained.push_back(record);
+        }
     }
-    while spool
-        .records
-        .iter()
-        .filter(|record| {
-            source_key_of(&record.source_instance).is_some_and(|key| key == source_key)
-        })
-        .count()
-        > MAX_SOURCE_SPOOL_RECORDS
-        || spool
-            .records
-            .iter()
-            .filter(|record| {
-                source_key_of(&record.source_instance).is_some_and(|key| key == source_key)
-            })
-            .map(|record| record.line.len())
-            .sum::<usize>()
-            > MAX_SOURCE_SPOOL_BYTES
-    {
-        let index = spool
-            .records
-            .iter()
-            .position(|record| {
-                source_key_of(&record.source_instance).is_some_and(|key| key == source_key)
-            })
-            .expect("source quota implies source record");
-        pop_evicted_at(spool, index, &mut from, &mut to);
-    }
-    if let (Some(from_sequence), Some(to_sequence)) = (from, to) {
-        let source = format!("{}:{source_key}", spool.source_instance);
-        push_gap(
-            spool,
-            SyslogForwardGap {
-                source_instance: source.clone(),
-                source_epoch: spool.source_epoch,
-                from_sequence,
-                to_sequence,
-                idempotency_key: delivery_key(&source, spool.source_epoch, to_sequence, "gap"),
-                observed_at: now(),
-                reason_code: "local_retention_quota".into(),
-            },
-        );
-    }
-}
-fn pop_evicted_at(
-    spool: &mut SpoolState,
-    index: usize,
-    from: &mut Option<u64>,
-    to: &mut Option<u64>,
-) {
-    if let Some(record) = spool.records.remove(index) {
-        *from = Some(from.unwrap_or(record.sequence));
-        *to = Some(record.sequence);
-        spool.evicted_records = spool.evicted_records.saturating_add(1);
-    }
+    spool.records = retained;
+    record_eviction_gaps(spool, evicted, "local_retention_quota");
 }
 pub(super) fn evict_aggregate_to_quota(spool: &mut SpoolState) {
-    let mut windows: HashMap<String, (u64, u64)> = HashMap::new();
-    while spool.records.len() > MAX_SPOOL_RECORDS
-        || spool
-            .records
-            .iter()
-            .map(|record| record.line.len())
-            .sum::<usize>()
-            > MAX_SPOOL_BYTES
-    {
+    let mut bytes = spool
+        .records
+        .iter()
+        .map(|record| record.line.len())
+        .sum::<usize>();
+    let mut evicted = Vec::new();
+    while spool.records.len() > MAX_SPOOL_RECORDS || bytes > MAX_SPOOL_BYTES {
         let Some(record) = spool.records.pop_front() else {
             break;
         };
-        spool.evicted_records = spool.evicted_records.saturating_add(1);
-        windows
-            .entry(record.source_instance)
-            .and_modify(|window| window.1 = record.sequence)
-            .or_insert((record.sequence, record.sequence));
+        bytes = bytes.saturating_sub(record.line.len());
+        evicted.push(record);
     }
-    for (source_instance, (from_sequence, to_sequence)) in windows {
-        push_gap(
-            spool,
-            SyslogForwardGap {
-                idempotency_key: delivery_key(
-                    &source_instance,
-                    spool.source_epoch,
+    record_eviction_gaps(spool, evicted, "aggregate_retention_quota");
+}
+
+fn record_eviction_gaps(
+    spool: &mut SpoolState,
+    evicted: Vec<SyslogForwardRecord>,
+    reason_code: &str,
+) {
+    let mut windows: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
+    for record in evicted {
+        spool.evicted_records = spool.evicted_records.saturating_add(1);
+        let source_windows = windows.entry(record.source_instance).or_default();
+        match source_windows.last_mut() {
+            Some((_, to)) if record.sequence == to.saturating_add(1) => *to = record.sequence,
+            _ => source_windows.push((record.sequence, record.sequence)),
+        }
+    }
+    for (source_instance, source_windows) in windows {
+        for (from_sequence, to_sequence) in source_windows {
+            push_gap(
+                spool,
+                SyslogForwardGap {
+                    idempotency_key: delivery_key(
+                        &source_instance,
+                        spool.source_epoch,
+                        to_sequence,
+                        "gap",
+                    ),
+                    source_instance: source_instance.clone(),
+                    source_epoch: spool.source_epoch,
+                    from_sequence,
                     to_sequence,
-                    "gap",
-                ),
-                source_instance,
-                source_epoch: spool.source_epoch,
-                from_sequence,
-                to_sequence,
-                observed_at: now(),
-                reason_code: "aggregate_retention_quota".into(),
-            },
-        );
+                    observed_at: now(),
+                    reason_code: reason_code.into(),
+                },
+            );
+        }
     }
 }
 

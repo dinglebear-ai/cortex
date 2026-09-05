@@ -9,10 +9,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::syslog_forward_ingest::{
     SyslogForwardGap, SyslogForwardRecord, SyslogForwardRequest, SyslogForwardResponse,
@@ -28,6 +28,7 @@ const MAX_BATCH_RECORDS: usize = 100;
 const MAX_BATCH_BYTES: usize = 512 * 1024;
 const MAX_FORWARD_RECORD_BYTES: usize = 64 * 1024;
 const RECONNECT_MAX_MS: u64 = 30_000;
+const PERSIST_COMMAND_CAPACITY: usize = 128;
 
 /// Payload-free forwarding health that is safe to log or expose in status.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -113,11 +114,27 @@ struct SenderState {
 /// stays bounded and creates a durable payload-free gap before any eviction.
 pub struct SyslogSender {
     state: Arc<Mutex<SenderState>>,
-    notify: Arc<Notify>,
+    persist_tx: mpsc::Sender<PersistCommand>,
     /// The sender is normally retained by the agent for its entire lifetime.
     /// Keeping the abort handle means a dropped/restarted agent cannot leave an
     /// orphaned delivery loop running against the durable spool.
     delivery_task: tokio::task::AbortHandle,
+}
+
+enum PersistCommand {
+    Enqueue {
+        source_key: String,
+        line: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    NextRequest {
+        reply: oneshot::Sender<Result<Option<SyslogForwardRequest>>>,
+    },
+    ApplyReceipts {
+        request: SyslogForwardRequest,
+        receipts: Vec<String>,
+        reply: oneshot::Sender<Result<()>>,
+    },
 }
 
 impl SyslogSender {
@@ -130,15 +147,23 @@ impl SyslogSender {
             last_error_code: loaded.error_code,
         }));
         let notify = Arc::new(Notify::new());
+        let (persist_tx, persist_rx) = mpsc::channel(PERSIST_COMMAND_CAPACITY);
+        let owner_state = Arc::clone(&state);
+        let owner_notify = Arc::clone(&notify);
+        std::thread::Builder::new()
+            .name("cortex-syslog-spool".into())
+            .spawn(move || persistence_owner(owner_state, owner_notify, persist_rx))
+            .expect("spawn syslog spool persistence owner");
         let delivery_task = tokio::spawn(delivery_loop(
             target,
             token,
             Arc::clone(&state),
             Arc::clone(&notify),
+            persist_tx.clone(),
         ));
         Self {
             state,
-            notify,
+            persist_tx,
             delivery_task: delivery_task.abort_handle(),
         }
     }
@@ -148,7 +173,18 @@ impl SyslogSender {
     }
 
     pub async fn send_from(&self, source_key: &str, line: String) -> Result<()> {
-        self.enqueue(source_key, line)
+        let (reply, receive) = oneshot::channel();
+        self.persist_tx
+            .send(PersistCommand::Enqueue {
+                source_key: source_key.to_owned(),
+                line,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow!("syslog spool persistence owner stopped"))?;
+        receive
+            .await
+            .map_err(|_| anyhow!("syslog spool persistence owner stopped"))?
     }
 
     /// Compatibility API for high-rate tailers. Failure is not silent: it is a
@@ -158,28 +194,37 @@ impl SyslogSender {
     }
 
     pub fn try_send_from(&self, source_key: &str, line: String) {
-        if let Err(error) = self.enqueue(source_key, line) {
+        let (reply, receive) = oneshot::channel();
+        // Close the reply side before handoff so the persistence owner can
+        // deterministically report any durable-write failure.
+        drop(receive);
+        if let Err(error) = self.persist_tx.try_send(PersistCommand::Enqueue {
+            source_key: source_key.to_owned(),
+            line,
+            reply,
+        }) {
             tracing::error!(
-                reason_code = "local_spool_persist_failed",
+                reason_code = "local_spool_backpressure",
                 source_key = %stable_source_key(source_key),
-                error = format!("{error:#}"),
-                "syslog frame could not be retained"
+                error = %error,
+                "syslog frame could not enter the bounded persistence queue"
             );
         }
     }
 
     pub fn status(&self) -> SyslogForwardStatus {
         let state = self.state.lock().expect("syslog sender state poisoned");
-        let oldest_age_secs = state.spool.records.front().and_then(|record| {
-            chrono::DateTime::parse_from_rfc3339(&record.observed_at)
-                .ok()
-                .map(|at| {
-                    Utc::now()
-                        .signed_duration_since(at.with_timezone(&Utc))
-                        .num_seconds()
-                        .max(0) as u64
-                })
-        });
+        let oldest_at = state
+            .spool
+            .records
+            .iter()
+            .map(|record| record.observed_at.as_str())
+            .chain(state.spool.gaps.iter().map(|gap| gap.observed_at.as_str()))
+            .filter_map(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .min();
+        let oldest_age_secs =
+            oldest_at.map(|at| Utc::now().signed_duration_since(at).num_seconds().max(0) as u64);
         SyslogForwardStatus {
             queued_records: state.spool.records.len(),
             queued_bytes: state
@@ -206,60 +251,17 @@ impl SyslogSender {
         }
     }
 
+    #[cfg(test)]
     fn enqueue(&self, source_key: &str, line: String) -> Result<()> {
-        let mut state = self.state.lock().expect("syslog sender state poisoned");
-        // Persistence is the durability boundary. Keep an exact snapshot so a
-        // failed atomic write cannot consume a sequence, retain a memory-only
-        // frame, or apply quota eviction that was never committed to disk.
-        let previous_spool = state.spool.clone();
-        let source_key = stable_source_key(source_key);
-        let sequence = {
-            let legacy_next = state.spool.next_sequence;
-            let next = state
-                .spool
-                .next_sequences
-                .entry(source_key.clone())
-                .or_insert(legacy_next);
-            *next = next.saturating_add(1);
-            *next
-        };
-        let source_instance = format!("{}:{source_key}", state.spool.source_instance);
-        let epoch = state.spool.source_epoch;
-        if line.len() > MAX_FORWARD_RECORD_BYTES {
-            push_gap(
-                &mut state.spool,
-                SyslogForwardGap {
-                    source_instance: source_instance.clone(),
-                    source_epoch: epoch,
-                    from_sequence: sequence,
-                    to_sequence: sequence,
-                    idempotency_key: delivery_key(&source_instance, epoch, sequence, "gap"),
-                    observed_at: now(),
-                    reason_code: "record_too_large".into(),
-                },
-            );
-            state.spool.evicted_records = state.spool.evicted_records.saturating_add(1);
-        } else {
-            state.spool.records.push_back(SyslogForwardRecord {
-                source_instance: source_instance.clone(),
-                source_epoch: epoch,
-                sequence,
-                idempotency_key: delivery_key(&source_instance, epoch, sequence, "record"),
-                observed_at: now(),
-                line,
-            });
-        }
-        evict_source_to_quota(&mut state.spool, &source_key);
-        evict_aggregate_to_quota(&mut state.spool);
-        if let Err(error) = save_spool(&state.spool_path, &state.spool) {
-            state.spool = previous_spool;
-            return Err(error);
-        }
-        drop(state);
-        self.notify.notify_one();
-        Ok(())
+        enqueue(&self.state, source_key, line)
     }
 }
+
+#[path = "syslog_sender/persistence.rs"]
+mod persistence;
+use persistence::persistence_owner;
+#[cfg(test)]
+use persistence::{apply_receipts, enqueue, next_request};
 
 impl Drop for SyslogSender {
     fn drop(&mut self) {
@@ -272,6 +274,7 @@ async fn delivery_loop(
     token: Option<String>,
     state: Arc<Mutex<SenderState>>,
     notify: Arc<Notify>,
+    persist_tx: mpsc::Sender<PersistCommand>,
 ) {
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -290,7 +293,18 @@ async fn delivery_loop(
             notify.notified().await;
             continue;
         }
-        let request = match next_request(&state) {
+        let (reply, receive) = oneshot::channel();
+        if persist_tx
+            .send(PersistCommand::NextRequest { reply })
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let request = match receive
+            .await
+            .unwrap_or_else(|_| Err(anyhow!("syslog spool persistence owner stopped")))
+        {
             Ok(Some(request)) => request,
             Ok(None) => {
                 notify.notified().await;
@@ -321,29 +335,47 @@ async fn delivery_loop(
             Ok(response) if response.status().is_success() => {
                 let status = response.status();
                 match response.json::<SyslogForwardResponse>().await {
-                    Ok(response) => match apply_receipts(&state, &request, &response.receipts) {
-                        Ok(()) => {
-                            attempt = 0;
-                            set_error(&state, "none");
+                    Ok(response) => {
+                        let (reply, receive) = oneshot::channel();
+                        let checkpoint = if persist_tx
+                            .send(PersistCommand::ApplyReceipts {
+                                request: request.clone(),
+                                receipts: response.receipts,
+                                reply,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            Err(anyhow!("syslog spool persistence owner stopped"))
+                        } else {
+                            receive.await.unwrap_or_else(|_| {
+                                Err(anyhow!("syslog spool persistence owner stopped"))
+                            })
+                        };
+                        match checkpoint {
+                            Ok(()) => {
+                                attempt = 0;
+                                set_error(&state, "none");
+                            }
+                            Err(error) => {
+                                let invalid_receipts =
+                                    error.downcast_ref::<InvalidReceiptSet>().is_some();
+                                let reason_code = if invalid_receipts {
+                                    "invalid_receipt_response"
+                                } else {
+                                    "local_spool_persist_failed"
+                                };
+                                tracing::error!(
+                                    reason_code,
+                                    error = format!("{error:#}"),
+                                    "syslog receipt could not be checkpointed"
+                                );
+                                set_error(&state, reason_code);
+                                let delay = retry_delay_ms(attempt, None, random_u64());
+                                retry_sleep(&mut attempt, delay).await;
+                            }
                         }
-                        Err(error) => {
-                            let invalid_receipts =
-                                error.downcast_ref::<InvalidReceiptSet>().is_some();
-                            let reason_code = if invalid_receipts {
-                                "invalid_receipt_response"
-                            } else {
-                                "local_spool_persist_failed"
-                            };
-                            tracing::error!(
-                                reason_code,
-                                error = format!("{error:#}"),
-                                "syslog receipt could not be checkpointed"
-                            );
-                            set_error(&state, reason_code);
-                            let delay = retry_delay_ms(attempt, None, random_u64());
-                            retry_sleep(&mut attempt, delay).await;
-                        }
-                    },
+                    }
                     Err(error) => {
                         tracing::warn!(
                             reason_code = "invalid_receipt_response",
@@ -385,80 +417,6 @@ async fn delivery_loop(
             }
         }
     }
-}
-
-fn next_request(state: &Arc<Mutex<SenderState>>) -> Result<Option<SyslogForwardRequest>> {
-    let mut state = state.lock().expect("syslog sender state poisoned");
-    let Some(source_key) = next_source_key(&state.spool) else {
-        return Ok(None);
-    };
-    let mut bytes = 0usize;
-    let records = state
-        .spool
-        .records
-        .iter()
-        .filter(|record| {
-            source_key_of(&record.source_instance).is_some_and(|key| key == source_key)
-        })
-        .take_while(|record| {
-            let include = bytes == 0 || bytes.saturating_add(record.line.len()) <= MAX_BATCH_BYTES;
-            if include {
-                bytes = bytes.saturating_add(record.line.len());
-            }
-            include
-        })
-        .take(MAX_BATCH_RECORDS)
-        .cloned()
-        .collect();
-    let gaps: Vec<SyslogForwardGap> = state
-        .spool
-        .gaps
-        .iter()
-        .filter(|gap| source_key_of(&gap.source_instance).is_some_and(|key| key == source_key))
-        .take(50)
-        .cloned()
-        .collect();
-    state.spool.last_dispatched_source = Some(source_key);
-    state
-        .spool
-        .dispatched_gap_keys
-        .extend(gaps.iter().map(|gap| gap.idempotency_key.clone()));
-    save_spool(&state.spool_path, &state.spool)?;
-    Ok(Some(SyslogForwardRequest { records, gaps }))
-}
-
-fn apply_receipts(
-    state: &Arc<Mutex<SenderState>>,
-    request: &SyslogForwardRequest,
-    receipts: &[String],
-) -> Result<()> {
-    let outbound_keys: HashSet<&str> = request
-        .records
-        .iter()
-        .map(|record| record.idempotency_key.as_str())
-        .chain(request.gaps.iter().map(|gap| gap.idempotency_key.as_str()))
-        .collect();
-    let keys: HashSet<&str> = receipts.iter().map(String::as_str).collect();
-    if receipts.len() != outbound_keys.len()
-        || keys.len() != receipts.len()
-        || keys != outbound_keys
-    {
-        return Err(anyhow::Error::new(InvalidReceiptSet));
-    }
-    let mut state = state.lock().expect("syslog sender state poisoned");
-    state
-        .spool
-        .records
-        .retain(|record| !keys.contains(record.idempotency_key.as_str()));
-    state
-        .spool
-        .gaps
-        .retain(|gap| !keys.contains(gap.idempotency_key.as_str()));
-    state
-        .spool
-        .dispatched_gap_keys
-        .retain(|key| !keys.contains(key.as_str()));
-    save_spool(&state.spool_path, &state.spool)
 }
 
 #[path = "syslog_sender/retry.rs"]

@@ -362,25 +362,41 @@ pub(crate) fn compare_recurring_errors(
     });
     rows.truncate(requested_limit);
 
-    let mut evidence_stmt = conn.prepare(
-        "SELECT id
-         FROM graph_relationship_evidence
-         WHERE source_kind = 'error_signature' AND source_signature_hash = ?1
-         ORDER BY id ASC
-         LIMIT ?2",
-    )?;
-    for row in &mut rows {
-        row.evidence_ids = evidence_stmt
-            .query_map(
-                params![
-                    row.signature_hash,
-                    (RECURRING_ERROR_EVIDENCE_CAP + 1) as i64
-                ],
-                |item| item.get(0),
-            )?
-            .collect::<std::result::Result<Vec<i64>, _>>()?;
-        row.evidence_truncated = row.evidence_ids.len() > RECURRING_ERROR_EVIDENCE_CAP;
-        row.evidence_ids.truncate(RECURRING_ERROR_EVIDENCE_CAP);
+    if !rows.is_empty() {
+        let placeholders = std::iter::repeat_n("?", rows.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT source_signature_hash, id
+             FROM (
+                 SELECT source_signature_hash, id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY source_signature_hash ORDER BY id ASC
+                        ) AS evidence_rank
+                 FROM graph_relationship_evidence
+                 WHERE source_kind = 'error_signature'
+                   AND source_signature_hash IN ({placeholders})
+             )
+             WHERE evidence_rank <= {}\n             ORDER BY source_signature_hash, id",
+            RECURRING_ERROR_EVIDENCE_CAP + 1
+        );
+        let mut evidence_stmt = conn.prepare(&sql)?;
+        let mut evidence_by_hash = std::collections::HashMap::<String, Vec<i64>>::new();
+        let evidence = evidence_stmt.query_map(
+            rusqlite::params_from_iter(rows.iter().map(|row| row.signature_hash.as_str())),
+            |item| Ok((item.get::<_, String>(0)?, item.get::<_, i64>(1)?)),
+        )?;
+        for item in evidence {
+            let (hash, id) = item?;
+            evidence_by_hash.entry(hash).or_default().push(id);
+        }
+        for row in &mut rows {
+            row.evidence_ids = evidence_by_hash
+                .remove(&row.signature_hash)
+                .unwrap_or_default();
+            row.evidence_truncated = row.evidence_ids.len() > RECURRING_ERROR_EVIDENCE_CAP;
+            row.evidence_ids.truncate(RECURRING_ERROR_EVIDENCE_CAP);
+        }
     }
 
     Ok(RecurringErrorComparisonResult {

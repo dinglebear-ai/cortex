@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 57;
+pub const KNOWN_SCHEMA_VERSION: i64 = 58;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3265,6 +3265,15 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         let transcript_sources_exists = table_exists(&conn, "transcript_sources")?;
         let tx = conn.transaction()?;
         if !transcript_sources_exists {
+            // With foreign-key enforcement disabled, damaged/restored databases
+            // can retain children after the identity-bearing parent vanished.
+            // Recreated parent IDs begin at 1, so retaining those rows would let
+            // a new source inherit old dedupe receipts and parse errors.
+            for child in ["transcript_import_records", "transcript_parse_errors"] {
+                if table_exists(&tx, child)? {
+                    tx.execute(&format!("DELETE FROM {child}"), [])?;
+                }
+            }
             tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS transcript_sources (
                      id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3446,6 +3455,25 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         )?;
         tx.commit()?;
         tracing::info!("Migration 57: bound transcript receipts to request fingerprints");
+    }
+
+    // Migration 58: recurring-error enrichment looks up evidence for a
+    // bounded set of signature hashes in one query.
+    if !migration_applied(&conn, 58)? {
+        let tx = conn.transaction()?;
+        if table_exists(&tx, "graph_relationship_evidence")? {
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_graph_evidence_error_signature_hash_id
+                 ON graph_relationship_evidence(source_signature_hash, id)
+                 WHERE source_kind = 'error_signature';",
+            )?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (58)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 58: indexed recurring-error graph evidence lookup");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

@@ -3223,6 +3223,36 @@ fn bench_percentiles_ms(runs: usize, mut f: impl FnMut()) -> BenchPercentiles {
 }
 
 #[test]
+fn session_rollup_query_plan_uses_ordering_index_without_temp_sort() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&test_storage_config(dir.path().join("plan.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    let plan = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT ai_project, ai_tool, ai_session_id, hostname, last_seen
+             FROM ai_session_rollup
+             WHERE 1=1
+             ORDER BY last_seen DESC LIMIT 100",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|detail| detail.contains("idx_ai_session_rollup_last_seen")),
+        "rollup query must use its last-seen index: {plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|detail| !detail.contains("USE TEMP B-TREE")),
+        "rollup query must not perform a temporary sort: {plan:?}"
+    );
+}
+
+#[test]
 #[ignore = "performance benchmark; builds millions of rows. Run with --ignored."]
 fn bench_stats_and_sessions() {
     let rows: usize = crate::env::var("CORTEX_BENCH_ROWS")
@@ -3362,22 +3392,20 @@ fn bench_stats_and_sessions() {
     let speedup = sessions_live_latency.p50_ms / sessions_rollup_latency.p50_ms.max(0.001);
     let minimum_speedup = crate::env::var("CORTEX_BENCH_MIN_SESSION_SPEEDUP")
         .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(1.0);
-    assert!(
-        speedup >= minimum_speedup,
-        "session rollup speedup {speedup:.2}x is below the {minimum_speedup:.2}x release threshold"
-    );
-    if let Ok(value) = crate::env::var("CORTEX_BENCH_MAX_SESSION_P95_MS") {
-        let maximum = value
-            .parse::<f64>()
-            .expect("CORTEX_BENCH_MAX_SESSION_P95_MS must be a number");
-        assert!(
-            sessions_rollup_latency.p95_ms <= maximum,
-            "session rollup p95 {:.1}ms exceeds the {maximum:.1}ms release threshold",
-            sessions_rollup_latency.p95_ms
-        );
-    }
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .expect("CORTEX_BENCH_MIN_SESSION_SPEEDUP must be a number")
+        });
+    let maximum_p95 = crate::env::var("CORTEX_BENCH_MAX_SESSION_P95_MS")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .expect("CORTEX_BENCH_MAX_SESSION_P95_MS must be a number")
+        });
+    let speedup_passed = minimum_speedup.is_none_or(|minimum| speedup >= minimum);
+    let p95_passed = maximum_p95.is_none_or(|maximum| sessions_rollup_latency.p95_ms <= maximum);
     if let Ok(path) = crate::env::var("CORTEX_BENCH_ARTIFACT") {
         let artifact = serde_json::json!({
             "rows": rows,
@@ -3388,9 +3416,22 @@ fn bench_stats_and_sessions() {
             "refresh": {"p50_ms": refresh_latency.p50_ms, "p95_ms": refresh_latency.p95_ms},
             "session_speedup": speedup,
             "minimum_session_speedup": minimum_speedup,
+            "maximum_session_p95_ms": maximum_p95,
+            "outcome": {"speedup_passed": speedup_passed, "p95_passed": p95_passed},
         });
         std::fs::write(path, serde_json::to_vec_pretty(&artifact).unwrap()).unwrap();
     }
+    if let Some(minimum_speedup) = minimum_speedup {
+        assert!(
+            speedup_passed,
+            "session rollup speedup {speedup:.2}x is below the {minimum_speedup:.2}x configured threshold"
+        );
+    }
+    assert!(
+        p95_passed,
+        "session rollup p95 {:.1}ms exceeds the configured diagnostic threshold",
+        sessions_rollup_latency.p95_ms
+    );
     eprintln!(
         "[bench] SUMMARY rows={rows} \
          stats_default_p50_ms={:.1} stats_default_p95_ms={:.1} \

@@ -59,6 +59,34 @@ const MAX_DISCOVERY_PATH_BYTES_PER_ROOT: usize = 256 * 1024;
 static SNAPSHOT_WORKERS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 static DISCOVERY_WORKERS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
+struct WorkerSlot(&'static AtomicUsize);
+
+impl WorkerSlot {
+    fn acquire(counter: &'static AtomicUsize) -> Option<Self> {
+        let mut current = counter.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_ABANDONED_SNAPSHOT_WORKERS {
+                return None;
+            }
+            match counter.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self(counter)),
+                Err(next) => current = next,
+            }
+        }
+    }
+}
+
+impl Drop for WorkerSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
+}
+
 trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
@@ -100,14 +128,15 @@ fn snapshot_jsonl_source(
     max_bytes: u64,
     deadline: Duration,
 ) -> Result<SnapshotOutcome> {
-    if !reserve_snapshot_worker() {
+    let Some(worker_slot) = WorkerSlot::acquire(&SNAPSHOT_WORKERS_IN_FLIGHT) else {
         return Ok(SnapshotOutcome::Capacity);
-    }
+    };
 
     let (sender, receiver) = mpsc::sync_channel(1);
     let worker = std::thread::Builder::new()
         .name("cortex-transcript-snapshot".to_string())
         .spawn(move || {
+            let _worker_slot = worker_slot;
             let outcome = (|| -> Result<SnapshotOutcome> {
                 #[cfg(test)]
                 maybe_delay_snapshot_for_test(&path);
@@ -128,12 +157,10 @@ fn snapshot_jsonl_source(
                 }
             })();
 
-            SNAPSHOT_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
             let _ = sender.send(outcome);
         });
 
     if worker.is_err() {
-        SNAPSHOT_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
         return Err(anyhow::anyhow!("could not start bounded transcript reader"));
     }
 
@@ -147,30 +174,15 @@ fn snapshot_jsonl_source(
     }
 }
 
-fn reserve_snapshot_worker() -> bool {
-    let mut current = SNAPSHOT_WORKERS_IN_FLIGHT.load(Ordering::Acquire);
-    loop {
-        if current >= MAX_ABANDONED_SNAPSHOT_WORKERS {
-            return false;
-        }
-        match SNAPSHOT_WORKERS_IN_FLIGHT.compare_exchange_weak(
-            current,
-            current + 1,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => return true,
-            Err(next) => current = next,
-        }
-    }
-}
-
 #[cfg(test)]
 type SnapshotTestDelays = Vec<(String, Duration)>;
 
 #[cfg(test)]
 static SNAPSHOT_TEST_DELAY: LazyLock<Mutex<Option<SnapshotTestDelays>>> =
     LazyLock::new(|| Mutex::new(None));
+#[cfg(test)]
+static SNAPSHOT_TEST_DELAY_COMPLETED: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(test)]
 fn maybe_delay_snapshot_for_test(path: &Path) {
@@ -186,7 +198,21 @@ fn maybe_delay_snapshot_for_test(path: &Path) {
         });
     if let Some(delay) = delay {
         std::thread::sleep(delay);
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            SNAPSHOT_TEST_DELAY_COMPLETED
+                .lock()
+                .expect("snapshot delay completion lock")
+                .insert(name.to_string());
+        }
     }
+}
+
+#[cfg(test)]
+fn snapshot_test_delay_completed(file_name: &str) -> bool {
+    SNAPSHOT_TEST_DELAY_COMPLETED
+        .lock()
+        .expect("snapshot delay completion lock")
+        .contains(file_name)
 }
 
 #[cfg(test)]
@@ -200,14 +226,17 @@ impl SnapshotDelayGuard {
 
     fn for_files<'a>(delays: impl IntoIterator<Item = (&'a str, Duration)>) -> Self {
         let mut configured = SNAPSHOT_TEST_DELAY.lock().expect("snapshot delay lock");
-        Self(
-            configured.replace(
-                delays
-                    .into_iter()
-                    .map(|(file_name, delay)| (file_name.to_string(), delay))
-                    .collect(),
-            ),
-        )
+        let delays = delays
+            .into_iter()
+            .map(|(file_name, delay)| (file_name.to_string(), delay))
+            .collect::<Vec<_>>();
+        let mut completed = SNAPSHOT_TEST_DELAY_COMPLETED
+            .lock()
+            .expect("snapshot delay completion lock");
+        for (file_name, _) in &delays {
+            completed.remove(file_name);
+        }
+        Self(configured.replace(delays))
     }
 }
 
@@ -1772,18 +1801,19 @@ fn discover_root_bounded(
     start_after: Option<&Path>,
     budget: DiscoveryBudget,
 ) -> Result<DiscoveryResult> {
-    if !reserve_discovery_worker() {
+    let Some(worker_slot) = WorkerSlot::acquire(&DISCOVERY_WORKERS_IN_FLIGHT) else {
         return Ok(DiscoveryResult {
             capped: true,
             ..Default::default()
         });
-    }
+    };
     let deadline = budget.deadline;
     let start_after = start_after.map(Path::to_path_buf);
     let (sender, receiver) = mpsc::sync_channel(1);
     let worker = std::thread::Builder::new()
         .name("cortex-transcript-discovery".to_string())
         .spawn(move || {
+            let _worker_slot = worker_slot;
             #[cfg(test)]
             maybe_delay_snapshot_for_test(&path);
             let mut result = DiscoveryResult::default();
@@ -1799,11 +1829,9 @@ fn discover_root_bounded(
                 &budget,
                 started,
             );
-            DISCOVERY_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
             let _ = sender.send(result);
         });
     if worker.is_err() {
-        DISCOVERY_WORKERS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
         return Err(anyhow::anyhow!(
             "could not start bounded transcript discovery"
         ));
@@ -1815,24 +1843,6 @@ fn discover_root_bounded(
                 capped: true,
                 ..Default::default()
             })
-        }
-    }
-}
-
-fn reserve_discovery_worker() -> bool {
-    let mut current = DISCOVERY_WORKERS_IN_FLIGHT.load(Ordering::Acquire);
-    loop {
-        if current >= MAX_ABANDONED_SNAPSHOT_WORKERS {
-            return false;
-        }
-        match DISCOVERY_WORKERS_IN_FLIGHT.compare_exchange_weak(
-            current,
-            current + 1,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => return true,
-            Err(next) => current = next,
         }
     }
 }
