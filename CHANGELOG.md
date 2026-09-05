@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.15.1](https://github.com/dinglebear-ai/cortex/compare/v3.15.0...v3.15.1) (2026-09-01)
+
+
+### Fixed
+
+* address post-merge concurrency review ([#211](https://github.com/dinglebear-ai/cortex/issues/211)) ([143461e](https://github.com/dinglebear-ai/cortex/commit/143461ec13d86f9503495275357f7c82af6b8ce3))
+* consolidate outstanding Cortex reliability work ([#210](https://github.com/dinglebear-ai/cortex/issues/210)) ([e8a9764](https://github.com/dinglebear-ai/cortex/commit/e8a9764910274b86a8012848054a514437260cdb))
+* harden Cortex contracts, recovery, and release validation ([#213](https://github.com/dinglebear-ai/cortex/issues/213)) ([d1e60c4](https://github.com/dinglebear-ai/cortex/commit/d1e60c4e805ae4be2f337105bfeec25329282eb6))
+* harden graph staging coordination ([#212](https://github.com/dinglebear-ai/cortex/issues/212)) ([63df9d6](https://github.com/dinglebear-ai/cortex/commit/63df9d6223d51db93a17ce05f6d1d32ef73b3066))
+
 ## [3.15.0](https://github.com/dinglebear-ai/cortex/compare/v3.14.0...v3.15.0) (2026-08-25)
 
 
