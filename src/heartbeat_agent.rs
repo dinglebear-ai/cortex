@@ -1435,6 +1435,11 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
             journald: config.journald,
             syslog_file: config.syslog_file.clone(),
             file_tails: config.file_tails.clone(),
+            file_tail_target: config
+                .target
+                .clone()
+                .unwrap_or_else(|| DEFAULT_TARGET.to_string()),
+            file_tail_token: config.token.clone(),
             syslog_target,
             hostname: hostname(),
             ai_transcripts: config.ai_transcripts,
@@ -1757,23 +1762,7 @@ fn bounded_probe_error(name: &str, error: &anyhow::Error) -> String {
 }
 
 fn hostname() -> String {
-    if let Ok(hostname) = crate::env::var("HOSTNAME")
-        && !hostname.is_empty()
-    {
-        return hostname;
-    }
-    match std::fs::read_to_string("/proc/sys/kernel/hostname") {
-        Ok(name) => {
-            let name = name.trim().to_string();
-            if !name.is_empty() {
-                return name;
-            }
-        }
-        Err(error) => {
-            tracing::warn!(error = %error, "could not determine hostname; using 'unknown'");
-        }
-    }
-    "unknown".to_string()
+    crate::scanner::local_hostname()
 }
 
 fn kernel_release() -> Option<String> {
