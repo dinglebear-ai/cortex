@@ -150,3 +150,12 @@ image, retain the override under a non-default filename and run Compose with
 the original `docker-compose.yml` explicitly. No schema migration is included
 in this change. A database rollback is not needed merely to restore the prior
 image; keep the stopped-service database snapshot for recovery only.
+
+## One-shot report
+
+`cortex reflect` wraps indexing, skill/MCP/hook incident detection, and
+assessment into one local command. The Codex app-server requirements above
+apply to its LLM step. With `--no-llm` it needs no Codex or Gemini program.
+If the LLM program is missing, `reflect` still produces a report and names
+the reason at the top. If one kind's LLM action is disabled or its circuit
+opens, only that kind falls back to deterministic findings.

@@ -406,6 +406,25 @@ Default guard values allow one concurrent invocation, three per minute and thirt
 
 Prompt scrubbing is enabled by default. Skill, MCP, and hook event extraction happens before scrubbed transcript text is persisted, so structured operational signals are retained without requiring raw prompt storage.
 
+### One-shot reflection report
+
+`cortex reflect` runs the whole skill, MCP, and hook reflection loop locally.
+It needs no server and no tokens.
+
+```bash
+cortex reflect                          # last 7 days, LLM on the top 5 incidents
+cortex reflect --no-llm                 # deterministic report only, no LLM program needed
+cortex reflect --kinds skill,hook --since 30d --max-assess 10 > reflect.md
+cortex reflect --json | jq '.unassessed[].incident_id'
+```
+
+It indexes transcripts modified in the window (Claude, Codex, Gemini,
+Antigravity), ranks incidents from all selected kinds together, and assesses
+the highest-scoring ones with the LLM selected by `CORTEX_LLM`. Results go to
+`~/.cortex/reflect.db` (owner-only) unless you pass `--db` or set
+`CORTEX_DB_PATH`. Each unassessed incident lists the
+`cortex assess ... --incident-id` command that assesses it on its own.
+
 ## Alerts and notifications
 
 Notifications are optional and disabled by default. When enabled, Cortex uses Apprise as the delivery bridge and a durable SQLite outbox for retry, deduplication, and dead-letter handling.

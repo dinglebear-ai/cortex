@@ -12,6 +12,10 @@ set dotenv-load
 dev:
     cargo run -- serve mcp
 
+# One-shot local skill/MCP/hook reflection report (pass flags through)
+reflect *ARGS:
+    cargo run --quiet -- reflect {{ARGS}}
+
 build:
     cargo build
 
