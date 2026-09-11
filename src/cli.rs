@@ -54,6 +54,7 @@ mod config_toml;
 mod coordination;
 mod dispatch_command_log;
 mod heartbeat_agent;
+pub(crate) use heartbeat_agent::is_agent_invocation;
 pub(crate) mod help;
 mod output;
 mod parse;

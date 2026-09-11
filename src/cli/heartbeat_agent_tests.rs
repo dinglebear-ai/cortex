@@ -103,3 +103,46 @@ fn into_config_preserves_env_defaults_when_optional_flags_are_absent() {
     assert!(!config.journald);
     assert_eq!(config.syslog_target, None);
 }
+
+fn args(list: &[&str]) -> Vec<String> {
+    list.iter().map(|arg| arg.to_string()).collect()
+}
+
+#[test]
+fn agent_invocation_is_recognised_before_argument_parsing() {
+    // The systemd unit's ExecStart, and the same with a global flag first.
+    assert!(is_agent_invocation(&args(&[
+        "heartbeat",
+        "agent",
+        "--env-file",
+        "/home/a/.cortex/heartbeat-agent.env",
+        "--host-id-path",
+        "/home/a/.cortex/heartbeat-host-id",
+    ])));
+    assert!(is_agent_invocation(&args(&[
+        "--force-http",
+        "heartbeat",
+        "agent"
+    ])));
+    // A renamed or unknown option must not stop the rollback check from running.
+    assert!(is_agent_invocation(&args(&[
+        "heartbeat",
+        "agent",
+        "--renamed-flag",
+        "x"
+    ])));
+}
+
+#[test]
+fn other_commands_and_help_are_not_agent_starts() {
+    assert!(!is_agent_invocation(&args(&[])));
+    assert!(!is_agent_invocation(&args(&["setup", "check"])));
+    assert!(!is_agent_invocation(&args(&["heartbeat"])));
+    assert!(!is_agent_invocation(&args(&["heartbeat", "push"])));
+    assert!(!is_agent_invocation(&args(&[
+        "heartbeat",
+        "agent",
+        "--help"
+    ])));
+    assert!(!is_agent_invocation(&args(&["heartbeat", "agent", "-h"])));
+}

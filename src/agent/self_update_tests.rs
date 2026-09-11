@@ -423,3 +423,209 @@ fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
     assert!(validate_binary(&fake, "9.9.9").is_ok());
     assert!(validate_binary(&fake, "1.2.3").is_err());
 }
+
+#[test]
+fn rejected_update_record_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(read_rejected(dir.path()), None);
+    write_rejected(dir.path(), "3.16.1").unwrap();
+    assert_eq!(read_rejected(dir.path()).as_deref(), Some("3.16.1"));
+}
+
+#[test]
+fn rejected_version_is_skipped_until_a_different_version_is_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    write_rejected(dir.path(), "3.16.1").unwrap();
+    // The version that was rolled back stays blocked, however often it is offered.
+    assert!(rejected_update_blocks(dir.path(), "3.16.1"));
+    assert!(rejected_update_blocks(dir.path(), "3.16.1"));
+    // A new release clears the record and is allowed through.
+    assert!(!rejected_update_blocks(dir.path(), "3.16.2"));
+    assert_eq!(read_rejected(dir.path()), None);
+    assert!(!rejected_update_blocks(dir.path(), "3.16.1"));
+}
+
+#[test]
+fn no_rejected_record_blocks_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!rejected_update_blocks(dir.path(), "3.16.1"));
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_update_record_is_private_and_replaces_atomically() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write_rejected(dir.path(), "3.16.1").unwrap();
+    write_rejected(dir.path(), "3.16.2").unwrap();
+    assert_eq!(read_rejected(dir.path()).as_deref(), Some("3.16.2"));
+    let mode = std::fs::metadata(rejected_path(dir.path()))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "rejected record must be private");
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+        .collect();
+    assert!(leftovers.is_empty(), "no temp files left behind");
+}
+
+fn seeded_update(dir: &Path, attempts: u32) -> (PathBuf, PathBuf) {
+    let exe = dir.join("cortex");
+    std::fs::write(&exe, b"new").unwrap();
+    let bak = dir.join("cortex.bak-1.0.0");
+    std::fs::write(&bak, b"old").unwrap();
+    write_marker(
+        &exe,
+        &UpdateMarker {
+            target: "9.9.9".into(),
+            bak: bak.clone(),
+            attempts,
+        },
+    )
+    .unwrap();
+    (exe, bak)
+}
+
+#[test]
+fn failed_starts_count_to_max_then_record_the_rejection_before_restoring() {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, bak) = seeded_update(dir.path(), 0);
+
+    for expected in 1..=MAX_ATTEMPTS {
+        confirm_or_rollback_at(&exe, "9.9.9", |_, _| panic!("rolled back too early")).unwrap();
+        assert_eq!(read_marker(&marker_path(&exe)).unwrap().attempts, expected);
+        assert_eq!(read_rejected(dir.path()), None);
+    }
+    let mut restored = None;
+    confirm_or_rollback_at(&exe, "9.9.9", |from, to| {
+        // exec does not return on unix: the record must already be on disk here.
+        assert_eq!(read_rejected(dir.path()).as_deref(), Some("9.9.9"));
+        restored = Some((from.to_path_buf(), to.to_path_buf()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(restored, Some((bak, exe.clone())));
+
+    // The next start is the restored binary: the marker is stale and dropped,
+    // and the rejection survives.
+    confirm_or_rollback_at(&exe, "1.0.0", |_, _| panic!("no second rollback")).unwrap();
+    assert!(read_marker(&marker_path(&exe)).is_none());
+    assert!(rejected_update_blocks(dir.path(), "9.9.9"));
+}
+
+#[test]
+fn rollback_still_restores_when_the_rejection_cannot_be_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, _bak) = seeded_update(dir.path(), MAX_ATTEMPTS);
+    // A directory where the record belongs makes the atomic rename fail.
+    std::fs::create_dir(rejected_path(dir.path())).unwrap();
+    let mut restored = false;
+    confirm_or_rollback_at(&exe, "9.9.9", |_, _| {
+        restored = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        restored,
+        "a failed record write must not block the rollback"
+    );
+}
+
+#[test]
+fn restored_binary_records_the_rejection_the_rollback_could_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, _bak) = seeded_update(dir.path(), MAX_ATTEMPTS);
+    // Running the previous binary with a marker for the version it rolled back from.
+    confirm_or_rollback_at(&exe, "1.0.0", |_, _| panic!("no rollback expected")).unwrap();
+    assert_eq!(read_rejected(dir.path()).as_deref(), Some("9.9.9"));
+    assert!(read_marker(&marker_path(&exe)).is_none());
+}
+
+#[test]
+fn manual_binary_change_drops_the_marker_without_rejecting_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, _bak) = seeded_update(dir.path(), 1);
+    confirm_or_rollback_at(&exe, "1.0.0", |_, _| panic!("no rollback expected")).unwrap();
+    assert!(read_marker(&marker_path(&exe)).is_none());
+    assert_eq!(read_rejected(dir.path()), None);
+}
+
+#[test]
+fn rollback_without_a_backup_errors_and_clears_the_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, bak) = seeded_update(dir.path(), MAX_ATTEMPTS);
+    std::fs::remove_file(&bak).unwrap();
+    let error =
+        confirm_or_rollback_at(&exe, "9.9.9", |_, _| panic!("nothing to restore")).unwrap_err();
+    assert!(error.to_string().contains("no rollback binary"), "{error}");
+    assert!(read_marker(&marker_path(&exe)).is_none());
+    assert_eq!(read_rejected(dir.path()), None);
+}
+
+#[test]
+fn corrupt_rejected_record_blocks_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(rejected_path(dir.path()), b"not json").unwrap();
+    assert_eq!(read_rejected(dir.path()), None);
+    assert!(!rejected_update_blocks(dir.path(), "9.9.9"));
+}
+
+#[tokio::test]
+async fn maybe_update_refuses_a_rejected_version_without_downloading() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("cortex");
+    std::fs::write(&exe, b"current").unwrap();
+    for name in ["cortex.bak-a", "cortex.bak-b", "cortex.bak-c"] {
+        std::fs::write(dir.path().join(name), b"").unwrap();
+    }
+    write_rejected(dir.path(), "999.0.0").unwrap();
+    let directive = AgentUpdateDirective {
+        version: "999.0.0".into(),
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+        path: "/binary".into(),
+        sha256: None,
+        checksum_path: Some("/checksum".into()),
+        format: "binary".into(),
+    };
+
+    let error = maybe_update_for_exe(
+        &build_update_client().unwrap(),
+        &server.uri(),
+        None,
+        &directive,
+        &exe,
+    )
+    .await
+    .expect_err("a rejected version is refused visibly");
+    assert!(
+        error.to_string().contains("rolled back on this host"),
+        "{error}"
+    );
+    assert!(error.to_string().contains(REJECTED_FILE), "{error}");
+    assert_eq!(read_rejected(dir.path()).as_deref(), Some("999.0.0"));
+    // Three backups still present shows pruning (and the lock before it) never ran.
+    let backups = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("cortex.bak-")
+        })
+        .count();
+    assert_eq!(backups, 3);
+}

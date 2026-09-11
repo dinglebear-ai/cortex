@@ -24,6 +24,21 @@ async fn run() -> Result<()> {
     let mut raw: Vec<String> = std::env::args().skip(1).collect();
     cli::color::install_color_from_args(&mut raw)?;
 
+    // A self-updated agent binary must be able to roll back even if it cannot
+    // parse its own arguments: run the rollback check before any parsing can
+    // fail. Logging starts early on this path so the rollback's own lines are
+    // kept; the default matches the agent's CLI mode.
+    let agent_invocation = cli::is_agent_invocation(&raw);
+    if agent_invocation {
+        logging::init("error");
+        if let Err(error) = cortex::agent::self_update::confirm_or_rollback() {
+            tracing::error!(
+                error = format!("{error:#}"),
+                "agent update rollback check failed"
+            );
+        }
+    }
+
     // Explicit help (`cortex [--help|help]`, `cortex <cmd> --help`) prints the
     // Aurora grouped banner / per-command flags to stdout and exits 0.
     if cli::help::maybe_handle_help(&raw) {
@@ -40,7 +55,9 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
-    logging::init(mode.default_log_filter());
+    if !agent_invocation {
+        logging::init(mode.default_log_filter());
+    }
 
     info!("cortex v{}", env!("CARGO_PKG_VERSION"));
 

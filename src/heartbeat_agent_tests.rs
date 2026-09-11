@@ -817,3 +817,87 @@ async fn container_probe_reports_unreachable_when_docker_ps_fails() {
     assert_eq!(containers.running, 0);
     assert!(containers.details.is_empty());
 }
+
+#[test]
+#[serial]
+fn startup_preflight_runs_rollback_check_before_rejecting_the_transport() {
+    // The 2026-09-11 (UTC) incident: an agent that self-updated into a binary
+    // whose transport check rejects the existing plain-HTTP overlay target
+    // exited before the rollback check ever ran, and crash-looped. The rollback
+    // check must run first so the failed start still counts toward rolling back.
+    let _target = EnvGuard::set("CORTEX_HEARTBEAT_TARGET", "http://100.100.100.100:3100");
+    let _overlay = EnvGuard::unset("CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP");
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
+
+    let mut rollback_checked = false;
+    let result = rollback_then(
+        || {
+            rollback_checked = true;
+            Ok(())
+        },
+        || startup_preflight(&config),
+    );
+
+    assert!(
+        rollback_checked,
+        "rollback check must run before transport validation"
+    );
+    let error = result.expect_err("plain HTTP to a non-loopback target needs the overlay flag");
+    assert!(
+        error
+            .to_string()
+            .contains("CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+#[serial]
+fn startup_preflight_accepts_an_explicit_trusted_overlay() {
+    let _target = EnvGuard::set("CORTEX_HEARTBEAT_TARGET", "http://100.100.100.100:3100");
+    let _overlay = EnvGuard::set("CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP", "true");
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
+    startup_preflight(&config).expect("an explicitly trusted overlay target is accepted");
+}
+
+#[test]
+fn rollback_then_runs_the_rollback_check_before_a_failing_config_step() {
+    // Loading or validating the configuration can fail too (a stricter env-file
+    // check, an unknown option); the rollback check must already have run.
+    let order = std::cell::RefCell::new(Vec::new());
+    let result: Result<()> = rollback_then(
+        || {
+            order.borrow_mut().push("rollback");
+            Ok(())
+        },
+        || {
+            order.borrow_mut().push("config");
+            Err(anyhow::anyhow!("env file rejected"))
+        },
+    );
+    assert_eq!(*order.borrow(), ["rollback", "config"]);
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("env file rejected")
+    );
+}
+
+#[test]
+fn rollback_then_attaches_the_rollback_failure_when_the_next_step_fails() {
+    let error = rollback_then(
+        || Err(anyhow::anyhow!("marker unwritable")),
+        || -> Result<()> { Err(anyhow::anyhow!("transport rejected")) },
+    )
+    .unwrap_err();
+    let chain = format!("{error:#}");
+    assert!(chain.contains("transport rejected"), "{chain}");
+    assert!(chain.contains("marker unwritable"), "{chain}");
+}
+
+#[test]
+fn rollback_then_continues_after_a_rollback_error_when_the_next_step_succeeds() {
+    let value = rollback_then(|| Err(anyhow::anyhow!("marker unwritable")), || Ok(7)).unwrap();
+    assert_eq!(value, 7);
+}
