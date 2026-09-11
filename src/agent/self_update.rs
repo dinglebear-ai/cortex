@@ -35,7 +35,7 @@ use tokio::time::timeout;
 
 /// Number of agent restarts allowed without a confirming heartbeat before the
 /// in-flight update is rolled back to the previous `.bak` binary.
-const MAX_ATTEMPTS: u32 = 3;
+pub(crate) const MAX_ATTEMPTS: u32 = 3;
 
 pub const SELF_UPDATE_DEADLINE: Duration = Duration::from_secs(180);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -106,10 +106,30 @@ fn write_rejected(dir: &Path, version: &str) -> Result<()> {
 }
 
 fn read_rejected(dir: &Path) -> Option<String> {
-    let raw = std::fs::read_to_string(rejected_path(dir)).ok()?;
-    serde_json::from_str::<RejectedUpdate>(&raw)
-        .ok()
-        .map(|r| r.version)
+    let path = rejected_path(dir);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "cannot read the rejected agent update record; treating it as absent"
+            );
+            return None;
+        }
+    };
+    match serde_json::from_str::<RejectedUpdate>(&raw) {
+        Ok(record) => Some(record.version),
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "ignoring an unparseable rejected agent update record"
+            );
+            None
+        }
+    }
 }
 
 /// True when `version` is the one this agent already rolled back from, so the
@@ -119,7 +139,10 @@ fn rejected_update_blocks(dir: &Path, version: &str) -> bool {
     match read_rejected(dir) {
         Some(rejected) if rejected == version => true,
         Some(_) => {
-            let _ = std::fs::remove_file(rejected_path(dir));
+            let path = rejected_path(dir);
+            if let Err(error) = std::fs::remove_file(&path) {
+                tracing::warn!(path = %path.display(), error = %error, "could not clear the rejected agent update record");
+            }
             false
         }
         None => false,
@@ -284,6 +307,19 @@ pub async fn maybe_update(
     token: Option<&str>,
     directive: &AgentUpdateDirective,
 ) -> Result<()> {
+    let exe = std::env::current_exe().context("resolve current_exe")?;
+    maybe_update_for_exe(client, target_base, token, directive, &exe).await
+}
+
+/// [`maybe_update`] for an explicit binary path, so tests can run it against a
+/// temporary directory instead of the test executable.
+async fn maybe_update_for_exe(
+    client: &reqwest::Client,
+    target_base: &str,
+    token: Option<&str>,
+    directive: &AgentUpdateDirective,
+    exe: &Path,
+) -> Result<()> {
     if !update_needed(directive) {
         return Ok(());
     }
@@ -298,18 +334,21 @@ pub async fn maybe_update(
     }
 
     let current = env!("CARGO_PKG_VERSION");
-    let exe = std::env::current_exe().context("resolve current_exe")?;
+    let exe = exe.to_path_buf();
     ensure_binary_still_present(&exe)?;
     let dir = exe
         .parent()
         .ok_or_else(|| anyhow!("current_exe has no parent dir"))?
         .to_path_buf();
     if rejected_update_blocks(&dir, &directive.version) {
-        tracing::debug!(
-            version = %directive.version,
-            "skipping agent update this binary already rolled back from"
+        // An error, not a quiet skip: the heartbeat loop logs it at warn with a
+        // per-version cooldown, so an operator sees why this host stays behind.
+        bail!(
+            "agent update {} was rolled back on this host after it failed to start; not reinstalling it. \
+             Fix the cause (for example a configuration the new version rejects), then delete {} to retry",
+            directive.version,
+            rejected_path(&dir).display()
         );
-        return Ok(());
     }
     let _lifecycle_lock =
         crate::setup::heartbeat_agent_env::acquire_heartbeat_agent_lifecycle_lock()
@@ -543,17 +582,54 @@ fn unique_backup_path_base(dir: &Path, current: &str) -> PathBuf {
 /// once `MAX_ATTEMPTS` restarts pass without [`confirm_update_success`] clearing
 /// the marker (i.e. no successful heartbeat), it restores the `.bak` and re-execs.
 pub fn confirm_or_rollback() -> Result<()> {
+    // Once per process: startup runs this at the CLI entry and again as a
+    // guard in run_agent, and a start must never count twice toward rollback.
+    static CHECKED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if CHECKED.set(()).is_err() {
+        return Ok(());
+    }
     let exe = std::env::current_exe().context("resolve current_exe")?;
-    let path = marker_path(&exe);
+    confirm_or_rollback_at(&exe, env!("CARGO_PKG_VERSION"), |bak, exe| {
+        install_and_restart(bak, exe, None)
+    })
+}
+
+/// [`confirm_or_rollback`] for an explicit binary, version, and restore step.
+fn confirm_or_rollback_at(
+    exe: &Path,
+    current: &str,
+    restore: impl FnOnce(&Path, &Path) -> Result<()>,
+) -> Result<()> {
+    let path = marker_path(exe);
     let Some(mut marker) = read_marker(&path) else {
         return Ok(());
     };
+    let dir = exe.parent().unwrap_or_else(|| Path::new("."));
 
-    let current = env!("CARGO_PKG_VERSION");
     if marker.target != current {
-        // Running binary is not the one the marker tracked (e.g. manual change);
-        // the marker is stale — drop it without acting.
-        let _ = std::fs::remove_file(&path);
+        if marker.attempts >= MAX_ATTEMPTS {
+            // We are the restored binary after rolling back from marker.target.
+            // Record the rejection again in case the pre-restore write failed.
+            tracing::warn!(
+                rolled_back_from = %marker.target,
+                running = current,
+                "agent is running its previous binary after rolling back an update that never started cleanly"
+            );
+            if read_rejected(dir).as_deref() != Some(marker.target.as_str())
+                && let Err(error) = write_rejected(dir, &marker.target)
+            {
+                tracing::error!(
+                    path = %rejected_path(dir).display(),
+                    version = %marker.target,
+                    error = format!("{error:#}"),
+                    "could not record the rejected agent update; it may be reinstalled"
+                );
+            }
+        }
+        // Otherwise the running binary was changed by hand; the marker is stale.
+        if let Err(error) = std::fs::remove_file(&path) {
+            tracing::warn!(path = %path.display(), error = %error, "could not remove a stale update marker");
+        }
         return Ok(());
     }
 
@@ -564,14 +640,17 @@ pub fn confirm_or_rollback() -> Result<()> {
             "agent update never confirmed healthy; rolling back"
         );
         if marker.bak.exists() {
-            // Remember the failed version first: after the re-exec the marker no
-            // longer matches the running binary and is dropped as stale, and the
-            // next heartbeat would otherwise offer the same update again.
-            let dir = exe.parent().unwrap_or_else(|| Path::new("."));
+            // Record the failed version before restoring: exec does not return on
+            // unix, and the next heartbeat would otherwise offer it again.
             if let Err(error) = write_rejected(dir, &marker.target) {
-                tracing::warn!(error = %error, version = %marker.target, "could not record rejected agent update");
+                tracing::error!(
+                    path = %rejected_path(dir).display(),
+                    version = %marker.target,
+                    error = format!("{error:#}"),
+                    "could not record the rejected agent update before rolling back"
+                );
             }
-            return install_and_restart(&marker.bak, &exe, None);
+            return restore(&marker.bak, exe);
         }
         // No backup to restore — give up on rollback but clear the marker so we
         // stop looping; the operator must intervene.
@@ -583,21 +662,37 @@ pub fn confirm_or_rollback() -> Result<()> {
     }
 
     marker.attempts += 1;
-    write_marker(&exe, &marker)?;
+    write_marker(exe, &marker)?;
     Ok(())
 }
 
 /// Clear the in-flight update marker after the agent's first successful
-/// heartbeat, finalizing the update. Also prunes the retained `.bak`.
-pub fn confirm_update_success() {
+/// heartbeat, finalizing the update. Also prunes the retained `.bak`. Returns
+/// false while the marker could not be cleared, so the caller retries: a
+/// leftover marker would count ordinary restarts toward a rollback.
+pub fn confirm_update_success() -> bool {
     let Ok(exe) = std::env::current_exe() else {
-        return;
+        return false;
     };
     let path = marker_path(&exe);
-    if let Some(marker) = read_marker(&path) {
-        tracing::info!(version = %marker.target, "agent update confirmed healthy");
-        let _ = std::fs::remove_file(&marker.bak);
-        let _ = std::fs::remove_file(&path);
+    let Some(marker) = read_marker(&path) else {
+        return true;
+    };
+    let _ = std::fs::remove_file(&marker.bak);
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            tracing::info!(version = %marker.target, "agent update confirmed healthy");
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            tracing::error!(
+                path = %path.display(),
+                error = %error,
+                "could not clear the update marker; restarts could still roll this healthy update back"
+            );
+            false
+        }
     }
 }
 

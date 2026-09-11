@@ -1430,20 +1430,33 @@ pub fn backoff_duration(attempt: u32) -> Duration {
     Duration::from_millis(millis.min(4_000))
 }
 
-/// Checks that must pass before the agent does any work, in the one order that
-/// keeps self-update recoverable: the rollback check runs first, so a freshly
-/// installed binary that cannot start with the existing configuration still
-/// counts its failed attempt and is rolled back, instead of exiting before the
-/// rollback is ever reached and crash-looping.
-fn startup_preflight(
-    config: &HeartbeatAgentConfig,
+/// Run the self-update rollback check before any other startup step that can
+/// fail. A freshly installed binary that cannot start with the existing
+/// configuration must still count the failed attempt, so it is rolled back
+/// instead of exiting before the rollback is reached and crash-looping. A
+/// failing rollback check does not stop startup (a healthy binary must not exit
+/// over marker trouble), but its cause is attached if the next step fails too.
+pub fn rollback_then<T>(
     rollback_check: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    // If we are running immediately after a self-update, confirm it settled or
-    // roll back to the previous binary. May re-exec and not return.
-    if let Err(error) = rollback_check() {
-        tracing::error!(error = %error, "agent update rollback check failed");
+    next: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let rollback_error = rollback_check().err();
+    if let Some(error) = &rollback_error {
+        tracing::error!(
+            error = format!("{error:#}"),
+            "agent update rollback check failed"
+        );
     }
+    next().map_err(|error| match rollback_error {
+        Some(rollback) => error.context(format!(
+            "self-update rollback check also failed: {rollback:#}"
+        )),
+        None => error,
+    })
+}
+
+/// Configuration checks that must pass before the agent does any work.
+fn startup_preflight(config: &HeartbeatAgentConfig) -> Result<()> {
     if let Some(target) = config.target.as_deref() {
         validate_ingest_transport(target, config.allow_trusted_overlay_http)?;
     }
@@ -1451,7 +1464,11 @@ fn startup_preflight(
 }
 
 pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
-    startup_preflight(&config, crate::agent::self_update::confirm_or_rollback)?;
+    // The CLI entry already ran the rollback check before building the config;
+    // this guard (a no-op on a second call) covers any other caller.
+    rollback_then(crate::agent::self_update::confirm_or_rollback, || {
+        startup_preflight(&config)
+    })?;
     let host_id = load_or_create_host_id(&config.host_id_path)?;
 
     // Server-coordinated auto-update keeps the agent binary in lockstep with the
@@ -1583,8 +1600,7 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
                 attempt = 0;
                 // First successful heartbeat after a swap finalizes the update.
                 if !update_confirmed {
-                    crate::agent::self_update::confirm_update_success();
-                    update_confirmed = true;
+                    update_confirmed = crate::agent::self_update::confirm_update_success();
                 }
                 if let Some(directive) = directive {
                     let update_needed = crate::agent::self_update::update_needed(&directive);

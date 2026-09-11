@@ -8,7 +8,15 @@ use super::{HeartbeatAgentArgs, HeartbeatCommand};
 
 pub(crate) async fn run_heartbeat_no_db(command: HeartbeatCommand) -> Result<()> {
     match command {
-        HeartbeatCommand::Agent(args) => run_agent(args.into_config()?).await,
+        HeartbeatCommand::Agent(args) => {
+            // Roll back a self-update that cannot start before anything else
+            // can fail, including loading and validating the configuration.
+            let config = cortex::heartbeat_agent::rollback_then(
+                cortex::agent::self_update::confirm_or_rollback,
+                || args.into_config(),
+            )?;
+            run_agent(config).await
+        }
     }
 }
 
