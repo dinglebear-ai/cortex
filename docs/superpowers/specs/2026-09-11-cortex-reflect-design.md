@@ -1,7 +1,7 @@
-# `cortex reflect` — one-shot skill / MCP / hook reflection
+# `cortex reflect`: one-shot skill / MCP / hook reflection
 
 Date: 2026-09-11
-Status: approved design, pending implementation plan
+Status: approved design, revised after engineering review (2026-09-11)
 
 ## Goal
 
@@ -19,32 +19,36 @@ server, the syslog receiver, or any tokens. It supports two modes:
 - No new detectors, scoring, or prompts. `reflect` orchestrates existing,
   tested code only.
 - No `abuse` kind. Kinds are exactly `skill`, `mcp`, `hook`.
-- No built-in tool (Bash/Edit/Read) incidents, no subagent kind. Built-in
-  tool incidents may land later as a separate project.
+- No built-in tool (Bash/Edit/Read) incidents and no subagent kind.
 - No daemon or watcher mode, no MCP or REST exposure. `reflect` is a
   local-only CLI command, like `assess`.
+- No `--out` flag. The report goes to stdout; progress and warnings go to
+  stderr, so `cortex reflect > report.md` works.
 - No crate split, cargo feature, or schema fork.
+
+Tracked follow-ups (not in this project): fair share of top-N slots across
+kinds, set-based anchor queries in incident search, and an index scan
+budget with live progress.
 
 ## Command surface
 
 ```
 cortex reflect [--since 7d] [--until T] [--project P] [--tool claude|codex|gemini]
                [--kinds skill,mcp,hook] [--no-llm] [--max-assess 5]
-               [--no-index] [--db PATH] [--json] [--out FILE]
+               [--no-index] [--db PATH] [--json]
 ```
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--since` / `--until` | last 7 days / now | Detection window, same syntax as `assess` |
+| `--since` / `--until` | last 7 days / run start | Detection window, same syntax as `assess` |
 | `--project` | all | Filter by AI project |
 | `--tool` | all | Filter by AI tool (claude, codex, gemini) |
 | `--kinds` | `skill,mcp,hook` | Comma-separated subset; any other value is an argument error |
 | `--no-llm` | off | Report-only mode |
-| `--max-assess` | 5 | How many top incidents (across all kinds) get a detailed section; the LLM runs on these unless `--no-llm`. `0` means summary and table only, no LLM calls |
+| `--max-assess` | 5 | How many top incidents (across all kinds) get a detailed section; the LLM runs on these unless `--no-llm`. `0` means summary and table only |
 | `--no-index` | off | Skip indexing; detect over what the DB already holds |
 | `--db` | see below | SQLite file to use |
 | `--json` | off | Emit the report as JSON instead of Markdown |
-| `--out` | stdout | Write the report to a file |
 
 `--http`, `--server`, `--token`, and `CORTEX_USE_HTTP=1` are rejected:
 `reflect` always runs locally.
@@ -52,120 +56,136 @@ cortex reflect [--since 7d] [--until T] [--project P] [--tool claude|codex|gemin
 ### Database path resolution
 
 1. `--db PATH`
-2. `CORTEX_DB_PATH` when set
-3. `~/.cortex/reflect.db` (parent directory created if missing)
+2. `CORTEX_DB_PATH` when set and non-empty. `reflect` prints a stderr
+   warning naming the path, because it may be a live server database.
+3. `~/.cortex/reflect.db`. When `~/.cortex` does not exist, `reflect`
+   creates it owner-only (0700).
 
-The file is initialised with the normal migration ladder. Tables unrelated
-to reflection are created empty. `reflect` never writes to the homelab
-server database unless the user points `--db` or `CORTEX_DB_PATH` at it.
+After the pool opens, the database file is set owner-only (0600) on Unix.
+The file uses the normal migration ladder; unrelated tables stay empty.
 
 ## Pipeline
 
-1. **Setup.** Resolve the DB path, load config via the stdio/query-only
-   loader, override `storage.db_path`, and build the query-only runtime
-   (`RuntimeCore::query_only`). No listener is bound and no auth config is
-   validated.
-2. **Index.** Unless `--no-index`, run the transcript scanner over the
-   default transcript roots (`scanner::index_roots_with_options` with
-   `scanner::providers::paths::transcript_roots()`). Checkpoints make repeat runs incremental. Skill,
-   MCP, and hook events are extracted in the same pass.
-3. **Detect.** For each selected kind, call the existing service
-   investigate method (`investigate_ai_skill_incidents`,
-   `investigate_ai_mcp_incidents`, `investigate_ai_hook_incidents`) with
-   the window, project, and tool filters. All three use the same scoring
-   formula, so incidents merge into one list sorted by score descending,
-   then by most recent event, then by incident id for a stable order.
-4. **Assess.** Take the top N incidents (N = `--max-assess`) from the
-   merged list. Unless `--no-llm`, run each through its kind's existing
-   guarded assessment path (`run_skill_assessment_with_delta`,
-   `run_mcp_assessment_with_delta`, `run_hook_assessment_with_delta`),
-   targeted at that single incident. All `LlmRunner` guards (kill switch,
-   concurrency, rate limits, circuit breaker, timeout, size caps, audit
-   rows) apply unchanged. Assessments run one at a time.
-5. **Report.** Build one `ReflectReport` value, then render it as Markdown
-   or JSON.
+1. **Setup.** Resolve the DB path, load config via the stdio loader,
+   override `storage.db_path`, and build the query-only runtime with the
+   existing SQLite-busy retry. No listener is bound and no auth config is
+   validated. Pin `until` to the run start time when the user gave none,
+   so every later step sees the same window.
+2. **Index.** Unless `--no-index`, index the default transcript roots,
+   passing `since` as the file-age filter so only transcripts modified in
+   the window are read. Print a progress line before and a counts line
+   after. Checkpoints keep repeat runs incremental.
+3. **Detect.** For each selected kind, call the existing list service with
+   the window and filters. The list service returns at most 100 incidents
+   per kind; `reflect` records the kind's `total_incidents` and whether the
+   candidate window or the list was truncated. All three kinds share one
+   scoring formula shape, so incidents merge into one list sorted by score
+   descending, then most recent, then incident id. The report states that
+   scores are heuristic.
+4. **Assess.** Take the top N (`--max-assess`). For each, run the kind's
+   investigate service once, with the incident id plus the incident's
+   exact target (skill and plugin, MCP server and tool, or hook event and
+   name) and the same window and filters. The target filters are exact
+   matches on the grouping key, so they shrink the scan without changing
+   the incident id. The deterministic findings come from that evidence.
+   Unless `--no-llm`, the evidence goes to the kind's existing per-evidence
+   LLM helper, with every `LlmRunner` guard in force. Assessments run one
+   at a time.
+5. **Report.** Build one `ReflectReport`, then render it as Markdown or
+   JSON on stdout.
 
-None of `SkillAssessRequest`, `McpAssessRequest`, or `HookAssessRequest`
-can target a single incident today. The implementation adds an optional
-`incident_id: Option<String>` to each, matching `AbuseAssessRequest`.
-When set, the service assesses only that incident from the investigate
-result. That is the only change allowed in existing service code, and it
-also gives `cortex assess skill|mcp|hooks` an `--incident-id` flag for
-free, which the report's "assess this" commands use.
+The three assess requests also gain an optional `incident_id`, exposed as
+`--incident-id` on `cortex assess skill|mcp|hooks`, so the report can print
+an exact command to assess any unassessed incident later.
 
 ## Report
 
 `ReflectReport` fields:
 
-- `window` (since, until), `filters` (project, tool, kinds), `db_path`
+- `since`, `until`, `project`, `tool`, `kinds`, `db_path`
 - `mode`: `report_only` or `report_and_llm`, plus `llm_fallback_reason`
-  when the run downgraded to report-only
-- `index`: files scanned, new records, parse-error count, or `skipped`
-- `summary`: incident counts by kind and severity label
-- `assessed`: one entry per assessed incident: kind, incident id, target
-  (skill / server+tool / hook), severity, score, and either the LLM
-  assessment Markdown or the deterministic findings plus a failure reason
-- `unassessed`: remaining incidents with kind, id, target, severity,
-  score, and the exact `cortex assess <kind> ...` command to assess it
+  when the preflight downgraded the run
+- `index`: discovered files, new records, duplicates skipped, parse errors,
+  or `null` when skipped
+- `summary`: per kind, listed and total incident counts, counts by severity
+  label, and `truncated` when the list or candidate window was capped
+- `assessed`: per detailed incident: kind, id, target, severity, score,
+  signals, the LLM assessment or `null`, the deterministic findings, and a
+  `failure` reason when the assessment could not run
+- `unassessed`: remaining incidents with the exact
+  `cortex assess <kind> --incident-id ... --since ... --until ...` command
 
-Markdown layout: title with window, summary table, one H2 section per
-assessed incident, then an "Other incidents" table. In `--no-llm` mode the
-detailed sections show deterministic findings instead of LLM output, so
-the report has the same shape in both modes.
-
-LLM output is not streamed in `reflect`. Progress lines ("indexing…",
-"assessing 2/5: skill foo…") go to stderr so stdout stays a clean report.
+Markdown: title, window, filters, database, mode, index line, a fallback
+note when present, a summary table with a truncation warning and a
+"narrow --since" hint when capped, one H2 section per detailed incident,
+then an "Other incidents" table. LLM headings are demoted two levels
+outside code fences. Transcript-derived single-line fields have control
+characters replaced with spaces; the LLM body keeps newlines and tabs only.
+Table cells escape `|` and backticks.
 
 ## Error handling
 
 | Situation | Behavior |
 |-----------|----------|
 | Bad arguments, unknown kind, unusable DB path | Fail before any work, non-zero exit |
-| Unreadable or malformed transcript files | Recorded as parse errors by the scanner; count appears in the report; run continues |
-| LLM disabled, backend binary missing, or backend fails preflight | Whole run downgrades to report-only; `llm_fallback_reason` set; warning on stderr naming the fix (`CORTEX_LLM`, `CORTEX_LLM_ENABLED`, install codex/gemini) |
-| A single assessment fails (timeout, rate limit, circuit open, backend error) | That incident shows deterministic findings plus the reason; remaining assessments continue |
-| Circuit breaker opens mid-run | Remaining incidents are reported with the same reason without further LLM calls |
+| Unreadable or malformed transcript files | Counted as parse errors; run continues |
+| LLM backend unresolvable, or its program not found (checked as the exact program string, no whitespace splitting) | Whole run downgrades to report-only; `llm_fallback_reason` set; stderr warning names the fix |
+| LLM globally disabled | First attempt reports it; the whole run downgrades to report-only |
+| LLM action disabled, or circuit open, for one kind | No more LLM calls for that kind; its incidents show findings plus the reason; other kinds continue |
+| One assessment fails (timeout, rate limit, backend error) | That incident keeps its findings plus the reason; the run continues |
+| Incident no longer resolves (DB changed during the run) | That incident is marked "incident changed during run"; the run continues |
 | No incidents in window | Report says so; exit 0 |
-| DB locked by another writer | Existing query-only retry (3 attempts); then fail with the path in the error |
+| DB locked when opening | Existing query-only retry (3 attempts), then fail naming the path |
 
 Exit code is 0 whenever a report is produced, including partial LLM
 failure.
 
 ## Code layout
 
-All new files follow the repo conventions: sibling `foo.rs` modules, no
-`mod.rs`, sidecar `*_tests.rs`, each file under the 500-line module limit.
+Sibling `foo.rs` modules, no `mod.rs`, sidecar `*_tests.rs`, every file
+under 500 lines.
 
 | File | Purpose |
 |------|---------|
-| `src/cli/args/reflect.rs` | `ReflectArgs` |
-| `src/cli/parse/reflect.rs` | Flag parsing and validation |
-| `src/cli/dispatch_reflect.rs` | Local-only guard, DB path resolution, runtime construction, output writing |
+| `src/app/models/reflect.rs` | Request, incident, summary, and report types; ranking; summary |
 | `src/app/services/reflect.rs` | Pipeline: index, detect, rank, assess |
-| `src/app/models/reflect.rs` | `ReflectRequest`, `ReflectReport`, and related types |
+| `src/app/services/reflect_llm.rs` | Pure LLM-failure classifier and program lookup |
 | `src/app/reflect_report.rs` | Markdown renderer |
+| `src/cli/args/reflect.rs`, `src/cli/parse/reflect.rs` | Flags |
+| `src/cli/dispatch_reflect.rs` | Dispatch and DB path resolution |
+| `src/runtime.rs` | Query-only runtime from a prepared config, with retry |
 | `src/surfaces.rs` | `local_cli!("reflect", Sessions, Canonical)` |
 
-Docs: README section "Skill, MCP, and hook reflection", a note in
-`docs/runbooks/skill-reflection.md`, a `CLAUDE.md` Commands entry, and a
-`just reflect` recipe.
+The per-evidence LLM helpers in the three assessment services become
+visible to sibling service modules. They are otherwise unchanged.
+
+Docs: a README subsection, a runbook note, a `CLAUDE.md` Commands entry,
+and a `just reflect` recipe.
 
 ## Testing
 
-Unit tests (sidecar files):
+Unit tests:
 
-- Argument parsing: defaults, every flag, unknown kind, `--max-assess 0`,
-  HTTP flags rejected.
+- Argument parsing: defaults, every flag, unknown and empty kinds,
+  duplicate kinds, unknown options.
 - DB path resolution order.
-- Merged ranking across kinds, including tie-breaks.
-- `--max-assess` cap across kinds.
-- Fallbacks with a stub LLM runner: disabled backend downgrades the run;
-  one failed assessment keeps the others; circuit-open short-circuits the
-  rest.
-- Markdown rendering for report-only, mixed, and empty reports.
+- Merged ranking with tie-breaks; per-kind summary with totals and
+  truncation.
+- Pipeline in report-only mode over seeded skill, MCP, and hook incidents:
+  ranking across kinds, the `--max-assess` cap, kind filtering, empty DB,
+  and a drifted incident id that becomes a per-incident failure.
+- LLM failure classification, and the program lookup.
+- Markdown rendering: report-only, LLM, fallback note, failures,
+  truncation warning, empty report, heading demotion that skips code
+  fences, and control-character stripping.
 
-Integration test: index small Claude and Codex transcript fixtures (with
-a skill load followed by a user correction, an MCP call that errors twice,
-and a failed hook) into a temp DB, run `reflect --no-llm --json`, and
-assert the incident kinds, ranking, and report shape. A second run asserts
-indexing is incremental (zero new records).
+End-to-end binary tests with Claude transcript fixtures in a temporary
+HOME:
+
+- `--no-llm --json` finds the skill incident, creates
+  `~/.cortex/reflect.db` owner-only, and a second run indexes nothing new.
+- An LLM backend program that exits with failure keeps the report: exit 0
+  and a `failure` reason on the assessed incident.
+- A missing LLM backend program downgrades the run with
+  `llm_fallback_reason`.
+- `--http` is rejected.
