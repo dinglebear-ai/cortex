@@ -217,9 +217,14 @@ async fn run_cli(invocation: CliInvocation) -> Result<()> {
     }
 
     if let cli::CliCommand::Reflect(args) = &command {
-        if let Some(trigger) = flags.http_trigger() {
-            anyhow::bail!("cortex reflect runs locally; remove {trigger}");
-        }
+        // HTTP mode reads incidents from a Cortex server, which already holds
+        // the transcripts the host agent forwards, so nothing is re-indexed
+        // locally. The local DB is still opened: the LLM step writes its
+        // audit rows there.
+        let server = flags
+            .http_trigger()
+            .map(|trigger| flags.build_http_client(trigger))
+            .transpose()?;
         let (db_path, source) = cli::resolve_reflect_db_path(
             args.db.as_deref(),
             cortex::env::var_os("CORTEX_DB_PATH"),
@@ -238,6 +243,12 @@ async fn run_cli(invocation: CliInvocation) -> Result<()> {
         config.storage.db_path = db_path.clone();
         let runtime = RuntimeCore::query_only_with_retry(config).await?;
         cli::restrict_reflect_db_file(&db_path)?;
+        if let Some(client) = server {
+            let cli::CliCommand::Reflect(args) = command else {
+                unreachable!("matched Reflect above");
+            };
+            return cli::run_reflect_remote(&runtime.service(), &client, args).await;
+        }
         return cli::run(cli::CliMode::Local(runtime.service()), command).await;
     }
 

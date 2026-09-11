@@ -393,9 +393,10 @@ mod dispatch;
 mod dispatch_db;
 mod dispatch_reflect;
 mod dispatch_sessions;
+mod reflect_http_source;
 pub(crate) use dispatch_reflect::{
     ReflectDbSource, prepare_reflect_db_dir, reflect_storage_config, resolve_reflect_db_path,
-    restrict_reflect_db_file,
+    restrict_reflect_db_file, run_reflect_remote,
 };
 mod http_client;
 

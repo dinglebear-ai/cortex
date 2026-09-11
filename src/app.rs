@@ -275,7 +275,7 @@ pub use services::wal_checkpoint_complete;
 // import db:: directly — app/ is the only db consumer (full-review AL1).
 pub(crate) use crate::db::{PATTERN_SCAN_LIMIT_MAX, SEVERITY_LEVELS};
 pub use os_adapter::SystemOsAdapter;
-pub use services::{CortexService, run_compose_status, run_service_logs};
+pub use services::{CortexService, ReflectIncidentSource, run_compose_status, run_service_logs};
 pub use time::{parse_optional_timestamp, parse_time_arg};
 
 #[cfg(test)]

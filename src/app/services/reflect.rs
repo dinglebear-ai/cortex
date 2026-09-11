@@ -1,12 +1,16 @@
 //! `cortex reflect`: index local transcripts, list skill/MCP/hook incidents,
-//! rank them together, and assess the top N. Each top incident is
-//! investigated once (incident id plus its exact target); its findings come
+//! rank them together, and assess the top N. Incidents come from a
+//! `ReflectIncidentSource`: the local database, or a Cortex server that
+//! already holds forwarded transcripts. Each top incident is investigated
+//! once at the source (incident id plus its exact target); its findings come
 //! from that evidence, and the evidence goes to the kind's existing
-//! per-evidence LLM helper. Orchestration only: no new detection or prompts.
+//! per-evidence LLM helper, which always runs locally. Orchestration only:
+//! no new detection or prompts.
 
 use std::collections::BTreeMap;
 
 use super::reflect_llm::{ReflectLlmFailure, classify_llm_failure, program_on_path};
+use super::reflect_source::ReflectIncidentSource;
 use super::*;
 use crate::app::models::{
     AiHookIncidentRequest, AiHookInvestigateRequest, AiMcpIncidentRequest, AiMcpInvestigateRequest,
@@ -34,10 +38,11 @@ pub(super) enum AssessOutcome {
     Missing,
 }
 
-/// Lists one kind's incidents and returns (incidents, total, truncated).
+/// Lists one kind's incidents at the source and returns
+/// (incidents, total, truncated).
 macro_rules! list_kind {
-    ($self:ident, $req:ident, $list:ident, $Req:ident) => {{
-        let response = $self
+    ($source:ident, $req:ident, $list:ident, $Req:ident) => {{
+        let response = $source
             .$list($Req {
                 tool: $req.tool.clone(),
                 project: $req.project.clone(),
@@ -58,13 +63,14 @@ macro_rules! list_kind {
     }};
 }
 
-/// Investigates one incident by id and exact target, then optionally runs
-/// the per-evidence LLM helper. Evaluates to an `AssessOutcome`; returns
-/// early from the enclosing fn on non-NotFound investigate errors.
+/// Investigates one incident at the source by id and exact target, then
+/// optionally runs the local per-evidence LLM helper. Evaluates to an
+/// `AssessOutcome`; returns early from the enclosing fn on non-NotFound
+/// investigate errors.
 macro_rules! assess_kind {
-    ($self:ident, $incident:ident, $req:ident, $backend:ident, $investigate:ident, $run_one:ident,
-     $Req:ident { $($field:ident : $value:expr),* $(,)? }) => {{
-        let investigated = $self
+    ($self:ident, $source:ident, $incident:ident, $req:ident, $backend:ident, $investigate:ident,
+     $run_one:ident, $Req:ident { $($field:ident : $value:expr),* $(,)? }) => {{
+        let investigated = $source
             .$investigate($Req {
                 incident_id: Some($incident.incident_id.clone()),
                 tool: $req.tool.clone(),
@@ -101,12 +107,29 @@ macro_rules! assess_kind {
 }
 
 impl CortexService {
+    /// Runs reflect against the local database.
     pub async fn run_reflect<P>(
         &self,
+        req: ReflectRequest,
+        progress: P,
+    ) -> ServiceResult<ReflectReport>
+    where
+        P: FnMut(&str) + Send,
+    {
+        self.run_reflect_with(self, req, progress).await
+    }
+
+    /// Runs reflect with incidents from `source`. Indexing (when
+    /// `req.index`) and the LLM step use this service's local database; the
+    /// caller turns indexing off for remote sources.
+    pub async fn run_reflect_with<S, P>(
+        &self,
+        source: &S,
         mut req: ReflectRequest,
         mut progress: P,
     ) -> ServiceResult<ReflectReport>
     where
+        S: ReflectIncidentSource,
         P: FnMut(&str) + Send,
     {
         if req.kinds.is_empty() {
@@ -141,15 +164,9 @@ impl CortexService {
         for &kind in &req.kinds {
             progress(&format!("detecting {} incidents", kind.as_str()));
             let (found, total, truncated) = match kind {
-                ReflectKind::Skill => {
-                    list_kind!(self, req, list_ai_skill_incidents, AiSkillIncidentRequest)
-                }
-                ReflectKind::Mcp => {
-                    list_kind!(self, req, list_ai_mcp_incidents, AiMcpIncidentRequest)
-                }
-                ReflectKind::Hook => {
-                    list_kind!(self, req, list_ai_hook_incidents, AiHookIncidentRequest)
-                }
+                ReflectKind::Skill => list_kind!(source, req, list_skill, AiSkillIncidentRequest),
+                ReflectKind::Mcp => list_kind!(source, req, list_mcp, AiMcpIncidentRequest),
+                ReflectKind::Hook => list_kind!(source, req, list_hook, AiHookIncidentRequest),
             };
             listings.push(ReflectKindListing {
                 kind,
@@ -196,7 +213,7 @@ impl CortexService {
                 None
             };
             let entry = match self
-                .assess_reflect_incident(&incident, &req, use_backend)
+                .assess_reflect_incident(source, &incident, &req, use_backend)
                 .await?
             {
                 AssessOutcome::Done {
@@ -250,6 +267,7 @@ impl CortexService {
             tool: req.tool.clone(),
             kinds: req.kinds.clone(),
             db_path: self.storage.db_path.display().to_string(),
+            source: source.label(),
             mode,
             llm_fallback_reason,
             index,
@@ -277,8 +295,9 @@ impl CortexService {
         }
     }
 
-    pub(super) async fn assess_reflect_incident(
+    pub(super) async fn assess_reflect_incident<S: ReflectIncidentSource>(
         &self,
+        source: &S,
         incident: &ReflectIncident,
         req: &ReflectRequest,
         backend: Option<&LlmBackend>,
@@ -288,10 +307,11 @@ impl CortexService {
         Ok(match incident.kind {
             ReflectKind::Skill => assess_kind!(
                 self,
+                source,
                 incident,
                 req,
                 backend,
-                investigate_ai_skill_incidents,
+                investigate_skill,
                 run_one_skill_assessment,
                 AiSkillInvestigateRequest {
                     skill: Some(incident.target_key.clone()),
@@ -300,10 +320,11 @@ impl CortexService {
             ),
             ReflectKind::Mcp => assess_kind!(
                 self,
+                source,
                 incident,
                 req,
                 backend,
-                investigate_ai_mcp_incidents,
+                investigate_mcp,
                 run_one_mcp_assessment,
                 AiMcpInvestigateRequest {
                     mcp_server: Some(incident.target_key.clone()),
@@ -312,10 +333,11 @@ impl CortexService {
             ),
             ReflectKind::Hook => assess_kind!(
                 self,
+                source,
                 incident,
                 req,
                 backend,
-                investigate_ai_hook_incidents,
+                investigate_hook,
                 run_one_hook_assessment,
                 AiHookInvestigateRequest {
                     hook_event: Some(incident.target_key.clone()),

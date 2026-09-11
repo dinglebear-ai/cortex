@@ -159,3 +159,8 @@ apply to its LLM step. With `--no-llm` it needs no Codex or Gemini program.
 If the LLM program is missing, `reflect` still produces a report and names
 the reason at the top. If one kind's LLM action is disabled or its circuit
 opens, only that kind falls back to deterministic findings.
+
+On a host whose agent already forwards transcripts to a Cortex server, run
+`cortex --http reflect` (with `CORTEX_API_TOKEN` set) to read incidents from
+the server instead of re-indexing locally. A local first run re-reads every
+transcript modified in the window, which can be many gigabytes.

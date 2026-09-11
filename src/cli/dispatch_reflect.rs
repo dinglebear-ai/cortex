@@ -6,21 +6,51 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use cortex::app::ReflectRequest;
 use cortex::app::reflect_report::render_reflect_markdown;
+use cortex::app::{CortexService, ReflectIncidentSource, ReflectReport, ReflectRequest};
 
 use super::CliMode;
 use super::args::ReflectArgs;
+use super::http_client::HttpClient;
+use super::reflect_http_source::HttpReflectSource;
 
 pub(crate) async fn run_reflect(mode: &CliMode, args: ReflectArgs) -> Result<()> {
-    // main.rs rejects HTTP mode before building a runtime; this guard is
-    // defensive for any other caller.
+    // main.rs routes HTTP mode to `run_reflect_remote` before building a
+    // CliMode; this guard is defensive for any other caller.
     let CliMode::Local(service) = mode else {
-        bail!(
-            "cortex reflect runs locally; remove --http / --server / --token and unset CORTEX_USE_HTTP"
-        );
+        bail!("cortex reflect in HTTP mode goes through run_reflect_remote");
     };
-    let request = ReflectRequest {
+    let request = reflect_request(&args);
+    let report = service
+        .run_reflect(request, |line| eprintln!("[reflect] {line}"))
+        .await?;
+    emit_report(&report, args.json)
+}
+
+/// `cortex reflect` in HTTP mode: incidents come from a Cortex server that
+/// already holds the forwarded transcripts, so nothing is indexed locally.
+/// `service` is the local reflect DB; the LLM step writes its audit rows
+/// there.
+pub(crate) async fn run_reflect_remote(
+    service: &CortexService,
+    client: &HttpClient,
+    args: ReflectArgs,
+) -> Result<()> {
+    let source = HttpReflectSource::new(client);
+    eprintln!(
+        "[reflect] reading incidents from {} (no local indexing); the LLM step runs on this machine",
+        source.label()
+    );
+    let mut request = reflect_request(&args);
+    request.index = false;
+    let report = service
+        .run_reflect_with(&source, request, |line| eprintln!("[reflect] {line}"))
+        .await?;
+    emit_report(&report, args.json)
+}
+
+fn reflect_request(args: &ReflectArgs) -> ReflectRequest {
+    ReflectRequest {
         since: Some(args.since.clone()),
         until: args.until.clone(),
         project: args.project.clone(),
@@ -29,19 +59,19 @@ pub(crate) async fn run_reflect(mode: &CliMode, args: ReflectArgs) -> Result<()>
         run_llm: !args.no_llm,
         max_assess: args.max_assess,
         index: !args.no_index,
-    };
-    let report = service
-        .run_reflect(request, |line| eprintln!("[reflect] {line}"))
-        .await?;
+    }
+}
+
+fn emit_report(report: &ReflectReport, json: bool) -> Result<()> {
     if let Some(reason) = &report.llm_fallback_reason {
         eprintln!("[reflect] warning: {reason}");
     }
-    let body = if args.json {
-        let mut json = serde_json::to_string_pretty(&report)?;
+    let body = if json {
+        let mut json = serde_json::to_string_pretty(report)?;
         json.push('\n');
         json
     } else {
-        render_reflect_markdown(&report)
+        render_reflect_markdown(report)
     };
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(body.as_bytes())?;

@@ -124,6 +124,7 @@ mod mcp_incidents;
 mod rag;
 mod reflect;
 mod reflect_llm;
+mod reflect_source;
 #[cfg(test)]
 mod seed_test_support;
 mod session_pages;
@@ -138,6 +139,7 @@ pub use compose::run_compose_status;
 pub use journal::run_service_logs;
 #[cfg(test)]
 use journal::{normalize_syslog_owned_service, parse_journal_json_lines};
+pub use reflect_source::ReflectIncidentSource;
 
 pub fn wal_checkpoint_complete(busy: i64, log_frames: i64, checkpointed_frames: i64) -> bool {
     db::wal_checkpoint_complete(busy, log_frames, checkpointed_frames)

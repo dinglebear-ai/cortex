@@ -42,7 +42,9 @@ fn cortex(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         .env_remove("CORTEX_USE_HTTP")
         .env_remove("CORTEX_LLM")
         .env_remove("CORTEX_LLM_ENABLED")
-        .env_remove("CORTEX_CODEX_CMD");
+        .env_remove("CORTEX_CODEX_CMD")
+        .env_remove("CORTEX_API_TOKEN")
+        .env_remove("CORTEX_URL");
     for (key, value) in env {
         command.env(key, value);
     }
@@ -159,9 +161,16 @@ fn a_missing_llm_program_downgrades_the_run() {
 }
 
 #[test]
-fn reflect_rejects_http_mode() {
+fn reflect_server_mode_needs_a_token() {
+    // --http reads incidents from a Cortex server; without a token the
+    // client discovery fails closed before any local indexing.
     let home = tempfile::tempdir().unwrap();
-    let output = cortex(home.path(), &["--http", "reflect"], &[]);
+    write_fixture(home.path());
+    let output = cortex(home.path(), &["--http", "reflect", "--no-llm"], &[]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("runs locally"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("CORTEX_API_TOKEN"));
+    assert!(
+        !home.path().join(".cortex/reflect.db").exists(),
+        "server mode must fail before creating or indexing the local DB"
+    );
 }

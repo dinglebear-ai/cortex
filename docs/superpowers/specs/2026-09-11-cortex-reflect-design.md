@@ -1,7 +1,7 @@
 # `cortex reflect`: one-shot skill / MCP / hook reflection
 
 Date: 2026-09-11
-Status: approved design, revised after engineering review (2026-09-11)
+Status: approved design, revised after engineering review (2026-09-11); amended for server mode and the reflect storage budget (2026-09-11)
 
 ## Goal
 
@@ -20,8 +20,9 @@ server, the syslog receiver, or any tokens. It supports two modes:
   tested code only.
 - No `abuse` kind. Kinds are exactly `skill`, `mcp`, `hook`.
 - No built-in tool (Bash/Edit/Read) incidents and no subagent kind.
-- No daemon or watcher mode, no MCP or REST exposure. `reflect` is a
-  local-only CLI command, like `assess`.
+- No daemon or watcher mode, no MCP or REST exposure. `reflect` is a CLI
+  command; it can read incidents from a server (server mode) but the server
+  gains no new endpoint.
 - No `--out` flag. The report goes to stdout; progress and warnings go to
   stderr, so `cortex reflect > report.md` works.
 - No crate split, cargo feature, or schema fork.
@@ -50,8 +51,13 @@ cortex reflect [--since 7d] [--until T] [--project P] [--tool claude|codex|gemin
 | `--db` | see below | SQLite file to use |
 | `--json` | off | Emit the report as JSON instead of Markdown |
 
-`--http`, `--server`, `--token`, and `CORTEX_USE_HTTP=1` are rejected:
-`reflect` always runs locally.
+`--http`, `--server`, `--token`, and `CORTEX_USE_HTTP=1` select **server
+mode** (amended 2026-09-11): incidents are listed and investigated on a Cortex
+server over its REST API, which already holds the transcripts the host agent
+forwards, and nothing is indexed locally. The LLM step still runs locally and
+writes its audit rows to the local reflect DB. Without those switches,
+`reflect` indexes locally as before. A token alone does not switch modes,
+matching every other CLI command.
 
 ### Database path resolution
 
@@ -136,6 +142,8 @@ Table cells escape `|` and backticks.
 | Incident no longer resolves (DB changed during the run) | That incident is marked "incident changed during run"; the run continues |
 | No incidents in window | Report says so; exit 0 |
 | DB locked when opening | Existing query-only retry (3 attempts), then fail naming the path |
+| Server mode without a token | Fails before opening the local DB, naming `CORTEX_API_TOKEN` |
+| Local DB grows past the server size budget | No self-trim: the reflect DB is a rebuildable cache, so `max_db_size_mb` is disabled for it (the trim deleted rows on every indexing chunk) |
 
 Exit code is 0 whenever a report is produced, including partial LLM
 failure.

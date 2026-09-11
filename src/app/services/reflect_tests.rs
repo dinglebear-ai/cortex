@@ -176,8 +176,101 @@ async fn an_incident_that_no_longer_resolves_is_missing_not_an_error() {
     incident.incident_id = "no-such-incident".to_string();
 
     let outcome = service
-        .assess_reflect_incident(&incident, &request(vec![ReflectKind::Skill], 1), None)
+        .assess_reflect_incident(
+            &service,
+            &incident,
+            &request(vec![ReflectKind::Skill], 1),
+            None,
+        )
         .await
         .unwrap();
     assert!(matches!(outcome, AssessOutcome::Missing));
+}
+
+/// Stands in for a Cortex server: a second service with its own database.
+struct Remote(CortexService);
+
+impl ReflectIncidentSource for Remote {
+    fn label(&self) -> String {
+        "https://cortex.example".to_string()
+    }
+
+    async fn list_skill(
+        &self,
+        req: crate::app::models::AiSkillIncidentRequest,
+    ) -> ServiceResult<crate::app::models::AiSkillIncidentResponse> {
+        self.0.list_ai_skill_incidents(req).await
+    }
+
+    async fn list_mcp(
+        &self,
+        req: crate::app::models::AiMcpIncidentRequest,
+    ) -> ServiceResult<crate::app::models::AiMcpIncidentResponse> {
+        self.0.list_ai_mcp_incidents(req).await
+    }
+
+    async fn list_hook(
+        &self,
+        req: crate::app::models::AiHookIncidentRequest,
+    ) -> ServiceResult<crate::app::models::AiHookIncidentResponse> {
+        self.0.list_ai_hook_incidents(req).await
+    }
+
+    async fn investigate_skill(
+        &self,
+        req: crate::app::models::AiSkillInvestigateRequest,
+    ) -> ServiceResult<crate::app::models::AiSkillInvestigateResponse> {
+        self.0.investigate_ai_skill_incidents(req).await
+    }
+
+    async fn investigate_mcp(
+        &self,
+        req: crate::app::models::AiMcpInvestigateRequest,
+    ) -> ServiceResult<crate::app::models::AiMcpInvestigateResponse> {
+        self.0.investigate_ai_mcp_incidents(req).await
+    }
+
+    async fn investigate_hook(
+        &self,
+        req: crate::app::models::AiHookInvestigateRequest,
+    ) -> ServiceResult<crate::app::models::AiHookInvestigateResponse> {
+        self.0.investigate_ai_hook_incidents(req).await
+    }
+}
+
+#[tokio::test]
+async fn a_remote_source_supplies_incidents_and_investigations() {
+    let (local, _local_pool, _local_dir) = test_service();
+    let (remote, remote_pool, _remote_dir) = test_service();
+    seed_all(&remote_pool);
+
+    let report = local
+        .run_reflect_with(
+            &Remote(remote),
+            request(ReflectKind::ALL.to_vec(), 3),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.source, "https://cortex.example");
+    assert_eq!(
+        report.assessed.len(),
+        3,
+        "incidents must come from the source"
+    );
+    for assessed in &report.assessed {
+        assert_eq!(assessed.failure, None, "{:?}", assessed.incident.kind);
+        assert!(assessed.findings.is_object());
+    }
+}
+
+#[tokio::test]
+async fn the_local_service_reports_itself_as_the_source() {
+    let (service, _pool, _dir) = test_service();
+    let report = service
+        .run_reflect(request(ReflectKind::ALL.to_vec(), 5), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(report.source, "local");
 }

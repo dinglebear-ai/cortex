@@ -425,6 +425,19 @@ the highest-scoring ones with the LLM selected by `CORTEX_LLM`. Results go to
 `CORTEX_DB_PATH`. Each unassessed incident lists the
 `cortex assess ... --incident-id` command that assesses it on its own.
 
+If a Cortex server already receives your transcripts (the host agent
+forwards them), point `reflect` at it instead of indexing locally:
+
+```bash
+cortex --server http://cortex.lan:3100 --token "$(cat ~/.cortex/api-token)" reflect
+CORTEX_USE_HTTP=1 cortex reflect        # uses CORTEX_URL and CORTEX_API_TOKEN
+```
+
+In server mode, incidents are listed and investigated on the server, so
+nothing is re-indexed. The LLM step still runs on your machine and records its
+audit rows in the local reflect DB. Server mode needs `CORTEX_API_TOKEN`, the
+same token the other `--http` commands use.
+
 ## Alerts and notifications
 
 Notifications are optional and disabled by default. When enabled, Cortex uses Apprise as the delivery bridge and a durable SQLite outbox for retry, deduplication, and dead-letter handling.

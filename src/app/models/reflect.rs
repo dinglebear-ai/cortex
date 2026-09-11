@@ -230,6 +230,8 @@ pub struct ReflectReport {
     pub tool: Option<String>,
     pub kinds: Vec<ReflectKind>,
     pub db_path: String,
+    /// Where incidents came from: `local`, or the Cortex server URL.
+    pub source: String,
     pub mode: ReflectMode,
     pub llm_fallback_reason: Option<String>,
     /// `None` when indexing was skipped with `--no-index`.

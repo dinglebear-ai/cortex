@@ -458,6 +458,11 @@ impl HttpClient {
     /// Subsequent 404s emit the generic "endpoint not available on this
     /// server; could not check version" fallback. Tests assert /api/version
     /// is called exactly once even across many failing requests.
+    /// The server this client talks to (used in report labels).
+    pub(crate) fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
     async fn enrich_404(&self, path: &str, body: &[u8]) -> anyhow::Error {
         // Build /api/version URL once; if even this fails we still emit a
         // usable 404 error.

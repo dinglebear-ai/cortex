@@ -47,6 +47,7 @@ fn report(assessed: Vec<ReflectAssessed>, unassessed: Vec<ReflectIncident>) -> R
         tool: None,
         kinds: ReflectKind::ALL.to_vec(),
         db_path: "/home/u/.cortex/reflect.db".to_string(),
+        source: "local".to_string(),
         mode: ReflectMode::ReportOnly,
         llm_fallback_reason: None,
         index: Some(ReflectIndexSummary {
@@ -78,6 +79,7 @@ fn report_only_shows_summary_findings_and_other_incidents() {
     ));
     assert!(md.starts_with("# Cortex reflect report\n"));
     assert!(md.contains("Mode: report only"));
+    assert!(md.contains("Source: local"));
     assert!(md.contains(
         "Index: 3 files discovered, 10 new records, 0 duplicates skipped, 1 parse errors"
     ));

@@ -74,6 +74,7 @@ fn write_header(md: &mut String, report: &ReflectReport) {
         kinds.join(", ")
     );
     let _ = writeln!(md, "Database: `{}`  ", code_span(&report.db_path));
+    let _ = writeln!(md, "Source: {}  ", inline(&report.source));
     let mode = match report.mode {
         ReflectMode::ReportOnly => "report only",
         ReflectMode::ReportAndLlm => "report + LLM",
