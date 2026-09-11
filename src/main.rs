@@ -234,6 +234,7 @@ async fn run_cli(invocation: CliInvocation) -> Result<()> {
         }
         cli::prepare_reflect_db_dir(&db_path, source)?;
         let mut config = cortex::config::Config::load_for_stdio()?;
+        config.storage = cli::reflect_storage_config(config.storage);
         config.storage.db_path = db_path.clone();
         let runtime = RuntimeCore::query_only_with_retry(config).await?;
         cli::restrict_reflect_db_file(&db_path)?;

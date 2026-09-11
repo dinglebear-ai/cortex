@@ -103,3 +103,21 @@ fn db_file_and_wal_siblings_become_owner_only() {
         assert_eq!(mode & 0o777, 0o600, "{name}");
     }
 }
+
+#[test]
+fn reflect_storage_disables_db_size_self_trim() {
+    // The reflect DB is a rebuildable cache. The server's DB-size self-trim
+    // deletes the oldest rows on every indexing chunk once the file passes
+    // max_db_size_mb, which stalls indexing and drops transcript rows.
+    let mut storage = cortex::config::StorageConfig::default();
+    storage.max_db_size_mb = 1024;
+    storage.recovery_db_size_mb = 900;
+    storage.min_free_disk_mb = 512;
+    storage.recovery_free_disk_mb = 1024;
+    let reflect = reflect_storage_config(storage);
+    assert_eq!(reflect.max_db_size_mb, 0);
+    assert_eq!(reflect.recovery_db_size_mb, 0);
+    // The free-disk guard blocks writes instead of deleting; keep it.
+    assert_eq!(reflect.min_free_disk_mb, 512);
+    assert_eq!(reflect.recovery_free_disk_mb, 1024);
+}

@@ -101,6 +101,19 @@ pub(crate) fn prepare_reflect_db_dir(path: &Path, source: ReflectDbSource) -> Re
     Ok(())
 }
 
+/// Storage policy for the reflect DB. It is a rebuildable cache, so the
+/// server's DB-size self-trim is disabled: that trim deletes the oldest rows
+/// before every indexing chunk once the file passes `max_db_size_mb`, which
+/// stalls indexing and drops transcript rows the report needs. The free-disk
+/// guard only blocks writes, so it stays.
+pub(crate) fn reflect_storage_config(
+    mut storage: cortex::config::StorageConfig,
+) -> cortex::config::StorageConfig {
+    storage.max_db_size_mb = 0;
+    storage.recovery_db_size_mb = 0;
+    storage
+}
+
 /// Restricts the SQLite file and its `-wal`/`-shm` siblings to the owner.
 pub(crate) fn restrict_reflect_db_file(path: &Path) -> Result<()> {
     #[cfg(unix)]
