@@ -12,6 +12,7 @@ pub(crate) mod mcp_incident_findings;
 pub mod mcp_signal_detectors;
 mod models;
 mod os_adapter;
+pub mod reflect_report;
 mod services;
 pub(crate) mod skill_incident_findings;
 pub mod skill_signal_detectors;
