@@ -1,64 +1,91 @@
-# `cortex reflect` Implementation Plan
+# `cortex reflect` Implementation Plan (revised after engineering review)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a local-only `cortex reflect` command that indexes local AI transcripts, finds skill, MCP, and hook incidents, ranks them together, optionally LLM-assesses the top N, and prints one Markdown or JSON report.
+**Goal:** Add a local-only `cortex reflect` command that indexes local AI transcripts, finds skill, MCP, and hook incidents, ranks them together, optionally LLM-assesses the top N, and prints one Markdown or JSON report on stdout.
 
-**Architecture:** `reflect` is orchestration over existing, tested code. The only change to existing services is an optional `incident_id` on the three assess requests (Task 1). New code is a small model module (types, ranking, summary), one service pipeline, one pure LLM-failure classifier, one Markdown renderer, and CLI wiring. `main.rs` builds a query-only runtime pointed at the reflect database.
+**Architecture:** `reflect` orchestrates existing code. It lists incidents with the existing list services, then investigates each top incident once (incident id plus its exact target), takes the deterministic findings from that evidence, and hands the evidence to the kind's existing per-evidence LLM helper. Existing-code changes are limited to an optional `incident_id` on the three assess requests (for the report's "assess this" commands), `pub(super)` on the three per-evidence LLM helpers, and a retrying query-only runtime constructor.
 
 **Tech Stack:** Rust 2024 (MSRV 1.97.1), tokio, rusqlite/r2d2, serde/serde_json, chrono. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-09-11-cortex-reflect-design.md`
-**Tracking:** beads `unraid-mcp-nh9s`
+**Spec:** `docs/superpowers/specs/2026-09-11-cortex-reflect-design.md` (revised after review)
+**Tracking:** beads `unraid-mcp-nh9s`. Deferred follow-ups: `unraid-mcp-360f` (fair share across kinds), `unraid-mcp-9b2h` (set-based anchor queries), `unraid-mcp-psvk` (index budget and live progress).
 
 ## Global Constraints
 
-- Kinds are exactly `skill`, `mcp`, `hook`. No `abuse`, no built-in tools, no subagents.
-- Defaults: window `--since 7d`, `--max-assess 5`, database `~/.cortex/reflect.db`.
-- Database resolution order: `--db PATH`, then `CORTEX_DB_PATH`, then `~/.cortex/reflect.db`.
+- Kinds are exactly `skill`, `mcp`, `hook`.
+- Defaults: `--since 7d`, `--max-assess 5`, database `~/.cortex/reflect.db`.
+- Database resolution: `--db PATH`, then non-empty `CORTEX_DB_PATH` (with a stderr warning), then `~/.cortex/reflect.db` (parent created 0700 when missing). The database file and its `-wal`/`-shm` siblings are set 0600 on Unix.
+- No `--out` flag. Report on stdout, progress and warnings on stderr.
 - `reflect` is local-only. `--http`, `--server`, `--token`, and `CORTEX_USE_HTTP=1` are rejected.
-- `--max-assess N` sets how many top incidents get a detailed section. The LLM runs on those unless `--no-llm`. `0` means summary and table only.
-- Exit code is 0 whenever a report is produced, including partial LLM failure.
+- `--max-assess N` sets how many top incidents get a detailed section; `0` means summary and table only.
+- `until` is pinned to the run start when not given.
+- Exit code is 0 whenever a report is produced, including partial LLM failure and incidents that change mid-run.
 - No new detectors, scoring, or prompts. All `LlmRunner` guards stay in force.
-- Modules use sibling `foo.rs` next to `foo/`, never `foo/mod.rs`. Tests live in sidecar `*_tests.rs` files wired with `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`.
-- Every Rust module stays under 500 lines (lefthook gate).
-- Read environment variables through `crate::env::var_os` (library) or `cortex::env::var_os` (binary), never `std::env::var*`.
-- `cargo fmt` and `cargo clippy` must pass before each commit.
-- Conventional Commit messages. Every commit ends with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+- Sibling `foo.rs` modules, never `foo/mod.rs`. Sidecar `*_tests.rs` wired with `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`.
+- Every Rust module under 500 lines (lefthook gate).
+- Read env vars through `crate::env::var_os` (library) or `cortex::env::var_os` (binary and integration tests).
+- `cargo fmt` and `cargo clippy --all-targets` pass before each commit.
+- Conventional Commits. Every commit ends with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+
+## Review changes applied
+
+| # | Review recommendation | Where |
+|---|---|---|
+| 1 | Investigate each top incident once with exact target filters; call the per-evidence LLM helper; keep findings when the LLM fails | Task 3 |
+| 2 | Pin `until` at run start | Task 3 |
+| 3 | An incident that no longer resolves is a per-incident failure, not an abort | Task 3 |
+| 4 | List limit 100 (the real clamp); carry `total_incidents` and truncation into the summary | Tasks 2, 3, 4 |
+| 5 | Index with `since` as the file-age filter; progress before and after | Task 3 |
+| 6 | LLM "action disabled" and "circuit open" block only that kind | Task 3 |
+| 7 | Mode is `report_only` when no LLM output was produced because of a fallback | Task 3 |
+| 8 | Preflight checks the exact program string, no whitespace split | Task 3 |
+| 9 | Collapse the three per-kind arms with local macros | Task 3 |
+| 10 | Drop `--out` | Task 5, spec |
+| 11 | Owner-only `~/.cortex` (when created) and database files | Task 5 |
+| 12 | Warn when `CORTEX_DB_PATH` is used | Task 5 |
+| 13 | Strip control characters from terminal-bound fields | Task 4 |
+| 14 | Heading demotion skips code fences | Task 4 |
+| 15 | Consistent table-cell escaping | Task 4 |
+| 16 | State that scores are heuristic | Task 4 |
+| 17 | End-to-end tests for a failing and a missing LLM program | Task 6 |
+
+Skipped with reason: reusing `IndexResult` in the report (it carries internal scan counters; a 4-field summary keeps the JSON stable); consolidating the existing private seeding helpers in `src/db/*_incidents_tests.rs` (out of scope); moving the end-to-end tests into an existing test binary (small link cost; a dedicated file keeps them findable); the "raw transcript leak via findings" finding (verified false: findings are derived analysis, and ingest scrubs secrets).
 
 ## File Map
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `src/app/models/{skill,mcp,hook}_assess.rs` | Modify | Optional `incident_id` on each assess request |
-| `src/app/services/{skill,mcp,hook}_assessment.rs` | Modify | Forward `incident_id`; relax "target required" guard |
-| `src/app/services/seed_test_support.rs` | Create | Test-only seeding helpers for skill, MCP, and hook incidents |
-| `src/cli/args/assess.rs`, `src/cli/parse/assess.rs`, `src/cli/dispatch_sessions.rs` | Modify | `--incident-id` flag on `assess skill/mcp/hooks` |
-| `src/app/models/reflect.rs` (+ `_tests.rs`) | Create | Reflect types, `From` conversions, ranking, summary |
-| `src/app/services/reflect_llm.rs` (+ `_tests.rs`) | Create | Pure LLM-failure classifier and PATH lookup |
-| `src/app/services/reflect.rs` (+ `_tests.rs`) | Create | `CortexService::run_reflect` pipeline |
+| `src/app/models/{skill,mcp,hook}_assess.rs` | Modify | Optional `incident_id` |
+| `src/app/services/{skill,mcp,hook}_assessment.rs` | Modify | Forward `incident_id`; relax target guard; `pub(super)` on `run_one_*` |
+| `src/app/services/seed_test_support.rs` | Create | Test-only seeding helpers |
+| `src/cli/args/assess.rs`, `src/cli/parse/assess.rs`, `src/cli/dispatch_sessions.rs`, `src/cli/help.rs` | Modify | `--incident-id` on `assess skill/mcp/hooks` |
+| `src/app/models/reflect.rs` (+ `_tests.rs`) | Create | Types, conversions, ranking, summary |
+| `src/app/services/reflect_llm.rs` (+ `_tests.rs`) | Create | LLM-failure classifier, program lookup |
+| `src/app/services/reflect.rs` (+ `_tests.rs`) | Create | `CortexService::run_reflect` |
 | `src/app/reflect_report.rs` (+ `_tests.rs`) | Create | Markdown renderer |
 | `src/runtime.rs` | Modify | `RuntimeCore::query_only_with_retry` |
-| `src/cli/args/reflect.rs`, `src/cli/parse/reflect.rs` (+ `_tests.rs`) | Create | `ReflectArgs` and parser |
-| `src/cli/dispatch_reflect.rs` (+ `_tests.rs`) | Create | Dispatch, output writing, DB path resolution |
-| `src/cli/args.rs`, `src/cli/parse.rs`, `src/cli/run.rs`, `src/cli.rs`, `src/main.rs`, `src/surfaces.rs`, `src/cli/help.rs`, `src/cli/help_tests.rs` | Modify | Wire the new command |
-| `tests/reflect_cli.rs` | Create | End-to-end binary test with transcript fixtures |
-| `README.md`, `docs/runbooks/skill-reflection.md`, `CLAUDE.md`, `Justfile` | Modify | Docs and `just reflect` |
+| `src/cli/args/reflect.rs`, `src/cli/parse/reflect.rs` (+ `_tests.rs`) | Create | Args and parser |
+| `src/cli/dispatch_reflect.rs` (+ `_tests.rs`) | Create | Dispatch, DB path resolution, permissions |
+| `src/cli/args.rs`, `src/cli/parse.rs`, `src/cli/run.rs`, `src/cli.rs`, `src/main.rs`, `src/surfaces.rs`, `src/cli/help_tests.rs` | Modify | Wiring |
+| `tests/reflect_cli.rs` | Create | End-to-end binary tests |
+| `README.md`, `docs/runbooks/skill-reflection.md`, `CLAUDE.md`, `Justfile` | Modify | Docs, `just reflect` |
 
 ---
 
 ### Task 1: Target a single incident in `assess skill|mcp|hooks`
 
+The report prints `cortex assess <kind> --incident-id ID` for every unassessed incident. This task makes that command work.
+
 **Files:**
 - Modify: `src/app/models/skill_assess.rs`, `src/app/models/mcp_assess.rs`, `src/app/models/hook_assess.rs`
 - Modify: `src/app/services/skill_assessment.rs`, `src/app/services/mcp_assessment.rs`, `src/app/services/hook_assessment.rs`
-- Create: `src/app/services/seed_test_support.rs`
-- Modify: `src/app/services.rs` (module declaration)
+- Create: `src/app/services/seed_test_support.rs`; Modify: `src/app/services.rs`
 - Modify: `src/cli/args/assess.rs`, `src/cli/parse/assess.rs`, `src/cli/dispatch_sessions.rs`, `src/cli/help.rs`
-- Test: `src/app/services/skill_assessment_tests.rs`, `src/app/services/mcp_assessment_tests.rs`, `src/app/services/hook_assessment_tests.rs`, `src/cli/parse/assess_tests.rs`
+- Test: `src/app/services/{skill,mcp,hook}_assessment_tests.rs`, `src/cli/parse/assess_tests.rs`
 
 **Interfaces:**
-- Produces: `SkillAssessRequest.incident_id`, `McpAssessRequest.incident_id`, `HookAssessRequest.incident_id`, all `Option<String>`. When set, the service assesses exactly that incident.
+- Produces: `incident_id: Option<String>` on `SkillAssessRequest`, `McpAssessRequest`, `HookAssessRequest`.
 - Produces (test-only): `crate::app::services::seed_test_support::{ts_minutes_ago, seed_skill_incident, seed_mcp_incident, seed_hook_incident}`.
 - Produces: `--incident-id ID` on `cortex assess skill|mcp|hooks`.
 
@@ -200,7 +227,7 @@ pub(crate) fn seed_hook_incident(pool: &DbPool, session_id: &str, hook_name: &st
 }
 ```
 
-In `src/app/services.rs`, add next to the other `mod` lines (after `mod rag;` keeps rough alphabetical order):
+In `src/app/services.rs`, add after `mod rag;`:
 
 ```rust
 #[cfg(test)]
@@ -243,7 +270,7 @@ async fn incident_id_targets_exactly_one_skill_incident() {
 }
 ```
 
-Append to `src/app/services/mcp_assessment_tests.rs` (reuse that file's existing `test_service()` helper; if the file names it differently, use that name):
+Append to `src/app/services/mcp_assessment_tests.rs`:
 
 ```rust
 #[tokio::test]
@@ -311,7 +338,7 @@ async fn incident_id_targets_exactly_one_hook_incident() {
 }
 ```
 
-If `mcp_assessment_tests.rs` or `hook_assessment_tests.rs` has no `test_service()` helper, add this one at the top of that file (identical to the one in `skill_assessment_tests.rs`):
+If `mcp_assessment_tests.rs` or `hook_assessment_tests.rs` has no `test_service()` helper, add this at the top of that file:
 
 ```rust
 fn test_service() -> (CortexService, std::sync::Arc<crate::db::DbPool>, tempfile::TempDir) {
@@ -325,11 +352,11 @@ fn test_service() -> (CortexService, std::sync::Arc<crate::db::DbPool>, tempfile
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `cargo test --lib incident_id_targets_exactly_one`
-Expected: compile error, "struct `SkillAssessRequest` has no field named `incident_id`" (and the same for MCP and hook).
+Expected: compile error, "struct `SkillAssessRequest` has no field named `incident_id`".
 
 - [ ] **Step 4: Add `incident_id` to the three request models**
 
-In each of `SkillAssessRequest` (`src/app/models/skill_assess.rs`), `McpAssessRequest` (`src/app/models/mcp_assess.rs`), and `HookAssessRequest` (`src/app/models/hook_assess.rs`), add as the first field:
+In `SkillAssessRequest`, `McpAssessRequest`, and `HookAssessRequest`, add as the first field:
 
 ```rust
     /// Assess exactly this incident (as returned by the matching
@@ -342,7 +369,7 @@ In each of `SkillAssessRequest` (`src/app/models/skill_assess.rs`), `McpAssessRe
 
 - [ ] **Step 5: Forward `incident_id` in the three services**
 
-In `src/app/services/skill_assessment.rs`, `run_skill_assessment_with_delta`:
+In `src/app/services/skill_assessment.rs`, `run_skill_assessment_with_delta`, replace the guard:
 
 ```rust
         if req.incident_id.is_none() && req.skill.is_none() && req.plugin.is_none() {
@@ -352,7 +379,7 @@ In `src/app/services/skill_assessment.rs`, `run_skill_assessment_with_delta`:
         }
 ```
 
-and in the `AiSkillInvestigateRequest` literal replace `incident_id: None,` with `incident_id: req.incident_id.clone(),`. In the "no skill incident found" branch, build the description with the incident id first:
+In the `AiSkillInvestigateRequest` literal, replace `incident_id: None,` with `incident_id: req.incident_id.clone(),`. In the "no skill incident found" branch:
 
 ```rust
             let skill_desc = req
@@ -363,7 +390,7 @@ and in the `AiSkillInvestigateRequest` literal replace `incident_id: None,` with
                 .unwrap_or_default();
 ```
 
-In `src/app/services/mcp_assessment.rs`, `run_mcp_assessment_with_delta`:
+In `src/app/services/mcp_assessment.rs`, `run_mcp_assessment_with_delta`, replace the guard:
 
 ```rust
         if req.incident_id.is_none()
@@ -377,23 +404,23 @@ In `src/app/services/mcp_assessment.rs`, `run_mcp_assessment_with_delta`:
         }
 ```
 
-replace `incident_id: None,` in the `AiMcpInvestigateRequest` literal with `incident_id: req.incident_id.clone(),`, and start `target_desc` with `req.incident_id.clone().or_else(|| req.mcp_server.clone())`.
+Replace `incident_id: None,` in its `AiMcpInvestigateRequest` literal with `incident_id: req.incident_id.clone(),`, and make `target_desc` start with `req.incident_id.clone().or_else(|| req.mcp_server.clone())`.
 
-In `src/app/services/hook_assessment.rs`, `run_hook_assessment_with_delta`: replace `incident_id: None,` in the `AiHookInvestigateRequest` literal with `incident_id: req.incident_id.clone(),`, and start `hook_desc` with `req.incident_id.clone().or_else(|| req.hook_name.clone())`.
+In `src/app/services/hook_assessment.rs`, `run_hook_assessment_with_delta`: replace `incident_id: None,` in its `AiHookInvestigateRequest` literal with `incident_id: req.incident_id.clone(),`, and make `hook_desc` start with `req.incident_id.clone().or_else(|| req.hook_name.clone())`.
 
 - [ ] **Step 6: Fix every existing struct literal**
 
 Run: `grep -rn 'SkillAssessRequest {\|McpAssessRequest {\|HookAssessRequest {' src tests`
 For every literal that lists all fields without `..Default::default()`, add `incident_id: None,`. Leave the three new tests alone.
 
-- [ ] **Step 7: Run the service tests to verify they pass**
+- [ ] **Step 7: Run the service tests**
 
 Run: `cargo test --lib assessment`
-Expected: PASS, including the three new `incident_id_targets_exactly_one_*` tests.
+Expected: PASS, including the three new tests.
 
 - [ ] **Step 8: Write the failing CLI parser tests**
 
-Append to `src/cli/parse/assess_tests.rs`:
+Append to `src/cli/parse/assess_tests.rs` (add `use super::super::super::args::{AssessCommand, CliCommand};` at the top if the file does not already import them):
 
 ```rust
 #[test]
@@ -425,31 +452,29 @@ fn assess_hooks_accepts_incident_id() {
 }
 ```
 
-If `assess_tests.rs` does not already import them, add `use super::super::super::args::{AssessCommand, CliCommand};` at the top (match the file's existing import style).
-
 - [ ] **Step 9: Run the parser tests to verify they fail**
 
 Run: `cargo test --bin cortex assess_`
-Expected: compile error, "no field `incident_id`" on `AssessSkillArgs`.
+Expected: compile error, no field `incident_id` on `AssessSkillArgs`.
 
 - [ ] **Step 10: Add the flag**
 
 In `src/cli/args/assess.rs`, add `pub incident_id: Option<String>,` as the first field of `AssessSkillArgs`, `AssessMcpArgs`, and `AssessHooksArgs`.
 
 In `src/cli/parse/assess.rs`:
-- In `parse_assess_skill_from`, `parse_assess_mcp_from`, and `parse_assess_hooks`, add the match arm `"--incident-id" => parsed.incident_id = Some(flags.value("--incident-id")?),` and add `"--incident-id"` to each `suggest::unknown_option` list.
-- Relax the skill guard to `if parsed.skill.is_none() && parsed.plugin.is_none() && parsed.incident_id.is_none() {` and change its message to `"assess skill: skill name, --plugin, or --incident-id is required, e.g. ..."` keeping the existing examples.
-- Relax the MCP guard to `if parsed.target.is_none() && parsed.server.is_none() && parsed.tool_name.is_none() && parsed.incident_id.is_none() {`.
+- In `parse_assess_skill_from`, `parse_assess_mcp_from`, and `parse_assess_hooks`, add the arm `"--incident-id" => parsed.incident_id = Some(flags.value("--incident-id")?),` and add `"--incident-id"` to each `suggest::unknown_option` list.
+- Skill guard: `if parsed.skill.is_none() && parsed.plugin.is_none() && parsed.incident_id.is_none() {`, message `"assess skill: skill name, --plugin, or --incident-id is required, e.g. ..."` keeping the existing examples.
+- MCP guard: `if parsed.target.is_none() && parsed.server.is_none() && parsed.tool_name.is_none() && parsed.incident_id.is_none() {`.
 
-In `src/cli/dispatch_sessions.rs`, in the request literals built by `run_assess_skill`, `run_assess_mcp`, and `run_assess_hooks`, add `incident_id: args.incident_id.clone(),`.
+In `src/cli/dispatch_sessions.rs`, add `incident_id: args.incident_id.clone(),` to the request literals in `run_assess_skill`, `run_assess_mcp`, and `run_assess_hooks`.
 
-In `src/cli/help.rs`, in the `assess` `CommandDoc`, insert `[--incident-id ID] ` after `SKILL ` in the first skill line and after `hooks ` in the hooks line, and add this usage line after the two skill lines:
+In `src/cli/help.rs`, in the `assess` `CommandDoc`, insert `[--incident-id ID] ` after `SKILL ` in the first skill line and after `hooks ` in the hooks line, and add after the two skill lines:
 
 ```rust
-            "cortex assess skill --incident-id ID [--no-llm] [--json]",
+            "cortex assess skill --incident-id ID [--since TIME] [--until TIME] [--no-llm] [--json]",
 ```
 
-- [ ] **Step 11: Run the CLI tests to verify they pass**
+- [ ] **Step 11: Run the CLI tests**
 
 Run: `cargo test --bin cortex assess`
 Expected: PASS.
@@ -469,23 +494,23 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ### Task 2: Reflect model types, ranking, and summary
 
 **Files:**
-- Create: `src/app/models/reflect.rs`
-- Create: `src/app/models/reflect_tests.rs`
+- Create: `src/app/models/reflect.rs`, `src/app/models/reflect_tests.rs`
 - Modify: `src/app/models.rs`, `src/app.rs`
 
 **Interfaces:**
 - Consumes: `SkillIncident`, `McpIncident`, `HookIncident` (in scope via `use super::*`), `crate::scanner::IndexResult`.
 - Produces (all `pub`, re-exported from `cortex::app`):
-  - `enum ReflectKind { Skill, Mcp, Hook }` with `ALL: [ReflectKind; 3]`, `as_str(self) -> &'static str`, `parse(&str) -> Option<Self>`, `assess_subcommand(self) -> &'static str`. Serializes lowercase.
+  - `enum ReflectKind { Skill, Mcp, Hook }`: `ALL`, `as_str`, `parse`, `assess_subcommand`. Lowercase serde. Derives `Ord` (used as a `BTreeMap` key).
   - `struct ReflectRequest { since, until, project, tool: Option<String>, kinds: Vec<ReflectKind>, run_llm: bool, max_assess: u32, index: bool }`
-  - `struct ReflectIncident { kind, incident_id, target, tool, project, session_id, last_seen: String, priority_score: f64, priority_label: String, signals_present: Vec<String> }` with `assess_command(&self, since: Option<&str>) -> String` and `From<SkillIncident|McpIncident|HookIncident>`.
-  - `enum ReflectMode { ReportOnly, ReportAndLlm }` (snake_case).
-  - `struct ReflectIndexSummary { discovered_files, ingested, skipped_dupes, parse_errors: usize }` with `From<&IndexResult>`.
-  - `struct ReflectKindSummary { kind, total, critical, high, medium, low }`
-  - `struct ReflectAssessed { incident: ReflectIncident, assessment: Option<String>, findings: serde_json::Value, failure: Option<String> }`
-  - `struct ReflectReport { since, until, project, tool: Option<String>, kinds: Vec<ReflectKind>, db_path: String, mode: ReflectMode, llm_fallback_reason: Option<String>, index: Option<ReflectIndexSummary>, summary: Vec<ReflectKindSummary>, assessed: Vec<ReflectAssessed>, unassessed: Vec<ReflectIncident> }`
+  - `struct ReflectIncident { kind, incident_id, target, target_key: String, target_detail: Option<String>, tool, project, session_id, last_seen: String, priority_score: f64, priority_label: String, signals_present: Vec<String> }` with `assess_command(&self, since: Option<&str>, until: Option<&str>) -> String` and `From<SkillIncident | McpIncident | HookIncident>`. `target_key`/`target_detail` are the exact grouping keys: skill name/plugin, MCP server/tool, hook event/name.
+  - `struct ReflectKindListing { kind, total: usize, truncated: bool }`
+  - `struct ReflectKindSummary { kind, listed, total: usize, truncated: bool, critical, high, medium, low: usize }`
+  - `enum ReflectMode { ReportOnly, ReportAndLlm }` (snake_case)
+  - `struct ReflectIndexSummary { discovered_files, ingested, skipped_dupes, parse_errors: usize }` with `From<&IndexResult>`
+  - `struct ReflectAssessed { incident, assessment: Option<String>, findings: serde_json::Value, failure: Option<String> }`
+  - `struct ReflectReport { since, until, project, tool: Option<String>, kinds, db_path: String, mode, llm_fallback_reason: Option<String>, index: Option<ReflectIndexSummary>, summary: Vec<ReflectKindSummary>, assessed: Vec<ReflectAssessed>, unassessed: Vec<ReflectIncident> }`
   - `fn rank_reflect_incidents(Vec<ReflectIncident>) -> Vec<ReflectIncident>`
-  - `fn summarize_reflect_incidents(&[ReflectKind], &[ReflectIncident]) -> Vec<ReflectKindSummary>`
+  - `fn summarize_reflect_incidents(&[ReflectKindListing], &[ReflectIncident]) -> Vec<ReflectKindSummary>`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -499,6 +524,8 @@ fn incident(kind: ReflectKind, id: &str, score: f64, label: &str, last_seen: &st
         kind,
         incident_id: id.to_string(),
         target: format!("target-{id}"),
+        target_key: format!("key-{id}"),
+        target_detail: None,
         tool: "claude".to_string(),
         project: "/p".to_string(),
         session_id: "s".to_string(),
@@ -526,7 +553,7 @@ fn hook_assess_subcommand_is_plural() {
 }
 
 #[test]
-fn kind_serializes_lowercase() {
+fn enums_serialize_as_documented() {
     assert_eq!(serde_json::to_string(&ReflectKind::Mcp).unwrap(), "\"mcp\"");
     assert_eq!(serde_json::to_string(&ReflectMode::ReportAndLlm).unwrap(), "\"report_and_llm\"");
 }
@@ -544,36 +571,45 @@ fn rank_orders_by_score_then_recency_then_id() {
 }
 
 #[test]
-fn summary_counts_per_selected_kind_including_empty_kinds() {
+fn summary_counts_listed_totals_and_truncation_per_kind() {
     let incidents = vec![
         incident(ReflectKind::Skill, "a", 70.0, "critical", "t"),
         incident(ReflectKind::Skill, "b", 20.0, "medium", "t"),
         incident(ReflectKind::Hook, "c", 5.0, "low", "t"),
     ];
-    let summary = summarize_reflect_incidents(&ReflectKind::ALL, &incidents);
+    let listings = [
+        ReflectKindListing { kind: ReflectKind::Skill, total: 250, truncated: true },
+        ReflectKindListing { kind: ReflectKind::Mcp, total: 0, truncated: false },
+        ReflectKindListing { kind: ReflectKind::Hook, total: 1, truncated: false },
+    ];
+    let summary = summarize_reflect_incidents(&listings, &incidents);
     assert_eq!(summary.len(), 3);
-    assert_eq!((summary[0].kind, summary[0].total, summary[0].critical, summary[0].medium), (ReflectKind::Skill, 2, 1, 1));
-    assert_eq!((summary[1].kind, summary[1].total), (ReflectKind::Mcp, 0));
-    assert_eq!((summary[2].kind, summary[2].total, summary[2].low), (ReflectKind::Hook, 1, 1));
+    let skill = &summary[0];
+    assert_eq!((skill.kind, skill.listed, skill.total, skill.truncated), (ReflectKind::Skill, 2, 250, true));
+    assert_eq!((skill.critical, skill.medium), (1, 1));
+    assert_eq!((summary[1].listed, summary[1].total), (0, 0));
+    assert_eq!((summary[2].listed, summary[2].total, summary[2].low), (1, 1, 1));
 }
 
 #[test]
-fn assess_command_includes_since_when_given() {
+fn summary_total_is_never_below_listed() {
+    let incidents = vec![incident(ReflectKind::Mcp, "a", 1.0, "low", "t")];
+    let listings = [ReflectKindListing { kind: ReflectKind::Mcp, total: 0, truncated: false }];
+    assert_eq!(summarize_reflect_incidents(&listings, &incidents)[0].total, 1);
+}
+
+#[test]
+fn assess_command_includes_the_window() {
     let hook = incident(ReflectKind::Hook, "abc", 1.0, "low", "t");
-    assert_eq!(hook.assess_command(None), "cortex assess hooks --incident-id abc");
+    assert_eq!(hook.assess_command(None, None), "cortex assess hooks --incident-id abc");
     assert_eq!(
-        hook.assess_command(Some("2026-09-04T00:00:00Z")),
-        "cortex assess hooks --incident-id abc --since 2026-09-04T00:00:00Z"
+        hook.assess_command(Some("S"), Some("U")),
+        "cortex assess hooks --incident-id abc --since S --until U"
     );
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `cargo test --lib models::reflect`
-Expected: compile error, the module `reflect` does not exist yet (the test file is not wired). Continue to Step 3.
-
-- [ ] **Step 3: Implement the module**
+- [ ] **Step 2: Implement the module**
 
 Create `src/app/models/reflect.rs`:
 
@@ -637,8 +673,12 @@ pub struct ReflectRequest {
 pub struct ReflectIncident {
     pub kind: ReflectKind,
     pub incident_id: String,
-    /// Human-readable target: `plugin:skill`, `server/tool`, or `event:hook`.
+    /// Display form: `plugin:skill`, `server/tool`, or `event:hook`.
     pub target: String,
+    /// Exact grouping key: skill name, MCP server, or hook event.
+    pub target_key: String,
+    /// Optional second key: skill plugin, MCP tool, or hook name.
+    pub target_detail: Option<String>,
     pub tool: String,
     pub project: String,
     pub session_id: String,
@@ -650,22 +690,34 @@ pub struct ReflectIncident {
 
 impl ReflectIncident {
     /// The command that assesses this incident on its own.
-    pub fn assess_command(&self, since: Option<&str>) -> String {
+    pub fn assess_command(&self, since: Option<&str>, until: Option<&str>) -> String {
         let mut command = format!(
             "cortex assess {} --incident-id {}",
             self.kind.assess_subcommand(),
             self.incident_id
         );
-        if let Some(since) = since {
-            command.push_str(" --since ");
-            command.push_str(since);
+        for (flag, value) in [("--since", since), ("--until", until)] {
+            if let Some(value) = value {
+                command.push(' ');
+                command.push_str(flag);
+                command.push(' ');
+                command.push_str(value);
+            }
         }
         command
     }
 }
 
+fn joined(first: &str, separator: char, second: Option<&str>) -> String {
+    match second {
+        Some(second) => format!("{first}{separator}{second}"),
+        None => first.to_string(),
+    }
+}
+
 impl From<SkillIncident> for ReflectIncident {
     fn from(incident: SkillIncident) -> Self {
+        // Display puts the plugin first: `plugin:skill`.
         let target = match &incident.skill_plugin {
             Some(plugin) => format!("{plugin}:{}", incident.skill_name),
             None => incident.skill_name.clone(),
@@ -674,6 +726,8 @@ impl From<SkillIncident> for ReflectIncident {
             kind: ReflectKind::Skill,
             incident_id: incident.incident_id,
             target,
+            target_key: incident.skill_name,
+            target_detail: incident.skill_plugin,
             tool: incident.tool,
             project: incident.project,
             session_id: incident.session_id,
@@ -687,14 +741,13 @@ impl From<SkillIncident> for ReflectIncident {
 
 impl From<McpIncident> for ReflectIncident {
     fn from(incident: McpIncident) -> Self {
-        let target = match &incident.mcp_tool {
-            Some(tool) => format!("{}/{tool}", incident.mcp_server),
-            None => incident.mcp_server.clone(),
-        };
+        let target = joined(&incident.mcp_server, '/', incident.mcp_tool.as_deref());
         Self {
             kind: ReflectKind::Mcp,
             incident_id: incident.incident_id,
             target,
+            target_key: incident.mcp_server,
+            target_detail: incident.mcp_tool,
             tool: incident.tool,
             project: incident.project,
             session_id: incident.session_id,
@@ -708,14 +761,13 @@ impl From<McpIncident> for ReflectIncident {
 
 impl From<HookIncident> for ReflectIncident {
     fn from(incident: HookIncident) -> Self {
-        let target = match &incident.hook_name {
-            Some(name) => format!("{}:{name}", incident.hook_event),
-            None => incident.hook_event.clone(),
-        };
+        let target = joined(&incident.hook_event, ':', incident.hook_name.as_deref());
         Self {
             kind: ReflectKind::Hook,
             incident_id: incident.incident_id,
             target,
+            target_key: incident.hook_event,
+            target_detail: incident.hook_name,
             tool: incident.tool,
             project: incident.project,
             session_id: incident.session_id,
@@ -725,6 +777,27 @@ impl From<HookIncident> for ReflectIncident {
             signals_present: incident.signals_present,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReflectKindListing {
+    pub kind: ReflectKind,
+    /// `total_incidents` from the list service (before its 100-row clamp).
+    pub total: usize,
+    /// True when the list or its candidate window was capped.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReflectKindSummary {
+    pub kind: ReflectKind,
+    pub listed: usize,
+    pub total: usize,
+    pub truncated: bool,
+    pub critical: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -753,25 +826,15 @@ impl From<&crate::scanner::IndexResult> for ReflectIndexSummary {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReflectKindSummary {
-    pub kind: ReflectKind,
-    pub total: usize,
-    pub critical: usize,
-    pub high: usize,
-    pub medium: usize,
-    pub low: usize,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReflectAssessed {
     pub incident: ReflectIncident,
     /// LLM assessment Markdown. `None` in report-only mode or on failure.
     pub assessment: Option<String>,
-    /// The kind's deterministic findings, serialized.
+    /// The kind's deterministic findings; `null` when the incident no
+    /// longer resolved.
     pub findings: serde_json::Value,
-    /// Why the LLM assessment is missing, when it was attempted or skipped
-    /// because the circuit breaker opened.
+    /// Why the LLM assessment or findings are missing.
     pub failure: Option<String>,
 }
 
@@ -803,24 +866,26 @@ pub fn rank_reflect_incidents(mut incidents: Vec<ReflectIncident>) -> Vec<Reflec
     incidents
 }
 
-/// One row per selected kind, in the order given, including empty kinds.
+/// One row per listing, in listing order, including empty kinds.
 pub fn summarize_reflect_incidents(
-    kinds: &[ReflectKind],
+    listings: &[ReflectKindListing],
     incidents: &[ReflectIncident],
 ) -> Vec<ReflectKindSummary> {
-    kinds
+    listings
         .iter()
-        .map(|&kind| {
+        .map(|listing| {
             let mut summary = ReflectKindSummary {
-                kind,
+                kind: listing.kind,
+                listed: 0,
                 total: 0,
+                truncated: listing.truncated,
                 critical: 0,
                 high: 0,
                 medium: 0,
                 low: 0,
             };
-            for incident in incidents.iter().filter(|incident| incident.kind == kind) {
-                summary.total += 1;
+            for incident in incidents.iter().filter(|incident| incident.kind == listing.kind) {
+                summary.listed += 1;
                 match incident.priority_label.as_str() {
                     "critical" => summary.critical += 1,
                     "high" => summary.high += 1,
@@ -828,6 +893,7 @@ pub fn summarize_reflect_incidents(
                     _ => summary.low += 1,
                 }
             }
+            summary.total = listing.total.max(summary.listed);
             summary
         })
         .collect()
@@ -838,27 +904,28 @@ pub fn summarize_reflect_incidents(
 mod tests;
 ```
 
-In `src/app/models.rs`, add `mod reflect;` next to `mod skill_assess;`, and `pub use reflect::*;` next to the other `pub use ...::*;` lines.
+In `src/app/models.rs`, add `mod reflect;` next to `mod skill_assess;` and `pub use reflect::*;` next to the other `pub use ...::*;` lines.
 
-In `src/app.rs`, add these names to the `pub use models::{ ... }` list:
+In `src/app.rs`, add to the `pub use models::{ ... }` list:
 
 ```rust
     ReflectAssessed,
     ReflectIncident,
     ReflectIndexSummary,
     ReflectKind,
+    ReflectKindListing,
     ReflectKindSummary,
     ReflectMode,
     ReflectReport,
     ReflectRequest,
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 3: Run the tests**
 
 Run: `cargo test --lib models::reflect`
-Expected: PASS (6 tests).
+Expected: PASS (7 tests).
 
-- [ ] **Step 5: Lint and commit**
+- [ ] **Step 4: Lint and commit**
 
 ```bash
 cargo fmt && cargo clippy --all-targets
@@ -875,16 +942,20 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 **Files:**
 - Create: `src/app/services/reflect_llm.rs`, `src/app/services/reflect_llm_tests.rs`
 - Create: `src/app/services/reflect.rs`, `src/app/services/reflect_tests.rs`
-- Modify: `src/app/services.rs`
+- Modify: `src/app/services.rs`, `src/app/services/{skill,mcp,hook}_assessment.rs` (visibility only)
 
 **Interfaces:**
-- Consumes: Task 1 `incident_id` on assess requests and `seed_test_support`; Task 2 types, `rank_reflect_incidents`, `summarize_reflect_incidents`.
+- Consumes: Task 1 seeding helpers; Task 2 types and functions; existing `list_ai_*_incidents`, `investigate_ai_*_incidents`, `run_one_*_assessment`, `index_ai_roots`, `self.llm().backend(None)`, `LlmBackend::program()`.
 - Produces: `CortexService::run_reflect<P: FnMut(&str) + Send>(&self, req: ReflectRequest, progress: P) -> ServiceResult<ReflectReport>`.
-- Produces (crate-private): `reflect_llm::{ReflectLlmFailure, classify_llm_failure, program_on_path}`.
+- Produces (crate-private): `reflect_llm::{ReflectLlmFailure, classify_llm_failure, program_on_path}`; `services::reflect::INCIDENT_CHANGED`.
 
-Note: the spec's "stub LLM runner" fallback tests are implemented as pure tests of the classifier and PATH lookup. The pipeline tests cover report-only behavior end to end. This avoids faking the LLM subprocess while still covering each fallback decision.
+Behavior recap (from the revised spec): pin `until`; index with `since` as the file-age filter; list with limit 100 and keep totals and truncation; investigate each top incident once with its incident id and exact target; findings come from that evidence; the LLM runs through the per-evidence helper; an LLM error keeps the findings; "globally disabled" stops the LLM for the run; "action disabled" and "circuit open" stop it for that kind; an incident that no longer resolves is a per-incident failure.
 
-- [ ] **Step 1: Write the failing classifier tests**
+- [ ] **Step 1: Make the per-evidence LLM helpers visible to sibling modules**
+
+In each of `src/app/services/skill_assessment.rs`, `mcp_assessment.rs`, and `hook_assessment.rs`, change `async fn run_one_skill_assessment<F>(` / `async fn run_one_mcp_assessment<F>(` / `async fn run_one_hook_assessment<F>(` to `pub(super) async fn ...`. No other change.
+
+- [ ] **Step 2: Write the failing classifier tests**
 
 Create `src/app/services/reflect_llm_tests.rs`:
 
@@ -896,36 +967,37 @@ fn internal(error: LlmRunnerError) -> ServiceError {
 }
 
 #[test]
-fn disabled_llm_makes_the_run_unavailable() {
-    assert!(matches!(classify_llm_failure(&internal(LlmRunnerError::Disabled)), ReflectLlmFailure::Unavailable(_)));
+fn globally_disabled_llm_is_unavailable() {
     assert!(matches!(
-        classify_llm_failure(&internal(LlmRunnerError::ActionDisabled("skill_assess".into()))),
+        classify_llm_failure(&internal(LlmRunnerError::Disabled)),
         ReflectLlmFailure::Unavailable(_)
     ));
 }
 
 #[test]
-fn open_circuit_stops_further_calls() {
-    let error = internal(LlmRunnerError::CircuitOpen {
-        action: "skill_assess".into(),
+fn action_disabled_and_open_circuit_block_one_kind() {
+    assert!(matches!(
+        classify_llm_failure(&internal(LlmRunnerError::ActionDisabled("skill_assess".into()))),
+        ReflectLlmFailure::KindBlocked(_)
+    ));
+    let ReflectLlmFailure::KindBlocked(reason) = classify_llm_failure(&internal(LlmRunnerError::CircuitOpen {
+        action: "mcp_assess".into(),
         retry_after: "2026-09-11T00:05:00Z".into(),
-    });
-    let ReflectLlmFailure::CircuitOpen(reason) = classify_llm_failure(&error) else {
-        panic!("expected CircuitOpen");
+    })) else {
+        panic!("expected KindBlocked");
     };
     assert!(reason.contains("circuit open"));
 }
 
 #[test]
-fn timeouts_and_rate_limits_fail_one_incident() {
-    assert!(matches!(
-        classify_llm_failure(&internal(LlmRunnerError::Timeout("id".into(), 120))),
-        ReflectLlmFailure::Failed(_)
-    ));
-    assert!(matches!(
-        classify_llm_failure(&internal(LlmRunnerError::RateLimited { action: "a".into(), detail: "d".into() })),
-        ReflectLlmFailure::Failed(_)
-    ));
+fn timeouts_rate_limits_and_backend_errors_fail_one_incident() {
+    for error in [
+        LlmRunnerError::Timeout("id".into(), 120),
+        LlmRunnerError::RateLimited { action: "a".into(), detail: "d".into() },
+        LlmRunnerError::Internal(anyhow::anyhow!("spawn failed")),
+    ] {
+        assert!(matches!(classify_llm_failure(&internal(error)), ReflectLlmFailure::Failed(_)));
+    }
 }
 
 #[test]
@@ -937,15 +1009,22 @@ fn non_llm_errors_propagate() {
 }
 
 #[test]
-fn program_on_path_finds_real_and_rejects_missing_binaries() {
+fn program_lookup_uses_the_exact_string() {
     assert!(program_on_path("sh"));
     assert!(program_on_path("/bin/sh"));
     assert!(!program_on_path("cortex-reflect-definitely-missing-binary"));
     assert!(!program_on_path(""));
+    // A path containing a space must not be split into "/tmp/My".
+    let dir = tempfile::tempdir().unwrap();
+    let spaced = dir.path().join("My Codex");
+    std::fs::create_dir_all(&spaced).unwrap();
+    let program = spaced.join("codex");
+    std::fs::write(&program, "").unwrap();
+    assert!(program_on_path(program.to_str().unwrap()));
 }
 ```
 
-- [ ] **Step 2: Implement the classifier**
+- [ ] **Step 3: Implement the classifier**
 
 Create `src/app/services/reflect_llm.rs`:
 
@@ -958,28 +1037,28 @@ use crate::app::llm_runner::LlmRunnerError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReflectLlmFailure {
-    /// The LLM cannot run at all: downgrade the whole run to report-only.
+    /// The LLM is globally disabled: no more LLM calls this run.
     Unavailable(String),
-    /// The circuit breaker opened: no more LLM calls this run.
-    CircuitOpen(String),
-    /// Only this assessment failed: keep going.
+    /// This kind's action is disabled or its circuit is open: no more LLM
+    /// calls for this kind.
+    KindBlocked(String),
+    /// Only this assessment failed.
     Failed(String),
     /// Not an LLM failure: propagate the error.
     NotLlm,
 }
 
-/// Assessment services wrap `LlmRunnerError` as `ServiceError::Internal`
-/// (see `run_llm_with_delta` in `src/app/services.rs`).
+/// The per-evidence helpers wrap `LlmRunnerError` as
+/// `ServiceError::Internal(anyhow!(error))` (see `run_llm_with_delta` in
+/// `src/app/services.rs`), so `downcast_ref` recovers it.
 pub(crate) fn classify_llm_failure(error: &ServiceError) -> ReflectLlmFailure {
     let ServiceError::Internal(inner) = error else {
         return ReflectLlmFailure::NotLlm;
     };
     match inner.downcast_ref::<LlmRunnerError>() {
-        Some(runner @ (LlmRunnerError::Disabled | LlmRunnerError::ActionDisabled(_))) => {
-            ReflectLlmFailure::Unavailable(runner.to_string())
-        }
-        Some(runner @ LlmRunnerError::CircuitOpen { .. }) => {
-            ReflectLlmFailure::CircuitOpen(runner.to_string())
+        Some(runner @ LlmRunnerError::Disabled) => ReflectLlmFailure::Unavailable(runner.to_string()),
+        Some(runner @ (LlmRunnerError::ActionDisabled(_) | LlmRunnerError::CircuitOpen { .. })) => {
+            ReflectLlmFailure::KindBlocked(runner.to_string())
         }
         Some(runner) => ReflectLlmFailure::Failed(runner.to_string()),
         None => ReflectLlmFailure::Failed(format!("{inner:#}")),
@@ -987,7 +1066,8 @@ pub(crate) fn classify_llm_failure(error: &ServiceError) -> ReflectLlmFailure {
 }
 
 /// True when `program` is an existing file path, or a bare name found in a
-/// `PATH` directory.
+/// `PATH` directory. The backend spawns this exact string, so it is never
+/// split on whitespace.
 pub(crate) fn program_on_path(program: &str) -> bool {
     if program.is_empty() {
         return false;
@@ -1006,12 +1086,10 @@ pub(crate) fn program_on_path(program: &str) -> bool {
 mod tests;
 ```
 
-In `src/app/services.rs`, add `mod reflect;` and `mod reflect_llm;` after `mod rag;`.
-
-- [ ] **Step 3: Run the classifier tests**
+In `src/app/services.rs`, add `mod reflect_llm;` after `mod rag;`.
 
 Run: `cargo test --lib reflect_llm`
-Expected: PASS (5 tests). Step 4 adds `reflect.rs`; until then, temporarily comment out `mod reflect;` if it blocks compilation.
+Expected: PASS (5 tests).
 
 - [ ] **Step 4: Write the failing pipeline tests**
 
@@ -1021,7 +1099,7 @@ Create `src/app/services/reflect_tests.rs`:
 use std::sync::Arc;
 
 use super::*;
-use crate::app::models::{ReflectKind, ReflectMode, ReflectRequest};
+use crate::app::models::{AiSkillIncidentRequest, ReflectIncident, ReflectKind, ReflectMode, ReflectRequest};
 use crate::app::services::seed_test_support::{seed_hook_incident, seed_mcp_incident, seed_skill_incident};
 use crate::config::StorageConfig;
 use crate::db::{DbPool, init_pool};
@@ -1067,9 +1145,9 @@ async fn report_only_merges_kinds_ranks_and_caps_detail() {
     assert_eq!(report.llm_fallback_reason, None);
     assert_eq!(report.index, None);
     assert_eq!(report.assessed.len(), 2);
-    assert_eq!(report.assessed.len() + report.unassessed.len(), 3);
+    assert_eq!(report.unassessed.len(), 1);
     for summary in &report.summary {
-        assert_eq!(summary.total, 1, "{:?} should have one incident", summary.kind);
+        assert_eq!((summary.listed, summary.total, summary.truncated), (1, 1, false), "{:?}", summary.kind);
     }
     let scores: Vec<f64> = report
         .assessed
@@ -1078,11 +1156,6 @@ async fn report_only_merges_kinds_ranks_and_caps_detail() {
         .chain(report.unassessed.iter().map(|i| i.priority_score))
         .collect();
     assert!(scores.windows(2).all(|w| w[0] >= w[1]), "not ranked: {scores:?}");
-    for assessed in &report.assessed {
-        assert_eq!(assessed.assessment, None);
-        assert_eq!(assessed.failure, None);
-        assert!(assessed.findings.is_object());
-    }
     assert!(progress.iter().any(|line| line.starts_with("assessing 1/2")));
 
     let llm_rows: i64 = pool
@@ -1094,13 +1167,33 @@ async fn report_only_merges_kinds_ranks_and_caps_detail() {
 }
 
 #[tokio::test]
+async fn every_kind_resolves_by_incident_id_and_target() {
+    let (service, pool, _dir) = test_service();
+    seed_all(&pool);
+    let report = service.run_reflect(request(ReflectKind::ALL.to_vec(), 3), |_| {}).await.unwrap();
+    assert_eq!(report.assessed.len(), 3);
+    for assessed in &report.assessed {
+        assert_eq!(assessed.failure, None, "{:?} did not resolve", assessed.incident.kind);
+        assert_eq!(assessed.assessment, None);
+        assert!(assessed.findings.is_object());
+    }
+}
+
+#[tokio::test]
+async fn pins_until_when_absent() {
+    let (service, _pool, _dir) = test_service();
+    let report = service.run_reflect(request(ReflectKind::ALL.to_vec(), 5), |_| {}).await.unwrap();
+    assert!(report.until.is_some());
+}
+
+#[tokio::test]
 async fn kinds_filter_limits_detection() {
     let (service, pool, _dir) = test_service();
     seed_all(&pool);
     let report = service.run_reflect(request(vec![ReflectKind::Hook], 5), |_| {}).await.unwrap();
     assert_eq!(report.summary.len(), 1);
-    assert!(report.assessed.iter().all(|a| a.incident.kind == ReflectKind::Hook));
     assert_eq!(report.assessed.len(), 1);
+    assert_eq!(report.assessed[0].incident.kind, ReflectKind::Hook);
 }
 
 #[tokio::test]
@@ -1128,38 +1221,131 @@ async fn empty_kinds_is_invalid_input() {
     let error = service.run_reflect(request(vec![], 5), |_| {}).await.unwrap_err();
     assert!(matches!(error, ServiceError::InvalidInput(_)));
 }
+
+#[tokio::test]
+async fn an_incident_that_no_longer_resolves_is_missing_not_an_error() {
+    let (service, pool, _dir) = test_service();
+    seed_skill_incident(&pool, "sess-a", "alpha-skill", 60);
+    let listed = service
+        .list_ai_skill_incidents(AiSkillIncidentRequest::default())
+        .await
+        .unwrap();
+    let mut incident = ReflectIncident::from(listed.incidents[0].clone());
+    incident.incident_id = "no-such-incident".to_string();
+
+    let outcome = service
+        .assess_reflect_incident(&incident, &request(vec![ReflectKind::Skill], 1), None)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, AssessOutcome::Missing));
+}
 ```
 
-- [ ] **Step 5: Run the tests to verify they fail**
-
 Run: `cargo test --lib services::reflect::`
-Expected: compile error, no method `run_reflect` on `CortexService`.
+Expected: compile error, no method `run_reflect`.
 
-- [ ] **Step 6: Implement the pipeline**
+- [ ] **Step 5: Implement the pipeline**
 
 Create `src/app/services/reflect.rs`:
 
 ```rust
 //! `cortex reflect`: index local transcripts, list skill/MCP/hook incidents,
-//! rank them together, and assess the top N through the existing guarded
-//! assessment services. Orchestration only: no new detection or prompts.
+//! rank them together, and assess the top N. Each top incident is
+//! investigated once (incident id plus its exact target); its findings come
+//! from that evidence, and the evidence goes to the kind's existing
+//! per-evidence LLM helper. Orchestration only: no new detection or prompts.
+
+use std::collections::BTreeMap;
 
 use super::reflect_llm::{ReflectLlmFailure, classify_llm_failure, program_on_path};
 use super::*;
 use crate::app::models::{
-    AiHookIncidentRequest, AiMcpIncidentRequest, AiSkillIncidentRequest, HookAssessRequest,
-    McpAssessRequest, ReflectAssessed, ReflectIncident, ReflectIndexSummary, ReflectKind,
-    ReflectMode, ReflectReport, ReflectRequest, SkillAssessRequest, rank_reflect_incidents,
-    summarize_reflect_incidents,
+    AiHookIncidentRequest, AiHookInvestigateRequest, AiMcpIncidentRequest,
+    AiMcpInvestigateRequest, AiSkillIncidentRequest, AiSkillInvestigateRequest, ReflectAssessed,
+    ReflectIncident, ReflectIndexSummary, ReflectKind, ReflectKindListing, ReflectMode,
+    ReflectReport, ReflectRequest, rank_reflect_incidents, summarize_reflect_incidents,
 };
+use crate::llm_backend::LlmBackend;
 
-/// Upper bound on incidents listed per kind before ranking.
-const REFLECT_LIST_LIMIT: u32 = 500;
+/// The incident list services clamp `limit` to 1..=100.
+const REFLECT_LIST_LIMIT: u32 = 100;
+
+pub(crate) const INCIDENT_CHANGED: &str =
+    "incident changed during the run (the database was written while reflect ran); rerun reflect";
+
+pub(super) enum AssessOutcome {
+    Done { assessment: Option<String>, findings: serde_json::Value },
+    LlmError { error: ServiceError, findings: serde_json::Value },
+    Missing,
+}
+
+/// Lists one kind's incidents and returns (incidents, total, truncated).
+macro_rules! list_kind {
+    ($self:ident, $req:ident, $list:ident, $Req:ident) => {{
+        let response = $self
+            .$list($Req {
+                tool: $req.tool.clone(),
+                project: $req.project.clone(),
+                since: $req.since.clone(),
+                until: $req.until.clone(),
+                limit: Some(REFLECT_LIST_LIMIT),
+                ..Default::default()
+            })
+            .await?;
+        let truncated = response.truncated || response.candidate_window_truncated;
+        let total = response.total_incidents;
+        let incidents: Vec<ReflectIncident> =
+            response.incidents.into_iter().map(ReflectIncident::from).collect();
+        (incidents, total, truncated)
+    }};
+}
+
+/// Investigates one incident by id and exact target, then optionally runs
+/// the per-evidence LLM helper. Evaluates to an `AssessOutcome`; returns
+/// early from the enclosing fn on non-NotFound investigate errors.
+macro_rules! assess_kind {
+    ($self:ident, $incident:ident, $req:ident, $backend:ident, $investigate:ident, $run_one:ident,
+     $Req:ident { $($field:ident : $value:expr),* $(,)? }) => {{
+        let investigated = $self
+            .$investigate($Req {
+                incident_id: Some($incident.incident_id.clone()),
+                tool: $req.tool.clone(),
+                project: $req.project.clone(),
+                since: $req.since.clone(),
+                until: $req.until.clone(),
+                limit: Some(1),
+                $($field: $value,)*
+                ..Default::default()
+            })
+            .await;
+        let response = match investigated {
+            Ok(response) => response,
+            Err(ServiceError::NotFound(_)) => return Ok(AssessOutcome::Missing),
+            Err(error) => return Err(error),
+        };
+        match response.evidence.into_iter().next() {
+            None => AssessOutcome::Missing,
+            Some(evidence) => {
+                let findings = findings_json(&evidence.findings)?;
+                match $backend {
+                    None => AssessOutcome::Done { assessment: None, findings },
+                    Some(backend) => {
+                        let mut ignore = |_: &str| -> anyhow::Result<()> { Ok(()) };
+                        match $self.$run_one(&evidence, backend, &mut ignore).await {
+                            Ok(result) => AssessOutcome::Done { assessment: result.assessment, findings },
+                            Err(error) => AssessOutcome::LlmError { error, findings },
+                        }
+                    }
+                }
+            }
+        }
+    }};
+}
 
 impl CortexService {
     pub async fn run_reflect<P>(
         &self,
-        req: ReflectRequest,
+        mut req: ReflectRequest,
         mut progress: P,
     ) -> ServiceResult<ReflectReport>
     where
@@ -1170,79 +1356,102 @@ impl CortexService {
                 "reflect requires at least one kind: skill, mcp, or hook".to_string(),
             ));
         }
+        // Pin the window end so listing and assessment see the same incidents.
+        if req.until.is_none() {
+            req.until = Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        }
 
         let index = if req.index {
-            progress("indexing local AI transcripts");
-            let result = self.index_ai_roots(None, false, None).await?;
-            Some(ReflectIndexSummary::from(&result))
+            progress(&format!(
+                "indexing AI transcripts modified since {} (the first run can take a while)",
+                req.since.as_deref().unwrap_or("the beginning")
+            ));
+            let result = self.index_ai_roots(None, false, req.since.clone()).await?;
+            let summary = ReflectIndexSummary::from(&result);
+            progress(&format!(
+                "indexed {} new records from {} files ({} parse errors)",
+                summary.ingested, summary.discovered_files, summary.parse_errors
+            ));
+            Some(summary)
         } else {
             None
         };
 
         let mut incidents = Vec::new();
-        for kind in &req.kinds {
+        let mut listings = Vec::with_capacity(req.kinds.len());
+        for &kind in &req.kinds {
             progress(&format!("detecting {} incidents", kind.as_str()));
-            incidents.extend(self.list_reflect_incidents(*kind, &req).await?);
+            let (found, total, truncated) = match kind {
+                ReflectKind::Skill => list_kind!(self, req, list_ai_skill_incidents, AiSkillIncidentRequest),
+                ReflectKind::Mcp => list_kind!(self, req, list_ai_mcp_incidents, AiMcpIncidentRequest),
+                ReflectKind::Hook => list_kind!(self, req, list_ai_hook_incidents, AiHookIncidentRequest),
+            };
+            listings.push(ReflectKindListing { kind, total, truncated });
+            incidents.extend(found);
         }
         let mut ranked = rank_reflect_incidents(incidents);
-        let summary = summarize_reflect_incidents(&req.kinds, &ranked);
+        let summary = summarize_reflect_incidents(&listings, &ranked);
         let take = (req.max_assess as usize).min(ranked.len());
         let unassessed = ranked.split_off(take);
 
-        let mut mode = if req.run_llm {
-            ReflectMode::ReportAndLlm
-        } else {
-            ReflectMode::ReportOnly
-        };
+        let mut mode = if req.run_llm { ReflectMode::ReportAndLlm } else { ReflectMode::ReportOnly };
         let mut llm_fallback_reason = None;
+        let mut backend = None;
         if mode == ReflectMode::ReportAndLlm && take > 0 {
-            if let Some(reason) = self.reflect_llm_preflight() {
-                mode = ReflectMode::ReportOnly;
-                llm_fallback_reason = Some(reason);
+            match self.reflect_llm_backend() {
+                Ok(resolved) => backend = Some(resolved),
+                Err(reason) => {
+                    mode = ReflectMode::ReportOnly;
+                    llm_fallback_reason = Some(reason);
+                }
             }
         }
 
-        let mut circuit_reason: Option<String> = None;
+        let mut blocked: BTreeMap<ReflectKind, String> = BTreeMap::new();
         let mut assessed = Vec::with_capacity(take);
         for (position, incident) in ranked.into_iter().enumerate() {
-            let use_llm = mode == ReflectMode::ReportAndLlm && circuit_reason.is_none();
             progress(&format!(
                 "assessing {}/{take}: {} {}",
                 position + 1,
                 incident.kind.as_str(),
                 incident.target
             ));
-            let entry = match self.assess_reflect_incident(&incident, &req, use_llm).await {
-                Ok((assessment, findings)) => ReflectAssessed {
+            let kind_blocked = blocked.get(&incident.kind).cloned();
+            let use_backend = if kind_blocked.is_none() { backend.as_ref() } else { None };
+            let entry = match self.assess_reflect_incident(&incident, &req, use_backend).await? {
+                AssessOutcome::Done { assessment, findings } => ReflectAssessed {
                     incident,
                     assessment,
                     findings,
-                    failure: circuit_reason.clone(),
+                    failure: kind_blocked,
                 },
-                Err(error) => {
+                AssessOutcome::Missing => ReflectAssessed {
+                    incident,
+                    assessment: None,
+                    findings: serde_json::Value::Null,
+                    failure: Some(INCIDENT_CHANGED.to_string()),
+                },
+                AssessOutcome::LlmError { error, findings } => {
                     let failure = match classify_llm_failure(&error) {
                         ReflectLlmFailure::NotLlm => return Err(error),
                         ReflectLlmFailure::Unavailable(reason) => {
-                            mode = ReflectMode::ReportOnly;
-                            llm_fallback_reason = Some(reason);
-                            None
+                            backend = None;
+                            llm_fallback_reason = Some(reason.clone());
+                            reason
                         }
-                        ReflectLlmFailure::CircuitOpen(reason) => {
-                            circuit_reason = Some(reason.clone());
-                            Some(reason)
+                        ReflectLlmFailure::KindBlocked(reason) => {
+                            blocked.insert(incident.kind, reason.clone());
+                            reason
                         }
-                        ReflectLlmFailure::Failed(reason) => Some(reason),
+                        ReflectLlmFailure::Failed(reason) => reason,
                     };
-                    let (_, findings) = self.assess_reflect_incident(&incident, &req, false).await?;
-                    ReflectAssessed {
-                        incident,
-                        assessment: None,
-                        findings,
-                        failure,
-                    }
+                    ReflectAssessed { incident, assessment: None, findings, failure: Some(failure) }
                 }
             };
             assessed.push(entry);
+        }
+        if llm_fallback_reason.is_some() && assessed.iter().all(|entry| entry.assessment.is_none()) {
+            mode = ReflectMode::ReportOnly;
         }
 
         Ok(ReflectReport {
@@ -1261,151 +1470,54 @@ impl CortexService {
         })
     }
 
-    /// `Some(reason)` when the LLM backend cannot run on this host.
-    fn reflect_llm_preflight(&self) -> Option<String> {
-        match self.llm().backend(None) {
-            Err(error) => Some(format!(
-                "LLM backend could not be resolved ({error}); set CORTEX_LLM to codex or gemini"
-            )),
-            Ok(backend) => {
-                let program = backend.program();
-                let executable = program.split_whitespace().next().unwrap_or_default().to_string();
-                (!program_on_path(&executable)).then(|| {
-                    format!(
-                        "LLM backend binary '{executable}' was not found on PATH; install it, \
-                         set CORTEX_LLM, or pass --no-llm"
-                    )
-                })
-            }
+    /// Resolves the backend and checks its exact program string exists.
+    fn reflect_llm_backend(&self) -> Result<LlmBackend, String> {
+        let backend = self.llm().backend(None).map_err(|error| {
+            format!("LLM backend could not be resolved ({error}); set CORTEX_LLM to codex or gemini, or pass --no-llm")
+        })?;
+        let program = backend.program();
+        if program_on_path(&program) {
+            Ok(backend)
+        } else {
+            Err(format!(
+                "LLM backend program '{program}' was not found; install it, set CORTEX_CODEX_CMD or \
+                 CORTEX_HEADLESS_GEMINI_CMD, or pass --no-llm"
+            ))
         }
     }
 
-    async fn list_reflect_incidents(
-        &self,
-        kind: ReflectKind,
-        req: &ReflectRequest,
-    ) -> ServiceResult<Vec<ReflectIncident>> {
-        let limit = Some(REFLECT_LIST_LIMIT);
-        Ok(match kind {
-            ReflectKind::Skill => self
-                .list_ai_skill_incidents(AiSkillIncidentRequest {
-                    tool: req.tool.clone(),
-                    project: req.project.clone(),
-                    since: req.since.clone(),
-                    until: req.until.clone(),
-                    limit,
-                    ..Default::default()
-                })
-                .await?
-                .incidents
-                .into_iter()
-                .map(ReflectIncident::from)
-                .collect(),
-            ReflectKind::Mcp => self
-                .list_ai_mcp_incidents(AiMcpIncidentRequest {
-                    tool: req.tool.clone(),
-                    project: req.project.clone(),
-                    since: req.since.clone(),
-                    until: req.until.clone(),
-                    limit,
-                    ..Default::default()
-                })
-                .await?
-                .incidents
-                .into_iter()
-                .map(ReflectIncident::from)
-                .collect(),
-            ReflectKind::Hook => self
-                .list_ai_hook_incidents(AiHookIncidentRequest {
-                    tool: req.tool.clone(),
-                    project: req.project.clone(),
-                    since: req.since.clone(),
-                    until: req.until.clone(),
-                    limit,
-                    ..Default::default()
-                })
-                .await?
-                .incidents
-                .into_iter()
-                .map(ReflectIncident::from)
-                .collect(),
-        })
-    }
-
-    /// Runs the kind's assessment service for exactly one incident. Uses the
-    /// same window and filters as the listing so the incident id resolves.
-    async fn assess_reflect_incident(
+    pub(super) async fn assess_reflect_incident(
         &self,
         incident: &ReflectIncident,
         req: &ReflectRequest,
-        run_llm: bool,
-    ) -> ServiceResult<(Option<String>, serde_json::Value)> {
-        let incident_id = Some(incident.incident_id.clone());
-        match incident.kind {
-            ReflectKind::Skill => {
-                let response = self
-                    .run_skill_assessment_with_delta(
-                        SkillAssessRequest {
-                            incident_id,
-                            tool: req.tool.clone(),
-                            project: req.project.clone(),
-                            since: req.since.clone(),
-                            until: req.until.clone(),
-                            ..Default::default()
-                        },
-                        run_llm,
-                        |_| Ok(()),
-                    )
-                    .await?;
-                let result = first_result(response.results, &incident.incident_id)?;
-                Ok((result.assessment, findings_json(&result.findings)?))
-            }
-            ReflectKind::Mcp => {
-                let response = self
-                    .run_mcp_assessment_with_delta(
-                        McpAssessRequest {
-                            incident_id,
-                            tool: req.tool.clone(),
-                            project: req.project.clone(),
-                            since: req.since.clone(),
-                            until: req.until.clone(),
-                            ..Default::default()
-                        },
-                        run_llm,
-                        |_| Ok(()),
-                    )
-                    .await?;
-                let result = first_result(response.results, &incident.incident_id)?;
-                Ok((result.assessment, findings_json(&result.findings)?))
-            }
-            ReflectKind::Hook => {
-                let response = self
-                    .run_hook_assessment_with_delta(
-                        HookAssessRequest {
-                            incident_id,
-                            tool: req.tool.clone(),
-                            project: req.project.clone(),
-                            since: req.since.clone(),
-                            until: req.until.clone(),
-                            ..Default::default()
-                        },
-                        run_llm,
-                        |_| Ok(()),
-                    )
-                    .await?;
-                let result = first_result(response.results, &incident.incident_id)?;
-                Ok((result.assessment, findings_json(&result.findings)?))
-            }
-        }
+        backend: Option<&LlmBackend>,
+    ) -> ServiceResult<AssessOutcome> {
+        // The target filters are exact matches on each kind's grouping key,
+        // so they shrink the scan without changing the incident id.
+        Ok(match incident.kind {
+            ReflectKind::Skill => assess_kind!(
+                self, incident, req, backend, investigate_ai_skill_incidents, run_one_skill_assessment,
+                AiSkillInvestigateRequest {
+                    skill: Some(incident.target_key.clone()),
+                    plugin: incident.target_detail.clone(),
+                }
+            ),
+            ReflectKind::Mcp => assess_kind!(
+                self, incident, req, backend, investigate_ai_mcp_incidents, run_one_mcp_assessment,
+                AiMcpInvestigateRequest {
+                    mcp_server: Some(incident.target_key.clone()),
+                    mcp_tool: incident.target_detail.clone(),
+                }
+            ),
+            ReflectKind::Hook => assess_kind!(
+                self, incident, req, backend, investigate_ai_hook_incidents, run_one_hook_assessment,
+                AiHookInvestigateRequest {
+                    hook_event: Some(incident.target_key.clone()),
+                    hook_name: incident.target_detail.clone(),
+                }
+            ),
+        })
     }
-}
-
-fn first_result<T>(results: Vec<T>, incident_id: &str) -> ServiceResult<T> {
-    results.into_iter().next().ok_or_else(|| {
-        ServiceError::NotFound(format!(
-            "incident {incident_id} disappeared between detection and assessment"
-        ))
-    })
 }
 
 fn findings_json<T: serde::Serialize>(findings: &T) -> ServiceResult<serde_json::Value> {
@@ -1418,24 +1530,26 @@ fn findings_json<T: serde::Serialize>(findings: &T) -> ServiceResult<serde_json:
 mod tests;
 ```
 
-If you commented out `mod reflect;` in Step 3, restore it.
+In `src/app/services.rs`, add `mod reflect;` after `mod reflect_llm;`.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [ ] **Step 6: Run the tests**
 
 Run: `cargo test --lib reflect`
-Expected: PASS (all `models::reflect`, `reflect_llm`, and `services::reflect` tests).
+Expected: PASS (`models::reflect`, `reflect_llm`, and `services::reflect`).
 
-If `report_only_merges_kinds_ranks_and_caps_detail` finds zero incidents for a kind, check that kind's listing with `since: None` returns the seeded row: run `cargo test --lib incident_id_targets_exactly_one` from Task 1. Those tests seed the same way and must pass first.
+If `every_kind_resolves_by_incident_id_and_target` reports a kind with `failure: Some(INCIDENT_CHANGED)`, that kind's investigate did not match its own id under the target filter. Check that kind's `Task 1` test passes first, then compare the filter field names in `assess_reflect_incident` with that kind's `Ai*InvestigateRequest`. Do not remove the target filter.
 
-- [ ] **Step 8: Check the module size gate and commit**
+If `an_incident_that_no_longer_resolves_is_missing_not_an_error` fails with `InvalidInput`, the skill investigate service reports an unknown id as invalid input. Read `investigate_ai_skill_incidents` in `src/app/services/skill_incidents.rs`, and add that exact error to the `Missing` arm in `assess_kind!` with a comment naming the service behavior.
+
+- [ ] **Step 7: Check sizes and commit**
 
 Run: `wc -l src/app/services/reflect.rs src/app/services/reflect_llm.rs`
 Expected: each under 500.
 
 ```bash
 cargo fmt && cargo clippy --all-targets
-git add src/app/services.rs src/app/services/reflect.rs src/app/services/reflect_tests.rs src/app/services/reflect_llm.rs src/app/services/reflect_llm_tests.rs
-git commit -m "feat(reflect): add run_reflect pipeline with LLM fallbacks
+git add src/app/services.rs src/app/services/reflect.rs src/app/services/reflect_tests.rs src/app/services/reflect_llm.rs src/app/services/reflect_llm_tests.rs src/app/services/skill_assessment.rs src/app/services/mcp_assessment.rs src/app/services/hook_assessment.rs
+git commit -m "feat(reflect): add run_reflect pipeline with per-kind LLM fallbacks
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
@@ -1449,7 +1563,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Modify: `src/app.rs`
 
 **Interfaces:**
-- Consumes: Task 2 `ReflectReport` and related types.
+- Consumes: Task 2 types.
 - Produces: `cortex::app::reflect_report::render_reflect_markdown(&ReflectReport) -> String`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1468,6 +1582,8 @@ fn incident(kind: ReflectKind, id: &str, target: &str) -> ReflectIncident {
         kind,
         incident_id: id.to_string(),
         target: target.to_string(),
+        target_key: target.to_string(),
+        target_detail: None,
         tool: "claude".to_string(),
         project: "/p".to_string(),
         session_id: "sess-1".to_string(),
@@ -1478,10 +1594,14 @@ fn incident(kind: ReflectKind, id: &str, target: &str) -> ReflectIncident {
     }
 }
 
+fn summary_row(kind: ReflectKind, listed: usize, total: usize, truncated: bool) -> ReflectKindSummary {
+    ReflectKindSummary { kind, listed, total, truncated, critical: 0, high: listed, medium: 0, low: 0 }
+}
+
 fn report(assessed: Vec<ReflectAssessed>, unassessed: Vec<ReflectIncident>) -> ReflectReport {
     ReflectReport {
         since: Some("2026-09-04T00:00:00Z".to_string()),
-        until: None,
+        until: Some("2026-09-11T00:00:00Z".to_string()),
         project: None,
         tool: None,
         kinds: ReflectKind::ALL.to_vec(),
@@ -1489,70 +1609,81 @@ fn report(assessed: Vec<ReflectAssessed>, unassessed: Vec<ReflectIncident>) -> R
         mode: ReflectMode::ReportOnly,
         llm_fallback_reason: None,
         index: Some(ReflectIndexSummary { discovered_files: 3, ingested: 10, skipped_dupes: 0, parse_errors: 1 }),
-        summary: vec![ReflectKindSummary { kind: ReflectKind::Skill, total: 1, critical: 0, high: 1, medium: 0, low: 0 }],
+        summary: vec![summary_row(ReflectKind::Skill, 1, 1, false)],
         assessed,
         unassessed,
+    }
+}
+
+fn assessed(target: &str, assessment: Option<&str>, failure: Option<&str>) -> ReflectAssessed {
+    ReflectAssessed {
+        incident: incident(ReflectKind::Skill, "abc", target),
+        assessment: assessment.map(str::to_string),
+        findings: serde_json::json!({"likely_failure_modes": ["x"]}),
+        failure: failure.map(str::to_string),
     }
 }
 
 #[test]
 fn report_only_shows_summary_findings_and_other_incidents() {
     let md = render_reflect_markdown(&report(
-        vec![ReflectAssessed {
-            incident: incident(ReflectKind::Skill, "abc", "lavra:lavra-plan"),
-            assessment: None,
-            findings: serde_json::json!({"likely_failure_modes": ["x"]}),
-            failure: None,
-        }],
+        vec![assessed("lavra:lavra-plan", None, None)],
         vec![incident(ReflectKind::Mcp, "def", "labby/search")],
     ));
     assert!(md.starts_with("# Cortex reflect report\n"));
     assert!(md.contains("Mode: report only"));
     assert!(md.contains("Index: 3 files discovered, 10 new records, 0 duplicates skipped, 1 parse errors"));
-    assert!(md.contains("| skill | 1 | 0 | 1 | 0 | 0 |"));
+    assert!(md.contains("| skill | 1 | 1 | 0 | 1 | 0 | 0 |"));
+    assert!(md.contains("Scores are heuristic"));
     assert!(md.contains("## 1. skill `lavra:lavra-plan` (high, score 42.0)"));
     assert!(md.contains("```json\n"));
-    assert!(md.contains("\"likely_failure_modes\""));
     assert!(md.contains("## Other incidents"));
-    assert!(md.contains("`cortex assess mcp --incident-id def --since 2026-09-04T00:00:00Z`"));
+    assert!(md.contains(
+        "`cortex assess mcp --incident-id def --since 2026-09-04T00:00:00Z --until 2026-09-11T00:00:00Z`"
+    ));
 }
 
 #[test]
-fn llm_assessment_headings_are_demoted_under_the_incident() {
+fn truncated_kinds_get_a_warning() {
+    let mut rep = report(vec![], vec![incident(ReflectKind::Skill, "a", "s")]);
+    rep.summary = vec![summary_row(ReflectKind::Skill, 100, 250, true)];
+    let md = render_reflect_markdown(&rep);
+    assert!(md.contains("> skill: showing the top 100 of 250 incidents"));
+    assert!(md.contains("narrow --since"));
+}
+
+#[test]
+fn llm_headings_are_demoted_outside_code_fences() {
     let mut rep = report(
-        vec![ReflectAssessed {
-            incident: incident(ReflectKind::Skill, "abc", "s"),
-            assessment: Some("## Incident Summary\nText\n### Detail\n".to_string()),
-            findings: serde_json::json!({}),
-            failure: None,
-        }],
+        vec![assessed("s", Some("## Incident Summary\nText\n```sh\n# keep me\n```\n### Detail\n"), None)],
         vec![],
     );
     rep.mode = ReflectMode::ReportAndLlm;
     let md = render_reflect_markdown(&rep);
     assert!(md.contains("Mode: report + LLM"));
     assert!(md.contains("\n#### Incident Summary\n"));
+    assert!(md.contains("\n# keep me\n"));
     assert!(md.contains("\n##### Detail\n"));
     assert!(!md.contains("```json"));
 }
 
 #[test]
 fn failures_and_fallbacks_are_visible() {
-    let mut rep = report(
-        vec![ReflectAssessed {
-            incident: incident(ReflectKind::Hook, "h1", "PostToolUse:fmt"),
-            assessment: None,
-            findings: serde_json::json!({}),
-            failure: Some("LLM invocation 'x' timed out after 120s".to_string()),
-        }],
-        vec![],
-    );
-    rep.llm_fallback_reason = Some("LLM backend binary 'codex' was not found on PATH".to_string());
+    let mut rep = report(vec![assessed("s", None, Some("LLM invocation 'x' timed out after 120s"))], vec![]);
+    rep.llm_fallback_reason = Some("LLM backend program 'codex' was not found".to_string());
     rep.index = None;
     let md = render_reflect_markdown(&rep);
-    assert!(md.contains("> LLM skipped: LLM backend binary 'codex' was not found on PATH"));
+    assert!(md.contains("> LLM skipped: LLM backend program 'codex' was not found"));
     assert!(md.contains("- Assessment failed: LLM invocation 'x' timed out after 120s"));
     assert!(md.contains("Index: skipped (--no-index)"));
+}
+
+#[test]
+fn null_findings_are_not_rendered_as_json() {
+    let mut entry = assessed("s", None, Some("incident changed during the run"));
+    entry.findings = serde_json::Value::Null;
+    let md = render_reflect_markdown(&report(vec![entry], vec![]));
+    assert!(!md.contains("```json"));
 }
 
 #[test]
@@ -1565,23 +1696,25 @@ fn empty_report_says_so() {
 }
 
 #[test]
-fn pipes_in_targets_are_escaped_in_tables() {
-    let md = render_reflect_markdown(&report(vec![], vec![incident(ReflectKind::Mcp, "p", "a|b")]));
-    assert!(md.contains("`a\\|b`"));
+fn control_characters_and_table_breakers_are_neutralized() {
+    let md = render_reflect_markdown(&report(
+        vec![assessed("evil\u{1b}[31m`x`", Some("ok\u{1b}[2J\n"), None)],
+        vec![incident(ReflectKind::Mcp, "p", "a|b`c")],
+    ));
+    assert!(!md.contains('\u{1b}'));
+    assert!(md.contains("a\\|b'c"));
+    assert!(md.contains("`evil [31m'x'`"));
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `cargo test --lib reflect_report`
-Expected: compile error, module `reflect_report` not found (after adding `pub mod reflect_report;` in Step 3 it becomes "cannot find function `render_reflect_markdown`").
-
-- [ ] **Step 3: Implement the renderer**
+- [ ] **Step 2: Implement the renderer**
 
 Create `src/app/reflect_report.rs`:
 
 ```rust
-//! Markdown rendering for `cortex reflect`. Pure: no I/O.
+//! Markdown rendering for `cortex reflect`. Pure: no I/O. Transcript-derived
+//! text is treated as untrusted: control characters are removed before it
+//! reaches a terminal.
 
 use std::fmt::Write as _;
 
@@ -1598,19 +1731,59 @@ pub fn render_reflect_markdown(report: &ReflectReport) -> String {
     md
 }
 
+/// Single-line text: every control character becomes a space.
+fn inline(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
+/// Text inside a code span: single line, no backticks.
+fn code_span(text: &str) -> String {
+    inline(text).replace('`', "'")
+}
+
+/// Text inside a table cell: single line, no pipes or backticks.
+fn cell(text: &str) -> String {
+    code_span(text).replace('|', "\\|")
+}
+
+/// Multi-line text: keep newlines and tabs, drop other control characters.
+fn block(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
+}
+
+/// Pushes headings two levels down so they nest under the H2 incident
+/// heading, leaving fenced code untouched.
+fn demote_headings(text: &str) -> String {
+    let mut in_fence = false;
+    text.lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_fence = !in_fence;
+                line.to_string()
+            } else if !in_fence && line.starts_with('#') {
+                format!("##{line}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn write_header(md: &mut String, report: &ReflectReport) {
     let since = report.since.as_deref().unwrap_or("beginning");
     let until = report.until.as_deref().unwrap_or("now");
     let kinds: Vec<&str> = report.kinds.iter().map(|kind| kind.as_str()).collect();
-    let _ = writeln!(md, "Window: {since} to {until}  ");
+    let _ = writeln!(md, "Window: {} to {}  ", inline(since), inline(until));
     let _ = writeln!(
         md,
         "Filters: project={}, tool={}, kinds={}  ",
-        report.project.as_deref().unwrap_or("all"),
-        report.tool.as_deref().unwrap_or("all"),
+        inline(report.project.as_deref().unwrap_or("all")),
+        inline(report.tool.as_deref().unwrap_or("all")),
         kinds.join(", ")
     );
-    let _ = writeln!(md, "Database: `{}`  ", report.db_path);
+    let _ = writeln!(md, "Database: `{}`  ", code_span(&report.db_path));
     let mode = match report.mode {
         ReflectMode::ReportOnly => "report only",
         ReflectMode::ReportAndLlm => "report + LLM",
@@ -1627,7 +1800,7 @@ fn write_header(md: &mut String, report: &ReflectReport) {
         None => md.push_str("Index: skipped (--no-index)\n"),
     }
     if let Some(reason) = &report.llm_fallback_reason {
-        let _ = writeln!(md, "\n> LLM skipped: {reason}");
+        let _ = writeln!(md, "\n> LLM skipped: {}", inline(reason));
     }
     md.push('\n');
 }
@@ -1638,13 +1811,14 @@ fn write_summary(md: &mut String, report: &ReflectReport) {
         md.push_str("No skill, MCP, or hook incidents found in this window.\n\n");
         return;
     }
-    md.push_str("| Kind | Total | Critical | High | Medium | Low |\n");
-    md.push_str("|------|-------|----------|------|--------|-----|\n");
+    md.push_str("| Kind | Listed | Total | Critical | High | Medium | Low |\n");
+    md.push_str("|------|--------|-------|----------|------|--------|-----|\n");
     for row in &report.summary {
         let _ = writeln!(
             md,
-            "| {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} |",
             row.kind.as_str(),
+            row.listed,
             row.total,
             row.critical,
             row.high,
@@ -1653,6 +1827,17 @@ fn write_summary(md: &mut String, report: &ReflectReport) {
         );
     }
     md.push('\n');
+    for row in report.summary.iter().filter(|row| row.truncated) {
+        let _ = writeln!(
+            md,
+            "> {}: showing the top {} of {} incidents; the detection window was capped. \
+             Use a narrow --since for complete results.",
+            row.kind.as_str(),
+            row.listed,
+            row.total
+        );
+    }
+    md.push_str("Scores are heuristic. They share one formula shape across kinds but are not calibrated between them.\n\n");
 }
 
 fn write_assessed(md: &mut String, position: usize, assessed: &ReflectAssessed) {
@@ -1661,35 +1846,39 @@ fn write_assessed(md: &mut String, position: usize, assessed: &ReflectAssessed) 
         md,
         "## {position}. {} `{}` ({}, score {:.1})\n",
         incident.kind.as_str(),
-        incident.target,
-        incident.priority_label,
+        code_span(&incident.target),
+        inline(&incident.priority_label),
         incident.priority_score
     );
-    let _ = writeln!(md, "- Incident: `{}`", incident.incident_id);
+    let _ = writeln!(md, "- Incident: `{}`", code_span(&incident.incident_id));
     let _ = writeln!(
         md,
         "- Session: `{}` ({}, {})",
-        incident.session_id, incident.tool, incident.project
+        code_span(&incident.session_id),
+        inline(&incident.tool),
+        inline(&incident.project)
     );
-    let _ = writeln!(md, "- Last seen: {}", incident.last_seen);
+    let _ = writeln!(md, "- Last seen: {}", inline(&incident.last_seen));
     if !incident.signals_present.is_empty() {
-        let _ = writeln!(md, "- Signals: {}", incident.signals_present.join(", "));
+        let signals: Vec<String> = incident.signals_present.iter().map(|s| inline(s)).collect();
+        let _ = writeln!(md, "- Signals: {}", signals.join(", "));
     }
     if let Some(failure) = &assessed.failure {
-        let _ = writeln!(md, "- Assessment failed: {failure}");
+        let _ = writeln!(md, "- Assessment failed: {}", inline(failure));
     }
     md.push('\n');
     match &assessed.assessment {
         Some(text) => {
-            md.push_str(&demote_headings(text));
+            md.push_str(&demote_headings(&block(text)));
             if !md.ends_with('\n') {
                 md.push('\n');
             }
         }
+        None if assessed.findings.is_null() => {}
         None => {
             let findings = serde_json::to_string_pretty(&assessed.findings)
                 .unwrap_or_else(|_| "{}".to_string());
-            let _ = writeln!(md, "```json\n{findings}\n```");
+            let _ = writeln!(md, "```json\n{}\n```", block(&findings));
         }
     }
     md.push('\n');
@@ -1705,31 +1894,16 @@ fn write_unassessed(md: &mut String, report: &ReflectReport) {
     for incident in &report.unassessed {
         let _ = writeln!(
             md,
-            "| {} | `{}` | {} | {:.1} | {} | `{}` |",
+            "| {} | {} | {} | {:.1} | {} | `{}` |",
             incident.kind.as_str(),
-            incident.target.replace('|', "\\|"),
-            incident.priority_label,
+            cell(&incident.target),
+            cell(&incident.priority_label),
             incident.priority_score,
-            incident.last_seen,
-            incident.assess_command(report.since.as_deref())
+            cell(&incident.last_seen),
+            cell(&incident.assess_command(report.since.as_deref(), report.until.as_deref()))
         );
     }
     md.push('\n');
-}
-
-/// Pushes LLM headings two levels down so they nest under the H2 incident
-/// heading.
-fn demote_headings(text: &str) -> String {
-    text.lines()
-        .map(|line| {
-            if line.starts_with('#') {
-                format!("##{line}")
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
@@ -1739,12 +1913,12 @@ mod tests;
 
 In `src/app.rs`, add `pub mod reflect_report;` next to the other `pub mod` lines.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 3: Run the tests**
 
 Run: `cargo test --lib reflect_report`
-Expected: PASS (5 tests).
+Expected: PASS (7 tests).
 
-- [ ] **Step 5: Lint and commit**
+- [ ] **Step 4: Lint and commit**
 
 ```bash
 cargo fmt && cargo clippy --all-targets
@@ -1759,14 +1933,13 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ### Task 5: `cortex reflect` CLI wiring
 
 **Files:**
-- Create: `src/cli/args/reflect.rs`
-- Create: `src/cli/parse/reflect.rs`, `src/cli/parse/reflect_tests.rs`
+- Create: `src/cli/args/reflect.rs`, `src/cli/parse/reflect.rs`, `src/cli/parse/reflect_tests.rs`
 - Create: `src/cli/dispatch_reflect.rs`, `src/cli/dispatch_reflect_tests.rs`
 - Modify: `src/cli/args.rs`, `src/cli/parse.rs`, `src/cli/run.rs`, `src/cli.rs`, `src/main.rs`, `src/runtime.rs`, `src/surfaces.rs`, `src/cli/help.rs`, `src/cli/help_tests.rs`
 
 **Interfaces:**
 - Consumes: `cortex::app::{ReflectKind, ReflectRequest}`, `CortexService::run_reflect`, `cortex::app::reflect_report::render_reflect_markdown`.
-- Produces: `CliCommand::Reflect(ReflectArgs)`; `cli::resolve_reflect_db_path(Option<&Path>, Option<OsString>, Option<OsString>) -> anyhow::Result<PathBuf>`; `RuntimeCore::query_only_with_retry(Config) -> Result<RuntimeCore>`.
+- Produces: `CliCommand::Reflect(ReflectArgs)`; in `cli`: `ReflectDbSource { Flag, Env, Default }`, `resolve_reflect_db_path(Option<&Path>, Option<OsString>, Option<OsString>) -> Result<(PathBuf, ReflectDbSource)>`, `prepare_reflect_db_dir(&Path, ReflectDbSource) -> Result<()>`, `restrict_reflect_db_file(&Path) -> Result<()>`; `RuntimeCore::query_only_with_retry(Config) -> Result<RuntimeCore>`.
 
 - [ ] **Step 1: Write the failing parser tests**
 
@@ -1787,12 +1960,9 @@ fn parse(args: &[&str]) -> anyhow::Result<ReflectArgs> {
 fn defaults_cover_all_kinds_llm_on_and_seven_days() {
     let parsed = parse(&[]).unwrap();
     assert_eq!(parsed.kinds, ReflectKind::ALL.to_vec());
-    assert!(!parsed.no_llm);
-    assert!(!parsed.no_index);
-    assert!(!parsed.json);
+    assert!(!parsed.no_llm && !parsed.no_index && !parsed.json);
     assert_eq!(parsed.max_assess, DEFAULT_REFLECT_MAX_ASSESS);
     assert_eq!(parsed.db, None);
-    assert_eq!(parsed.out, None);
     assert!(!parsed.since.is_empty(), "default --since 7d must be normalized");
 }
 
@@ -1801,8 +1971,7 @@ fn every_flag_is_parsed() {
     let parsed = parse(&[
         "--since", "2026-09-01T00:00:00Z", "--until", "2026-09-02T00:00:00Z",
         "--project", "/p", "--tool", "codex", "--kinds", "hook,skill",
-        "--no-llm", "--max-assess", "0", "--no-index", "--db", "/tmp/r.db",
-        "--json", "--out", "/tmp/r.md",
+        "--no-llm", "--max-assess", "0", "--no-index", "--db", "/tmp/r.db", "--json",
     ])
     .unwrap();
     assert!(parsed.since.starts_with("2026-09-01"));
@@ -1813,7 +1982,6 @@ fn every_flag_is_parsed() {
     assert!(parsed.no_llm && parsed.no_index && parsed.json);
     assert_eq!(parsed.max_assess, 0);
     assert_eq!(parsed.db, Some(std::path::PathBuf::from("/tmp/r.db")));
-    assert_eq!(parsed.out, Some(std::path::PathBuf::from("/tmp/r.md")));
 }
 
 #[test]
@@ -1833,7 +2001,8 @@ fn empty_kinds_is_rejected() {
 }
 
 #[test]
-fn unknown_option_is_rejected() {
+fn removed_and_unknown_options_are_rejected() {
+    assert!(parse(&["--out", "x.md"]).is_err());
     assert!(parse(&["--all"]).is_err());
 }
 ```
@@ -1850,25 +2019,27 @@ use super::*;
 
 #[test]
 fn flag_wins_over_env_and_home() {
-    let path = resolve_reflect_db_path(
+    let (path, source) = resolve_reflect_db_path(
         Some(Path::new("/flag.db")),
         Some(OsString::from("/env.db")),
         Some(OsString::from("/home/u")),
     )
     .unwrap();
-    assert_eq!(path, PathBuf::from("/flag.db"));
+    assert_eq!((path, source), (PathBuf::from("/flag.db"), ReflectDbSource::Flag));
 }
 
 #[test]
 fn env_wins_over_home() {
-    let path = resolve_reflect_db_path(None, Some(OsString::from("/env.db")), Some(OsString::from("/home/u"))).unwrap();
-    assert_eq!(path, PathBuf::from("/env.db"));
+    let (path, source) =
+        resolve_reflect_db_path(None, Some(OsString::from("/env.db")), Some(OsString::from("/home/u"))).unwrap();
+    assert_eq!((path, source), (PathBuf::from("/env.db"), ReflectDbSource::Env));
 }
 
 #[test]
 fn empty_env_falls_back_to_home_default() {
-    let path = resolve_reflect_db_path(None, Some(OsString::new()), Some(OsString::from("/home/u"))).unwrap();
-    assert_eq!(path, PathBuf::from("/home/u/.cortex/reflect.db"));
+    let (path, source) =
+        resolve_reflect_db_path(None, Some(OsString::new()), Some(OsString::from("/home/u"))).unwrap();
+    assert_eq!((path, source), (PathBuf::from("/home/u/.cortex/reflect.db"), ReflectDbSource::Default));
 }
 
 #[test]
@@ -1876,14 +2047,43 @@ fn missing_home_is_an_error_that_mentions_db_flag() {
     let error = resolve_reflect_db_path(None, None, None).unwrap_err().to_string();
     assert!(error.contains("--db"), "{error}");
 }
+
+#[cfg(unix)]
+#[test]
+fn default_parent_is_created_owner_only_and_existing_dirs_are_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let db = home.path().join(".cortex/reflect.db");
+    prepare_reflect_db_dir(&db, ReflectDbSource::Default).unwrap();
+    let mode = std::fs::metadata(home.path().join(".cortex")).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700);
+
+    let existing = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(existing.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    prepare_reflect_db_dir(&existing.path().join("reflect.db"), ReflectDbSource::Default).unwrap();
+    let mode = std::fs::metadata(existing.path()).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o755);
+}
+
+#[cfg(unix)]
+#[test]
+fn db_file_and_wal_siblings_become_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("reflect.db");
+    for name in ["reflect.db", "reflect.db-wal"] {
+        std::fs::write(dir.path().join(name), "").unwrap();
+        std::fs::set_permissions(dir.path().join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    restrict_reflect_db_file(&db).unwrap();
+    for name in ["reflect.db", "reflect.db-wal"] {
+        let mode = std::fs::metadata(dir.path().join(name)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{name}");
+    }
+}
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
-
-Run: `cargo test --bin cortex reflect`
-Expected: compile errors, the new test files are not wired yet and `ReflectArgs` does not exist. Continue.
-
-- [ ] **Step 4: Add `ReflectArgs` and the command variant**
+- [ ] **Step 3: Add `ReflectArgs` and the command variant**
 
 Create `src/cli/args/reflect.rs`:
 
@@ -1907,13 +2107,12 @@ pub(crate) struct ReflectArgs {
     pub no_index: bool,
     pub db: Option<PathBuf>,
     pub json: bool,
-    pub out: Option<PathBuf>,
 }
 ```
 
-In `src/cli/args.rs`: add `mod reflect;` next to `mod assess;`, add `pub(crate) use reflect::ReflectArgs;` next to the `pub(crate) use assess::{...}` block, and add the variant `Reflect(ReflectArgs),` after `Assess(AssessCommand),` in `CliCommand`.
+In `src/cli/args.rs`: add `mod reflect;` next to `mod assess;`, `pub(crate) use reflect::ReflectArgs;` next to the `pub(crate) use assess::{...}` block, and `Reflect(ReflectArgs),` after `Assess(AssessCommand),` in `CliCommand`.
 
-- [ ] **Step 5: Add the parser**
+- [ ] **Step 4: Add the parser**
 
 Create `src/cli/parse/reflect.rs`:
 
@@ -1943,7 +2142,6 @@ const REFLECT_FLAGS: &[&str] = &[
     "--no-index",
     "--db",
     "--json",
-    "--out",
 ];
 
 pub(crate) fn parse_reflect(args: &[String]) -> Result<CliCommand> {
@@ -1959,7 +2157,6 @@ pub(crate) fn parse_reflect(args: &[String]) -> Result<CliCommand> {
         no_index: false,
         db: None,
         json: false,
-        out: None,
     };
     let mut flags = FlagCursor::new(args);
     while let Some(arg) = flags.next() {
@@ -1976,7 +2173,6 @@ pub(crate) fn parse_reflect(args: &[String]) -> Result<CliCommand> {
                 parsed.max_assess = parse_u32_flag("--max-assess", flags.value("--max-assess")?)?
             }
             "--db" => parsed.db = Some(PathBuf::from(flags.value("--db")?)),
-            "--out" => parsed.out = Some(PathBuf::from(flags.value("--out")?)),
             other => bail!("{}", suggest::unknown_option("reflect", other, REFLECT_FLAGS)),
         }
     }
@@ -2005,14 +2201,15 @@ fn parse_kinds(raw: &str) -> Result<Vec<ReflectKind>> {
 mod tests;
 ```
 
-In `src/cli/parse.rs`: add `mod reflect;` next to `mod assess;`, `use self::reflect::parse_reflect;` next to `use self::assess::parse_assess;`, and the arm `"reflect" => parse_reflect(rest),` after `"assess" => parse_assess(rest),`.
+In `src/cli/parse.rs`: add `mod reflect;` next to `mod assess;`, `use self::reflect::parse_reflect;` next to `use self::assess::parse_assess;`, and `"reflect" => parse_reflect(rest),` after `"assess" => parse_assess(rest),`.
 
-- [ ] **Step 6: Add dispatch and DB path resolution**
+- [ ] **Step 5: Add dispatch, DB path resolution, and permissions**
 
 Create `src/cli/dispatch_reflect.rs`:
 
 ```rust
-//! `cortex reflect` dispatch: runs the local pipeline and writes the report.
+//! `cortex reflect` dispatch, database path resolution, and database file
+//! permissions.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -2026,6 +2223,8 @@ use super::CliMode;
 use super::args::ReflectArgs;
 
 pub(crate) async fn run_reflect(mode: &CliMode, args: ReflectArgs) -> Result<()> {
+    // main.rs rejects HTTP mode before building a runtime; this guard is
+    // defensive for any other caller.
     let CliMode::Local(service) = mode else {
         bail!("cortex reflect runs locally; remove --http / --server / --token and unset CORTEX_USE_HTTP");
     };
@@ -2043,7 +2242,7 @@ pub(crate) async fn run_reflect(mode: &CliMode, args: ReflectArgs) -> Result<()>
         .run_reflect(request, |line| eprintln!("[reflect] {line}"))
         .await?;
     if let Some(reason) = &report.llm_fallback_reason {
-        eprintln!("[reflect] warning: {reason}; the report contains deterministic findings only");
+        eprintln!("[reflect] warning: {reason}");
     }
     let body = if args.json {
         let mut json = serde_json::to_string_pretty(&report)?;
@@ -2052,35 +2251,80 @@ pub(crate) async fn run_reflect(mode: &CliMode, args: ReflectArgs) -> Result<()>
     } else {
         render_reflect_markdown(&report)
     };
-    match &args.out {
-        Some(path) => std::fs::write(path, &body)
-            .with_context(|| format!("writing reflect report to {}", path.display()))?,
-        None => {
-            let mut stdout = std::io::stdout().lock();
-            stdout.write_all(body.as_bytes())?;
-            stdout.flush()?;
-        }
-    }
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(body.as_bytes())?;
+    stdout.flush()?;
     Ok(())
 }
 
-/// Reflect database: `--db`, then `CORTEX_DB_PATH`, then `~/.cortex/reflect.db`.
-/// Environment values are passed in so the order is unit-testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReflectDbSource {
+    Flag,
+    Env,
+    Default,
+}
+
+/// Reflect database: `--db`, then non-empty `CORTEX_DB_PATH`, then
+/// `~/.cortex/reflect.db`. Environment values are passed in so the order is
+/// unit-testable.
 pub(crate) fn resolve_reflect_db_path(
     flag: Option<&Path>,
     env_db_path: Option<OsString>,
     home: Option<OsString>,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, ReflectDbSource)> {
     if let Some(path) = flag {
-        return Ok(path.to_path_buf());
+        return Ok((path.to_path_buf(), ReflectDbSource::Flag));
     }
     if let Some(path) = env_db_path.filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(path));
+        return Ok((PathBuf::from(path), ReflectDbSource::Env));
     }
-    let home = home
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("cannot resolve ~/.cortex/reflect.db because HOME is not set; pass --db PATH"))?;
-    Ok(PathBuf::from(home).join(".cortex").join("reflect.db"))
+    let home = home.filter(|value| !value.is_empty()).ok_or_else(|| {
+        anyhow!("cannot resolve ~/.cortex/reflect.db because HOME is not set; pass --db PATH")
+    })?;
+    Ok((PathBuf::from(home).join(".cortex").join("reflect.db"), ReflectDbSource::Default))
+}
+
+/// Creates the default database directory owner-only when it does not
+/// exist. Existing directories and non-default paths are left alone.
+pub(crate) fn prepare_reflect_db_dir(path: &Path, source: ReflectDbSource) -> Result<()> {
+    if source != ReflectDbSource::Default {
+        return Ok(());
+    }
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("creating {}", parent.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("restricting {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+/// Restricts the SQLite file and its `-wal`/`-shm` siblings to the owner.
+pub(crate) fn restrict_reflect_db_file(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut name = path.as_os_str().to_owned();
+            name.push(suffix);
+            let file = PathBuf::from(name);
+            if file.is_file() {
+                std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))
+                    .with_context(|| format!("restricting {}", file.display()))?;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2088,17 +2332,23 @@ pub(crate) fn resolve_reflect_db_path(
 mod tests;
 ```
 
-In `src/cli.rs`: add `mod dispatch_reflect;` next to `mod dispatch_sessions;`, and `pub(crate) use dispatch_reflect::resolve_reflect_db_path;` next to the file's other `pub(crate) use` lines.
+In `src/cli.rs`: add `mod dispatch_reflect;` next to `mod dispatch_sessions;`, and next to the file's other `pub(crate) use` lines:
 
-In `src/cli/run.rs`, add this arm after the `CliCommand::Assess(command) => match command { ... },` arm:
+```rust
+pub(crate) use dispatch_reflect::{
+    ReflectDbSource, prepare_reflect_db_dir, resolve_reflect_db_path, restrict_reflect_db_file,
+};
+```
+
+In `src/cli/run.rs`, add after the `CliCommand::Assess(command) => match command { ... },` arm:
 
 ```rust
         CliCommand::Reflect(args) => super::dispatch_reflect::run_reflect(&mode, args).await,
 ```
 
-- [ ] **Step 7: Add the retrying query-only constructor**
+- [ ] **Step 6: Add the retrying query-only constructor**
 
-In `src/runtime.rs`, split `load_query_only` so the retry loop takes a prepared `Config`. Move the existing `for attempt in 0..3 { ... }` loop and everything after it in `load_query_only` unchanged into the new function:
+In `src/runtime.rs`, move the existing `for attempt in 0..3 { ... }` loop and everything after it in `load_query_only` (unchanged) into a new function, and make `load_query_only` call it:
 
 ```rust
     pub async fn load_query_only() -> Result<Self> {
@@ -2110,35 +2360,43 @@ In `src/runtime.rs`, split `load_query_only` so the retry loop takes a prepared 
     /// Query-only runtime for a caller-prepared config, retrying briefly
     /// when another writer holds the SQLite lock.
     pub async fn query_only_with_retry(config: Config) -> Result<Self> {
-        // <the existing `for attempt in 0..3 { ... }` loop and tail, unchanged>
+        // (the loop moved from load_query_only goes here, unchanged)
     }
 ```
 
-The loop body already calls `Self::query_only(config.clone())`, so it compiles unchanged.
+The moved loop already calls `Self::query_only(config.clone())`, so it compiles unchanged. Run `cargo test --lib runtime` afterwards; expected PASS.
 
-- [ ] **Step 8: Build the reflect runtime in `main.rs`**
+- [ ] **Step 7: Build the reflect runtime in `main.rs`**
 
-In `src/main.rs`, insert this block immediately before the comment `// Build CliMode ONCE per invocation`:
+In `src/main.rs`, insert immediately before the comment `// Build CliMode ONCE per invocation`:
 
 ```rust
     if let cli::CliCommand::Reflect(args) = &command {
         if let Some(trigger) = flags.http_trigger() {
             anyhow::bail!("cortex reflect runs locally; remove {trigger}");
         }
-        let mut config = cortex::config::Config::load_for_stdio()?;
-        config.storage.db_path = cli::resolve_reflect_db_path(
+        let (db_path, source) = cli::resolve_reflect_db_path(
             args.db.as_deref(),
             cortex::env::var_os("CORTEX_DB_PATH"),
             cortex::env::var_os("HOME"),
         )?;
+        if source == cli::ReflectDbSource::Env {
+            eprintln!(
+                "[reflect] warning: using CORTEX_DB_PATH={}; if this is a live cortex server \
+                 database, reflect will write transcript records into it",
+                db_path.display()
+            );
+        }
+        cli::prepare_reflect_db_dir(&db_path, source)?;
+        let mut config = cortex::config::Config::load_for_stdio()?;
+        config.storage.db_path = db_path.clone();
         let runtime = RuntimeCore::query_only_with_retry(config).await?;
+        cli::restrict_reflect_db_file(&db_path)?;
         return cli::run(cli::CliMode::Local(runtime.service()), command).await;
     }
 ```
 
-`init_pool` creates the parent directory, so `~/.cortex` does not need creating here.
-
-- [ ] **Step 9: Register the surface and help**
+- [ ] **Step 8: Register the surface and help**
 
 In `src/surfaces.rs`, add after `local_cli!("assess", Sessions, Canonical),`:
 
@@ -2147,7 +2405,7 @@ In `src/surfaces.rs`, add after `local_cli!("assess", Sessions, Canonical),`:
     local_cli!("reflect", Sessions, Canonical),
 ```
 
-Run: `grep -n 'CLI_ROOTS' src/surfaces.rs`. If `CLI_ROOTS` is a literal list, add `"reflect",` after `"assess",`. If it is derived from `SURFACE_SPECS`, do nothing.
+Run: `grep -n 'CLI_ROOTS' src/surfaces.rs`. If `CLI_ROOTS` is a literal list, add `"reflect",` after `"assess",`; if it is derived from `SURFACE_SPECS`, leave it.
 
 In `src/cli/help.rs`, change the group line to `("AI Transcripts", &["sessions", "assess", "reflect"]),` and add after the `assess` `CommandDoc`:
 
@@ -2156,36 +2414,36 @@ In `src/cli/help.rs`, change the group line to `("AI Transcripts", &["sessions",
         name: "reflect",
         summary: "One-shot local skill, MCP, and hook reflection report (local-only)",
         usage: &[
-            "cortex reflect [--since TIME] [--until TIME] [--project PATH] [--tool TOOL] [--kinds skill,mcp,hook] [--no-llm] [--max-assess N] [--no-index] [--db PATH] [--json] [--out FILE]",
+            "cortex reflect [--since TIME] [--until TIME] [--project PATH] [--tool TOOL] [--kinds skill,mcp,hook] [--no-llm] [--max-assess N] [--no-index] [--db PATH] [--json]",
         ],
     },
 ```
 
 In `src/cli/help_tests.rs`, add `"reflect",` after `"assess",` in `PARSER_TOKENS`.
 
-- [ ] **Step 10: Run the CLI tests**
+- [ ] **Step 9: Run the CLI tests**
 
 Run: `cargo test --bin cortex`
-Expected: PASS, including the 6 parser tests and 4 DB path tests. If a completion or surface-catalog test fails because it enumerates root commands, add `reflect` to that list next to `assess` and rerun.
+Expected: PASS, including 6 parser and 6 dispatch tests. If a completion or catalog test fails because it enumerates root commands, add `reflect` next to `assess` in that list and rerun.
 
 Run: `cargo test --lib surfaces`
 Expected: PASS.
 
-- [ ] **Step 11: Smoke test by hand**
+- [ ] **Step 10: Smoke test by hand**
 
 ```bash
 cargo run --quiet -- reflect --no-llm --db "$(mktemp -d)/reflect.db" --max-assess 2
 ```
 
-Expected: `[reflect] indexing local AI transcripts` and `[reflect] detecting ...` on stderr, then a Markdown report starting with `# Cortex reflect report` on stdout. Exit code 0.
+Expected: `[reflect] indexing ...`, `[reflect] indexed ...`, and `[reflect] detecting ...` on stderr; a report starting with `# Cortex reflect report` on stdout; exit 0.
 
 ```bash
-cargo run --quiet -- reflect --http
+cargo run --quiet -- --http reflect
 ```
 
 Expected: non-zero exit with `cortex reflect runs locally; remove --http`.
 
-- [ ] **Step 12: Lint and commit**
+- [ ] **Step 11: Lint and commit**
 
 ```bash
 cargo fmt && cargo clippy --all-targets
@@ -2197,23 +2455,25 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: End-to-end binary test with transcript fixtures
+### Task 6: End-to-end binary tests
 
 **Files:**
 - Create: `tests/reflect_cli.rs`
 
 **Interfaces:**
-- Consumes: the `cortex` binary from Task 5 via `env!("CARGO_BIN_EXE_cortex")`.
+- Consumes: the `cortex` binary via `env!("CARGO_BIN_EXE_cortex")`; `cortex::env::var_os`.
 
-- [ ] **Step 1: Write the test**
+The fixture lines use the Claude fields the parser reads (`sessionId`, `timestamp`, `content`, `attributionSkill`, `attributionPlugin`; see `src/scanner/claude.rs` and the `attributionSkill` cases in `src/scanner_tests.rs`).
+
+- [ ] **Step 1: Write the tests**
 
 Create `tests/reflect_cli.rs`:
 
 ```rust
-//! End-to-end: `cortex reflect` indexes real Claude transcript lines from a
+//! End-to-end: `cortex reflect` indexes Claude transcript lines from a
 //! temporary HOME into the default reflect DB and reports a skill incident.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn now_minus(minutes: i64) -> String {
@@ -2243,18 +2503,38 @@ fn write_fixture(home: &Path) {
     std::fs::write(dir.join("sess-e2e.jsonl"), body).unwrap();
 }
 
-fn reflect(home: &Path, extra: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cortex"))
-        .arg("reflect")
-        .args(extra)
+fn cortex(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cortex"));
+    command
+        .args(args)
         .current_dir(home) // keep the repo's config.toml out of the run
         .env("HOME", home)
         .env("CODEX_HOME", home.join(".codex"))
         .env_remove("CORTEX_DB_PATH")
         .env_remove("CORTEX_USE_HTTP")
         .env_remove("CORTEX_LLM")
-        .output()
-        .unwrap()
+        .env_remove("CORTEX_LLM_ENABLED")
+        .env_remove("CORTEX_CODEX_CMD");
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().unwrap()
+}
+
+fn reflect_json(home: &Path, extra: &[&str], env: &[(&str, &str)]) -> serde_json::Value {
+    let mut args = vec!["reflect", "--json", "--kinds", "skill"];
+    args.extend_from_slice(extra);
+    let output = cortex(home, &args, env);
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn false_program() -> PathBuf {
+    let paths = cortex::env::var_os("PATH").expect("PATH is set");
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join("false"))
+        .find(|candidate| candidate.is_file())
+        .expect("a `false` program on PATH")
 }
 
 #[test]
@@ -2262,61 +2542,81 @@ fn reflect_indexes_detects_and_reports_incrementally() {
     let home = tempfile::tempdir().unwrap();
     write_fixture(home.path());
 
-    let first = reflect(home.path(), &["--no-llm", "--json", "--kinds", "skill"]);
-    assert!(first.status.success(), "stderr: {}", String::from_utf8_lossy(&first.stderr));
-    let report: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let report = reflect_json(home.path(), &["--no-llm"], &[]);
     assert_eq!(report["mode"], "report_only");
     assert!(report["db_path"].as_str().unwrap().ends_with(".cortex/reflect.db"));
-    assert!(home.path().join(".cortex/reflect.db").is_file());
     assert!(report["index"]["ingested"].as_u64().unwrap() >= 2);
     let top = &report["assessed"][0]["incident"];
     assert_eq!(top["kind"], "skill");
     assert_eq!(top["target"], "cortex:cortex-troubleshoot");
 
-    let second = reflect(home.path(), &["--no-llm", "--json", "--kinds", "skill"]);
-    assert!(second.status.success());
-    let report: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
-    assert_eq!(report["index"]["ingested"], 0, "second run must be incremental");
-    assert_eq!(report["assessed"][0]["incident"]["target"], "cortex:cortex-troubleshoot");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let dir_mode = std::fs::metadata(home.path().join(".cortex")).unwrap().permissions().mode();
+        assert_eq!(dir_mode & 0o777, 0o700);
+        let db_mode = std::fs::metadata(home.path().join(".cortex/reflect.db")).unwrap().permissions().mode();
+        assert_eq!(db_mode & 0o777, 0o600);
+    }
+
+    let again = reflect_json(home.path(), &["--no-llm"], &[]);
+    assert_eq!(again["index"]["ingested"], 0, "second run must be incremental");
+    assert_eq!(again["assessed"][0]["incident"]["target"], "cortex:cortex-troubleshoot");
 }
 
 #[test]
-fn reflect_markdown_goes_to_out_file() {
+fn a_failing_llm_program_keeps_the_report() {
     let home = tempfile::tempdir().unwrap();
     write_fixture(home.path());
-    let out = home.path().join("report.md");
-    let result = reflect(home.path(), &["--no-llm", "--out", out.to_str().unwrap()]);
-    assert!(result.status.success(), "stderr: {}", String::from_utf8_lossy(&result.stderr));
-    assert!(result.stdout.is_empty());
-    let md = std::fs::read_to_string(out).unwrap();
-    assert!(md.starts_with("# Cortex reflect report\n"));
-    assert!(md.contains("cortex-troubleshoot"));
+    let program = false_program();
+    let report = reflect_json(
+        home.path(),
+        &["--max-assess", "1"],
+        &[("CORTEX_LLM", "codex"), ("CORTEX_CODEX_CMD", program.to_str().unwrap())],
+    );
+    let entry = &report["assessed"][0];
+    assert!(entry["assessment"].is_null());
+    assert!(entry["failure"].is_string(), "expected a failure reason: {entry}");
+    assert!(entry["findings"].is_object());
+    assert!(report["llm_fallback_reason"].is_null());
+}
+
+#[test]
+fn a_missing_llm_program_downgrades_the_run() {
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let report = reflect_json(
+        home.path(),
+        &["--max-assess", "1"],
+        &[("CORTEX_LLM", "codex"), ("CORTEX_CODEX_CMD", "/nonexistent/cortex-reflect/codex")],
+    );
+    assert_eq!(report["mode"], "report_only");
+    assert!(report["llm_fallback_reason"].as_str().unwrap().contains("was not found"));
+    assert!(report["assessed"][0]["findings"].is_object());
 }
 
 #[test]
 fn reflect_rejects_http_mode() {
     let home = tempfile::tempdir().unwrap();
-    let result = reflect(home.path(), &["--http"]);
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("runs locally"));
+    let output = cortex(home.path(), &["--http", "reflect"], &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("runs locally"));
 }
 ```
 
-`--http` is a global flag. If the parser only accepts it before the command name, change the last test's call to `Command::new(...).args(["--http", "reflect"])` by adding a variant helper, keeping the same assertions.
-
-- [ ] **Step 2: Run the test**
+- [ ] **Step 2: Run the tests**
 
 Run: `cargo test --test reflect_cli`
-Expected: PASS (3 tests).
+Expected: PASS (4 tests).
 
-If the first test finds no skill incident, run the same binary with `--no-index` removed and `--kinds skill` against the temp HOME, then inspect with `cortex sessions skills --json` using `CORTEX_DB_PATH` set to the temp DB. Check that the Claude parser read `timestamp` and `attributionSkill` from the fixture lines. Adjust only the fixture lines, never the product code, to match the Claude shapes in `src/scanner_tests.rs` (search for `attributionSkill`).
+If the first test finds no skill incident, run the binary by hand against a temp HOME with the same fixture and check `cortex sessions skills --json` with `CORTEX_DB_PATH` set to the temp DB. Adjust only the fixture lines to the Claude shapes in `src/scanner_tests.rs`; never change product code to fit the fixture.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 cargo fmt && cargo clippy --all-targets
 git add tests/reflect_cli.rs
-git commit -m "test(reflect): end-to-end cortex reflect with transcript fixtures
+git commit -m "test(reflect): end-to-end cortex reflect incl. LLM failure paths
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
@@ -2330,7 +2630,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: README section**
 
-In `README.md`, find the "Skill and abuse assessment" section and add a subsection after it:
+In `README.md`, after the "Skill and abuse assessment" section, add:
 
 ````markdown
 ### One-shot reflection report
@@ -2339,18 +2639,18 @@ In `README.md`, find the "Skill and abuse assessment" section and add a subsecti
 It needs no server and no tokens.
 
 ```bash
-cortex reflect                     # last 7 days, LLM on the top 5 incidents
-cortex reflect --no-llm            # deterministic report only, no LLM binary needed
-cortex reflect --kinds skill,hook --since 30d --max-assess 10 --out reflect.md
+cortex reflect                          # last 7 days, LLM on the top 5 incidents
+cortex reflect --no-llm                 # deterministic report only, no LLM program needed
+cortex reflect --kinds skill,hook --since 30d --max-assess 10 > reflect.md
 cortex reflect --json | jq '.unassessed[].incident_id'
 ```
 
-It indexes local transcript roots (Claude, Codex, Gemini, Antigravity), ranks
-incidents from all selected kinds together, and assesses the highest-scoring
-ones with the LLM selected by `CORTEX_LLM`. Results go to its own database,
-`~/.cortex/reflect.db`, unless you pass `--db` or set `CORTEX_DB_PATH`.
-Each unassessed incident lists the `cortex assess ... --incident-id` command
-that assesses it on its own.
+It indexes transcripts modified in the window (Claude, Codex, Gemini,
+Antigravity), ranks incidents from all selected kinds together, and assesses
+the highest-scoring ones with the LLM selected by `CORTEX_LLM`. Results go to
+`~/.cortex/reflect.db` (owner-only) unless you pass `--db` or set
+`CORTEX_DB_PATH`. Each unassessed incident lists the
+`cortex assess ... --incident-id` command that assesses it on its own.
 ````
 
 - [ ] **Step 2: Runbook note**
@@ -2362,9 +2662,10 @@ Append to `docs/runbooks/skill-reflection.md`:
 
 `cortex reflect` wraps indexing, skill/MCP/hook incident detection, and
 assessment into one local command. The Codex app-server requirements above
-apply to its LLM step. With `--no-llm` it needs no Codex or Gemini binary.
-If the LLM is disabled or its binary is missing, `reflect` still produces a
-report and names the reason at the top.
+apply to its LLM step. With `--no-llm` it needs no Codex or Gemini program.
+If the LLM program is missing, `reflect` still produces a report and names
+the reason at the top. If one kind's LLM action is disabled or its circuit
+opens, only that kind falls back to deterministic findings.
 ```
 
 - [ ] **Step 3: CLAUDE.md Commands entry**
@@ -2372,12 +2673,12 @@ report and names the reason at the top.
 In `CLAUDE.md`, in the first `## Commands` code block, add after the `cortex assess abuse` line:
 
 ```bash
-cortex reflect [--since 7d] [--kinds skill,mcp,hook] [--no-llm] [--max-assess 5] [--db PATH] [--json] [--out FILE]  # one-shot local reflection report
+cortex reflect [--since 7d] [--kinds skill,mcp,hook] [--no-llm] [--max-assess 5] [--db PATH] [--json]  # one-shot local reflection report
 ```
 
 - [ ] **Step 4: Justfile recipe**
 
-In `Justfile`, add near the other run recipes (next to `dev`):
+In `Justfile`, next to `dev`:
 
 ```just
 # One-shot local skill/MCP/hook reflection report (pass flags through)
@@ -2388,10 +2689,10 @@ reflect *ARGS:
 - [ ] **Step 5: Verify and commit**
 
 Run: `just --list | grep reflect`
-Expected: `reflect *ARGS` is listed.
+Expected: `reflect *ARGS` listed.
 
-Run: `cargo test --test docs_tests 2>/dev/null; cargo test --lib docs`
-Expected: PASS (docs consistency tests, if they cover README or CLAUDE.md).
+Run: `cargo test --lib docs`
+Expected: PASS.
 
 ```bash
 git add README.md docs/runbooks/skill-reflection.md CLAUDE.md Justfile
@@ -2404,7 +2705,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ### Task 8: Full gate
 
-- [ ] **Step 1: Run the full hermetic suite and lints**
+- [ ] **Step 1: Run the full suite and lints**
 
 ```bash
 cargo fmt --check
@@ -2413,9 +2714,9 @@ just test
 cargo xtask check-version-sync
 ```
 
-Expected: all pass. No version bump is needed; release-please derives it from the `feat` commits.
+Expected: all pass. No version bump; release-please derives it from the `feat` commits.
 
-- [ ] **Step 2: Push the branch and close the issue**
+- [ ] **Step 2: Push and close**
 
 ```bash
 git push
