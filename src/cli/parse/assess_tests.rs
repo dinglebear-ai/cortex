@@ -134,7 +134,7 @@ fn parse_assess_skill_accepts_plugin_only() {
 #[test]
 fn parse_assess_skill_rejects_missing_positional_and_plugin() {
     let err = parse_assess(&["skill".to_string()]).unwrap_err();
-    assert!(format!("{err}").contains("skill name or --plugin is required"));
+    assert!(format!("{err}").contains("skill name, --plugin, or --incident-id is required"));
 }
 
 #[test]
@@ -153,4 +153,35 @@ fn parse_assess_abuse_defaults_to_no_incident_id() {
 fn parse_assess_unknown_subcommand_suggests() {
     let err = parse_assess(&["bogus".to_string()]).unwrap_err();
     assert!(format!("{err}").contains("bogus"));
+}
+
+#[test]
+fn assess_skill_accepts_incident_id_without_skill_name() {
+    let args = vec!["--incident-id".to_string(), "abc123".to_string()];
+    let CliCommand::Assess(AssessCommand::Skill(parsed)) = parse_assess_skill_from(&args).unwrap()
+    else {
+        panic!("expected assess skill");
+    };
+    assert_eq!(parsed.incident_id.as_deref(), Some("abc123"));
+    assert_eq!(parsed.skill, None);
+}
+
+#[test]
+fn assess_mcp_accepts_incident_id_without_target() {
+    let args = vec!["--incident-id".to_string(), "abc123".to_string()];
+    let CliCommand::Assess(AssessCommand::Mcp(parsed)) = parse_assess_mcp_from(&args).unwrap()
+    else {
+        panic!("expected assess mcp");
+    };
+    assert_eq!(parsed.incident_id.as_deref(), Some("abc123"));
+}
+
+#[test]
+fn assess_hooks_accepts_incident_id() {
+    let args = vec!["--incident-id".to_string(), "abc123".to_string()];
+    let CliCommand::Assess(AssessCommand::Hooks(parsed)) = parse_assess_hooks(&args).unwrap()
+    else {
+        panic!("expected assess hooks");
+    };
+    assert_eq!(parsed.incident_id.as_deref(), Some("abc123"));
 }

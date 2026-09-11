@@ -45,7 +45,7 @@ impl CortexService {
             Some(req.limit.unwrap_or(1).max(1))
         };
         let invest_req = AiHookInvestigateRequest {
-            incident_id: None,
+            incident_id: req.incident_id.clone(),
             hook_event: req.hook_event.clone(),
             hook_name: req.hook_name.clone(),
             hook_source: req.hook_source.clone(),
@@ -61,8 +61,9 @@ impl CortexService {
 
         if invest_resp.no_data || invest_resp.evidence.is_empty() {
             let hook_desc = req
-                .hook_name
+                .incident_id
                 .clone()
+                .or_else(|| req.hook_name.clone())
                 .or_else(|| req.hook_event.clone())
                 .unwrap_or_else(|| "any hook".to_string());
             return Err(ServiceError::InvalidInput(format!(

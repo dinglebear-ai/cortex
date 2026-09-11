@@ -49,9 +49,9 @@ impl CortexService {
     where
         F: FnMut(&str) -> anyhow::Result<()> + Send,
     {
-        if req.skill.is_none() && req.plugin.is_none() {
+        if req.incident_id.is_none() && req.skill.is_none() && req.plugin.is_none() {
             return Err(ServiceError::InvalidInput(
-                "assess skill requires either a skill name or --plugin".to_string(),
+                "assess skill requires a skill name, --plugin, or --incident-id".to_string(),
             ));
         }
 
@@ -61,7 +61,7 @@ impl CortexService {
             Some(req.limit.unwrap_or(1).max(1))
         };
         let invest_req = AiSkillInvestigateRequest {
-            incident_id: None,
+            incident_id: req.incident_id.clone(),
             skill: req.skill.clone(),
             plugin: req.plugin.clone(),
             tool: req.tool.clone(),
@@ -76,8 +76,9 @@ impl CortexService {
 
         if invest_resp.no_data || invest_resp.evidence.is_empty() {
             let skill_desc = req
-                .skill
+                .incident_id
                 .clone()
+                .or_else(|| req.skill.clone())
                 .or_else(|| req.plugin.clone().map(|p| format!("plugin:{p}")))
                 .unwrap_or_default();
             return Err(ServiceError::InvalidInput(format!(

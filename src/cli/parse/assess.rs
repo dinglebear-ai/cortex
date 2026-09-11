@@ -43,6 +43,7 @@ pub(crate) fn parse_assess_skill_from(args: &[String]) -> Result<CliCommand> {
             "--all" => parsed.all = true,
             "--no-llm" => parsed.no_llm = true,
             "--plugin" => parsed.plugin = Some(flags.value("--plugin")?),
+            "--incident-id" => parsed.incident_id = Some(flags.value("--incident-id")?),
             "--model" => parsed.model = Some(flags.value("--model")?),
             "--project" => parsed.project = Some(flags.value("--project")?),
             "--tool" => parsed.tool = Some(flags.value("--tool")?),
@@ -74,6 +75,7 @@ pub(crate) fn parse_assess_skill_from(args: &[String]) -> Result<CliCommand> {
                         "--all",
                         "--no-llm",
                         "--plugin",
+                        "--incident-id",
                         "--model",
                         "--project",
                         "--tool",
@@ -88,9 +90,9 @@ pub(crate) fn parse_assess_skill_from(args: &[String]) -> Result<CliCommand> {
         }
     }
     parsed.skill = positional;
-    if parsed.skill.is_none() && parsed.plugin.is_none() {
+    if parsed.skill.is_none() && parsed.plugin.is_none() && parsed.incident_id.is_none() {
         bail!(
-            "assess skill: skill name or --plugin is required, e.g. `cortex assess skill frustration-assessment` or `cortex assess skill --plugin lavra`"
+            "assess skill: skill name, --plugin, or --incident-id is required, e.g. `cortex assess skill frustration-assessment` or `cortex assess skill --plugin lavra`"
         );
     }
     Ok(CliCommand::Assess(AssessCommand::Skill(parsed)))
@@ -161,6 +163,7 @@ pub(crate) fn parse_assess_mcp_from(args: &[String]) -> Result<CliCommand> {
             "--no-llm" => parsed.no_llm = true,
             "--server" => parsed.server = Some(flags.value("--server")?),
             "--tool-name" => parsed.tool_name = Some(flags.value("--tool-name")?),
+            "--incident-id" => parsed.incident_id = Some(flags.value("--incident-id")?),
             "--model" => parsed.model = Some(flags.value("--model")?),
             "--project" => parsed.project = Some(flags.value("--project")?),
             "--tool" => parsed.tool = Some(flags.value("--tool")?),
@@ -193,6 +196,7 @@ pub(crate) fn parse_assess_mcp_from(args: &[String]) -> Result<CliCommand> {
                         "--no-llm",
                         "--server",
                         "--tool-name",
+                        "--incident-id",
                         "--model",
                         "--project",
                         "--tool",
@@ -207,7 +211,11 @@ pub(crate) fn parse_assess_mcp_from(args: &[String]) -> Result<CliCommand> {
         }
     }
     parsed.target = positional;
-    if parsed.target.is_none() && parsed.server.is_none() && parsed.tool_name.is_none() {
+    if parsed.target.is_none()
+        && parsed.server.is_none()
+        && parsed.tool_name.is_none()
+        && parsed.incident_id.is_none()
+    {
         bail!(
             "assess mcp: an mcp server/tool name is required, e.g. `cortex assess mcp cortex` or `cortex assess mcp --server labby --tool-name search`"
         );
@@ -230,6 +238,7 @@ pub(crate) fn parse_assess_hooks(args: &[String]) -> Result<CliCommand> {
             "--no-llm" => parsed.no_llm = true,
             "--collect-config" => parsed.collect_config = true,
             "--hook" => parsed.hook_name = Some(flags.value("--hook")?),
+            "--incident-id" => parsed.incident_id = Some(flags.value("--incident-id")?),
             "--hook-event" => parsed.hook_event = Some(flags.value("--hook-event")?),
             "--hook-source" => parsed.hook_source = Some(flags.value("--hook-source")?),
             "--model" => parsed.model = Some(flags.value("--model")?),
@@ -264,6 +273,7 @@ pub(crate) fn parse_assess_hooks(args: &[String]) -> Result<CliCommand> {
                         "--no-llm",
                         "--collect-config",
                         "--hook",
+                        "--incident-id",
                         "--hook-event",
                         "--hook-source",
                         "--model",

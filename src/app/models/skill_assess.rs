@@ -9,6 +9,12 @@ use super::*;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkillAssessRequest {
+    /// Assess exactly this incident (as returned by the matching
+    /// `*_incidents` listing). When set, the target fields may be empty.
+    /// Skipped when `None` for the same serde_qs reason as
+    /// `AiSkillInvestigateRequest::incident_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incident_id: Option<String>,
     pub skill: Option<String>,
     pub plugin: Option<String>,
     pub model: Option<String>,

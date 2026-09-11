@@ -12,6 +12,7 @@ pub(crate) enum AssessCommand {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AssessHooksArgs {
+    pub incident_id: Option<String>,
     /// Narrow to a known hook by name (`--hook NAME`).
     pub hook_name: Option<String>,
     /// Narrow to a hook event (e.g. `PostToolUse`) via `--hook-event`.
@@ -37,6 +38,7 @@ pub(crate) struct AssessHooksArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AssessSkillArgs {
+    pub incident_id: Option<String>,
     pub skill: Option<String>,
     pub plugin: Option<String>,
     pub model: Option<String>,
@@ -69,6 +71,7 @@ pub(crate) struct AssessAbuseArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AssessMcpArgs {
+    pub incident_id: Option<String>,
     /// Bare positional argument — an mcp_server, mcp_tool, or raw tool
     /// name. `None` when the caller used `--server`/`--tool` flags only.
     pub target: Option<String>,

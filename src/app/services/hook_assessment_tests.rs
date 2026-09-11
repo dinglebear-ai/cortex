@@ -15,6 +15,7 @@ fn test_service() -> (CortexService, Arc<DbPool>, tempfile::TempDir) {
 
 fn default_hook_assess_request() -> HookAssessRequest {
     HookAssessRequest {
+        incident_id: None,
         hook_event: None,
         hook_name: Some("nonexistent-hook-xyz".to_string()),
         hook_source: None,
@@ -64,4 +65,34 @@ async fn run_hook_assessment_never_touches_gemini_when_run_llm_false() {
         )
         .unwrap();
     assert_eq!(count, 0, "run_llm=false must never invoke LlmRunner::run");
+}
+
+#[tokio::test]
+async fn incident_id_targets_exactly_one_hook_incident() {
+    use crate::app::models::AiHookIncidentRequest;
+    use crate::app::services::seed_test_support::seed_hook_incident;
+
+    let (service, pool, _dir) = test_service();
+    seed_hook_incident(&pool, "sess-a", "format-on-save", 60);
+    seed_hook_incident(&pool, "sess-b", "lint-on-stop", 30);
+    let listed = service
+        .list_ai_hook_incidents(AiHookIncidentRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(listed.incidents.len(), 2);
+    let target = listed.incidents[1].incident_id.clone();
+
+    let resp = service
+        .run_hook_assessment_with_delta(
+            HookAssessRequest {
+                incident_id: Some(target.clone()),
+                ..Default::default()
+            },
+            false,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.results.len(), 1);
+    assert_eq!(resp.results[0].incident_id, target);
 }

@@ -32,9 +32,14 @@ impl CortexService {
     where
         F: FnMut(&str) -> anyhow::Result<()> + Send,
     {
-        if req.mcp_server.is_none() && req.mcp_tool.is_none() && req.tool_name.is_none() {
+        if req.incident_id.is_none()
+            && req.mcp_server.is_none()
+            && req.mcp_tool.is_none()
+            && req.tool_name.is_none()
+        {
             return Err(ServiceError::InvalidInput(
-                "assess mcp requires an mcp_server, mcp_tool, or tool_name".to_string(),
+                "assess mcp requires an mcp_server, mcp_tool, tool_name, or incident_id"
+                    .to_string(),
             ));
         }
 
@@ -44,7 +49,7 @@ impl CortexService {
             Some(req.limit.unwrap_or(1).max(1))
         };
         let invest_req = AiMcpInvestigateRequest {
-            incident_id: None,
+            incident_id: req.incident_id.clone(),
             mcp_server: req.mcp_server.clone(),
             mcp_tool: req.mcp_tool.clone(),
             tool_name: req.tool_name.clone(),
@@ -60,8 +65,9 @@ impl CortexService {
 
         if invest_resp.no_data || invest_resp.evidence.is_empty() {
             let target_desc = req
-                .mcp_server
+                .incident_id
                 .clone()
+                .or_else(|| req.mcp_server.clone())
                 .or_else(|| req.mcp_tool.clone())
                 .or_else(|| req.tool_name.clone())
                 .unwrap_or_default();

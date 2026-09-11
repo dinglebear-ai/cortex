@@ -17,6 +17,7 @@ fn test_service() -> (CortexService, Arc<DbPool>, tempfile::TempDir) {
 async fn run_skill_assessment_errors_when_no_incident_found() {
     let (service, _pool, _dir) = test_service();
     let req = SkillAssessRequest {
+        incident_id: None,
         skill: Some("nonexistent-skill-xyz".to_string()),
         plugin: None,
         model: None,
@@ -49,6 +50,7 @@ async fn run_skill_assessment_never_touches_gemini_when_run_llm_false() {
     // does not prove run_llm was honored; the audit-table absence does).
     let (service, pool, _dir) = test_service();
     let req = SkillAssessRequest {
+        incident_id: None,
         skill: Some("frustration-assessment".to_string()),
         plugin: None,
         model: None,
@@ -79,6 +81,7 @@ async fn run_skill_assessment_never_touches_gemini_when_run_llm_false() {
 async fn plugin_only_request_forwards_plugin_to_investigate_ai_skill_incidents() {
     let (service, _pool, _dir) = test_service();
     let req = SkillAssessRequest {
+        incident_id: None,
         skill: None,
         plugin: Some("no-such-plugin-xyz".to_string()),
         model: None,
@@ -110,6 +113,7 @@ async fn plugin_only_request_forwards_plugin_to_investigate_ai_skill_incidents()
 async fn run_skill_assessment_with_delta_run_llm_false_writes_no_llm_invocation_row() {
     let (service, pool, _dir) = test_service();
     let req = SkillAssessRequest {
+        incident_id: None,
         skill: Some("frustration-assessment".to_string()),
         plugin: None,
         model: None,
@@ -137,4 +141,34 @@ async fn run_skill_assessment_with_delta_run_llm_false_writes_no_llm_invocation_
         count, 0,
         "run_llm=false must never write an llm_invocations row (LlmRunner::run must not be called)"
     );
+}
+
+#[tokio::test]
+async fn incident_id_targets_exactly_one_skill_incident() {
+    use crate::app::models::AiSkillIncidentRequest;
+    use crate::app::services::seed_test_support::seed_skill_incident;
+
+    let (service, pool, _dir) = test_service();
+    seed_skill_incident(&pool, "sess-a", "alpha-skill", 60);
+    seed_skill_incident(&pool, "sess-b", "beta-skill", 30);
+    let listed = service
+        .list_ai_skill_incidents(AiSkillIncidentRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(listed.incidents.len(), 2);
+    let target = listed.incidents[1].incident_id.clone();
+
+    let resp = service
+        .run_skill_assessment_with_delta(
+            SkillAssessRequest {
+                incident_id: Some(target.clone()),
+                ..Default::default()
+            },
+            false,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.results.len(), 1);
+    assert_eq!(resp.results[0].incident_id, target);
 }

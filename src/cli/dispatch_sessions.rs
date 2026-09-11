@@ -1101,6 +1101,7 @@ pub(crate) async fn run_assess_skill(mode: &CliMode, args: AssessSkillArgs) -> R
         );
     }
     let req = SkillAssessRequest {
+        incident_id: args.incident_id.clone(),
         skill: args.skill.clone(),
         plugin: args.plugin.clone(),
         model: args.model.clone(),
@@ -1205,6 +1206,7 @@ pub(crate) async fn run_assess_mcp(mode: &CliMode, args: AssessMcpArgs) -> Resul
         }
     });
     let req = McpAssessRequest {
+        incident_id: args.incident_id.clone(),
         mcp_server,
         mcp_tool: None,
         tool_name: args.tool_name.clone(),
@@ -1311,6 +1313,7 @@ pub(crate) async fn run_assess_hooks(mode: &CliMode, args: AssessHooksArgs) -> R
     }
 
     let req = HookAssessRequest {
+        incident_id: args.incident_id.clone(),
         hook_event: args.hook_event.clone(),
         hook_name: args.hook_name.clone(),
         hook_source: args.hook_source.clone(),
