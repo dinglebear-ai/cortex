@@ -6,6 +6,19 @@ use cortex::heartbeat_agent::{HeartbeatAgentConfig, run_agent};
 
 use super::{HeartbeatAgentArgs, HeartbeatCommand};
 
+/// True when the raw arguments start the long-running heartbeat agent
+/// (`cortex [global flags] heartbeat agent ...`), the invocation service
+/// managers restart. Help requests are excluded so reading `--help` never
+/// counts as an agent start.
+pub(crate) fn is_agent_invocation(raw: &[String]) -> bool {
+    if raw.iter().any(|arg| arg == "--help" || arg == "-h") {
+        return false;
+    }
+    let mut positional = raw.iter().filter(|arg| !arg.starts_with('-'));
+    positional.next().map(String::as_str) == Some("heartbeat")
+        && positional.next().map(String::as_str) == Some("agent")
+}
+
 pub(crate) async fn run_heartbeat_no_db(command: HeartbeatCommand) -> Result<()> {
     match command {
         HeartbeatCommand::Agent(args) => {

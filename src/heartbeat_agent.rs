@@ -1455,6 +1455,10 @@ pub fn rollback_then<T>(
     })
 }
 
+/// How long to wait before retrying to clear an update marker that could not be
+/// removed after a successful heartbeat.
+const UPDATE_CONFIRM_RETRY: Duration = Duration::from_secs(600);
+
 /// Configuration checks that must pass before the agent does any work.
 fn startup_preflight(config: &HeartbeatAgentConfig) -> Result<()> {
     if let Some(target) = config.target.as_deref() {
@@ -1477,6 +1481,9 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
         .map(|v| !(v.eq_ignore_ascii_case("false") || v == "0"))
         .unwrap_or(true);
     let mut update_confirmed = false;
+    // After a failed marker clear, retry on this cadence rather than on every
+    // heartbeat, so a stuck marker is reported without flooding the logs.
+    let mut next_confirm_attempt = Instant::now();
 
     // Spawn Docker / journald / file-tail / AI-transcript forwarding streams as a background task.
     let mut streams_task = None;
@@ -1599,8 +1606,11 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
             Ok(directive) => {
                 attempt = 0;
                 // First successful heartbeat after a swap finalizes the update.
-                if !update_confirmed {
+                if !update_confirmed && Instant::now() >= next_confirm_attempt {
                     update_confirmed = crate::agent::self_update::confirm_update_success();
+                    if !update_confirmed {
+                        next_confirm_attempt = Instant::now() + UPDATE_CONFIRM_RETRY;
+                    }
                 }
                 if let Some(directive) = directive {
                     let update_needed = crate::agent::self_update::update_needed(&directive);
