@@ -119,7 +119,7 @@ impl CortexService {
     /// Runs one guarded LLM assessment for a `SkillIncidentEvidence`
     /// bundle via `LlmRunner::run`, forwarding deltas directly through the
     /// borrowed callback without an intermediate allocation or channel.
-    async fn run_one_skill_assessment<F>(
+    pub(super) async fn run_one_skill_assessment<F>(
         &self,
         evidence: &SkillIncidentEvidence,
         backend: &LlmBackend,

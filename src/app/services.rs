@@ -122,6 +122,8 @@ mod mcp_backfill;
 mod mcp_events;
 mod mcp_incidents;
 mod rag;
+mod reflect;
+mod reflect_llm;
 #[cfg(test)]
 mod seed_test_support;
 mod session_pages;

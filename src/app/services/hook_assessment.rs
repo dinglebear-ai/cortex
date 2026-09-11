@@ -102,7 +102,7 @@ impl CortexService {
         })
     }
 
-    async fn run_one_hook_assessment<F>(
+    pub(super) async fn run_one_hook_assessment<F>(
         &self,
         evidence: &HookIncidentEvidence,
         backend: &LlmBackend,
