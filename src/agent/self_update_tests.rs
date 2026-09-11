@@ -450,3 +450,25 @@ fn no_rejected_record_blocks_nothing() {
     let dir = tempfile::tempdir().unwrap();
     assert!(!rejected_update_blocks(dir.path(), "3.16.1"));
 }
+
+#[cfg(unix)]
+#[test]
+fn rejected_update_record_is_private_and_replaces_atomically() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write_rejected(dir.path(), "3.16.1").unwrap();
+    write_rejected(dir.path(), "3.16.2").unwrap();
+    assert_eq!(read_rejected(dir.path()).as_deref(), Some("3.16.2"));
+    let mode = std::fs::metadata(rejected_path(dir.path()))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "rejected record must be private");
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+        .collect();
+    assert!(leftovers.is_empty(), "no temp files left behind");
+}

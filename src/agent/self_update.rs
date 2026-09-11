@@ -94,12 +94,15 @@ fn rejected_path(dir: &Path) -> PathBuf {
 }
 
 fn write_rejected(dir: &Path, version: &str) -> Result<()> {
-    let path = rejected_path(dir);
     let json = serde_json::to_string(&RejectedUpdate {
         version: version.to_string(),
     })
     .context("serialize rejected update record")?;
-    std::fs::write(&path, json).with_context(|| format!("write rejected update record {path:?}"))
+    write_state_file_atomic(
+        &rejected_path(dir),
+        json.as_bytes(),
+        "rejected update record",
+    )
 }
 
 fn read_rejected(dir: &Path) -> Option<String> {
@@ -743,8 +746,14 @@ fn install_and_restart(_staged: &Path, _exe: &Path, _fallback: Option<&Path>) ->
 }
 
 fn write_marker(exe: &Path, marker: &UpdateMarker) -> Result<()> {
-    let path = marker_path(exe);
     let json = serde_json::to_string(marker).context("serialize update marker")?;
+    write_state_file_atomic(&marker_path(exe), json.as_bytes(), "update marker")
+}
+
+/// Write a small self-update state file without following symlinks: a private
+/// (0600) temp file created exclusively, fsynced, then renamed into place.
+fn write_state_file_atomic(path: &Path, bytes: &[u8], what: &str) -> Result<()> {
+    let path = path.to_path_buf();
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -756,11 +765,11 @@ fn write_marker(exe: &Path, marker: &UpdateMarker) -> Result<()> {
         }
         let mut file = options
             .open(&tmp)
-            .with_context(|| format!("create update marker {tmp:?}"))?;
-        file.write_all(json.as_bytes())
-            .context("write update marker")?;
-        file.sync_all().context("fsync update marker")?;
-        std::fs::rename(&tmp, &path).with_context(|| format!("publish update marker {path:?}"))
+            .with_context(|| format!("create {what} {tmp:?}"))?;
+        file.write_all(bytes)
+            .with_context(|| format!("write {what}"))?;
+        file.sync_all().with_context(|| format!("fsync {what}"))?;
+        std::fs::rename(&tmp, &path).with_context(|| format!("publish {what} {path:?}"))
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
