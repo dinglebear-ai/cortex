@@ -423,3 +423,30 @@ fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
     assert!(validate_binary(&fake, "9.9.9").is_ok());
     assert!(validate_binary(&fake, "1.2.3").is_err());
 }
+
+#[test]
+fn rejected_update_record_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(read_rejected(dir.path()), None);
+    write_rejected(dir.path(), "3.16.1").unwrap();
+    assert_eq!(read_rejected(dir.path()).as_deref(), Some("3.16.1"));
+}
+
+#[test]
+fn rejected_version_is_skipped_until_a_different_version_is_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    write_rejected(dir.path(), "3.16.1").unwrap();
+    // The version that was rolled back stays blocked, however often it is offered.
+    assert!(rejected_update_blocks(dir.path(), "3.16.1"));
+    assert!(rejected_update_blocks(dir.path(), "3.16.1"));
+    // A new release clears the record and is allowed through.
+    assert!(!rejected_update_blocks(dir.path(), "3.16.2"));
+    assert_eq!(read_rejected(dir.path()), None);
+    assert!(!rejected_update_blocks(dir.path(), "3.16.1"));
+}
+
+#[test]
+fn no_rejected_record_blocks_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!rejected_update_blocks(dir.path(), "3.16.1"));
+}

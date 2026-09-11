@@ -43,6 +43,9 @@ const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10);
 const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_AGENT_BINARY_BYTES: usize = 128 * 1024 * 1024;
 const MARKER_FILE: &str = ".cortex-update-state.json";
+/// Records a version this agent rolled back from, so it is not re-installed on
+/// the next heartbeat. Cleared as soon as the server offers any other version.
+const REJECTED_FILE: &str = ".cortex-update-rejected.json";
 const RETAIN_BACKUPS: usize = 2;
 
 /// Server-issued update directive, deserialized from the heartbeat `202` body.
@@ -78,6 +81,46 @@ struct UpdateMarker {
     bak: PathBuf,
     /// Restarts observed since the swap without a confirming heartbeat.
     attempts: u32,
+}
+
+/// A version that was installed, never confirmed healthy, and rolled back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RejectedUpdate {
+    version: String,
+}
+
+fn rejected_path(dir: &Path) -> PathBuf {
+    dir.join(REJECTED_FILE)
+}
+
+fn write_rejected(dir: &Path, version: &str) -> Result<()> {
+    let path = rejected_path(dir);
+    let json = serde_json::to_string(&RejectedUpdate {
+        version: version.to_string(),
+    })
+    .context("serialize rejected update record")?;
+    std::fs::write(&path, json).with_context(|| format!("write rejected update record {path:?}"))
+}
+
+fn read_rejected(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(rejected_path(dir)).ok()?;
+    serde_json::from_str::<RejectedUpdate>(&raw)
+        .ok()
+        .map(|r| r.version)
+}
+
+/// True when `version` is the one this agent already rolled back from, so the
+/// update must be skipped. Any other offered version clears the record: a new
+/// release deserves a fresh attempt.
+fn rejected_update_blocks(dir: &Path, version: &str) -> bool {
+    match read_rejected(dir) {
+        Some(rejected) if rejected == version => true,
+        Some(_) => {
+            let _ = std::fs::remove_file(rejected_path(dir));
+            false
+        }
+        None => false,
+    }
 }
 
 fn marker_path(exe: &Path) -> PathBuf {
@@ -258,6 +301,13 @@ pub async fn maybe_update(
         .parent()
         .ok_or_else(|| anyhow!("current_exe has no parent dir"))?
         .to_path_buf();
+    if rejected_update_blocks(&dir, &directive.version) {
+        tracing::debug!(
+            version = %directive.version,
+            "skipping agent update this binary already rolled back from"
+        );
+        return Ok(());
+    }
     let _lifecycle_lock =
         crate::setup::heartbeat_agent_env::acquire_heartbeat_agent_lifecycle_lock()
             .context("acquire shared heartbeat-agent lifecycle lock")?;
@@ -511,6 +561,13 @@ pub fn confirm_or_rollback() -> Result<()> {
             "agent update never confirmed healthy; rolling back"
         );
         if marker.bak.exists() {
+            // Remember the failed version first: after the re-exec the marker no
+            // longer matches the running binary and is dropped as stale, and the
+            // next heartbeat would otherwise offer the same update again.
+            let dir = exe.parent().unwrap_or_else(|| Path::new("."));
+            if let Err(error) = write_rejected(dir, &marker.target) {
+                tracing::warn!(error = %error, version = %marker.target, "could not record rejected agent update");
+            }
             return install_and_restart(&marker.bak, &exe, None);
         }
         // No backup to restore — give up on rollback but clear the marker so we

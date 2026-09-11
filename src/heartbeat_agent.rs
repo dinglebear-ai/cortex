@@ -1430,17 +1430,29 @@ pub fn backoff_duration(attempt: u32) -> Duration {
     Duration::from_millis(millis.min(4_000))
 }
 
-pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
-    let host_id = load_or_create_host_id(&config.host_id_path)?;
+/// Checks that must pass before the agent does any work, in the one order that
+/// keeps self-update recoverable: the rollback check runs first, so a freshly
+/// installed binary that cannot start with the existing configuration still
+/// counts its failed attempt and is rolled back, instead of exiting before the
+/// rollback is ever reached and crash-looping.
+fn startup_preflight(
+    config: &HeartbeatAgentConfig,
+    rollback_check: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    // If we are running immediately after a self-update, confirm it settled or
+    // roll back to the previous binary. May re-exec and not return.
+    if let Err(error) = rollback_check() {
+        tracing::error!(error = %error, "agent update rollback check failed");
+    }
     if let Some(target) = config.target.as_deref() {
         validate_ingest_transport(target, config.allow_trusted_overlay_http)?;
     }
+    Ok(())
+}
 
-    // If we are running immediately after a self-update, confirm it settled or
-    // roll back to the previous binary. May re-exec and not return.
-    if let Err(error) = crate::agent::self_update::confirm_or_rollback() {
-        tracing::error!(error = %error, "agent update rollback check failed");
-    }
+pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
+    startup_preflight(&config, crate::agent::self_update::confirm_or_rollback)?;
+    let host_id = load_or_create_host_id(&config.host_id_path)?;
 
     // Server-coordinated auto-update keeps the agent binary in lockstep with the
     // cortex server it reports to. Opt out with CORTEX_AGENT_AUTO_UPDATE=false.
