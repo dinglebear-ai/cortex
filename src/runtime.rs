@@ -300,7 +300,12 @@ impl RuntimeCore {
     pub async fn load_query_only() -> Result<Self> {
         // Use load_for_stdio() to skip the non-loopback bind safety gate —
         // stdio mode never binds an HTTP port so the gate is irrelevant.
-        let config = Config::load_for_stdio()?;
+        Self::query_only_with_retry(Config::load_for_stdio()?).await
+    }
+
+    /// Query-only runtime for a caller-prepared config, retrying briefly
+    /// when another writer holds the SQLite lock.
+    pub async fn query_only_with_retry(config: Config) -> Result<Self> {
         for attempt in 0..3 {
             match Self::query_only(config.clone()).await {
                 Ok(runtime) => return Ok(runtime),

@@ -216,6 +216,30 @@ async fn run_cli(invocation: CliInvocation) -> Result<()> {
         return cli::run(cli::CliMode::Local(runtime.service()), command).await;
     }
 
+    if let cli::CliCommand::Reflect(args) = &command {
+        if let Some(trigger) = flags.http_trigger() {
+            anyhow::bail!("cortex reflect runs locally; remove {trigger}");
+        }
+        let (db_path, source) = cli::resolve_reflect_db_path(
+            args.db.as_deref(),
+            cortex::env::var_os("CORTEX_DB_PATH"),
+            cortex::env::var_os("HOME"),
+        )?;
+        if source == cli::ReflectDbSource::Env {
+            eprintln!(
+                "[reflect] warning: using CORTEX_DB_PATH={}; if this is a live cortex server \
+                 database, reflect will write transcript records into it",
+                db_path.display()
+            );
+        }
+        cli::prepare_reflect_db_dir(&db_path, source)?;
+        let mut config = cortex::config::Config::load_for_stdio()?;
+        config.storage.db_path = db_path.clone();
+        let runtime = RuntimeCore::query_only_with_retry(config).await?;
+        cli::restrict_reflect_db_file(&db_path)?;
+        return cli::run(cli::CliMode::Local(runtime.service()), command).await;
+    }
+
     // Build CliMode ONCE per invocation, matching the per-invocation reqwest
     // Client rule from bead .5. For Local mode we lazily load the runtime so
     // HTTP-mode invocations don't pay the SQLite-open cost.

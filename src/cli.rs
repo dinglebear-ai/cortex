@@ -391,7 +391,11 @@ use setup::{SetupPhase, SetupStatus};
 
 mod dispatch;
 mod dispatch_db;
+mod dispatch_reflect;
 mod dispatch_sessions;
+pub(crate) use dispatch_reflect::{
+    ReflectDbSource, prepare_reflect_db_dir, resolve_reflect_db_path, restrict_reflect_db_file,
+};
 mod http_client;
 
 #[cfg(test)]

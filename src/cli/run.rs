@@ -180,6 +180,7 @@ pub(crate) async fn run(mode: CliMode, command: CliCommand) -> Result<()> {
             }
             super::SessionsCommand::McpAssess(args) => dispatch::run_assess_mcp(&mode, args).await,
         },
+        CliCommand::Reflect(args) => super::dispatch_reflect::run_reflect(&mode, args).await,
         CliCommand::Assess(command) => match command {
             super::AssessCommand::Skill(args) => dispatch::run_assess_skill(&mode, args).await,
             super::AssessCommand::Abuse(args) => dispatch::run_assess_abuse(&mode, args).await,

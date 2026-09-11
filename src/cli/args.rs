@@ -3,6 +3,7 @@ use cortex::compose::{ComposeTarget, MutationOptions};
 
 mod alerts;
 mod assess;
+mod reflect;
 mod sessions;
 mod surface;
 
@@ -13,6 +14,7 @@ pub(crate) use alerts::{
 pub(crate) use assess::{
     AssessAbuseArgs, AssessCommand, AssessHooksArgs, AssessMcpArgs, AssessSkillArgs,
 };
+pub(crate) use reflect::ReflectArgs;
 pub(crate) use sessions::{
     SessionsAbuseArgs, SessionsAddArgs, SessionsAssessArgs, SessionsBlocksArgs,
     SessionsCheckpointsArgs, SessionsCommand, SessionsContextArgs, SessionsCorrelateArgs,
@@ -39,6 +41,7 @@ pub(crate) enum CliCommand {
     Hosts(HostsCommand),
     Sessions(SessionsCommand),
     Assess(AssessCommand),
+    Reflect(ReflectArgs),
     Incident(IncidentArgs),
     Correlate(CorrelateArgs),
     State(StateCommand),

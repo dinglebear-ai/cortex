@@ -265,6 +265,8 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
     // LLM assessment spawns Gemini CLI on the local host via LlmRunner —
     // local-only by design (see PR 4 of GH #94's safety invariants).
     local_cli!("assess", Sessions, Canonical),
+    // One-shot local reflection report; may run the local LLM like `assess`.
+    local_cli!("reflect", Sessions, Canonical),
     cli!("analysis", Analysis, Canonical, Read),
     cli!("state", State, Canonical, Read),
     cli!("ingest", Ingest, Canonical, Admin),
@@ -453,6 +455,7 @@ pub fn is_cli_mode_command(name: &str) -> bool {
             | "hosts"
             | "sessions"
             | "assess"
+            | "reflect"
             | "analysis"
             | "state"
             | "status"

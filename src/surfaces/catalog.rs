@@ -121,6 +121,7 @@ pub const CLI_ROOTS: &[&str] = &[
     "hosts",
     "sessions",
     "assess",
+    "reflect",
     "analysis",
     "state",
     "status",

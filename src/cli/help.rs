@@ -55,7 +55,7 @@ const SECTIONS: &[(&str, &[&str])] = &[
         "Analytics & Correlation",
         &["analysis", "correlate", "state", "stats", "timeline"],
     ),
-    ("AI Transcripts", &["sessions", "assess"]),
+    ("AI Transcripts", &["sessions", "assess", "reflect"]),
     ("Signals & Alerts", &["alerts"]),
     ("Ingestion", &["ingest", "heartbeat"]),
     (
@@ -213,6 +213,13 @@ const CATALOG: &[CommandDoc] = &[
             "cortex assess skill --incident-id ID [--since TIME] [--until TIME] [--no-llm] [--json]",
             "cortex assess abuse [--incident-id ID] [--model MODEL] [--project PATH] [--tool TOOL] [--since TIME] [--until TIME] [--limit N] [--window-minutes N] [--correlation-window-minutes N] [--no-llm] [--json]",
             "cortex assess hooks [--incident-id ID] [--hook NAME] [--hook-event EVENT] [--hook-source SOURCE] [--model MODEL] [--project PATH] [--tool TOOL] [--since TIME] [--until TIME] [--limit N] [--all] [--window-minutes N] [--correlation-window-minutes N] [--no-llm] [--collect-config] [--json]",
+        ],
+    },
+    CommandDoc {
+        name: "reflect",
+        summary: "One-shot local skill, MCP, and hook reflection report (local-only)",
+        usage: &[
+            "cortex reflect [--since TIME] [--until TIME] [--project PATH] [--tool TOOL] [--kinds skill,mcp,hook] [--no-llm] [--max-assess N] [--no-index] [--db PATH] [--json]",
         ],
     },
     CommandDoc {

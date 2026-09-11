@@ -9,9 +9,11 @@ use super::parse_logs::{
 use super::{CliCommand, commands, parse_config, suggest};
 
 mod assess;
+mod reflect;
 mod sessions;
 
 use self::assess::parse_assess;
+use self::reflect::parse_reflect;
 use self::sessions::parse_sessions_command;
 
 pub(crate) const TOP_LEVEL_COMMANDS: &[&str] = cortex::surfaces::CLI_ROOTS;
@@ -27,6 +29,7 @@ pub(crate) fn parse_command(args: Vec<String>) -> Result<CliCommand> {
         "hosts" => parse_hosts(rest),
         "sessions" => parse_sessions_command(rest),
         "assess" => parse_assess(rest),
+        "reflect" => parse_reflect(rest),
         "analysis" => parse_analysis(rest),
         "state" => commands::state::parse_state(rest),
         "status" => parse_status(rest),
