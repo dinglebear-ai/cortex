@@ -9,9 +9,9 @@ fn parse(args: &[&str]) -> anyhow::Result<ReflectArgs> {
 }
 
 #[test]
-fn defaults_cover_all_kinds_llm_on_and_seven_days() {
-    let parsed = parse(&[]).unwrap();
-    assert_eq!(parsed.kinds, ReflectKind::ALL.to_vec());
+fn defaults_are_llm_on_and_seven_days() {
+    let parsed = parse(&["skills"]).unwrap();
+    assert_eq!(parsed.kinds, vec![ReflectKind::Skill]);
     assert!(!parsed.no_llm && !parsed.no_index && !parsed.json);
     assert_eq!(parsed.max_assess, DEFAULT_REFLECT_MAX_ASSESS);
     assert_eq!(parsed.db, None);
@@ -22,18 +22,27 @@ fn defaults_cover_all_kinds_llm_on_and_seven_days() {
 }
 
 #[test]
+fn each_kind_is_one_positional() {
+    assert_eq!(parse(&["skills"]).unwrap().kinds, vec![ReflectKind::Skill]);
+    assert_eq!(parse(&["mcp"]).unwrap().kinds, vec![ReflectKind::Mcp]);
+    assert_eq!(parse(&["hooks"]).unwrap().kinds, vec![ReflectKind::Hook]);
+    // Singular forms are accepted too.
+    assert_eq!(parse(&["skill"]).unwrap().kinds, vec![ReflectKind::Skill]);
+    assert_eq!(parse(&["hook"]).unwrap().kinds, vec![ReflectKind::Hook]);
+}
+
+#[test]
 fn every_flag_is_parsed() {
     let parsed = parse(&[
         "--since",
         "2026-09-01T00:00:00Z",
+        "hooks",
         "--until",
         "2026-09-02T00:00:00Z",
         "--project",
         "/p",
         "--tool",
         "codex",
-        "--kinds",
-        "hook,skill",
         "--no-llm",
         "--max-assess",
         "0",
@@ -43,37 +52,33 @@ fn every_flag_is_parsed() {
         "--json",
     ])
     .unwrap();
+    assert_eq!(parsed.kinds, vec![ReflectKind::Hook]);
     assert!(parsed.since.starts_with("2026-09-01"));
     assert!(parsed.until.as_deref().unwrap().starts_with("2026-09-02"));
     assert_eq!(parsed.project.as_deref(), Some("/p"));
     assert_eq!(parsed.tool.as_deref(), Some("codex"));
-    assert_eq!(parsed.kinds, vec![ReflectKind::Hook, ReflectKind::Skill]);
     assert!(parsed.no_llm && parsed.no_index && parsed.json);
     assert_eq!(parsed.max_assess, 0);
     assert_eq!(parsed.db, Some(std::path::PathBuf::from("/tmp/r.db")));
 }
 
 #[test]
-fn kinds_are_deduplicated() {
-    assert_eq!(
-        parse(&["--kinds", "mcp,mcp, mcp"]).unwrap().kinds,
-        vec![ReflectKind::Mcp]
-    );
+fn a_kind_is_required() {
+    let error = parse(&[]).unwrap_err().to_string();
+    assert!(error.contains("cortex reflect skills"), "{error}");
 }
 
 #[test]
-fn unknown_kind_is_rejected() {
-    let error = parse(&["--kinds", "skill,abuse"]).unwrap_err().to_string();
+fn unknown_and_extra_kinds_are_rejected() {
+    let error = parse(&["abuse"]).unwrap_err().to_string();
     assert!(error.contains("unknown kind 'abuse'"), "{error}");
-}
-
-#[test]
-fn empty_kinds_is_rejected() {
-    assert!(parse(&["--kinds", ","]).is_err());
+    let error = parse(&["skills", "mcp"]).unwrap_err().to_string();
+    assert!(error.contains("one kind"), "{error}");
 }
 
 #[test]
 fn removed_and_unknown_options_are_rejected() {
-    assert!(parse(&["--out", "x.md"]).is_err());
-    assert!(parse(&["--all"]).is_err());
+    assert!(parse(&["skills", "--kinds", "skill"]).is_err());
+    assert!(parse(&["skills", "--out", "x.md"]).is_err());
+    assert!(parse(&["skills", "--all"]).is_err());
 }

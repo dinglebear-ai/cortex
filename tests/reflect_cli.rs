@@ -52,7 +52,7 @@ fn cortex(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
 }
 
 fn reflect_json(home: &Path, extra: &[&str], env: &[(&str, &str)]) -> serde_json::Value {
-    let mut args = vec!["reflect", "--json", "--kinds", "skill"];
+    let mut args = vec!["reflect", "skills", "--json"];
     args.extend_from_slice(extra);
     let output = cortex(home, &args, env);
     assert!(
@@ -166,7 +166,11 @@ fn reflect_server_mode_needs_a_token() {
     // client discovery fails closed before any local indexing.
     let home = tempfile::tempdir().unwrap();
     write_fixture(home.path());
-    let output = cortex(home.path(), &["--http", "reflect", "--no-llm"], &[]);
+    let output = cortex(
+        home.path(),
+        &["--http", "reflect", "skills", "--no-llm"],
+        &[],
+    );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("CORTEX_API_TOKEN"));
     assert!(

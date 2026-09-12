@@ -128,9 +128,7 @@ fn write_summary(md: &mut String, report: &ReflectReport) {
             row.total
         );
     }
-    md.push_str(
-        "Scores are heuristic. They share one formula shape across kinds but are not calibrated between them.\n\n",
-    );
+    md.push_str("Scores are heuristic.\n\n");
 }
 
 fn write_assessed(md: &mut String, position: usize, assessed: &ReflectAssessed) {

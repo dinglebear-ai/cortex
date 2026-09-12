@@ -217,10 +217,10 @@ const CATALOG: &[CommandDoc] = &[
     },
     CommandDoc {
         name: "reflect",
-        summary: "One-shot local skill, MCP, and hook reflection report (local-only)",
+        summary: "One-shot reflection report for one kind: skills, MCP tools, or hooks",
         usage: &[
-            "cortex reflect [--since TIME] [--until TIME] [--project PATH] [--tool TOOL] [--kinds skill,mcp,hook] [--no-llm] [--max-assess N] [--no-index] [--db PATH] [--json]",
-            "cortex --server URL --token TOKEN reflect [flags]   # read incidents from a Cortex server; the LLM step stays local",
+            "cortex reflect <skills|mcp|hooks> [--since TIME] [--until TIME] [--project PATH] [--tool TOOL] [--no-llm] [--max-assess N] [--no-index] [--db PATH] [--json]",
+            "cortex --server URL --token TOKEN reflect <skills|mcp|hooks> [flags]   # read incidents from a Cortex server; the LLM step stays local",
         ],
     },
     CommandDoc {

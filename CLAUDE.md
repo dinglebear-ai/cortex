@@ -40,7 +40,7 @@ cortex db integrity              # run SQLite integrity_check
 cortex db backup                 # create WAL-safe SQLite backup
 cortex assess skill <skill> [--since 7d] [--tool codex] [--all|--limit N] [--no-llm]
 cortex assess abuse [--incident-id ID] [--no-llm]  # unified assess namespace; see README "Skill and abuse assessment"
-cortex reflect [--since 7d] [--kinds skill,mcp,hook] [--no-llm] [--max-assess 5] [--db PATH] [--json]  # one-shot local reflection report
+cortex reflect <skills|mcp|hooks> [--since 7d] [--no-llm] [--max-assess 5] [--db PATH] [--json]  # one-shot reflection report for one kind (--http reads from the server)
 ```
 
 Recipes in `Justfile` (run `just --list` for the full set):

@@ -408,18 +408,18 @@ Prompt scrubbing is enabled by default. Skill, MCP, and hook event extraction ha
 
 ### One-shot reflection report
 
-`cortex reflect` runs the whole skill, MCP, and hook reflection loop locally.
+`cortex reflect <skills|mcp|hooks>` runs the reflection loop for one kind locally.
 It needs no server and no tokens.
 
 ```bash
-cortex reflect                          # last 7 days, LLM on the top 5 incidents
-cortex reflect --no-llm                 # deterministic report only, no LLM program needed
-cortex reflect --kinds skill,hook --since 30d --max-assess 10 > reflect.md
-cortex reflect --json | jq '.unassessed[].incident_id'
+cortex reflect skills                   # last 7 days, LLM on the top 5 skill incidents
+cortex reflect mcp --no-llm             # deterministic report only, no LLM program needed
+cortex reflect hooks --since 30d --max-assess 10 > hooks.md
+cortex reflect skills --json | jq '.unassessed[].incident_id'
 ```
 
 It indexes transcripts modified in the window (Claude, Codex, Gemini,
-Antigravity), ranks incidents from all selected kinds together, and assesses
+Antigravity), ranks that kind's incidents, and assesses
 the highest-scoring ones with the LLM selected by `CORTEX_LLM`. Results go to
 `~/.cortex/reflect.db` (owner-only) unless you pass `--db` or set
 `CORTEX_DB_PATH`. Each unassessed incident lists the
@@ -429,8 +429,8 @@ If a Cortex server already receives your transcripts (the host agent
 forwards them), point `reflect` at it instead of indexing locally:
 
 ```bash
-cortex --server http://cortex.lan:3100 --token "$(cat ~/.cortex/api-token)" reflect
-CORTEX_USE_HTTP=1 cortex reflect        # uses CORTEX_URL and CORTEX_API_TOKEN
+cortex --server http://cortex.lan:3100 --token "$(cat ~/.cortex/api-token)" reflect skills
+CORTEX_USE_HTTP=1 cortex reflect mcp    # uses CORTEX_URL and CORTEX_API_TOKEN
 ```
 
 In server mode, incidents are listed and investigated on the server, so

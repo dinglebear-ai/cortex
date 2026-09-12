@@ -1,4 +1,4 @@
-//! Parser for `cortex reflect`.
+//! Parser for `cortex reflect <skills|mcp|hooks>`.
 
 use std::path::PathBuf;
 
@@ -12,12 +12,13 @@ use super::super::suggest;
 pub(crate) const DEFAULT_REFLECT_SINCE: &str = "7d";
 pub(crate) const DEFAULT_REFLECT_MAX_ASSESS: u32 = 5;
 
+const REFLECT_USAGE: &str = "reflect: which kind? use `cortex reflect skills`, `cortex reflect mcp`, or `cortex reflect hooks`";
+
 const REFLECT_FLAGS: &[&str] = &[
     "--since",
     "--until",
     "--project",
     "--tool",
-    "--kinds",
     "--no-llm",
     "--max-assess",
     "--no-index",
@@ -27,12 +28,13 @@ const REFLECT_FLAGS: &[&str] = &[
 
 pub(crate) fn parse_reflect(args: &[String]) -> Result<CliCommand> {
     let mut since: Option<String> = None;
+    let mut kind: Option<ReflectKind> = None;
     let mut parsed = ReflectArgs {
         since: String::new(),
         until: None,
         project: None,
         tool: None,
-        kinds: ReflectKind::ALL.to_vec(),
+        kinds: Vec::new(),
         no_llm: false,
         max_assess: DEFAULT_REFLECT_MAX_ASSESS,
         no_index: false,
@@ -49,39 +51,37 @@ pub(crate) fn parse_reflect(args: &[String]) -> Result<CliCommand> {
             "--until" => parsed.until = Some(norm_time(flags.value("--until")?)?),
             "--project" => parsed.project = Some(flags.value("--project")?),
             "--tool" => parsed.tool = Some(flags.value("--tool")?),
-            "--kinds" => parsed.kinds = parse_kinds(&flags.value("--kinds")?)?,
             "--max-assess" => {
                 parsed.max_assess = parse_u32_flag("--max-assess", flags.value("--max-assess")?)?
             }
             "--db" => parsed.db = Some(PathBuf::from(flags.value("--db")?)),
+            other if !other.starts_with('-') && kind.is_none() => {
+                kind = Some(parse_kind(other)?);
+            }
+            other if !other.starts_with('-') => {
+                bail!("reflect takes one kind; got a second one: '{other}'")
+            }
             other => bail!(
                 "{}",
                 suggest::unknown_option("reflect", other, REFLECT_FLAGS)
             ),
         }
     }
+    let Some(kind) = kind else {
+        bail!("{REFLECT_USAGE}");
+    };
+    parsed.kinds = vec![kind];
     parsed.since = norm_time(since.unwrap_or_else(|| DEFAULT_REFLECT_SINCE.to_string()))?;
     Ok(CliCommand::Reflect(parsed))
 }
 
-fn parse_kinds(raw: &str) -> Result<Vec<ReflectKind>> {
-    let mut kinds = Vec::new();
-    for part in raw
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let Some(kind) = ReflectKind::parse(part) else {
-            bail!("reflect: unknown kind '{part}'; expected skill, mcp, or hook");
-        };
-        if !kinds.contains(&kind) {
-            kinds.push(kind);
-        }
+fn parse_kind(raw: &str) -> Result<ReflectKind> {
+    match raw {
+        "skills" | "skill" => Ok(ReflectKind::Skill),
+        "mcp" => Ok(ReflectKind::Mcp),
+        "hooks" | "hook" => Ok(ReflectKind::Hook),
+        other => bail!("reflect: unknown kind '{other}'; expected skills, mcp, or hooks"),
     }
-    if kinds.is_empty() {
-        bail!("reflect: --kinds needs at least one of skill, mcp, hook");
-    }
-    Ok(kinds)
 }
 
 #[cfg(test)]
