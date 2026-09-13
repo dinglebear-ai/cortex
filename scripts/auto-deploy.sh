@@ -26,7 +26,6 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 git fetch --no-tags origin main
-before="$(git rev-parse HEAD)"
 git pull --ff-only
 after="$(git rev-parse HEAD)"
 
@@ -41,7 +40,9 @@ fi
 running_version="$(
   docker exec cortex cortex --version 2>/dev/null | awk '{print $2}' || true
 )"
-if [[ "$before" == "$after" && "$running_version" == "$expected_version" ]]; then
+receipt="$(git rev-parse --git-path cortex-deployed-revision)"
+deployed_revision="$(cat "$receipt" 2>/dev/null || true)"
+if [[ "$deployed_revision" == "$after" && "$running_version" == "$expected_version" ]]; then
   echo "cortex auto-deploy: current at $expected_version"
   exit 0
 fi
@@ -55,6 +56,9 @@ for _ in $(seq 1 24); do
   if curl -fsS "$health_url" >/dev/null; then
     deployed="$(docker exec cortex cortex --version 2>/dev/null || true)"
     if [[ "$deployed" == "cortex $expected_version" ]]; then
+      receipt_tmp="$(mktemp "${receipt}.XXXXXX")"
+      printf '%s\n' "$after" >"$receipt_tmp"
+      mv -f -- "$receipt_tmp" "$receipt"
       echo "cortex auto-deploy: deployed $deployed"
       exit 0
     fi

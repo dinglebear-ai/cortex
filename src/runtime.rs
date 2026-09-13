@@ -525,6 +525,21 @@ impl RuntimeCore {
             self.config.mcp.api_token.0.clone(),
             forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
+        )
+        .with_ingest_policy(
+            Arc::clone(&self.storage_state),
+            EnrichmentConfig {
+                authelia_source_ip: self.config.enrichment.authelia_source_ip.clone(),
+                adguard_source_ip: self.config.enrichment.adguard_source_ip.clone(),
+                agent_docker_source_prefixes: self
+                    .config
+                    .enrichment
+                    .agent_docker_source_prefixes
+                    .clone(),
+                agent_docker_trust_any_source: self.config.enrichment.agent_docker_trust_any_source,
+                scrub_prompts: self.config.enrichment.scrub_prompts,
+                api_token: self.config.mcp.api_token.0.clone(),
+            },
         );
         crate::syslog_forward_ingest::router(state)
     }

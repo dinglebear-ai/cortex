@@ -2,14 +2,13 @@
 "use strict";
 const crypto = require("node:crypto");
 const fs = require("node:fs");
-const http = require("node:http");
-const https = require("node:https");
+const { download } = require("../lib/download");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { binaryPath, downloadUrl, installRoot, releaseVersion, targetFor } = require("../lib/platform");
 function log(message) { process.stderr.write(`cortex-rmcp: ${message}\n`); }
-function download(url, destination) { return new Promise((resolve,reject)=>{ const client = url.startsWith("http:") ? http : https; const request=client.get(url,(response)=>{ if([301,302,303,307,308].includes(response.statusCode)){ response.resume(); download(response.headers.location,destination).then(resolve,reject); return; } if(response.statusCode!==200){ response.resume(); reject(new Error(`download failed (${response.statusCode}) from ${url}`)); return; } const file=fs.createWriteStream(destination,{mode:0o600}); response.pipe(file); file.on("finish",()=>file.close(resolve)); file.on("error",reject); }); request.on("error",reject); }); }
+
 function sha256(file) {
   const hash = crypto.createHash("sha256");
   hash.update(fs.readFileSync(file));
@@ -35,12 +34,12 @@ async function verifyChecksum(url, archive) {
   let expected;
 
   try {
-    await download(url + ".sha256", sidecarFile);
+    await download(url + ".sha256", sidecarFile, { maxBytes: 1024 * 1024 });
     expected = checksumFromText(fs.readFileSync(sidecarFile, "utf8"), asset);
   } catch (sidecarError) {
     const manifestUrl = url.replace(/\/[^/]+$/, "/SHA256SUMS");
     const manifestFile = archive + ".SHA256SUMS";
-    await download(manifestUrl, manifestFile);
+    await download(manifestUrl, manifestFile, { maxBytes: 1024 * 1024 });
     expected = checksumFromText(fs.readFileSync(manifestFile, "utf8"), asset);
   }
 

@@ -451,3 +451,32 @@ fn older_different_replay_is_a_true_noop_without_outbox() {
     assert_eq!(replay.run.event_count, 1);
     assert_projection_counts(&pool, [1, 1, 1, 1, 1]);
 }
+
+#[test]
+fn observation_uniqueness_filters_freshness_before_limiting_matches() {
+    let (_dir, pool) = setup();
+    for index in 0..3 {
+        let mut value = input();
+        value.run.native_session_id = format!("candidate-{index}");
+        value.actor = None;
+        value.event.source_id = format!("candidate-{index}");
+        value.event.source_log_id = None;
+        value.worktree_evidence.as_mut().unwrap().evidence_source = format!("candidate-{index}");
+        if index > 0 {
+            value.run.last_activity_at = "2026-08-05T12:59:00.000Z".into();
+            value.worktree_evidence.as_mut().unwrap().last_seen_at =
+                "2026-08-05T12:59:00.000Z".into();
+        }
+        write_agent_projection(&pool, &value).unwrap();
+    }
+    let found = super::find_unique_projection_run_for_repository_observation(
+        &pool,
+        "worktree-key",
+        "2026-08-05T13:00:00.000Z",
+    )
+    .unwrap();
+    assert!(matches!(
+        found,
+        super::AgentRepositoryObservationRunMatch::Ambiguous
+    ));
+}

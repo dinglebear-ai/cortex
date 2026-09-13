@@ -194,6 +194,7 @@ impl HttpClient {
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .default_headers(headers)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .context("failed to build reqwest::Client")?;
 

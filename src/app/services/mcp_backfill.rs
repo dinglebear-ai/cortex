@@ -40,6 +40,8 @@ struct CandidateRow {
     ai_session_id: Option<String>,
     hostname: String,
     timestamp: String,
+    ai_transcript_path: Option<String>,
+    metadata_json: Option<String>,
     raw_json: Option<String>,
 }
 
@@ -95,9 +97,22 @@ fn run_backfill(
         result.scanned += rows.len() as u64;
         remaining = remaining.saturating_sub(rows.len() as u64);
 
+        let recovered = super::transcript_recovery::recover(rows.iter().map(|row| {
+            (
+                row.id,
+                row.ai_transcript_path.as_deref(),
+                row.metadata_json.as_deref(),
+            )
+        }));
         let mut inserts = Vec::new();
         for row in &rows {
-            let Some(raw_json) = &row.raw_json else {
+            let raw_json = if row.ai_transcript_path.is_some() {
+                recovered.get(&row.id)
+            } else {
+                row.raw_json.as_ref()
+            };
+            let Some(raw_json) = raw_json else {
+                result.source_unavailable += 1;
                 continue;
             };
             let extracted = match serde_json::from_str::<serde_json::Value>(raw_json) {
@@ -140,15 +155,7 @@ fn run_backfill(
     Ok(result)
 }
 
-/// Fetch a chunk of candidate `logs` rows to scan for MCP events. Unlike
-/// `skill_backfill::fetch_candidate_chunk` (which reads the already-scrubbed
-/// `message` column and only needs a raw JSON parse for the rare
-/// Claude-with-attributionSkill case), MCP event extraction always needs the
-/// full raw transcript JSON — the `raw` column stores the same
-/// non-scrubbed-for-structure text `message` does at ingest time
-/// (`scrub_ai_message` only replaces matched secret patterns, never
-/// reshapes JSON), so `raw` is parseable JSON for both Claude and Codex
-/// transcript rows.
+/// Fetch display rows plus provenance for recovery of the original transcript.
 fn fetch_candidate_chunk(
     conn: &rusqlite::Connection,
     since: Option<&str>,
@@ -157,7 +164,7 @@ fn fetch_candidate_chunk(
 ) -> Result<Vec<CandidateRow>> {
     let (sql, bindings): (&str, Vec<rusqlite::types::Value>) = match since {
         Some(since) => (
-            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, raw
+            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, raw, ai_transcript_path, metadata_json
              FROM logs
              WHERE ai_tool IN ('claude', 'codex')
                AND id > ?1
@@ -171,7 +178,7 @@ fn fetch_candidate_chunk(
             ],
         ),
         None => (
-            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, raw
+            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, raw, ai_transcript_path, metadata_json
              FROM logs
              WHERE ai_tool IN ('claude', 'codex')
                AND id > ?1
@@ -194,6 +201,8 @@ fn fetch_candidate_chunk(
                 hostname: row.get(4)?,
                 timestamp: row.get(5)?,
                 raw_json: row.get(6)?,
+                ai_transcript_path: row.get(7)?,
+                metadata_json: row.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

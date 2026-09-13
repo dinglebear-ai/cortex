@@ -256,22 +256,26 @@ async fn run_rescan(
     {
         Ok(result) => {
             emit_index_result(stage, &result, options.json);
-            if let Some(next) = result.next_scan_cursor.clone() {
-                cursor.start_after = Some(next);
-            }
-            cursor.discovery_start_after = result.next_discovery_cursors.clone();
-            let status = rescan_status_for_result(&result);
-            if status == RescanStatus::Completed {
-                cursor.start_after = None;
-                cursor.discovery_start_after.clear();
-            }
-            status
+            apply_rescan_result(cursor, &result)
         }
         Err(error) => {
             tracing::warn!(error = %error, "AI transcript rescan failed");
             RescanStatus::Retry
         }
     }
+}
+
+fn apply_rescan_result(cursor: &mut RescanCursor, result: &IndexResult) -> RescanStatus {
+    if let Some(next) = result.next_scan_cursor.clone() {
+        cursor.start_after = Some(next);
+    }
+    cursor.discovery_start_after = result.next_discovery_cursors.clone();
+    let status = rescan_status_for_result(result);
+    if status == RescanStatus::Completed {
+        cursor.start_after = None;
+        cursor.discovery_start_after.clear();
+    }
+    status
 }
 
 fn rescan_since_for_cursor(since: Option<SystemTime>, cursor: &RescanCursor) -> Option<SystemTime> {

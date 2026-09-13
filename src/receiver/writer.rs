@@ -196,10 +196,17 @@ pub(super) async fn flush_batch(
             );
             *storage_blocked = true;
         }
+        let mut retained = FailedBatchOutcome::default();
+        retain_or_discard_entries(&mut retained, batch_to_write);
         context
             .observability
-            .record_writer_retained(batch_to_write.len(), true);
-        *batch = batch_to_write;
+            .record_writer_retained(retained.retained_entries.len(), true);
+        if retained.discarded_count > 0 {
+            context
+                .observability
+                .record_writer_discarded(retained.discarded_count);
+        }
+        *batch = retained.retained_entries;
         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
         return;
     }

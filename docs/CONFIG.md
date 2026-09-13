@@ -27,7 +27,7 @@ Docker Compose container. Explicit process environment variables still win.
 The TOML config file at the repo root is used for local development. It is **not** copied into the Docker image -- container deployments use defaults + env vars exclusively.
 
 ```toml
-[syslog]
+[receiver]
 host = "0.0.0.0"
 port = 1514
 max_message_size = 8192

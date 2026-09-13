@@ -26,18 +26,29 @@ impl CortexService {
             after_id,
             limit: limit + 1,
         };
-        let rows = self
+        let (rows, source_truncated) = self
             .run_db("rendered_session_page", move |pool| {
                 db::rendered_session_page(pool, &params)
             })
             .await?;
 
-        let count_truncated = rows.len() > limit as usize;
+        let count_truncated = source_truncated || rows.len() > limit as usize;
         let mut events = Vec::with_capacity(limit as usize);
         let mut retained_bytes = 0usize;
         let mut byte_truncated = false;
         for row in rows.into_iter().take(limit as usize) {
-            let event = project_event(row);
+            let mut event = project_event(row);
+            // Reserve response overhead and fit after JSON escaping. A first
+            // oversized record must still advance the durable cursor.
+            while serde_json::to_vec(&event)
+                .map_err(|e| ServiceError::Internal(e.into()))?
+                .len()
+                > RENDERED_SESSION_PAGE_MAX_BYTES - 4096
+            {
+                event.text = truncate_utf8(event.text.clone(), event.text.len() / 2).0;
+                event.parse_warning = Some("rendered text truncated".into());
+                byte_truncated = true;
+            }
             let event_bytes = serde_json::to_vec(&event)
                 .map_err(|error| ServiceError::Internal(error.into()))?
                 .len();

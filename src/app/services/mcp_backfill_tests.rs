@@ -171,3 +171,39 @@ async fn malformed_raw_json_counts_as_parse_error_not_panic() {
     assert_eq!(result.parse_errors, 1);
     assert_eq!(result.inserted, 0);
 }
+
+#[tokio::test]
+#[serial(mcp_backfill_guard)]
+async fn backfill_recovers_original_file_instead_of_display_text() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    let path = dir.path().join("source.jsonl");
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            claude_tool_use_json("recovered-1", "mcp__labby__search")
+        ),
+    )
+    .unwrap();
+    let id = insert_claude_log_row(&pool, "display summary only");
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE logs SET ai_transcript_path=?1,metadata_json='{\"line_no\":0}' WHERE id=?2",
+            rusqlite::params![path.to_str().unwrap(), id],
+        )
+        .unwrap();
+    let first = service
+        .backfill_mcp_events(McpBackfillRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(first.inserted, 1);
+    assert_eq!(first.parse_errors, 0);
+    std::fs::remove_file(path).unwrap();
+    let missing = service
+        .backfill_mcp_events(McpBackfillRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(missing.source_unavailable, 1);
+}

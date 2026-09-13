@@ -76,3 +76,73 @@ fn metadata_and_warning_redaction_make_page_flag_truthful() {
             .contains("warning-secret")
     );
 }
+
+#[tokio::test]
+async fn escaped_source_fields_are_bounded_and_cursor_advances() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("page.db"));
+    let pool = std::sync::Arc::new(crate::db::init_pool(&storage).unwrap());
+    let service = CortexService::new(pool.clone(), storage);
+    let conn = pool.get().unwrap();
+    for message in ["\"".repeat(140_000), "later event".into()] {
+        conn.execute("INSERT INTO logs(timestamp,hostname,severity,message,raw,source_ip,ai_tool,ai_project,ai_session_id,parse_error) VALUES('2026-08-28T00:00:00Z','h','info',?1,?1,'fixture','claude','p','s',?2)", rusqlite::params![message,"warning ".repeat(50_000)]).unwrap();
+    }
+    drop(conn);
+    let req = RenderedSessionPageRequest {
+        project: "p".into(),
+        tool: "claude".into(),
+        session_id: "s".into(),
+        host: "h".into(),
+        cursor: None,
+        limit: Some(1),
+    };
+    let first = service.rendered_session_page(req.clone()).await.unwrap();
+    assert_eq!(first.events.len(), 1);
+    assert!(first.high_watermark > 0);
+    assert!(first.has_more);
+    assert!(serde_json::to_vec(&first).unwrap().len() <= RENDERED_SESSION_PAGE_MAX_BYTES);
+    let next = service
+        .rendered_session_page(RenderedSessionPageRequest {
+            cursor: Some(first.next_cursor),
+            ..req
+        })
+        .await
+        .unwrap();
+    assert_eq!(next.events[0].text, "later event");
+    assert!(next.high_watermark > first.high_watermark);
+}
+
+#[test]
+fn source_page_stops_at_aggregate_byte_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = crate::db::init_pool(&crate::config::StorageConfig::for_test(
+        dir.path().join("bounded.db"),
+    ))
+    .unwrap();
+    let conn = pool.get().unwrap();
+    for _ in 0..8 {
+        conn.execute("INSERT INTO logs(timestamp,hostname,severity,message,raw,source_ip,ai_tool,ai_project,ai_session_id) VALUES('2026-08-28T00:00:00Z','h','info',?1,'','fixture','claude','p','s')", ["🦀".repeat(70_000)]).unwrap();
+    }
+    drop(conn);
+    let (rows, more) = crate::db::rendered_session_page(
+        &pool,
+        &crate::db::RenderedSessionPageParams {
+            ai_project: "p".into(),
+            ai_tool: "claude".into(),
+            ai_session_id: "s".into(),
+            host: "h".into(),
+            after_id: 0,
+            limit: 201,
+        },
+    )
+    .unwrap();
+    assert!(more);
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().map(|r| r.message.len()).sum::<usize>() <= 1024 * 1024);
+    assert!(rows.iter().all(|r| {
+        r.parse_error
+            .as_deref()
+            .unwrap()
+            .contains("source fields truncated")
+    }));
+}

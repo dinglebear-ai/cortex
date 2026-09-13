@@ -47,10 +47,30 @@ diagnosis.
         help.push_str("**Cost:** ");
         help.push_str(spec.cost.as_str());
         help.push_str("\n\n");
-        if spec.flags.is_empty() {
-            help.push_str("**Parameters:** none\n\n");
-        } else {
-            help.push_str("**Parameters:**\n");
+        match spec.input_contract {
+            actions::ActionInputContract::Exact { allowed, required } => {
+                help.push_str("**MCP parameters:**\n");
+                for name in allowed {
+                    help.push_str(&format!(
+                        "- `{name}`{}\n",
+                        if required.contains(name) {
+                            " (required)"
+                        } else {
+                            " (optional)"
+                        }
+                    ));
+                }
+            }
+            actions::ActionInputContract::LegacyFlat => {
+                help.push_str("**MCP parameters:** See the published `cortex` tools/list input schema for field descriptions and action-specific requirements.\n");
+                if spec.name == "similar_incidents" {
+                    help.push_str("Required: `query`. Optional filters: `host`, `app`, `severity_min`, `since`, `until`, `window_minutes`, `limit`.\n");
+                }
+            }
+        }
+        help.push('\n');
+        if !spec.flags.is_empty() {
+            help.push_str("**CLI flags (not MCP field names):**\n");
             for flag in spec.flags {
                 help.push_str("- `");
                 help.push_str(flag.flag);

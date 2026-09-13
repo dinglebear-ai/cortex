@@ -71,17 +71,22 @@ fn parse_relative(s: &str, now: DateTime<Utc>) -> ServiceResult<Option<DateTime<
             ));
         }
         let dur = match unit_char {
-            's' => Duration::seconds(n),
-            'm' => Duration::minutes(n),
-            'h' => Duration::hours(n),
-            'd' => Duration::days(n),
+            's' => Duration::try_seconds(n),
+            'm' => Duration::try_minutes(n),
+            'h' => Duration::try_hours(n),
+            'd' => Duration::try_days(n),
             _ => {
                 return Err(ServiceError::InvalidInput(format!(
                     "unknown time unit '{unit_char}'; use s, m, h, or d (e.g. 90s, 2d)"
                 )));
             }
         };
-        return Ok(Some(now - dur));
+        let out_of_range = || ServiceError::InvalidInput("relative time is out of range".into());
+        let dur = dur.ok_or_else(out_of_range)?;
+        return now
+            .checked_sub_signed(dur)
+            .map(Some)
+            .ok_or_else(out_of_range);
     }
     Ok(None)
 }

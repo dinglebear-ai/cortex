@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::ingest::IngestTx;
 
 use super::models::{FileTailSource, FileTailStatus};
-use super::platform::metadata_identity;
+use super::platform::file_identity;
 use super::registry::FileTailRegistry;
 
 mod io;
@@ -244,7 +244,7 @@ impl FileTailSupervisor {
         } else {
             0
         };
-        let (dev, ino) = metadata_identity(&metadata);
+        let (dev, ino) = file_identity(&file)?;
         source.checkpoint_dev = Some(dev);
         source.checkpoint_ino = Some(ino);
         source.checkpoint_offset = Some(offset);

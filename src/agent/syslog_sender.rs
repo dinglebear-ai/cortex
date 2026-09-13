@@ -44,6 +44,10 @@ pub struct SyslogForwardStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SpoolState {
+    #[serde(default)]
+    journal_sequence: u64,
+    #[serde(skip)]
+    journal_failed: bool,
     source_instance: String,
     #[serde(default = "default_epoch")]
     source_epoch: u64,
@@ -70,13 +74,14 @@ pub(super) struct SpoolState {
     last_dispatched_source: Option<String>,
 }
 
+#[path = "syslog_sender/journal.rs"]
+mod journal;
 #[path = "syslog_sender/spool.rs"]
 mod spool;
 #[cfg(test)]
-use spool::should_report_gap_overflow;
+use spool::{evict_aggregate_to_quota, evict_source_to_quota, should_report_gap_overflow};
 use spool::{
-    evict_aggregate_to_quota, evict_source_to_quota, gap_footprint_bytes, load_spool,
-    next_source_key, push_gap, save_spool, source_key_of,
+    gap_footprint_bytes, load_spool, next_source_key, push_gap, save_spool, source_key_of,
 };
 
 fn default_epoch() -> u64 {
@@ -86,6 +91,8 @@ fn default_epoch() -> u64 {
 impl Default for SpoolState {
     fn default() -> Self {
         Self {
+            journal_sequence: 0,
+            journal_failed: false,
             source_instance: random_source_instance(),
             source_epoch: 1,
             next_sequence: 0,

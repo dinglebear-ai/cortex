@@ -15,6 +15,8 @@ pub struct HookBackfillResult {
     pub inserted: u64,
     pub skipped_duplicates: u64,
     pub parse_errors: u64,
+    /// Original transcript path/line could not be recovered.
+    pub source_unavailable: u64,
     pub truncated: bool,
     pub dry_run: bool,
 }

@@ -236,5 +236,8 @@ bash "$ROOT/tests/live/phases/artifacts/selftest.sh"
 bash "$ROOT/tests/live/phases/surfaces/resource-selftest.sh"
 bash "$ROOT/tests/live/selftest/artifact-upload.sh"
 bash "$ROOT/tests/live/lib/aggregate-selftest.sh"
+python3 "$ROOT/tests/live/selftest/review-regressions.py"
+bash "$ROOT/tests/live/phases/mutation/selftest.sh"
+node --test "$ROOT/tests/web/request-races.test.cjs"
 
 printf 'live foundation self-tests: %d passed\n' "$passes"

@@ -2,61 +2,87 @@
 
 use super::*;
 
+#[cfg(test)]
 pub(super) fn enqueue(
     state: &Arc<Mutex<SenderState>>,
     source_key: &str,
     line: String,
 ) -> Result<()> {
+    enqueue_batch(state, vec![(source_key.to_owned(), line)])
+}
+
+fn enqueue_batch(state: &Arc<Mutex<SenderState>>, records: Vec<(String, String)>) -> Result<()> {
     let mut state = state.lock().expect("syslog sender state poisoned");
-    // Persistence is the durability boundary. Keep an exact snapshot so a
-    // failed atomic write cannot consume a sequence, retain a memory-only
-    // frame, or apply quota eviction that was never committed to disk.
+    journal::append(&mut state, records)
+}
+
+#[cfg(test)]
+fn commit_enqueues(
+    state: &Arc<Mutex<SenderState>>,
+    records: Vec<(String, String)>,
+    mut persist: impl FnMut(&std::path::Path, &SpoolState) -> Result<()>,
+) -> Result<()> {
+    let mut state = state.lock().expect("syslog sender state poisoned");
     let previous_spool = state.spool.clone();
+    for (source_key, line) in records {
+        enqueue_in_memory(&mut state.spool, &source_key, line);
+    }
+    if let Err(error) = persist(&state.spool_path, &state.spool) {
+        state.spool = previous_spool;
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn enqueue_in_memory(spool: &mut SpoolState, source_key: &str, line: String) {
+    enqueue_at(spool, source_key, line, Utc::now());
+}
+
+pub(super) fn enqueue_at(
+    spool: &mut SpoolState,
+    source_key: &str,
+    line: String,
+    at: chrono::DateTime<Utc>,
+) {
     let source_key = stable_source_key(source_key);
     let sequence = {
-        let legacy_next = state.spool.next_sequence;
-        let next = state
-            .spool
+        let legacy_next = spool.next_sequence;
+        let next = spool
             .next_sequences
             .entry(source_key.clone())
             .or_insert(legacy_next);
         *next = next.saturating_add(1);
         *next
     };
-    let source_instance = format!("{}:{source_key}", state.spool.source_instance);
-    let epoch = state.spool.source_epoch;
+    let source_instance = format!("{}:{source_key}", spool.source_instance);
+    let epoch = spool.source_epoch;
     if line.len() > MAX_FORWARD_RECORD_BYTES {
         push_gap(
-            &mut state.spool,
+            spool,
             SyslogForwardGap {
                 source_instance: source_instance.clone(),
                 source_epoch: epoch,
                 from_sequence: sequence,
                 to_sequence: sequence,
                 idempotency_key: delivery_key(&source_instance, epoch, sequence, "gap"),
-                observed_at: now(),
+                observed_at: at.to_rfc3339(),
                 reason_code: "record_too_large".into(),
             },
         );
-        state.spool.evicted_records = state.spool.evicted_records.saturating_add(1);
+        spool.evicted_records = spool.evicted_records.saturating_add(1);
     } else {
-        state.spool.records.push_back(SyslogForwardRecord {
+        spool.records.push_back(SyslogForwardRecord {
             source_instance: source_instance.clone(),
             source_epoch: epoch,
             sequence,
             idempotency_key: delivery_key(&source_instance, epoch, sequence, "record"),
-            observed_at: now(),
+            observed_at: at.to_rfc3339(),
             line,
         });
     }
-    evict_source_to_quota(&mut state.spool, &source_key);
-    evict_aggregate_to_quota(&mut state.spool);
-    if let Err(error) = save_spool(&state.spool_path, &state.spool) {
-        state.spool = previous_spool;
-        return Err(error);
-    }
-    drop(state);
-    Ok(())
+    spool::evict_source_at(spool, &source_key, at);
+    spool::evict_aggregate_at(spool, at);
 }
 
 pub(super) fn persistence_owner(
@@ -64,28 +90,55 @@ pub(super) fn persistence_owner(
     notify: Arc<Notify>,
     mut commands: mpsc::Receiver<PersistCommand>,
 ) {
-    while let Some(command) = commands.blocking_recv() {
+    let mut pending = None;
+    while let Some(command) = pending.take().or_else(|| commands.blocking_recv()) {
         match command {
             PersistCommand::Enqueue {
                 source_key,
                 line,
                 reply,
             } => {
-                let result = enqueue(&state, &source_key, line);
+                // Commit a bounded run of ready producers together. Never ack
+                // a member until the entire snapshot and quota gaps are synced.
+                let mut records = vec![(source_key, line)];
+                let mut replies = vec![reply];
+                while records.len() < PERSIST_COMMAND_CAPACITY {
+                    match commands.try_recv() {
+                        Ok(PersistCommand::Enqueue {
+                            source_key,
+                            line,
+                            reply,
+                        }) => {
+                            records.push((source_key, line));
+                            replies.push(reply);
+                        }
+                        Ok(command) => {
+                            pending = Some(command);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let result = enqueue_batch(&state, records);
                 if result.is_ok() {
                     notify.notify_one();
                 }
-                if reply.is_closed()
-                    && let Err(error) = &result
-                {
-                    tracing::error!(
-                        reason_code = "local_spool_persist_failed",
-                        source_key = %stable_source_key(&source_key),
-                        error = format!("{error:#}"),
-                        "syslog frame could not be retained"
-                    );
+                let error = result.err().map(|error| format!("{error:#}"));
+                for reply in replies {
+                    if reply.is_closed()
+                        && let Some(error) = &error
+                    {
+                        tracing::error!(
+                            reason_code = "local_spool_persist_failed",
+                            error,
+                            "syslog frame could not be retained"
+                        );
+                    }
+                    let _ = reply.send(match &error {
+                        Some(error) => Err(anyhow!(error.clone())),
+                        None => Ok(()),
+                    });
                 }
-                let _ = reply.send(result);
             }
             PersistCommand::NextRequest { reply } => {
                 let _ = reply.send(next_request(&state));
@@ -184,3 +237,7 @@ pub(super) fn apply_receipts(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "persistence_tests.rs"]
+mod tests;

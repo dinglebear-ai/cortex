@@ -118,3 +118,14 @@ fn parse_required_timestamp_reports_field_name_and_expected_format() {
         "error should mention accepted formats: {err}"
     );
 }
+
+#[test]
+fn excessive_relative_times_return_invalid_input() {
+    for unit in ["s", "m", "h", "d"] {
+        assert!(matches!(
+            parse_time_arg(&format!("{}{}", i64::MAX, unit), fixed_now()),
+            Err(ServiceError::InvalidInput(_))
+        ));
+    }
+    assert!(parse_time_arg("1000000000000d", fixed_now()).is_err());
+}

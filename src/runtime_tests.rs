@@ -861,3 +861,57 @@ async fn build_auth_policy_enforces_restrictive_permissions_on_auth_db() {
         key_mode
     );
 }
+
+#[tokio::test]
+async fn syslog_runtime_keeps_tcp_ingress_alive_until_shutdown() {
+    use tokio::io::AsyncWriteExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = test_config(tmp.path(), loopback_mcp());
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = reservation.local_addr().unwrap();
+    config.receiver.host = "127.0.0.1".into();
+    config.receiver.port = address.port();
+    config.receiver.batch_size = 1;
+    let runtime = RuntimeCore::for_server(config).await.expect("runtime");
+    let mut handles = runtime.spawn_maintenance_tasks();
+    drop(reservation);
+    runtime.start_syslog(&mut handles).await.unwrap();
+    let fatal = runtime.fatal_shutdown_token();
+    let delivery = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut stream = loop {
+            tokio::select! {
+                biased;
+                _ = fatal.cancelled() => return Err("TCP supervisor exited before ingress became available"),
+                connection = tokio::net::TcpStream::connect(address) => match connection {
+                    Ok(stream) => break stream,
+                    Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        };
+        stream.write_all(b"<134>1 2026-09-12T12:00:00Z runtime-test test - - - tcp-runtime-liveness-proof\n")
+            .await.map_err(|_| "TCP listener rejected the frame")?;
+        loop {
+            if fatal.is_cancelled() { return Err("TCP supervisor exited while awaiting persisted ingress"); }
+            let count: i64 = runtime.pool.get().unwrap().query_row(
+                "SELECT count(*) FROM logs WHERE message = 'tcp-runtime-liveness-proof'",
+                [], |row| row.get(0),
+            ).unwrap();
+            if count == 1 { return Ok(()); }
+            tokio::select! {
+                biased;
+                _ = fatal.cancelled() => return Err("TCP supervisor exited while awaiting persisted ingress"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    }).await;
+    let clean = handles.shutdown(Duration::from_secs(1)).await;
+    let runtime_clean = runtime.shutdown(Duration::from_secs(1)).await;
+    delivery
+        .expect("TCP frame must reach durable storage within deadline")
+        .expect("runtime must keep TCP ingress alive until requested shutdown");
+    assert!(clean && runtime_clean);
+    assert!(
+        !fatal.is_cancelled(),
+        "normal TCP operation and cooperative shutdown must not signal fatal failure"
+    );
+}

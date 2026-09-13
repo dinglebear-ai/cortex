@@ -418,3 +418,31 @@ fn summarize_top_senders_includes_other_bucket_deterministically() {
         "__other__@__other__=31, devhost@172.19.0.1=29"
     );
 }
+
+#[tokio::test]
+async fn storage_blocked_flush_caps_retained_rows_and_counts_discards() {
+    let (pool, storage, _dir) = test_pool();
+    let state = Arc::new(Mutex::new(Some(db::StorageBudgetState {
+        metrics: db::get_storage_metrics(&pool, &storage).unwrap(),
+        write_blocked: true,
+    })));
+    let observability = Arc::new(crate::observability::RuntimeObservability::default());
+    let context = WriterContext::new(
+        pool,
+        storage,
+        state,
+        crate::receiver::enrichment::EnrichmentConfig::default(),
+        Arc::new(crate::enrich::EnrichmentPipeline::new()),
+        observability.clone(),
+    );
+    let mut batch = envelope_batch((0..1100).map(|_| make_entry("blocked")).collect());
+    flush_batch(
+        &mut batch,
+        &mut false,
+        &mut IngestSummary::default(),
+        &context,
+    )
+    .await;
+    assert_eq!(batch.len(), 1000);
+    assert_eq!(observability.snapshot().writer_logs_discarded, 100);
+}

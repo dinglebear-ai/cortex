@@ -6,6 +6,7 @@ pub mod self_update;
 pub mod shell_history;
 pub mod syslog_file;
 pub mod syslog_sender;
+mod tail_reader;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -271,7 +272,13 @@ pub async fn run_agent_streams(config: AgentStreamsConfig) -> Result<()> {
         });
     }
 
-    while tasks.join_next().await.is_some() {}
+    supervise_streams(tasks).await
+}
+
+async fn supervise_streams(mut tasks: JoinSet<()>) -> Result<()> {
+    while let Some(result) = tasks.join_next().await {
+        result.map_err(|error| anyhow::anyhow!("agent stream task failed: {error}"))?;
+    }
     Ok(())
 }
 

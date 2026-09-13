@@ -2,10 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio::time::sleep;
 
 use super::syslog_sender::{PRI_LOCAL0_INFO, SyslogSender, format_rfc5424};
@@ -74,8 +72,7 @@ pub async fn run_file_forwarder(
     forced_app_name: Option<&str>,
     sender: Arc<SyslogSender>,
 ) -> Result<()> {
-    let mut reader = open_at_end(path).await?;
-    let mut position = reader.stream_position().await?;
+    let mut reader = super::tail_reader::TailReader::open(path).await?;
     tracing::info!(
         path = %path.display(),
         tag = forced_app_name.unwrap_or("<syslog>"),
@@ -83,19 +80,10 @@ pub async fn run_file_forwarder(
     );
 
     loop {
-        let mut line = String::new();
-        let read = reader.read_line(&mut line).await?;
-        if read == 0 {
-            if file_was_truncated(path, position).await {
-                tracing::info!(path = %path.display(), "file truncated; reopening");
-                reader = open_at_end(path).await?;
-                position = reader.stream_position().await?;
-            }
+        let Some(line) = reader.next_line().await? else {
             sleep(Duration::from_millis(EOF_SLEEP_MS)).await;
             continue;
-        }
-
-        position = position.saturating_add(read as u64);
+        };
         let raw = line.trim_end_matches(['\r', '\n']);
         if raw.is_empty() {
             continue;
@@ -134,21 +122,6 @@ pub async fn run_syslog_file_forwarder(
     sender: Arc<SyslogSender>,
 ) -> Result<()> {
     run_file_forwarder(path, fallback_hostname, None, sender).await
-}
-
-async fn open_at_end(path: &Path) -> Result<BufReader<File>> {
-    let mut file = File::open(path)
-        .await
-        .with_context(|| format!("open {}", path.display()))?;
-    file.seek(SeekFrom::End(0)).await?;
-    Ok(BufReader::new(file))
-}
-
-async fn file_was_truncated(path: &Path, position: u64) -> bool {
-    tokio::fs::metadata(path)
-        .await
-        .map(|metadata| metadata.len() < position)
-        .unwrap_or(false)
 }
 
 fn parse_syslog_line<'a>(line: &'a str, fallback_hostname: &'a str) -> ParsedSyslogLine<'a> {

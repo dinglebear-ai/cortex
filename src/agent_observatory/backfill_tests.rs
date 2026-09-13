@@ -304,3 +304,38 @@ fn legacy_head_observation_recovers_entire_commit_range_from_durable_graph() {
         vec![MID.to_string(), TIP.to_string()]
     );
 }
+
+#[test]
+fn backfill_replays_repository_observations_before_head_repair() {
+    let dir = TempDir::new().unwrap();
+    let pool = setup(&dir.path().join("observations.db"));
+    let rows = crate::db::agent_observatory::record_repository_observations_if_changed(
+        &pool,
+        "repo-key",
+        &[crate::db::agent_observatory::RepositoryObservationInput {
+            worktree_key: Some("worktree-key".into()),
+            observation_kind: crate::db::agent_observatory::RepositoryObservationKind::Status,
+            new_head_sha: None,
+            summary: "status changed".into(),
+            payload_json: "{}".into(),
+        }],
+        "2026-08-05T12:01:02.000Z",
+    )
+    .unwrap();
+    let job = start_agent_backfill(&pool).unwrap();
+    let done = finish(&pool, job.job_id, 1);
+    assert_eq!(
+        done.progress.cursors.repository_observation_events,
+        rows[0].id.to_string()
+    );
+    let events: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM agent_run_events WHERE source_kind='repository_observations'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 1);
+}

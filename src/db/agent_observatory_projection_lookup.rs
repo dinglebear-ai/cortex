@@ -115,42 +115,39 @@ pub fn find_unique_projection_run_for_repository_observation(
                   first_seen_at, last_seen_at
              FROM ranked_candidates
             WHERE evidence_rank = 1
-            ORDER BY id
-            LIMIT 2",
+            ORDER BY id",
     )?;
-    let candidates = statement
-        .query_map(params![worktree_key, observed_at], |row| {
-            let trust: String = row.get(3)?;
-            let evidence_trust = trust.parse().map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    3,
-                    rusqlite::types::Type::Text,
-                    Box::new(error),
-                )
-            })?;
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                evidence_trust,
-                row.get::<_, f64>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let candidates = statement.query_map(params![worktree_key, observed_at], |row| {
+        let trust: String = row.get(3)?;
+        let evidence_trust = trust.parse().map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            evidence_trust,
+            row.get::<_, f64>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
 
     let mut matches = Vec::new();
-    for (
-        run_id,
-        evidence_kind,
-        evidence_source,
-        evidence_trust,
-        evidence_confidence,
-        first,
-        last,
-    ) in candidates
-    {
+    for candidate in candidates {
+        let (
+            run_id,
+            evidence_kind,
+            evidence_source,
+            evidence_trust,
+            evidence_confidence,
+            first,
+            last,
+        ) = candidate?;
         let run = sql::run_by_id(&connection, run_id)?;
         if association_is_current(observed, &run, &first, &last)? {
             matches.push(AgentRepositoryObservationRunAssociation {
@@ -160,6 +157,9 @@ pub fn find_unique_projection_run_for_repository_observation(
                 evidence_trust,
                 evidence_confidence,
             });
+            if matches.len() == 2 {
+                break;
+            }
         }
     }
     match matches.len() {

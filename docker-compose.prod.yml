@@ -35,6 +35,8 @@ services:
       - path: .env
         required: false
     environment:
+      # CORTEX_PORT in .env selects the host publication; internal port is fixed.
+      CORTEX_PORT: "3100"
       CORTEX_HOME: /cortex-home
       # Keep the rebuildable investigation graph synchronized with authoritative
       # logs and inventory. Operators may tune or explicitly disable either path.

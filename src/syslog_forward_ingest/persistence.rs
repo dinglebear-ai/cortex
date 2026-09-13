@@ -23,6 +23,7 @@ pub(super) fn persist_request(
         forwarder_identity,
         forwarder_identity,
         forwarder_identity == "shared_bearer",
+        None,
     )
 }
 
@@ -33,8 +34,14 @@ fn persist_request_with_identity(
     receipt_namespace: &str,
     display_identity: &str,
     shared_bearer: bool,
+    policy: Option<&ForwardIngestPolicy>,
 ) -> anyhow::Result<Vec<String>> {
     let mut conn = db::write_conn(pool)?;
+    // Check admission after obtaining the writer connection, immediately before
+    // the atomic evidence/receipt transaction. Maintenance can still recover.
+    if policy.is_some_and(|p| p.storage.lock().as_ref().is_some_and(|s| s.write_blocked)) {
+        return Err(StorageBlocked.into());
+    }
     let tx = conn.transaction()?;
     let mut receipts = Vec::with_capacity(request.records.len() + request.gaps.len());
     for record in request.records {
@@ -60,6 +67,14 @@ fn persist_request_with_identity(
         }
         let mut entry = parse_syslog(&record.line, format!("agent-syslog://{peer_ip}"));
         let claimed_hostname = entry.hostname.clone();
+        if let Some(policy) = policy {
+            // Enrichment source gates use the network peer, never a hostname
+            // claim. Restore the authenticated transport identity afterwards.
+            entry.source_ip = peer_ip.to_owned();
+            entry = crate::receiver::enrichment::enrich_entry(entry, &policy.enrichment);
+            policy.pipeline.dispatch(&mut entry);
+            entry.source_ip = format!("agent-syslog://{peer_ip}");
+        }
         entry.hostname = format!("agent-{display_identity}");
         entry.metadata_json = Some(forwarded_metadata(
             entry.metadata_json.as_deref(),
@@ -154,6 +169,7 @@ pub(super) fn persist_authenticated_request(
     request: SyslogForwardRequest,
     peer_ip: &str,
     principal: &ForwardingPrincipal,
+    policy: &ForwardIngestPolicy,
 ) -> anyhow::Result<Vec<String>> {
     persist_request_with_identity(
         pool,
@@ -162,6 +178,7 @@ pub(super) fn persist_authenticated_request(
         &principal.receipt_namespace(),
         principal.label(),
         principal.is_shared(),
+        Some(policy),
     )
 }
 

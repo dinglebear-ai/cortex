@@ -181,3 +181,47 @@ async fn scan_and_forward_sends_zsh_and_atuin_records_together() {
         .unwrap();
     assert_eq!(sent_again, 0);
 }
+
+#[tokio::test]
+async fn invalid_page_advances_disk_cursor_before_later_valid_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history");
+    write_file(
+        &path,
+        &("invalid\n".repeat(500) + ": 1716500000:1;echo reachable\n"),
+    );
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = ShellHistoryForwardConfig {
+        zsh_history_path: Some(path),
+        atuin_db_path: None,
+        target: server.uri(),
+        token: None,
+        hostname: "host".into(),
+        checkpoint_path: dir.path().join("checkpoint"),
+        poll_interval: Duration::from_secs(1),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(checkpoint.zsh_line, 500);
+    let disk: Checkpoint =
+        serde_json::from_slice(&std::fs::read(&config.checkpoint_path).unwrap()).unwrap();
+    assert_eq!(disk.zsh_line, 500);
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(checkpoint.zsh_line, 501);
+}

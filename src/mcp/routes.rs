@@ -204,9 +204,10 @@ async fn health_minimal(State(state): State<AppState>) -> impl IntoResponse {
 /// Both /health routes live outside the MCP auth layer, so this handler
 /// enforces auth explicitly rather than relying on middleware.
 async fn health_full(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if let AuthPolicy::Mounted { .. } = &state.auth_policy
-        && let Some(expected) = state.config.api_token.as_deref()
-    {
+    if let AuthPolicy::Mounted { .. } = &state.auth_policy {
+        let Some(expected) = state.config.api_token.as_deref() else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
         let provided = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())

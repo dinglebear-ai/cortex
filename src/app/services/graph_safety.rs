@@ -138,7 +138,21 @@ fn redact_graph_text_unbounded(value: String) -> String {
         } else {
             out.push_str(token);
         }
-        redact_next_value = value_marker;
+        let credential_name = lower.trim_end_matches([':', '=']);
+        redact_next_value = (redact_next_value && matches!(token, "=" | ":"))
+            || value_marker
+            || matches!(
+                credential_name,
+                "password"
+                    | "secret"
+                    | "token"
+                    | "api_key"
+                    | "apikey"
+                    | "client_secret"
+                    | "access_token"
+                    | "private-key"
+                    | "private_key"
+            );
     }
     out
 }

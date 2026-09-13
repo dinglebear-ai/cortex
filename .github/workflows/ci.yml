@@ -409,6 +409,8 @@ jobs:
       - deny
       - mcp-integration
       - deployment-contract
+      - npm
+      - session-query-benchmark
     steps:
       - name: Verify required jobs passed or were intentionally skipped
         run: |
@@ -432,13 +434,15 @@ jobs:
           require_success_or_skipped deny "${{ needs.deny.result }}"
           require_success_or_skipped mcp-integration "${{ needs.mcp-integration.result }}"
           require_success_or_skipped deployment-contract "${{ needs.deployment-contract.result }}"
+          require_success_or_skipped npm "${{ needs.npm.result }}"
+          require_success_or_skipped session-query-benchmark "${{ needs.session-query-benchmark.result }}"
 
   npm:
     name: npm launcher
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
-    if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' }}
+    if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.web == 'true' }}
     env:
       NPM_CONFIG_CACHE: ${{ github.workspace }}/.npm-cache
     steps:
@@ -448,6 +452,12 @@ jobs:
           node-version: 22
       - name: Test npm launcher
         run: npm test --prefix packages/cortex-rmcp
+      - name: Verify browser request ownership
+        run: node --test tests/web/request-races.test.cjs
+      - name: Verify review failure-path regressions
+        run: |
+          python3 tests/live/selftest/review-regressions.py
+          bash tests/live/phases/mutation/selftest.sh
       - name: Check npm launcher syntax
         run: npm run check --prefix packages/cortex-rmcp
       - name: Dry-run npm package

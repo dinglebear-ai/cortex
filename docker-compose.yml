@@ -17,6 +17,8 @@ services:
       - path: ${CORTEX_ENV_FILE:-.env}
         required: false
     environment:
+      # CORTEX_PORT in .env selects the host publication; internal port is fixed.
+      CORTEX_PORT: "3100"
       CORTEX_HOME: /cortex-home
       CORTEX_GRAPH_REFRESH_INTERVAL_SECS: "${CORTEX_GRAPH_REFRESH_INTERVAL_SECS:-300}"
       CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED: "${CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED:-true}"

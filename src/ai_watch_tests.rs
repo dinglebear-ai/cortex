@@ -275,23 +275,37 @@ fn bounded_rescan_deferral_requests_the_existing_retry_path() {
 #[test]
 fn rescan_cursor_advances_only_after_an_attempted_source() {
     let mut cursor = RescanCursor::default();
-    let no_attempt = IndexResult::default();
-    if let Some(next) = no_attempt.next_scan_cursor.clone() {
-        cursor.start_after = Some(next);
-    }
-    assert!(cursor.start_after.is_none());
-
     let attempted = IndexResult {
         next_scan_cursor: Some(PathBuf::from("/safe/root/b.jsonl")),
+        source_deadline_exceeded: 1,
         ..Default::default()
     };
-    if let Some(next) = attempted.next_scan_cursor.clone() {
-        cursor.start_after = Some(next);
-    }
+    assert_eq!(
+        apply_rescan_result(&mut cursor, &attempted),
+        RescanStatus::Retry
+    );
     assert_eq!(
         cursor.start_after,
         Some(PathBuf::from("/safe/root/b.jsonl"))
     );
+    let no_attempt = IndexResult {
+        source_deadline_exceeded: 1,
+        ..Default::default()
+    };
+    assert_eq!(
+        apply_rescan_result(&mut cursor, &no_attempt),
+        RescanStatus::Retry
+    );
+    assert_eq!(
+        cursor.start_after,
+        Some(PathBuf::from("/safe/root/b.jsonl"))
+    );
+    assert_eq!(
+        apply_rescan_result(&mut cursor, &IndexResult::default()),
+        RescanStatus::Completed
+    );
+    assert!(cursor.start_after.is_none());
+    assert!(cursor.discovery_start_after.is_empty());
 }
 
 #[test]

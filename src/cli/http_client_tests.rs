@@ -958,3 +958,26 @@ impl Drop for EnvVarGuard {
         }
     }
 }
+
+#[tokio::test]
+async fn admin_redirect_never_reaches_another_origin() {
+    let first = MockServer::start().await;
+    let other = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(307).insert_header("Location", format!("{}/stolen", other.uri())),
+        )
+        .expect(1)
+        .mount(&first)
+        .await;
+    let client = HttpClient::discover(Some(first.uri()), Some("read-secret".into()))
+        .unwrap()
+        .with_api_admin_token_for_test("admin-secret");
+    assert!(
+        client
+            .file_tails(&cortex::app::FileTailRequest::status())
+            .await
+            .is_err()
+    );
+    assert!(other.received_requests().await.unwrap().is_empty());
+}

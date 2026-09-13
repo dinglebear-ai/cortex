@@ -976,3 +976,16 @@ async fn null_origin_rejected_by_rmcp_validator_on_mcp_endpoint() {
 
 // NOTE: Tests for allowed_hosts() / allowed_origins() public_url extension
 // live in rmcp_server_tests.rs (same module as the functions, via `use super::*`).
+
+#[tokio::test]
+async fn oauth_without_static_token_denies_full_health() {
+    let (state, _dir) = test_state_with_oauth().await;
+    let request = Request::builder()
+        .uri("/health/full")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    assert_eq!(
+        router(state).oneshot(request).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+}

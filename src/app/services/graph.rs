@@ -321,17 +321,17 @@ impl CortexService {
                 })
                 .await?
                 .ok_or_else(|| ServiceError::NotFound("graph evidence not found".into()))?;
-            let src_entity = GraphEntity::from(rows.src_entity);
-            let dst_entity = GraphEntity::from(rows.dst_entity);
+            let src_entity = graph_entity_safe(GraphEntity::from(rows.src_entity));
+            let dst_entity = graph_entity_safe(GraphEntity::from(rows.dst_entity));
             let src_summary = GraphEntitySummary::from(&src_entity);
             let dst_summary = GraphEntitySummary::from(&dst_entity);
             let evidence = graph_evidence_safe(rows.evidence, limits.payload_budget);
-            let relationship = graph_relationship_to_model(
+            let relationship = graph_relationship_safe(graph_relationship_to_model(
                 rows.relationship,
                 Some(src_summary.clone()),
                 Some(dst_summary.clone()),
                 vec![evidence.id],
-            );
+            ));
             let source_log_summary = rows
                 .source_log_summary
                 .map(|row| graph_source_log_summary_safe(row, limits.payload_budget));

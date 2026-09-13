@@ -79,3 +79,15 @@ fn parse_file_tails_extracts_path_and_tag_pairs() {
     assert!(parse_file_tails("/no/tag/here").is_empty());
     assert!(parse_file_tails(" , ").is_empty());
 }
+
+#[tokio::test]
+async fn stream_panic_fails_supervisor_while_another_stream_is_pending() {
+    let mut tasks = JoinSet::new();
+    tasks.spawn(async { std::future::pending::<()>().await });
+    tasks.spawn(async { panic!("injected stream failure") });
+    let error = tokio::time::timeout(Duration::from_secs(2), supervise_streams(tasks))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("agent stream task failed"));
+}

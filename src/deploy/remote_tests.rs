@@ -327,3 +327,87 @@ fn remote_deploy_accepts_safe_hosts() {
             .all(|command| command.starts_with("nashost:"))
     );
 }
+
+#[test]
+fn existing_environment_read_failure_aborts_before_writes() {
+    let mut runner = FakeRemoteRunner::fail_on("then cat");
+    assert!(run_remote_deploy_with_runner("host-a", false, &mut runner).is_err());
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command.contains("cat >"))
+    );
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command.contains("up -d"))
+    );
+}
+
+#[test]
+fn remote_staging_scripts_fail_fast() {
+    let mut runner = FakeRemoteRunner::ok();
+    run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
+    let staging: Vec<_> = runner
+        .commands
+        .iter()
+        .filter(|command| command.contains("cat >"))
+        .collect();
+    assert_eq!(staging.len(), 2);
+    for script in staging {
+        assert!(script.contains("set -eu\n"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn staging_failures_preserve_existing_remote_files() {
+    let mut runner = FakeRemoteRunner::ok();
+    run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
+    for script in runner
+        .commands
+        .iter()
+        .filter(|command| command.contains("cat >"))
+    {
+        for failing in ["cat", "chmod", "mv"] {
+            // Asset staging has no chmod operation.
+            if failing == "chmod" && !script.contains("chmod ") {
+                continue;
+            }
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(dir.path().join("compose/config")).unwrap();
+            let files = [
+                ".env",
+                "compose/docker-compose.yml",
+                "compose/config/Dockerfile",
+            ];
+            for file in files {
+                std::fs::write(dir.path().join(file), "LAST_GOOD").unwrap();
+            }
+            let script = script
+                .strip_prefix("host-a: ")
+                .unwrap()
+                .replace("/home/syslog/.cortex", dir.path().to_str().unwrap());
+            let injection = if failing == "cat" {
+                "cat() { command cat >/dev/null; printf PARTIAL; return 1; }\n".to_string()
+            } else {
+                format!("{failing}() {{ return 1; }}\n")
+            };
+            let status = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("{injection}{script}"))
+                .status()
+                .unwrap();
+            assert!(!status.success(), "{failing} must fail staging");
+            for file in files {
+                assert_eq!(
+                    std::fs::read_to_string(dir.path().join(file)).unwrap(),
+                    "LAST_GOOD",
+                    "{file}, failed {failing}"
+                );
+            }
+        }
+    }
+}

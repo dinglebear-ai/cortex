@@ -177,10 +177,22 @@ case "$profile" in
   mutation)
     [[ -n "$candidate_image" && -n "$oracle_image" && -n "$toxiproxy_image" ]] || live_die "mutation profile requires three explicit image references"
     live_topology_start "$candidate_image" "$oracle_image" "$toxiproxy_image"
-    "$LIVE_PROJECT_ROOT/tests/live/phases/mutation/selftest.sh"
+    mutation_workspace="$(mktemp -d "${TMPDIR:-/tmp}/cortex-mutation-live.XXXXXX")"
+    rmdir "$mutation_workspace"
+    if python3 "$LIVE_PROJECT_ROOT/tests/live/phases/mutation/run.py" \
+      --manifest "$LIVE_PROJECT_ROOT/tests/live/phases/mutation/mutants.json" \
+      --source "$LIVE_PROJECT_ROOT" --workspace "$mutation_workspace" \
+      --killer bash "$LIVE_PROJECT_ROOT/tests/live/phases/mutation/killer-cargo.sh" \
+      >"$LIVE_RUN_ROOT/artifacts/mutation.json"; then
+      rm -rf -- "$mutation_workspace"
+    else
+      rm -rf -- "$mutation_workspace"
+      live_die "real mutation qualification failed; see artifacts/mutation.json"
+      return 1 2>/dev/null || exit 1
+    fi
     "$LIVE_PROJECT_ROOT/tests/live/phases/concurrency/run.sh"
     "$LIVE_PROJECT_ROOT/tests/live/phases/concurrency/live.sh"
-    live_terminal_disposition mutation pass artifacts/concurrency-live/accounting.json
+    live_terminal_disposition mutation pass artifacts/mutation.json
     ;;
   soak)
     [[ -n "$candidate_image" && -n "$oracle_image" && -n "$toxiproxy_image" ]] || live_die "soak profile requires three explicit image references"

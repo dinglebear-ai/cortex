@@ -46,6 +46,8 @@ struct CandidateRow {
     ai_session_id: Option<String>,
     hostname: String,
     timestamp: String,
+    ai_transcript_path: Option<String>,
+    metadata_json: Option<String>,
     message: String,
 }
 
@@ -99,14 +101,27 @@ fn run_backfill(
         result.scanned += rows.len() as u64;
         remaining = remaining.saturating_sub(rows.len() as u64);
 
+        let recovered = super::transcript_recovery::recover(rows.iter().map(|row| {
+            (
+                row.id,
+                row.ai_transcript_path.as_deref(),
+                row.metadata_json.as_deref(),
+            )
+        }));
         let mut inserts = Vec::new();
         for row in &rows {
-            // Substring short-circuit before any JSON parse: only Claude rows
-            // whose message text mentions a `hook_` attachment type can carry
-            // a runtime hook event.
+            let message = if row.ai_transcript_path.is_some() {
+                let Some(record) = recovered.get(&row.id) else {
+                    result.source_unavailable += 1;
+                    continue;
+                };
+                record
+            } else {
+                &row.message
+            };
             let extracted = match row.ai_tool.as_str() {
-                "claude" if row.message.contains("hook_") => {
-                    match serde_json::from_str::<serde_json::Value>(&row.message) {
+                "claude" if message.contains("hook_") => {
+                    match serde_json::from_str::<serde_json::Value>(message) {
                         Ok(value) => extract_claude_hook_events(&value),
                         Err(_) => {
                             result.parse_errors += 1;
@@ -153,7 +168,7 @@ fn fetch_candidate_chunk(
 ) -> Result<Vec<CandidateRow>> {
     let (sql, bindings): (&str, Vec<rusqlite::types::Value>) = match since {
         Some(since) => (
-            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, message
+            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, message, ai_transcript_path, metadata_json
              FROM logs
              WHERE ai_tool = 'claude'
                AND id > ?1
@@ -167,7 +182,7 @@ fn fetch_candidate_chunk(
             ],
         ),
         None => (
-            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, message
+            "SELECT id, ai_tool, ai_project, ai_session_id, hostname, timestamp, message, ai_transcript_path, metadata_json
              FROM logs
              WHERE ai_tool = 'claude'
                AND id > ?1
@@ -190,6 +205,8 @@ fn fetch_candidate_chunk(
                 hostname: row.get(4)?,
                 timestamp: row.get(5)?,
                 message: row.get(6)?,
+                ai_transcript_path: row.get(7)?,
+                metadata_json: row.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

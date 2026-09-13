@@ -521,11 +521,15 @@ pub fn list_ai_sessions(
 pub fn rendered_session_page(
     pool: &DbPool,
     params: &RenderedSessionPageParams,
-) -> Result<Vec<RenderedSessionEventRow>> {
+) -> Result<(Vec<RenderedSessionEventRow>, bool)> {
     let conn = pool.get()?;
     let fetch = params.limit.clamp(1, 201);
     let mut stmt = conn.prepare_cached(
-        "SELECT CAST(id AS INTEGER), timestamp, message, metadata_json, parse_error
+        "SELECT CAST(id AS INTEGER), substr(timestamp,1,128), substr(message,1,65536),
+          CASE WHEN length(metadata_json)<=8192 THEN metadata_json END,
+          CASE WHEN length(message)>65536 OR length(metadata_json)>8192 OR length(parse_error)>1024
+            THEN 'source fields truncated; ' || substr(coalesce(parse_error,''),1,1024)
+            ELSE parse_error END
          FROM logs
          WHERE ai_project = ?1
            AND ai_tool = ?2
@@ -554,7 +558,21 @@ pub fn rendered_session_page(
             })
         },
     )?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut page = Vec::new();
+    let mut bytes = 0usize;
+    for row in rows {
+        let row = row?;
+        let row_bytes = row.message.len()
+            + row.metadata_json.as_ref().map_or(0, String::len)
+            + row.parse_error.as_ref().map_or(0, String::len)
+            + row.timestamp.len();
+        if !page.is_empty() && bytes.saturating_add(row_bytes) > 1024 * 1024 {
+            return Ok((page, true));
+        }
+        bytes += row_bytes;
+        page.push(row);
+    }
+    Ok((page, false))
 }
 
 pub fn durable_stream_page(

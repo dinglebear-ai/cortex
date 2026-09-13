@@ -119,7 +119,23 @@ pub struct SyslogForwardIngestState {
     api_token: Option<String>,
     forwarding_agent_tokens: Arc<HashMap<String, String>>,
     auth_policy: AuthPolicy,
+    policy: Arc<ForwardIngestPolicy>,
 }
+
+struct ForwardIngestPolicy {
+    storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
+    enrichment: crate::receiver::enrichment::EnrichmentConfig,
+    pipeline: crate::enrich::EnrichmentPipeline,
+}
+
+#[derive(Debug)]
+struct StorageBlocked;
+impl std::fmt::Display for StorageBlocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("storage_write_blocked")
+    }
+}
+impl std::error::Error for StorageBlocked {}
 
 impl SyslogForwardIngestState {
     pub fn new(
@@ -133,7 +149,24 @@ impl SyslogForwardIngestState {
             api_token,
             forwarding_agent_tokens: Arc::new(forwarding_agent_tokens),
             auth_policy,
+            policy: Arc::new(ForwardIngestPolicy {
+                storage: Arc::new(parking_lot::Mutex::new(None)),
+                enrichment: crate::receiver::enrichment::EnrichmentConfig::default(),
+                pipeline: crate::enrich::EnrichmentPipeline::new(),
+            }),
         }
+    }
+    pub fn with_ingest_policy(
+        mut self,
+        storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
+        enrichment: crate::receiver::enrichment::EnrichmentConfig,
+    ) -> Self {
+        self.policy = Arc::new(ForwardIngestPolicy {
+            storage,
+            enrichment,
+            pipeline: crate::enrich::EnrichmentPipeline::new(),
+        });
+        self
     }
 }
 
@@ -179,18 +212,25 @@ async fn ingest_handler(
             .into_response();
     }
     let pool = Arc::clone(&state.pool);
+    let policy = Arc::clone(&state.policy);
     let peer_ip = peer.ip().to_string();
     let record_count = request.records.len();
     let gap_count = request.gaps.len();
     let diagnostic_identity = forwarder_identity.label().to_owned();
     match tokio::task::spawn_blocking(move || {
-        persist_authenticated_request(&pool, request, &peer_ip, &forwarder_identity)
+        persist_authenticated_request(&pool, request, &peer_ip, &forwarder_identity, &policy)
     })
     .await
     {
         Ok(Ok(receipts)) => {
             (StatusCode::OK, Json(SyslogForwardResponse { receipts })).into_response()
         }
+        Ok(Err(error)) if error.downcast_ref::<StorageBlocked>().is_some() => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("retry-after", "5")],
+            Json(json!({"error": "storage_write_blocked"})),
+        )
+            .into_response(),
         Ok(Err(error)) if error.downcast_ref::<IdempotencyConflict>().is_some() => (
             StatusCode::CONFLICT,
             Json(json!({"error": "idempotency_conflict"})),

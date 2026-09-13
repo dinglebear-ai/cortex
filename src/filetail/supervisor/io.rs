@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncSeekExt};
 
 use super::super::models::FileTailSource;
 use super::super::path_policy::{validate_file_tail_path, validate_opened_file_tail_path};
-use super::super::platform::{metadata_identity, open_read_no_follow};
+use super::super::platform::{file_identity, open_read_no_follow};
 
 const FILE_TAIL_FINGERPRINT_BYTES: usize = 256;
 
@@ -16,9 +16,10 @@ pub(crate) struct FileIdentity {
 }
 
 impl FileIdentity {
-    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
-        let (dev, ino) = metadata_identity(metadata);
-        Self { dev, ino }
+    async fn from_file(file: &tokio::fs::File) -> std::io::Result<Self> {
+        let cloned = file.try_clone().await?.into_std().await;
+        let (dev, ino) = file_identity(&cloned)?;
+        Ok(Self { dev, ino })
     }
 }
 
@@ -42,7 +43,7 @@ pub(crate) async fn open_tail_file(
 ) -> Result<OpenedTailFile> {
     let mut file = open_validated_tail_file(&source.path).await?;
     let metadata = file.metadata().await?;
-    let identity = FileIdentity::from_metadata(&metadata);
+    let identity = FileIdentity::from_file(&file).await?;
     let fingerprint = file_prefix_fingerprint(&mut file, FILE_TAIL_FINGERPRINT_BYTES).await?;
     let checkpoint_matches = source.checkpoint_dev == Some(identity.dev)
         && source.checkpoint_ino == Some(identity.ino)
@@ -83,7 +84,8 @@ pub(crate) async fn reopen_if_rotated_or_truncated(
         }
         Err(err) => return Err(err.into()),
     };
-    let current = FileIdentity::from_metadata(&metadata);
+    let current_file = open_validated_tail_file(&source.path).await?;
+    let current = FileIdentity::from_file(&current_file).await?;
     if current != identity || metadata.len() < position {
         return reopen_from_start(source).await.map(Some);
     }
@@ -95,11 +97,11 @@ pub(crate) async fn reopen_if_rotated_or_truncated(
         let current_fingerprint =
             file_prefix_fingerprint(&mut file, FILE_TAIL_FINGERPRINT_BYTES).await?;
         if !current_fingerprint.starts_with(fingerprint) {
-            let metadata = file.metadata().await?;
+            let identity = FileIdentity::from_file(&file).await?;
             file.seek(std::io::SeekFrom::Start(0)).await?;
             return Ok(Some(OpenedTailFile {
                 file,
-                identity: FileIdentity::from_metadata(&metadata),
+                identity,
                 position: 0,
                 fingerprint: current_fingerprint,
             }));
@@ -112,24 +114,18 @@ pub(crate) async fn path_identity_changed(
     source: &FileTailSource,
     identity: FileIdentity,
 ) -> Result<bool> {
-    let metadata = match tokio::fs::metadata(&source.path).await {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            anyhow::bail!("file-tail source disappeared: {}", source.path);
-        }
-        Err(err) => return Err(err.into()),
-    };
-    Ok(FileIdentity::from_metadata(&metadata) != identity)
+    let file = open_validated_tail_file(&source.path).await?;
+    Ok(FileIdentity::from_file(&file).await? != identity)
 }
 
 async fn reopen_from_start(source: &FileTailSource) -> Result<OpenedTailFile> {
     let mut file = open_validated_tail_file(&source.path).await?;
-    let metadata = file.metadata().await?;
+    let identity = FileIdentity::from_file(&file).await?;
     let fingerprint = file_prefix_fingerprint(&mut file, FILE_TAIL_FINGERPRINT_BYTES).await?;
     file.seek(std::io::SeekFrom::Start(0)).await?;
     Ok(OpenedTailFile {
         file,
-        identity: FileIdentity::from_metadata(&metadata),
+        identity,
         position: 0,
         fingerprint,
     })
@@ -155,16 +151,14 @@ async fn open_validated_tail_file(path: &str) -> Result<tokio::fs::File> {
         move || open_read_no_follow(std::path::Path::new(&path))
     })
     .await??;
-    let metadata = std_file.metadata()?;
-    validate_opened_file_tail_path(&path, &metadata)?;
+    validate_opened_file_tail_path(&path, &std_file)?;
     Ok(tokio::fs::File::from_std(std_file))
 }
 
 pub(crate) fn open_validated_tail_file_sync(path: &str) -> Result<std::fs::File> {
     validate_file_tail_path(path)?;
     let file = open_read_no_follow(std::path::Path::new(path))?;
-    let metadata = file.metadata()?;
-    validate_opened_file_tail_path(path, &metadata)?;
+    validate_opened_file_tail_path(path, &file)?;
     Ok(file)
 }
 
@@ -206,3 +200,7 @@ pub(crate) async fn read_bounded_line<R: AsyncBufRead + Unpin>(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "io_tests.rs"]
+mod tests;

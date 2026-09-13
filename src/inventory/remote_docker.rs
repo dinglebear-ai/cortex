@@ -1,4 +1,5 @@
 use chrono::Utc;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -29,22 +30,12 @@ pub async fn collect(
         );
         return out;
     }
-    let mut handles = Vec::new();
+    let mut hosts = FuturesUnordered::new();
     for host in resolution.hosts {
-        let ssh_context = ssh_context.clone();
-        handles.push(tokio::spawn(async move {
-            collect_host(host, ssh_context, timeout).await
-        }));
+        hosts.push(collect_host(host, ssh_context.clone(), timeout));
     }
-
-    for handle in handles {
-        match handle.await {
-            Ok(host_output) => merge_output(&mut out, host_output),
-            Err(error) => out.warn(
-                "remote_docker",
-                format!("remote Docker task failed: {error}"),
-            ),
-        }
+    while let Some(host_output) = hosts.next().await {
+        merge_output(&mut out, host_output);
     }
     out
 }

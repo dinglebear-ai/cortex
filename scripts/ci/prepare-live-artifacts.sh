@@ -14,14 +14,17 @@ source = pathlib.Path(sys.argv[1]).resolve()
 destination = pathlib.Path(sys.argv[2])
 if destination.is_absolute() or ".." in destination.parts or destination in (pathlib.Path("."), pathlib.Path("")):
     raise SystemExit("unsafe artifact destination")
-target = (cwd / destination).resolve(strict=False)
-if target == cwd or cwd not in target.parents:
-    raise SystemExit("artifact destination escapes the working directory")
-for parent in [target, *target.parents]:
+lexical_target = cwd / destination
+for parent in [lexical_target, *lexical_target.parents]:
     if parent == cwd:
         break
-    if parent.exists() and parent.is_symlink():
+    if parent.is_symlink():
         raise SystemExit("artifact destination traverses a symlink")
+target = lexical_target.resolve(strict=False)
+if target == cwd or cwd not in target.parents:
+    raise SystemExit("artifact destination escapes the working directory")
+if target == source or target in source.parents or source in target.parents:
+    raise SystemExit("artifact source and destination must not overlap")
 print(source)
 print(target)
 PY

@@ -858,3 +858,93 @@ fn forwarded_metadata_rejects_corrupt_or_non_object_input() {
     assert!(forwarded_metadata(Some("{"), "agent-a", "127.0.0.1", "host-a".into()).is_err());
     assert!(forwarded_metadata(Some("[]"), "agent-a", "127.0.0.1", "host-a".into()).is_err());
 }
+
+#[tokio::test]
+async fn storage_admission_and_configured_scrubbing_apply_to_receipt_transaction() {
+    for scrub in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::config::StorageConfig::for_test(dir.path().join("policy.db"));
+        let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+        let shared = Arc::new(parking_lot::Mutex::new(Some(
+            crate::db::StorageBudgetState {
+                metrics: crate::db::get_storage_metrics(&pool, &storage).unwrap(),
+                write_blocked: true,
+            },
+        )));
+        let state = SyslogForwardIngestState::new(
+            pool.clone(),
+            Some("forward-token".into()),
+            HashMap::new(),
+            crate::mcp::AuthPolicy::TrustedGatewayUnscoped,
+        )
+        .with_ingest_policy(
+            shared.clone(),
+            crate::receiver::enrichment::EnrichmentConfig {
+                scrub_prompts: scrub,
+                ..Default::default()
+            },
+        );
+        let app = router(state).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
+        let body = serde_json::to_string(&SyslogForwardRequest {
+            records: vec![SyslogForwardRecord {
+                source_instance: "source".into(),
+                source_epoch: 1,
+                sequence: 1,
+                idempotency_key: "policy-test".into(),
+                observed_at: "2026-01-01T00:00:00Z".into(),
+                line: "<134>1 2026-01-01T00:00:00Z claimed claude-code - - - password=supersecret"
+                    .into(),
+            }],
+            gaps: vec![],
+        })
+        .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(syslog_request(body.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let conn = pool.get().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM logs", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM syslog_forward_receipts", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        drop(conn);
+        shared.lock().as_mut().unwrap().write_blocked = false;
+        for _ in 0..2 {
+            assert_eq!(
+                app.clone()
+                    .oneshot(syslog_request(body.clone()))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::OK
+            );
+        }
+        let conn = pool.get().unwrap();
+        let messages: Vec<String> = conn
+            .prepare("SELECT message FROM logs")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].contains("supersecret"), !scrub);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM syslog_forward_receipts", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+}

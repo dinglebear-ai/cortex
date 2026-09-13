@@ -83,9 +83,8 @@ async fn run_docker_log_forwarder(
         while let Ok(Some(res)) =
             tokio::time::timeout(Duration::from_millis(1), tasks.join_next()).await
         {
-            if let Ok(id) = res {
-                active.remove(&id);
-            }
+            let id = res.context("Docker log follower task failed")?;
+            active.remove(&id);
         }
 
         let containers = list_containers(docker).await?;
