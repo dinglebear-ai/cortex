@@ -766,7 +766,10 @@ async fn graph_evidence_lookup_returns_safe_source_summary_and_relationship_cont
 
     let encoded = serde_json::to_string(&response).unwrap();
     for secret in ["secret-owner", "hidden-source", "hidden-relation"] {
-        assert!(!encoded.contains(secret), "leaked {secret}");
+        assert!(
+            !encoded.contains(secret),
+            "graph response leaked a protected fixture value"
+        );
     }
     assert_eq!(response.evidence.id, evidence_id);
     assert_eq!(response.relationship.id, response.evidence.relationship_id);
