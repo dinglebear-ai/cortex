@@ -38,7 +38,7 @@ jobs:
       security: ${{ steps.classify.outputs.security }}
       mcp: ${{ steps.classify.outputs.mcp }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -89,7 +89,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.skills == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.workflow == 'true' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -122,7 +122,7 @@ jobs:
       || needs.changes.outputs.docker == 'true'
       || needs.changes.outputs.workflow == 'true' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install identity scan prerequisites
         run: |
@@ -145,7 +145,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -162,7 +162,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -179,7 +179,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -216,7 +216,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -229,7 +229,7 @@ jobs:
 
       - name: Upload benchmark evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: session-query-benchmark
           path: session-query-benchmark.json
@@ -252,7 +252,7 @@ jobs:
       || needs.changes.outputs.docker == 'true'
       || needs.changes.outputs.workflow == 'true') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -274,7 +274,7 @@ jobs:
     # nothing consumes, so keep it to push/schedule/dispatch.
     if: ${{ needs.changes.outputs.rust == 'true' && needs.test.result == 'success' && github.event_name != 'pull_request' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -296,7 +296,7 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.security == 'true' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
@@ -326,7 +326,7 @@ jobs:
     needs: [changes, test]
     if: ${{ needs.test.result == 'success' && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.mcp == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Live qualification is a required release gate. Runner provisioning is
       # part of that contract: missing Docker must fail closed.
@@ -392,7 +392,7 @@ jobs:
 
       - name: Upload live ledger and JUnit
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-smoke-${{ github.run_id }}
           path: live-upload
@@ -405,7 +405,7 @@ jobs:
     needs: [changes]
     if: ${{ (needs.changes.outputs.rust == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.workflow == 'true') && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check Docker availability
         run: docker info >/dev/null
       - name: Build the exact PR image
@@ -473,8 +473,8 @@ jobs:
     env:
       NPM_CONFIG_CACHE: ${{ github.workspace }}/.npm-cache
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Test npm launcher

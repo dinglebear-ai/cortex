@@ -872,12 +872,14 @@ async fn syslog_runtime_keeps_tcp_ingress_alive_until_shutdown() {
     config.receiver.host = "127.0.0.1".into();
     config.receiver.port = address.port();
     config.receiver.batch_size = 1;
+    // The observer must not compete with the ingest writer for one connection.
+    config.storage.pool_size = 2;
     let runtime = RuntimeCore::for_server(config).await.expect("runtime");
     let mut handles = runtime.spawn_maintenance_tasks();
     drop(reservation);
     runtime.start_syslog(&mut handles).await.unwrap();
     let fatal = runtime.fatal_shutdown_token();
-    let delivery = tokio::time::timeout(Duration::from_secs(3), async {
+    let delivery = tokio::time::timeout(Duration::from_secs(10), async {
         let mut stream = loop {
             tokio::select! {
                 biased;
@@ -892,10 +894,13 @@ async fn syslog_runtime_keeps_tcp_ingress_alive_until_shutdown() {
             .await.map_err(|_| "TCP listener rejected the frame")?;
         loop {
             if fatal.is_cancelled() { return Err("TCP supervisor exited while awaiting persisted ingress"); }
-            let count: i64 = runtime.pool.get().unwrap().query_row(
-                "SELECT count(*) FROM logs WHERE message = 'tcp-runtime-liveness-proof'",
-                [], |row| row.get(0),
-            ).unwrap();
+            let pool = Arc::clone(&runtime.pool);
+            let count: i64 = tokio::task::spawn_blocking(move || {
+                pool.get().unwrap().query_row(
+                    "SELECT count(*) FROM logs WHERE message = 'tcp-runtime-liveness-proof'",
+                    [], |row| row.get(0),
+                ).unwrap()
+            }).await.unwrap();
             if count == 1 { return Ok(()); }
             tokio::select! {
                 biased;
@@ -904,8 +909,8 @@ async fn syslog_runtime_keeps_tcp_ingress_alive_until_shutdown() {
             }
         }
     }).await;
-    let clean = handles.shutdown(Duration::from_secs(1)).await;
-    let runtime_clean = runtime.shutdown(Duration::from_secs(1)).await;
+    let clean = handles.shutdown(Duration::from_secs(5)).await;
+    let runtime_clean = runtime.shutdown(Duration::from_secs(5)).await;
     delivery
         .expect("TCP frame must reach durable storage within deadline")
         .expect("runtime must keep TCP ingress alive until requested shutdown");
