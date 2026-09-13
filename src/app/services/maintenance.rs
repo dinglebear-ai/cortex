@@ -366,7 +366,24 @@ impl CortexService {
             // connection inherits busy_timeout=5000 and the backup API reads
             // through WAL snapshots cooperatively — no lock contention.
             let src_conn = pool.get()?;
-            let mut dst_conn = rusqlite::Connection::open(&backup_path)?;
+            // Reserve a new destination before SQLite opens it. Existing live
+            // databases, symlinks, and previous backups must never be replaced
+            // or removed by the failure cleanup below.
+            let mut destination = std::fs::OpenOptions::new();
+            destination.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                destination.mode(0o600);
+            }
+            drop(destination.open(&backup_path)?);
+            let mut dst_conn = match rusqlite::Connection::open(&backup_path) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&backup_path);
+                    return Err(error.into());
+                }
+            };
             // Wrap the backup in a closure so we can remove the partial file on
             // error rather than leaving a truncated or corrupted backup behind.
             let backup_result = (|| -> anyhow::Result<()> {

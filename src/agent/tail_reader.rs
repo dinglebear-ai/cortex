@@ -14,6 +14,7 @@ pub(super) struct TailReader {
     position: u64,
     prefix: Vec<u8>,
     partial: Vec<u8>,
+    truncated: bool,
 }
 
 impl TailReader {
@@ -27,7 +28,23 @@ impl TailReader {
             position,
             prefix,
             partial: Vec::new(),
+            truncated: false,
         })
+    }
+
+    fn take_record(&mut self) -> String {
+        let line = if self.truncated {
+            // Do not present an incomplete log as original evidence or forward
+            // a prefix that may cut through a credential/redaction boundary.
+            "[Cortex omitted oversized file-tail record: exceeds 65536-byte limit]".to_owned()
+        } else {
+            String::from_utf8_lossy(&self.partial)
+                .trim_end_matches(['\r', '\n'])
+                .to_owned()
+        };
+        self.partial.clear();
+        self.truncated = false;
+        line
     }
 
     /// None means temporary EOF; callers may sleep before polling again.
@@ -43,19 +60,14 @@ impl TailReader {
             self.position = 0;
             self.prefix = prefix;
             if !self.partial.is_empty() {
-                let line = String::from_utf8_lossy(&self.partial).into_owned();
-                self.partial.clear();
-                return Ok(Some(line));
+                return Ok(Some(self.take_record()));
             }
         }
         let read = read_bounded_line(&mut self.reader, &mut self.partial, MAX_LINE_BYTES).await?;
         self.position = self.position.saturating_add(read.bytes_read as u64);
+        self.truncated |= read.truncated;
         if read.complete {
-            let line = String::from_utf8_lossy(&self.partial)
-                .trim_end_matches(['\r', '\n'])
-                .to_owned();
-            self.partial.clear();
-            return Ok(Some(line));
+            return Ok(Some(self.take_record()));
         }
         if read.bytes_read != 0 {
             return Ok(None);
@@ -81,9 +93,7 @@ impl TailReader {
             self.prefix = prefix;
             // Flush an unterminated old record once, never join it to the new file.
             if !self.partial.is_empty() {
-                let line = String::from_utf8_lossy(&self.partial).into_owned();
-                self.partial.clear();
-                return Ok(Some(line));
+                return Ok(Some(self.take_record()));
             }
         } else if prefix.len() > self.prefix.len() {
             self.prefix = prefix;

@@ -50,3 +50,16 @@ test('latest Ask wins even when older request completes last', async () => {
   assert.doesNotMatch(node('[data-answer-stack]').textContent, /OLD/);
   assert.equal(node('[data-answer-stack]').dataset.askState, 'complete');
 });
+
+test('current Ask network failure replaces stale content with failed state', async () => {
+  const { node, requests } = setup();
+  node('[data-token-form]').value = 'token'; node('[data-token-form]').fire('submit');
+  requests[0].resolve({}); await tick();
+  for (const request of requests.slice(1)) request.resolve({}); await tick();
+  node('[data-ask-form]').value = 'force api failure'; node('[data-ask-form]').fire('submit');
+  assert.equal(node('[data-answer-stack]').dataset.askState, 'pending');
+  requests.at(-1).reject(new Error('network unavailable')); await tick();
+  assert.equal(node('[data-answer-stack]').dataset.askState, 'failed');
+  assert.match(node('[data-answer-stack]').textContent, /Ask failed/);
+  assert.match(node('[data-answer-stack]').textContent, /network unavailable/);
+});

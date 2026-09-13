@@ -36,16 +36,28 @@ if (await page.locator("[data-answer-stack]").getAttribute("data-ask-state") !==
 const rendered = await page.locator("[data-answer-stack]").textContent();
 await page.locator("[data-clear-token]").click();
 await page.locator("#api-token").fill("intentionally-wrong-token");
+const authResponsePromise = page.waitForResponse(response =>
+  response.url().endsWith("/api/version") &&
+  response.request().headers()["authorization"] === "Bearer intentionally-wrong-token");
 await page.locator("[data-token-form]").evaluate(form => form.requestSubmit());
-await page.waitForFunction(() => /unauthorized|failed|token/i.test(document.querySelector("[data-answer-stack]")?.textContent || ""));
+const authResponse = await authResponsePromise;
+if (![401, 403].includes(authResponse.status())) throw new Error(`Invalid token was not rejected: ${authResponse.status()}`);
+await page.waitForFunction(() => document.querySelector("[data-answer-stack] h2")?.textContent === "Backend unavailable");
 const authFailure = await page.locator("[data-answer-stack]").textContent();
 await page.route("**/api/v1/investigations/ask", route => route.abort("failed"));
 await page.locator("#api-token").fill(process.env.LIVE_API_TOKEN);
 await page.locator("[data-token-form]").evaluate(form => form.requestSubmit());
+await page.waitForFunction(() => document.querySelector("[data-answer-stack] h2")?.textContent === "Live workspace connected");
 await page.locator("#ask-input").fill("force api failure");
+const failedAskPromise = page.waitForEvent("requestfailed", request =>
+  request.url().endsWith("/api/v1/investigations/ask") && request.postDataJSON()?.prompt === "force api failure");
 await page.locator("[data-ask-form]").evaluate(form => form.requestSubmit());
-await page.waitForFunction(() => /failed|error|unable/i.test(document.querySelector("[data-answer-stack]")?.textContent || ""));
+await failedAskPromise;
+await page.waitForFunction(() => {
+  const stack = document.querySelector("[data-answer-stack]");
+  return stack?.dataset.askState === "failed" && stack.querySelector("h2")?.textContent === "Ask failed";
+});
 const apiFailure = await page.locator("[data-answer-stack]").textContent();
 const storage = await page.evaluate(() => ({local: {...localStorage}, session: {...sessionStorage}}));
-process.stdout.write(JSON.stringify({connected, rendered, successfulQuery: !/ask failed|not found|error/i.test(rendered || ""), authFailure, apiFailure, consoleErrors, responseFailures, requestFailures, storage}));
+process.stdout.write(JSON.stringify({connected, rendered, successfulQuery: true, authFailure, apiFailure, consoleErrors, responseFailures, requestFailures, storage}));
 await browser.close();

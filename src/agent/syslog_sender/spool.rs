@@ -252,7 +252,9 @@ fn record_eviction_gaps(
     reason_code: &str,
     at: chrono::DateTime<Utc>,
 ) {
-    let mut windows: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
+    // Journal replay must choose the same retained gaps at the hard cap.
+    let mut windows: std::collections::BTreeMap<String, Vec<(u64, u64)>> =
+        std::collections::BTreeMap::new();
     for record in evicted {
         spool.evicted_records = spool.evicted_records.saturating_add(1);
         let source_windows = windows.entry(record.source_instance).or_default();

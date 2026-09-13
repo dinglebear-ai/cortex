@@ -47,6 +47,12 @@ def main():
     print(f'isolated Cargo target: {cargo_target}', file=sys.stderr, flush=True)
     print(f'isolated Cargo build: {cargo_build}', file=sys.stderr, flush=True)
 
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+
     def run(command, mutant):
         env = {**os.environ, 'CARGO_TARGET_DIR': str(cargo_target),
                'CARGO_BUILD_BUILD_DIR': str(cargo_build), 'MUTANT_ID': mutant['id'],
@@ -61,6 +67,15 @@ def main():
                                          stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     code = child.wait(timeout=args.timeout)
+                except (KeyboardInterrupt, SystemExit):
+                    # Includes interruption: detached children cannot outlive the
+                    # qualification driver or race the caller's workspace cleanup.
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    child.wait()
+                    raise
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
                     child.wait()

@@ -568,7 +568,7 @@ See [docs/plugin/HOOKS.md](docs/plugin/HOOKS.md) for the setup lifecycle and [do
 ### Health endpoints
 
 - `GET /health`: minimal unauthenticated liveness response for containers and proxies
-- `GET /health/full`: authenticated detailed health and ingest observability
+- `GET /health/full`: detailed health and ingest observability; mounted auth requires `CORTEX_TOKEN` (OAuth alone is insufficient). Explicit loopback and trusted-gateway policies bypass this check.
 
 ## Configuration
 

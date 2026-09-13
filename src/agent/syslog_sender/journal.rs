@@ -5,8 +5,17 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 const COMPACT_BYTES: u64 = 8 * 1024 * 1024;
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SourceKeyFormat {
+    #[default]
+    Raw,
+    Sha256Prefix96,
+}
 #[derive(Serialize, Deserialize)]
 struct Entry {
+    #[serde(default)]
+    source_key_format: SourceKeyFormat,
     sequence: u64,
     at: chrono::DateTime<Utc>,
     records: Vec<(String, String)>,
@@ -24,8 +33,22 @@ fn apply(spool: &mut SpoolState, entry: Entry) -> Result<()> {
         entry.sequence == spool.journal_sequence + 1,
         "non-contiguous enqueue journal"
     );
+    if matches!(entry.source_key_format, SourceKeyFormat::Sha256Prefix96) {
+        anyhow::ensure!(
+            entry.records.iter().all(|(source, _)| {
+                source.strip_prefix("source-").is_some_and(|digest| {
+                    digest.len() == 24 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            }),
+            "invalid canonical journal source key"
+        );
+    }
     for (source, line) in entry.records {
-        persistence::enqueue_at(spool, &source, line, entry.at);
+        let canonical = match entry.source_key_format {
+            SourceKeyFormat::Raw => stable_source_key(&source),
+            SourceKeyFormat::Sha256Prefix96 => source,
+        };
+        persistence::enqueue_canonical_at(spool, canonical, line, entry.at);
     }
     spool.journal_sequence = entry.sequence;
     Ok(())
@@ -95,6 +118,7 @@ pub(super) fn append_with_sync(
     file.set_len(length)?;
     file.seek(SeekFrom::Start(length))?;
     let entry = Entry {
+        source_key_format: SourceKeyFormat::Sha256Prefix96,
         sequence: state
             .spool
             .journal_sequence
@@ -109,7 +133,7 @@ pub(super) fn append_with_sync(
                 } else {
                     line
                 };
-                (source, line)
+                (stable_source_key(&source), line)
             })
             .collect(),
     };

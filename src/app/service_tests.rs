@@ -3272,3 +3272,24 @@ async fn db_backup_includes_committed_wal_records() {
     assert_eq!(integrity, "ok");
     drop(conn);
 }
+
+#[tokio::test]
+async fn db_backup_rejects_existing_destinations_without_modifying_them() {
+    let (service, _pool, dir) = test_service();
+    let other = dir.path().join("auth.db");
+    std::fs::write(&other, b"preserve-existing-auth").unwrap();
+    assert!(service.db_backup(Some(other.clone())).await.is_err());
+    assert_eq!(std::fs::read(&other).unwrap(), b"preserve-existing-auth");
+    let source = service.storage.db_path.clone();
+    let before = std::fs::read(&source).unwrap();
+    assert!(service.db_backup(Some(source.clone())).await.is_err());
+    assert_eq!(std::fs::read(&source).unwrap(), before);
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("backup-link.db");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert!(service.db_backup(Some(link.clone())).await.is_err());
+        assert!(link.is_symlink());
+        assert_eq!(std::fs::read(&other).unwrap(), b"preserve-existing-auth");
+    }
+}

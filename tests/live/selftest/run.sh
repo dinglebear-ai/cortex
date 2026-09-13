@@ -243,4 +243,6 @@ python3 "$ROOT/tests/live/selftest/review-regressions.py"
 bash "$ROOT/tests/live/phases/mutation/selftest.sh"
 node --test "$ROOT/tests/web/request-races.test.cjs"
 
+bash "$ROOT/tests/live/phases/concurrency/bounds-selftest.sh"
+
 printf 'live foundation self-tests: %d passed\n' "$passes"

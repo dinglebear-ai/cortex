@@ -54,8 +54,8 @@ async fn oversized_partial_buffer_is_bounded_and_next_record_survives() {
     assert_eq!(tail.partial.len(), MAX_LINE_BYTES);
     append(&path, b"\nnext\n");
     assert_eq!(
-        tail.next_line().await.unwrap().unwrap().len(),
-        MAX_LINE_BYTES
+        tail.next_line().await.unwrap().unwrap(),
+        "[Cortex omitted oversized file-tail record: exceeds 65536-byte limit]"
     );
     assert_eq!(tail.next_line().await.unwrap().as_deref(), Some("next"));
 }
@@ -82,5 +82,26 @@ async fn regrown_copytruncate_checks_prefix_before_reading_old_offset() {
     assert_eq!(
         tail.next_line().await.unwrap().as_deref(),
         Some("new replacement longer than previous contents")
+    );
+}
+
+#[tokio::test]
+async fn oversized_unterminated_record_is_diagnosed_on_rotation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.log");
+    std::fs::write(&path, b"").unwrap();
+    let mut tail = TailReader::open(&path).await.unwrap();
+    append(&path, &vec![b'x'; MAX_LINE_BYTES + 1]);
+    assert_eq!(tail.next_line().await.unwrap(), None);
+    assert_eq!(tail.next_line().await.unwrap(), None);
+    std::fs::rename(&path, dir.path().join("old.log")).unwrap();
+    std::fs::write(&path, b"new record\n").unwrap();
+    assert_eq!(
+        tail.next_line().await.unwrap().as_deref(),
+        Some("[Cortex omitted oversized file-tail record: exceeds 65536-byte limit]")
+    );
+    assert_eq!(
+        tail.next_line().await.unwrap().as_deref(),
+        Some("new record")
     );
 }

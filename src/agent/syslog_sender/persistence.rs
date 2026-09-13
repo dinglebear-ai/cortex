@@ -39,13 +39,22 @@ fn enqueue_in_memory(spool: &mut SpoolState, source_key: &str, line: String) {
     enqueue_at(spool, source_key, line, Utc::now());
 }
 
+#[cfg(test)]
 pub(super) fn enqueue_at(
     spool: &mut SpoolState,
     source_key: &str,
     line: String,
     at: chrono::DateTime<Utc>,
 ) {
-    let source_key = stable_source_key(source_key);
+    enqueue_canonical_at(spool, stable_source_key(source_key), line, at);
+}
+
+pub(super) fn enqueue_canonical_at(
+    spool: &mut SpoolState,
+    source_key: String,
+    line: String,
+    at: chrono::DateTime<Utc>,
+) {
     let sequence = {
         let legacy_next = spool.next_sequence;
         let next = spool

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import json
 import os
+import signal
+import time
 import pathlib
 import subprocess
 import sys
@@ -53,6 +55,49 @@ class MutationTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report['results'][0]['status'], 'killed')
         self.assertTrue(report['cargo_target_dir'].endswith('/mutated/.mutation-target'))
+
+    def test_interruption_reaps_child_and_restores_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'source'
+            source.mkdir()
+            (source / 'value.py').write_text('value = 1\n')
+            (source / 'check.py').write_text(CHECK)
+            (source / 'build.py').write_text(
+                "import os, pathlib, time\n"
+                "if os.environ['MUTANT_ID'] != 'baseline':\n"
+                " pathlib.Path('child.pid').write_text(str(os.getpid()))\n"
+                " time.sleep(60)\n")
+            manifest = root / 'manifest.json'
+            manifest.write_text(json.dumps({'mutants': [{'id': 'fixture', 'fingerprint': 'value',
+                'killer': 'literal assertion', 'expected_test': 'fixture::value',
+                'target': 'value.py', 'needle': 'value = 1', 'replacement': 'value = 2'}]}))
+            tree = root / 'tree'
+            process = subprocess.Popen([sys.executable, str(DRIVER), '--source', str(source),
+                '--workspace', str(tree), '--manifest', str(manifest), '--build', sys.executable,
+                'build.py', '--killer', sys.executable, 'check.py'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            child = None
+            try:
+                deadline = time.monotonic() + 10
+                while not (tree / 'child.pid').exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue((tree / 'child.pid').exists())
+                child = int((tree / 'child.pid').read_text())
+                process.send_signal(signal.SIGTERM)
+                self.assertEqual(process.wait(timeout=5), 143)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child, 0)
+                self.assertEqual((tree / 'value.py').read_text(), 'value = 1\n')
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                if child:
+                    try:
+                        os.killpg(child, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_compile_failure_is_invalid(self):
         self.assert_status('value = (', 'invalid')
