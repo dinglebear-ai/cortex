@@ -85,14 +85,15 @@ fn symlink_allowed_root_is_canonicalized() {
 #[test]
 #[serial]
 fn sensitive_mount_is_denied_even_when_env_allows_parent() {
-    let Ok(temp) = tempfile::tempdir_in("/data") else {
-        return;
-    };
-    let log_path = temp.path().join("app.log");
-    std::fs::write(&log_path, "hello\n").unwrap();
-    let _guard = EnvGuard::set("CORTEX_FILE_TAIL_ALLOWED_ROOTS", "/".to_string());
-
-    let err = validate_file_tail_path(&log_path.to_string_lossy()).unwrap_err();
-
-    assert!(err.to_string().contains("sensitive cortex mount"));
+    for path in [
+        "/data/test.log",
+        "/cortex-home/test.log",
+        "/home/cortex/.ssh/key",
+        "/home/cortex/workspace/file",
+    ] {
+        let error =
+            super::path_policy::reject_sensitive_path(std::path::Path::new(path)).unwrap_err();
+        assert!(error.to_string().contains("sensitive cortex mount"));
+    }
+    super::path_policy::reject_sensitive_path(std::path::Path::new("/database/test.log")).unwrap();
 }

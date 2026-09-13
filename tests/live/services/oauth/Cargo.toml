@@ -14,3 +14,31 @@ lab-auth = { git = "https://github.com/dinglebear-ai/labby.git", rev = "87cec324
 serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+
+[lints]
+workspace = true
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
+invalid_rust_codeblocks = "deny"
+bare_urls = "warn"
+unescaped_backticks = "warn"
+redundant_explicit_links = "warn"
+missing_crate_level_docs = "deny"
+
+[workspace.lints.rust]
+missing_docs = "allow"
+# fleet-contract@fleet-2026-07-31 still requires this legacy lint key. Keep the
+# real Rustdoc lint above and suppress only the compiler diagnostic emitted for
+# carrying this compatibility alias. Remove both lines when the fleet contract
+# accepts workspace.lints.rustdoc.missing_crate_level_docs.
+missing_crate_level_docs = "deny"
+renamed_and_removed_lints = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+mod_module_files = "deny"
+missing_safety_doc = "deny"

@@ -21,7 +21,7 @@ use persistence::persist;
 const JOB_KIND: &str = "agent_observatory_backfill";
 const STATE_VERSION: u32 = 1;
 const MAX_CHUNK_ROWS: usize = 500;
-const SOURCE_COUNT: u8 = 7;
+const SOURCE_COUNT: u8 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AgentBackfillHighWater {
@@ -485,23 +485,20 @@ pub fn run_agent_backfill_chunk(
     while remaining > 0 && job.progress.source_index < SOURCE_COUNT {
         let (used, done) = match job.progress.source_index {
             0 => process_logs(pool, &mut job.progress, remaining)?,
-            1 => process_source(pool, &mut job.progress, AgentSourceKind::Mcp, remaining)?,
-            2 => process_source(pool, &mut job.progress, AgentSourceKind::Hook, remaining)?,
-            3 => process_source(pool, &mut job.progress, AgentSourceKind::Skill, remaining)?,
-            4 => process_source(pool, &mut job.progress, AgentSourceKind::Llm, remaining)?,
-            5 => process_source(
-                pool,
-                &mut job.progress,
-                AgentSourceKind::OtelSpan,
-                remaining,
-            )?,
-            6 => process_source(
-                pool,
-                &mut job.progress,
-                AgentSourceKind::OtelMetric,
-                remaining,
-            )?,
-            _ => unreachable!(),
+            index => {
+                let kind = match index {
+                    1 => AgentSourceKind::Mcp,
+                    2 => AgentSourceKind::Hook,
+                    3 => AgentSourceKind::Skill,
+                    4 => AgentSourceKind::Llm,
+                    5 => AgentSourceKind::OtelSpan,
+                    6 => AgentSourceKind::OtelMetric,
+                    // Append to preserve the meaning of persisted v1 cursors 0..6.
+                    7 => AgentSourceKind::RepositoryObservation,
+                    _ => unreachable!(),
+                };
+                process_source(pool, &mut job.progress, kind, remaining)?
+            }
         };
         remaining = remaining.saturating_sub(used);
         if done {

@@ -6,32 +6,53 @@
 //! no direct Windows equivalent, so this module isolates the two
 //! platform-specific operations behind a stable, cross-platform surface.
 //!
-//! On Unix the behavior is exactly as before. On Windows file identity is not
-//! cheaply available for path-based metadata, so [`metadata_identity`] returns
-//! a constant and rotation detection falls back to the content fingerprint and
-//! file length (see `supervisor::reopen_if_rotated_or_truncated`). The
-//! no-follow open maps to `FILE_FLAG_OPEN_REPARSE_POINT`, which mirrors the
-//! intent of `O_NOFOLLOW` (open the reparse point itself rather than its
-//! target).
+//! Identity comes from the opened handle on both Unix and Windows, so saved
+//! checkpoints cannot match a different file merely because its length grew.
 
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 
-/// File identity used to detect rotation/truncation.
-///
-/// Unix: `(st_dev, st_ino)`. Windows: `(0, 0)` — identity-based rotation
-/// detection is disabled and the caller relies on the content fingerprint and
-/// length instead.
-pub(crate) fn metadata_identity(metadata: &Metadata) -> (u64, u64) {
+pub(crate) fn file_identity(file: &File) -> std::io::Result<(u64, u64)> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        (metadata.dev(), metadata.ino())
+        let metadata = file.metadata()?;
+        Ok((metadata.dev(), metadata.ino()))
     }
     #[cfg(windows)]
     {
-        let _ = metadata;
-        (0, 0)
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileInfo {
+            attributes: u32,
+            creation: [u32; 2],
+            access: [u32; 2],
+            write: [u32; 2],
+            volume: u32,
+            size_high: u32,
+            size_low: u32,
+            links: u32,
+            index_high: u32,
+            index_low: u32,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFileInformationByHandle(
+                handle: *mut std::ffi::c_void,
+                info: *mut FileInfo,
+            ) -> i32;
+        }
+        let mut info = FileInfo::default();
+        // SAFETY: the borrowed File keeps its handle open; info has the C
+        // BY_HANDLE_FILE_INFORMATION layout and is writable for this call.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((
+            u64::from(info.volume),
+            (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+        ))
     }
 }
 

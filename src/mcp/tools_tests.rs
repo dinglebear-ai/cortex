@@ -1916,3 +1916,40 @@ async fn graph_action_redacts_sensitive_identifiers_in_entity_responses() {
     assert_eq!(entity["display_label"], "[redacted]");
     assert_eq!(entity["source_id"], "[redacted]");
 }
+
+#[tokio::test]
+async fn help_describes_mcp_parameters_separately_from_cli_flags() {
+    let result = super::help::tool_cortex_help().await.unwrap();
+    let text = result["help"].as_str().unwrap();
+    let similar = text
+        .split("## cortex similar_incidents\n")
+        .nth(1)
+        .unwrap()
+        .split("---")
+        .next()
+        .unwrap();
+    assert!(similar.contains("Required: `query`"));
+    assert!(!similar.contains("Parameters:** none"));
+    let artifact = text
+        .split("## cortex artifact_evidence\n")
+        .nth(1)
+        .unwrap()
+        .split("---")
+        .next()
+        .unwrap();
+    assert!(artifact.contains("`artifactId` (optional)"));
+}
+
+#[tokio::test]
+async fn help_action_dispatch_returns_the_tool_reference() {
+    let h = TestHarness::new();
+    let result = execute_tool(&h.state, "cortex", json!({"action": "help"}), None)
+        .await
+        .unwrap();
+    let reference = result["help"]
+        .as_str()
+        .expect("help action returns its reference");
+    assert!(reference.starts_with("# cortex Tool Reference"));
+    assert!(reference.contains("## cortex search\n"));
+    assert!(reference.contains("## cortex ack_error\n"));
+}

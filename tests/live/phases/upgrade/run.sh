@@ -110,6 +110,7 @@ upgrade_one_window() {
 
 upgrade_phase_run() {
   local manifest="$LIVE_PROJECT_ROOT/tests/live/contracts/releases/compatibility.json" dir="$LIVE_RUN_ROOT/artifacts/upgrade" n1 oldest
+  python3 "$LIVE_PROJECT_ROOT/tests/live/phases/upgrade/validate.py" "$LIVE_PROJECT_ROOT"
   mkdir -p "$dir"; chmod 700 "$dir"
   jq -e '.schema=="cortex-live-upgrade-compatibility-v1" and .snapshot.immutable and .rollback=="backup-restore-only"' "$manifest" >/dev/null
   cp "$manifest" "$dir/compatibility.json"; shasum -a 256 "$dir/compatibility.json" >"$dir/compatibility.json.sha256"; chmod 400 "$dir/compatibility.json" "$dir/compatibility.json.sha256"

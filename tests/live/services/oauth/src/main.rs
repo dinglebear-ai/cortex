@@ -1,3 +1,5 @@
+//! Serve the isolated OAuth fixture used by live authentication qualification.
+
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use cortex::{mcp::router, testing};
 use lab_auth::{

@@ -22,7 +22,7 @@ with out.open('w') as f:
     raise SystemExit(f'telemetry collection failed: docker stats: {exc}')
    units={'B':1,'KiB':1024,'MiB':1048576,'GiB':1073741824}
    def size(v):
-    for u,m in units.items():
+    for u,m in sorted(units.items(), key=lambda item: len(item[0]), reverse=True):
      if v.endswith(u):
       try:return int(float(v[:-len(u)])*m)
       except ValueError:raise SystemExit(f'invalid docker memory metric: {v}')

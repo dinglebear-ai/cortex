@@ -1,4 +1,4 @@
-//! Agent self-update — keeps the host agent binary in lockstep with the cortex
+//! Agent self-update — upgrades the host agent binary toward the cortex
 //! server it reports to.
 //!
 //! The server advertises its own version + a download directive in the heartbeat
@@ -186,7 +186,10 @@ fn join_url(base: &str, path: &str) -> Result<String> {
 
 /// True when the directive asks for a version different from the one compiled
 /// into this binary. The server is the source of truth, so any difference
-/// (upgrade or downgrade) converges the agent toward the server.
+/// converges the agent toward the server, except numeric semver downgrades.
+/// Rolling back the server does not downgrade newer agents; operators must
+/// install the intended older binary explicitly. Saved-backup recovery after
+/// a failed local update is a separate rollback mechanism.
 pub fn update_needed(directive: &AgentUpdateDirective) -> bool {
     directive.version != env!("CARGO_PKG_VERSION")
         && !is_semver_downgrade(env!("CARGO_PKG_VERSION"), &directive.version)

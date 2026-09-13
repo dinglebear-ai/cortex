@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 #[cfg(test)]
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -142,7 +142,7 @@ fn snapshot_jsonl_source(
             let _worker_slot = worker_slot;
             let outcome = (|| -> Result<SnapshotOutcome> {
                 #[cfg(test)]
-                maybe_delay_snapshot_for_test(&path);
+                hold_snapshot_for_test(&path);
 
                 let file = fs::File::open(path)?;
                 let mut reader = BufReader::new(file);
@@ -163,6 +163,12 @@ fn snapshot_jsonl_source(
             let _ = sender.send(outcome);
         });
 
+    #[cfg(test)]
+    let worker = worker.map(|handle| {
+        if SNAPSHOT_TEST_HOLDS.lock().unwrap().is_some() {
+            SNAPSHOT_TEST_WORKERS.lock().unwrap().push(handle);
+        }
+    });
     if worker.is_err() {
         return Err(anyhow::anyhow!("could not start bounded transcript reader"));
     }
@@ -178,31 +184,37 @@ fn snapshot_jsonl_source(
 }
 
 #[cfg(test)]
-type SnapshotTestDelays = Vec<(String, Duration)>;
+static SNAPSHOT_TEST_RELEASE: (Mutex<bool>, Condvar) = (Mutex::new(true), Condvar::new());
+#[cfg(test)]
+static SNAPSHOT_TEST_WORKERS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
 
 #[cfg(test)]
-static SNAPSHOT_TEST_DELAY: LazyLock<Mutex<Option<SnapshotTestDelays>>> =
+type SnapshotTestHolds = Vec<String>;
+
+#[cfg(test)]
+static SNAPSHOT_TEST_HOLDS: LazyLock<Mutex<Option<SnapshotTestHolds>>> =
     LazyLock::new(|| Mutex::new(None));
 #[cfg(test)]
-static SNAPSHOT_TEST_DELAY_COMPLETED: LazyLock<Mutex<HashSet<String>>> =
+static SNAPSHOT_TEST_RELEASED: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(test)]
-fn maybe_delay_snapshot_for_test(path: &Path) {
-    let delay = SNAPSHOT_TEST_DELAY
+fn hold_snapshot_for_test(path: &Path) {
+    let held = SNAPSHOT_TEST_HOLDS
         .lock()
-        .expect("snapshot delay lock")
+        .expect("snapshot hold lock")
         .as_ref()
-        .and_then(|delays| {
-            let name = path.file_name().and_then(|name| name.to_str());
-            delays
-                .iter()
-                .find_map(|(file_name, delay)| (name == Some(file_name)).then_some(*delay))
+        .is_some_and(|names| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| names.iter().any(|held| held == name))
         });
-    if let Some(delay) = delay {
-        std::thread::sleep(delay);
+    if held {
+        let (lock, ready) = &SNAPSHOT_TEST_RELEASE;
+        let released = lock.lock().unwrap();
+        let _released = ready.wait_while(released, |released| !*released).unwrap();
         if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-            SNAPSHOT_TEST_DELAY_COMPLETED
+            SNAPSHOT_TEST_RELEASED
                 .lock()
                 .expect("snapshot delay completion lock")
                 .insert(name.to_string());
@@ -211,42 +223,61 @@ fn maybe_delay_snapshot_for_test(path: &Path) {
 }
 
 #[cfg(test)]
-fn snapshot_test_delay_completed(file_name: &str) -> bool {
-    SNAPSHOT_TEST_DELAY_COMPLETED
+fn snapshot_test_worker_released(file_name: &str) -> bool {
+    SNAPSHOT_TEST_RELEASED
         .lock()
         .expect("snapshot delay completion lock")
         .contains(file_name)
 }
 
 #[cfg(test)]
-struct SnapshotDelayGuard(Option<Vec<(String, Duration)>>);
+struct SnapshotWorkerGuard(Option<Vec<String>>);
 
 #[cfg(test)]
-impl SnapshotDelayGuard {
-    fn for_file(file_name: &str, delay: Duration) -> Self {
-        Self::for_files([(file_name, delay)])
+impl SnapshotWorkerGuard {
+    fn for_file(file_name: &str) -> Self {
+        Self::for_files([file_name])
     }
 
-    fn for_files<'a>(delays: impl IntoIterator<Item = (&'a str, Duration)>) -> Self {
-        let mut configured = SNAPSHOT_TEST_DELAY.lock().expect("snapshot delay lock");
-        let delays = delays
-            .into_iter()
-            .map(|(file_name, delay)| (file_name.to_string(), delay))
-            .collect::<Vec<_>>();
-        let mut completed = SNAPSHOT_TEST_DELAY_COMPLETED
+    fn for_files<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut configured = SNAPSHOT_TEST_HOLDS.lock().expect("snapshot hold lock");
+        let delays = names.into_iter().map(String::from).collect::<Vec<_>>();
+        let mut completed = SNAPSHOT_TEST_RELEASED
             .lock()
             .expect("snapshot delay completion lock");
-        for (file_name, _) in &delays {
+        for file_name in &delays {
             completed.remove(file_name);
         }
+        *SNAPSHOT_TEST_RELEASE.0.lock().unwrap() = false;
         Self(configured.replace(delays))
     }
 }
 
 #[cfg(test)]
-impl Drop for SnapshotDelayGuard {
+impl SnapshotWorkerGuard {
+    fn finish(&self) {
+        *SNAPSHOT_TEST_RELEASE.0.lock().unwrap() = true;
+        SNAPSHOT_TEST_RELEASE.1.notify_all();
+        let workers = std::mem::take(&mut *SNAPSHOT_TEST_WORKERS.lock().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        for worker in workers {
+            while !worker.is_finished() {
+                assert!(
+                    Instant::now() < deadline,
+                    "snapshot test worker did not finish"
+                );
+                std::thread::park_timeout(Duration::from_millis(1));
+            }
+            worker.join().expect("snapshot test worker panicked");
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for SnapshotWorkerGuard {
     fn drop(&mut self) {
-        *SNAPSHOT_TEST_DELAY.lock().expect("snapshot delay lock") = self.0.take();
+        self.finish();
+        *SNAPSHOT_TEST_HOLDS.lock().expect("snapshot delay lock") = self.0.take();
     }
 }
 
@@ -1825,7 +1856,7 @@ fn discover_root_bounded(
         .spawn(move || {
             let _worker_slot = worker_slot;
             #[cfg(test)]
-            maybe_delay_snapshot_for_test(&path);
+            hold_snapshot_for_test(&path);
             let mut result = DiscoveryResult::default();
             let started = Instant::now();
             let mut entries = 0usize;
@@ -1841,6 +1872,12 @@ fn discover_root_bounded(
             );
             let _ = sender.send(result);
         });
+    #[cfg(test)]
+    let worker = worker.map(|handle| {
+        if SNAPSHOT_TEST_HOLDS.lock().unwrap().is_some() {
+            SNAPSHOT_TEST_WORKERS.lock().unwrap().push(handle);
+        }
+    });
     if worker.is_err() {
         return Err(anyhow::anyhow!(
             "could not start bounded transcript discovery"

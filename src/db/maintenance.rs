@@ -662,10 +662,10 @@ const DEFAULT_FTS_MERGE_PAGES: i64 = 500;
 ///
 /// **High-severity exemption:** rows with `severity IN ('err','crit','alert','emerg')`
 /// are excluded from time-based purge — they are never aged out by retention.
-/// They CAN still be deleted by `enforce_storage_budget` under disk pressure
-/// (oldest-first, no severity filter). Permanent err+ retention is therefore
-/// only guaranteed if the DB never breaches `max_db_size_mb` or
-/// `min_free_disk_mb`. See CLAUDE.md "Retention" for the policy interaction.
+/// Logical DB-size pressure can delete err+ rows only outside the configured
+/// recent, per-source error floor. Low free disk independently blocks writes;
+/// it does not initiate deletion. If both limits are breached, deletion is
+/// attributable to the DB-size policy. See CLAUDE.md "Retention".
 pub fn purge_old_logs(pool: &DbPool, retention_days: u32, fts_merge_pages: u32) -> Result<usize> {
     if retention_days == 0 {
         return Ok(0);

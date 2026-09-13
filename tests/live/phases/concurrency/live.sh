@@ -10,7 +10,8 @@ done
 source "$root/tests/live/phases/ingest/run.sh"
 live_install_err_trap
 workers="${LIVE_CONCURRENCY_LIVE_WORKERS:-4}"; each="${LIVE_CONCURRENCY_LIVE_ITEMS:-30}"
-[[ "$workers" =~ ^[1-8]$ && "$each" =~ ^[1-9][0-9]*$ && "$each" -le 200 ]] || { echo 'unsafe concurrency bounds' >&2; exit 2; }
+source "$root/tests/live/phases/concurrency/bounds.sh"
+concurrency_bounds_valid "$workers" "$each" || { echo 'unsafe concurrency bounds' >&2; exit 2; }
 prefix="conc-${LIVE_RUN_ID#cortex-e2e-}"; candidate="$(live_ingest_candidate_id)"; pids=(); query_pids=()
 for n in $(seq 1 "$workers"); do python3 "$root/tests/live/phases/concurrency/producer.py" --port "${LIVE_SYSLOG_TCP_PORT:?}" --prefix "$prefix-w$n" --count "$each" >"$out/producer-$n.json" & pids+=("$!"); done
 # Receipt-backed records travel through the same restart. Only these carry a

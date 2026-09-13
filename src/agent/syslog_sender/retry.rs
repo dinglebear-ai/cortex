@@ -1,6 +1,7 @@
 //! Retry classification, backoff, and sender identity helpers.
 
 use super::*;
+#[cfg(test)]
 use chrono::{SecondsFormat, Utc};
 use getrandom::fill as random_fill;
 use sha2::{Digest, Sha256};
@@ -63,6 +64,7 @@ pub(super) fn stable_source_key(source_key: &str) -> String {
     let digest = Sha256::digest(source_key.as_bytes());
     format!("source-{}", hex::encode(&digest[..12]))
 }
+#[cfg(test)]
 pub(super) fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }

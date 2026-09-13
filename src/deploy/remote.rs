@@ -369,7 +369,7 @@ fn write_remote_env_phase(
     let legacy_env_path = format!("{remote_home}/compose/.env");
     let legacy_archive_path = format!("{remote_home}/compose/.env.legacy");
     let script = format!(
-        "umask 077\ncat > {tmp_path} <<'__CORTEX_ENV__'\n{rendered}__CORTEX_ENV__\nchmod 600 {tmp_path}\nmv {tmp_path} {env_path}\nif test -f {legacy_env_path}; then rm -f {legacy_archive_path}; mv {legacy_env_path} {legacy_archive_path}; chmod 600 {legacy_archive_path}; fi",
+        "set -eu\numask 077\ncat > {tmp_path} <<'__CORTEX_ENV__'\n{rendered}__CORTEX_ENV__\nchmod 600 {tmp_path}\nmv {tmp_path} {env_path}\nif test -f {legacy_env_path}; then rm -f {legacy_archive_path}; mv {legacy_env_path} {legacy_archive_path}; chmod 600 {legacy_archive_path}; fi",
         tmp_path = shell_quote(&tmp_path),
         env_path = shell_quote(&env_path),
         legacy_env_path = shell_quote(&legacy_env_path),
@@ -415,7 +415,7 @@ fn write_remote_assets_phase(
     let dockerfile_path = format!("{remote_home}/compose/config/Dockerfile");
     let dockerfile_tmp = format!("{dockerfile_path}.tmp");
     let script = format!(
-        "cat > {compose_tmp} <<'__CORTEX_COMPOSE__'\n{}__CORTEX_COMPOSE__\ncat > {dockerfile_tmp} <<'__CORTEX_DOCKERFILE__'\n{}__CORTEX_DOCKERFILE__\nmv {compose_tmp} {compose_path}\nmv {dockerfile_tmp} {dockerfile_path}",
+        "set -eu\ncat > {compose_tmp} <<'__CORTEX_COMPOSE__'\n{}__CORTEX_COMPOSE__\ncat > {dockerfile_tmp} <<'__CORTEX_DOCKERFILE__'\n{}__CORTEX_DOCKERFILE__\nmv {compose_tmp} {compose_path}\nmv {dockerfile_tmp} {dockerfile_path}",
         installed_compose_asset(),
         dockerfile_asset(),
         compose_tmp = shell_quote(&compose_tmp),
@@ -438,7 +438,13 @@ fn read_existing_remote_env(
         env_path = shell_quote(&env_path),
         legacy_env_path = shell_quote(&legacy_env_path),
     );
-    Ok(runner.run(host, &script, None)?.stdout)
+    let output = runner.run(host, &script, None)?;
+    if !output.status_success {
+        return Err(io::Error::other(
+            "failed to read existing remote environment",
+        ));
+    }
+    Ok(output.stdout)
 }
 
 fn validate_remote_home(home: &str) -> io::Result<String> {

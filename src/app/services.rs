@@ -129,6 +129,7 @@ mod skill_events;
 mod skill_incidents;
 mod streams;
 mod topic_correlate;
+mod transcript_recovery;
 
 pub use compose::run_compose_status;
 pub use journal::run_service_logs;
@@ -199,6 +200,12 @@ pub struct CortexService {
 /// produced `permit_ms=0` alongside a 6s `pool.get()` timeout (syslog-mcp-0firx).
 fn read_permits_for_pool(pool_size: u32) -> usize {
     PoolBudget::for_pool_size(pool_size).read_permits()
+}
+
+tokio::task_local! {
+    // Cloned into every blocking step so request cancellation cannot release
+    // heavy admission while SQLite is still executing that operation.
+    static HEAVY_OPERATION: Arc<tokio::sync::OwnedSemaphorePermit>;
 }
 
 impl CortexService {
@@ -413,7 +420,9 @@ impl CortexService {
 
         let exec_start = Instant::now();
         let pool = Arc::clone(&self.pool);
+        let heavy_operation = HEAVY_OPERATION.try_with(Arc::clone).ok();
         let join_result = tokio::task::spawn_blocking(move || {
+            let _heavy_operation = heavy_operation;
             let _permit = permit;
             f(&pool)
         })
@@ -488,8 +497,7 @@ impl CortexService {
             Ok(Ok(permit)) => permit,
         };
 
-        let _heavy_permit = heavy_permit;
-        f().await
+        HEAVY_OPERATION.scope(Arc::new(heavy_permit), f()).await
     }
 }
 

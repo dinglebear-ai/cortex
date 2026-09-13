@@ -747,6 +747,14 @@ async fn graph_evidence_lookup_returns_safe_source_summary_and_relationship_cont
         .unwrap()
     };
 
+    pool.get().unwrap().execute("UPDATE graph_entities SET display_label='/home/secret-owner/private', source_id='password: hidden-source'", []).unwrap();
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE graph_relationships SET relationship_key='api_key: hidden-relation'",
+            [],
+        )
+        .unwrap();
     let response = service
         .graph_evidence_lookup(GraphEvidenceLookupRequest {
             evidence_id,
@@ -756,6 +764,13 @@ async fn graph_evidence_lookup_returns_safe_source_summary_and_relationship_cont
         .await
         .unwrap();
 
+    let encoded = serde_json::to_string(&response).unwrap();
+    for secret in ["secret-owner", "hidden-source", "hidden-relation"] {
+        assert!(
+            !encoded.contains(secret),
+            "graph response leaked a protected fixture value"
+        );
+    }
     assert_eq!(response.evidence.id, evidence_id);
     assert_eq!(response.relationship.id, response.evidence.relationship_id);
     assert_eq!(response.relationship.src_entity_id, response.src_entity.id);
@@ -2544,30 +2559,44 @@ async fn batch_writer_completes_under_saturated_read_permits() {
     storage.pool_size = 4;
     let pool = Arc::new(init_pool(&storage).unwrap());
     let service = CortexService::new(Arc::clone(&pool), storage);
-
-    // Saturate every read permit with reads that pin a pooled connection for
-    // longer than the writer's deadline below. A 4-connection pool is below
-    // `MIN_POOL_SIZE`, so `PoolBudget` falls back to reserving 1 and issues 3.
+    assert_eq!(service.db_permits.available_permits(), 3);
     let mut readers = Vec::new();
+    let mut releases = Vec::new();
     for _ in 0..3 {
         let svc = service.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        releases.push(release_tx);
         readers.push(tokio::spawn(async move {
-            svc.run_db("test.slow_read", |pool| {
+            svc.run_db("test.slow_read", move |pool| {
                 let _conn = pool.get()?;
-                std::thread::sleep(std::time::Duration::from_millis(1200));
+                let _ = started_tx.send(());
+                let _ = release_rx.recv_timeout(std::time::Duration::from_secs(10));
                 Ok(())
             })
             .await
         }));
+        tokio::time::timeout(std::time::Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
     }
-    // Let the readers acquire their permits and connections.
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-
-    let pool_w = Arc::clone(&pool);
-    let write_start = std::time::Instant::now();
+    let (fourth_tx, mut fourth_rx) = tokio::sync::oneshot::channel();
+    let svc = service.clone();
+    let fourth = tokio::spawn(async move {
+        svc.run_db("test.fourth_read", move |_| {
+            let _ = fourth_tx.send(());
+            Ok(())
+        })
+        .await
+    });
+    let fourth_blocked =
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut fourth_rx)
+            .await
+            .is_err();
     let written = tokio::task::spawn_blocking(move || {
         insert_logs_batch(
-            &pool_w,
+            &pool,
             &[entry(
                 "2026-01-01T00:00:00Z",
                 "host-w",
@@ -2578,23 +2607,20 @@ async fn batch_writer_completes_under_saturated_read_permits() {
         )
     })
     .await
-    .expect("spawn_blocking join")
-    .expect("batch insert should succeed");
-    let elapsed = write_start.elapsed();
-
-    assert_eq!(written, 1);
-    assert!(
-        elapsed < std::time::Duration::from_millis(800),
-        "writer must reach the reserved connection promptly under read \
-         saturation; took {elapsed:?}"
-    );
-
-    for reader in readers {
-        reader
-            .await
-            .expect("reader join")
-            .expect("slow read should succeed");
+    .unwrap()
+    .unwrap();
+    for release in releases {
+        let _ = release.send(());
     }
+    for reader in readers {
+        reader.await.unwrap().unwrap();
+    }
+    fourth.await.unwrap().unwrap();
+    assert!(
+        fourth_blocked,
+        "fourth read must remain outside its DB closure"
+    );
+    assert_eq!(written, 1);
 }
 
 #[tokio::test]
@@ -3157,4 +3183,116 @@ async fn investigate_ai_skill_incidents_low_signal_returns_summary_not_error() {
     assert!(!response.no_data);
     assert_eq!(response.evidence.len(), 1);
     assert!(response.no_incident_low_severity_summary);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heavy_operation_admission_survives_cancelled_caller() {
+    let (service, _, _dir) = test_service();
+    let svc = service.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let first = tokio::spawn(async move {
+        svc.with_heavy_read_permit("test.multi_step", || async {
+            svc.run_db("test.blocking", move |pool| {
+                let _conn = pool.get()?;
+                let _ = started_tx.send(());
+                let _ = release_rx.recv_timeout(std::time::Duration::from_secs(10));
+                Ok(())
+            })
+            .await
+        })
+        .await
+    });
+    started_rx.await.unwrap();
+    first.abort();
+    let _ = first.await;
+    assert_eq!(service.heavy_read_permits.available_permits(), 0);
+    let pending = service.heavy_read_permits.clone().acquire_owned();
+    tokio::pin!(pending);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut pending)
+            .await
+            .is_err()
+    );
+    release_tx.send(()).unwrap();
+    let permit = tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(permit);
+    assert_eq!(service.heavy_read_permits.available_permits(), 1);
+}
+
+#[test]
+fn graph_redaction_removes_separated_credential_values() {
+    for input in [
+        "password: swordfish",
+        "api_key abc123",
+        "client_secret = hidden",
+        "access_token: tok123",
+    ] {
+        let redacted = super::graph_safety::redact_graph_text(input.into());
+        for secret in ["swordfish", "abc123", "hidden", "tok123"] {
+            assert!(!redacted.contains(secret));
+        }
+    }
+}
+
+#[tokio::test]
+async fn db_backup_includes_committed_wal_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig {
+        wal_mode: true,
+        // The fixture pins its writer while backup obtains another connection.
+        pool_size: 2,
+        ..StorageConfig::for_test(dir.path().join("backup-source.db"))
+    };
+    let pool = Arc::new(init_pool(&storage).unwrap());
+    let service = CortexService::new(Arc::clone(&pool), storage);
+    let conn = pool.get().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE backup_canary (message TEXT NOT NULL);
+         PRAGMA wal_checkpoint(TRUNCATE);
+         PRAGMA wal_autocheckpoint=0;
+         INSERT INTO backup_canary VALUES ('committed-in-wal');",
+    )
+    .unwrap();
+    // Keep the connection alive so closing the final reader cannot checkpoint
+    // away the condition this test exercises.
+    let wal = crate::db::sqlite_sidecar_path(&service.storage.db_path, "wal");
+    assert!(std::fs::metadata(wal).unwrap().len() > 32);
+    let destination = dir.path().join("wal-safe-backup.db");
+    let result = service.db_backup(Some(destination.clone())).await.unwrap();
+    assert_eq!(result.backup_path, destination);
+    let backup = rusqlite::Connection::open(&destination).unwrap();
+    let message: String = backup
+        .query_row("SELECT message FROM backup_canary", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(message, "committed-in-wal");
+    let integrity: String = backup
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(conn);
+}
+
+#[tokio::test]
+async fn db_backup_rejects_existing_destinations_without_modifying_them() {
+    let (service, _pool, dir) = test_service();
+    let other = dir.path().join("auth.db");
+    std::fs::write(&other, b"preserve-existing-auth").unwrap();
+    assert!(service.db_backup(Some(other.clone())).await.is_err());
+    assert_eq!(std::fs::read(&other).unwrap(), b"preserve-existing-auth");
+    let source = service.storage.db_path.clone();
+    let before = std::fs::read(&source).unwrap();
+    assert!(service.db_backup(Some(source.clone())).await.is_err());
+    assert_eq!(std::fs::read(&source).unwrap(), before);
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("backup-link.db");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert!(service.db_backup(Some(link.clone())).await.is_err());
+        assert!(link.is_symlink());
+        assert_eq!(std::fs::read(&other).unwrap(), b"preserve-existing-auth");
+    }
 }

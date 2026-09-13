@@ -3,7 +3,6 @@ use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -48,7 +47,9 @@ impl InventoryPaths {
 }
 
 pub struct RefreshLock {
-    path: PathBuf,
+    // Keep the inode and OS lock alive together. Never unlink this path: another
+    // process may already have opened the same inode while waiting to acquire it.
+    _file: fs::File,
 }
 
 impl RefreshLock {
@@ -57,26 +58,14 @@ impl RefreshLock {
             ensure_private_dir(parent)?;
         }
         reject_symlink(path)?;
-        remove_stale_lock(path)?;
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .with_context(|| {
-                format!(
-                    "inventory refresh already running or stale lock exists: {}",
-                    path.display()
-                )
-            })?;
-        Ok(Self {
-            path: path.to_path_buf(),
-        })
-    }
-}
-
-impl Drop for RefreshLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        let file = options.open(path)?;
+        file.try_lock()
+            .with_context(|| format!("inventory refresh already running: {}", path.display()))?;
+        Ok(Self { _file: file })
     }
 }
 
@@ -149,19 +138,6 @@ fn write_private_atomic(path: &Path, body: &[u8]) -> Result<()> {
         })
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     chmod_private_file(path)?;
-    Ok(())
-}
-
-fn remove_stale_lock(path: &Path) -> Result<()> {
-    let Ok(metadata) = fs::metadata(path) else {
-        return Ok(());
-    };
-    let Ok(modified) = metadata.modified() else {
-        return Ok(());
-    };
-    if modified.elapsed().unwrap_or_default() > Duration::from_secs(6 * 60 * 60) {
-        fs::remove_file(path).with_context(|| format!("remove stale lock {}", path.display()))?;
-    }
     Ok(())
 }
 

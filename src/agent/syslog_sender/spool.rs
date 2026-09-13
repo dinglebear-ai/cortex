@@ -14,6 +14,16 @@ pub(super) struct LoadedSpool {
 }
 
 pub(super) fn load_spool(path: &Path) -> LoadedSpool {
+    let mut loaded = load_snapshot(path);
+    if let Err(error) = super::journal::replay(&loaded.spool_path, &mut loaded.spool) {
+        loaded.error_code = Some("spool_recovery_required");
+        loaded.spool.journal_failed = true;
+        tracing::error!(%error, "syslog enqueue journal requires recovery");
+    }
+    loaded
+}
+
+fn load_snapshot(path: &Path) -> LoadedSpool {
     match fs::read(path) {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(spool) => LoadedSpool {
@@ -101,11 +111,13 @@ fn load_or_create_recovery_generation(
                 break latest_valid.unwrap_or_else(|| (candidate, SpoolState::default()));
             }
             Err(error) => {
-                latest_valid = None;
-                tracing::error!(
-                    recovery_spool = %candidate.display(),
-                    error = %error,
-                    "syslog recovery generation could not be read; preserving it"
+                tracing::error!(recovery_spool = %candidate.display(), %error, "syslog recovery generation could not be read; preserving it");
+                break (
+                    candidate,
+                    SpoolState {
+                        journal_failed: true,
+                        ..SpoolState::default()
+                    },
                 );
             }
         }
@@ -127,6 +139,10 @@ fn load_or_create_recovery_generation(
 }
 
 pub(super) fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
+    anyhow::ensure!(
+        !spool.journal_failed,
+        "enqueue journal requires operator recovery"
+    );
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create syslog spool dir {}", parent.display()))?;
@@ -172,8 +188,13 @@ pub(super) fn save_spool(path: &Path, spool: &SpoolState) -> Result<()> {
     result
 }
 
+#[cfg(test)]
 pub(super) fn evict_source_to_quota(spool: &mut SpoolState, source_key: &str) {
-    let cutoff = Utc::now() - chrono::Duration::seconds(MAX_SPOOL_AGE_SECS);
+    evict_source_at(spool, source_key, Utc::now());
+}
+
+pub(super) fn evict_source_at(spool: &mut SpoolState, source_key: &str, at: chrono::DateTime<Utc>) {
+    let cutoff = at - chrono::Duration::seconds(MAX_SPOOL_AGE_SECS);
     let mut source_count = 0usize;
     let mut source_bytes = 0usize;
     for record in &spool.records {
@@ -201,9 +222,14 @@ pub(super) fn evict_source_to_quota(spool: &mut SpoolState, source_key: &str) {
         }
     }
     spool.records = retained;
-    record_eviction_gaps(spool, evicted, "local_retention_quota");
+    record_eviction_gaps(spool, evicted, "local_retention_quota", at);
 }
+#[cfg(test)]
 pub(super) fn evict_aggregate_to_quota(spool: &mut SpoolState) {
+    evict_aggregate_at(spool, Utc::now());
+}
+
+pub(super) fn evict_aggregate_at(spool: &mut SpoolState, at: chrono::DateTime<Utc>) {
     let mut bytes = spool
         .records
         .iter()
@@ -217,15 +243,18 @@ pub(super) fn evict_aggregate_to_quota(spool: &mut SpoolState) {
         bytes = bytes.saturating_sub(record.line.len());
         evicted.push(record);
     }
-    record_eviction_gaps(spool, evicted, "aggregate_retention_quota");
+    record_eviction_gaps(spool, evicted, "aggregate_retention_quota", at);
 }
 
 fn record_eviction_gaps(
     spool: &mut SpoolState,
     evicted: Vec<SyslogForwardRecord>,
     reason_code: &str,
+    at: chrono::DateTime<Utc>,
 ) {
-    let mut windows: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
+    // Journal replay must choose the same retained gaps at the hard cap.
+    let mut windows: std::collections::BTreeMap<String, Vec<(u64, u64)>> =
+        std::collections::BTreeMap::new();
     for record in evicted {
         spool.evicted_records = spool.evicted_records.saturating_add(1);
         let source_windows = windows.entry(record.source_instance).or_default();
@@ -249,7 +278,7 @@ fn record_eviction_gaps(
                     source_epoch: spool.source_epoch,
                     from_sequence,
                     to_sequence,
-                    observed_at: now(),
+                    observed_at: at.to_rfc3339(),
                     reason_code: reason_code.into(),
                 },
             );

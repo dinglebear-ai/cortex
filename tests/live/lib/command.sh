@@ -67,7 +67,8 @@ live_run_bounded() {
   local home="${LIVE_RUN_ROOT:?}/home" tmp="${LIVE_RUN_ROOT}/tmp"
   live_secure_dir "$home"; live_secure_dir "$tmp"
   if live_timeout "$seconds" python3 "$LIVE_PROJECT_ROOT/tests/live/lib/session_exec.py" "$home" "$tmp" "$@" >"$out_pipe" 2>"$err_pipe"; then status=0; else status=$?; fi
-  wait "$out_filter"; wait "$err_filter"
+  if ! wait "$out_filter"; then status=1; fi
+  if ! wait "$err_filter"; then status=1; fi
   chmod 600 "$stdout" "$stderr"
   rm -f "$out_pipe" "$err_pipe"; rmdir "$pipe_dir"
   live_event command "$(jq -cn --arg status "$status" --arg timeout "$seconds" '{status:($status|tonumber),timeout_seconds:($timeout|tonumber)}')"

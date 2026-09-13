@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use super::platform::metadata_identity;
+use super::platform::{file_identity, open_read_no_follow};
 
 pub(crate) fn validate_file_tail_path(path: &str) -> Result<()> {
     let raw = Path::new(path);
@@ -20,18 +20,7 @@ pub(crate) fn validate_file_tail_path(path: &str) -> Result<()> {
 
     let canonical = std::fs::canonicalize(raw)
         .map_err(|err| anyhow::anyhow!("file-tail path could not be canonicalized: {err}"))?;
-    let denied = [
-        "/data",
-        "/cortex-home",
-        "/home/cortex/.ssh",
-        "/home/cortex/workspace",
-    ];
-    if denied
-        .iter()
-        .any(|root| canonical.starts_with(Path::new(root)))
-    {
-        bail!("file-tail path is under a sensitive cortex mount");
-    }
+    reject_sensitive_path(&canonical)?;
 
     let allowed_roots = canonical_allowed_file_tail_roots();
     if allowed_roots.iter().any(|root| canonical.starts_with(root)) {
@@ -49,17 +38,34 @@ pub(crate) fn validate_file_tail_path(path: &str) -> Result<()> {
 
 pub(crate) fn validate_opened_file_tail_path(
     path: &str,
-    opened_metadata: &std::fs::Metadata,
+    opened_file: &std::fs::File,
 ) -> Result<()> {
-    if !opened_metadata.file_type().is_file() {
+    if !opened_file.metadata()?.file_type().is_file() {
         bail!("file-tail opened path must be a regular file");
     }
     validate_file_tail_path(path)?;
-    let path_metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| anyhow::anyhow!("file-tail path is not readable: {path}: {err}"))?;
-    if metadata_identity(opened_metadata) != metadata_identity(&path_metadata) {
+    let path_file = open_read_no_follow(std::path::Path::new(path))?;
+    if file_identity(opened_file)? != file_identity(&path_file)? {
         bail!("file-tail path changed while opening");
     }
+    Ok(())
+}
+
+/// Check denied prefixes independently of filesystem availability and allowlists.
+pub(super) fn reject_sensitive_path(canonical: &Path) -> Result<()> {
+    let denied = [
+        "/data",
+        "/cortex-home",
+        "/home/cortex/.ssh",
+        "/home/cortex/workspace",
+    ];
+    if denied
+        .iter()
+        .any(|root| canonical.starts_with(Path::new(root)))
+    {
+        bail!("file-tail path is under a sensitive cortex mount");
+    }
+
     Ok(())
 }
 

@@ -2565,3 +2565,55 @@ fn saving_the_checkpoint_forgets_nothing_while_a_root_is_unavailable() {
         "an unmounted home must not read as every tracked transcript deleted"
     );
 }
+
+#[tokio::test]
+async fn restored_line_checkpoint_forwards_only_appended_transcript_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&root).unwrap();
+    let transcript = root.join("session.jsonl");
+    write_file(&transcript, &transcript_line("acknowledged old event"));
+    let key = transcript.to_string_lossy().to_string();
+    let checkpoint_path = dir.path().join("checkpoint.json");
+    // Older agents persisted line cursors before seekable JSONL positions
+    // existed. Restore that supported on-disk format across an agent restart.
+    write_file(
+        &checkpoint_path,
+        &serde_json::json!({"files": {key.clone(): 1}}).to_string(),
+    );
+    let mut checkpoint = load_checkpoint(&checkpoint_path).unwrap();
+    assert_eq!(checkpoint.files[&key], 1);
+    assert!(checkpoint.jsonl_positions.is_empty());
+    append_line(&transcript, "new event after restart");
+    let server = always_accepting_server().await;
+    let config = forward_config(dir.path(), server.uri());
+    let client = reqwest::Client::new();
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let records = payload["records"].as_array().unwrap();
+    assert_eq!(
+        records.len(),
+        1,
+        "acknowledged history must not be replayed"
+    );
+    assert_eq!(records[0]["envelope"]["message"], "new event after restart");
+    assert!(!String::from_utf8_lossy(&requests[0].body).contains("acknowledged old event"));
+    assert_eq!(checkpoint.files[&key], 2);
+    // The newly persisted seek cursor remains correct on another restart.
+    let mut restarted = load_checkpoint(&checkpoint_path).unwrap();
+    assert_eq!(restarted.files[&key], 2);
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut restarted)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}

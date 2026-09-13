@@ -38,7 +38,7 @@ jobs:
       LIVE_AGENT_BOUNDARY_MODE: full
       LIVE_UPGRADE_SCHEDULED: "true"
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require Docker infrastructure
         run: docker info >/dev/null && docker compose version >/dev/null
       - name: Sweep expired exact-identity leases
@@ -57,7 +57,7 @@ jobs:
         run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload
       - name: Upload ledgers and JUnit
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-${{ matrix.profile }}-${{ github.run_id }}
           path: live-upload
@@ -75,7 +75,7 @@ jobs:
       CORTEX_LIVE_DIND_AUTHORIZED: "1"
       LIVE_AGENT_BOUNDARY_MODE: full
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Sweep expired aggregate leases
         run: |
           mkdir -p "$LIVE_RUNS_ROOT"
@@ -110,7 +110,7 @@ jobs:
         run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload-aggregate
       - name: Upload aggregate evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-aggregate-${{ github.run_id }}
           path: live-upload-aggregate
@@ -128,7 +128,7 @@ jobs:
       CORTEX_LIVE_DIND_AUTHORIZED: "1"
       LIVE_AGENT_BOUNDARY_MODE: full
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require Docker for isolated profiles
         if: ${{ inputs.profile != 'noop' && inputs.profile != 'artifacts' && inputs.profile != 'fleet-read-only' && inputs.profile != 'fleet-mutating' }}
         run: docker info >/dev/null && docker compose version >/dev/null
@@ -153,7 +153,7 @@ jobs:
         run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload
       - name: Upload ledgers and JUnit
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-${{ inputs.profile }}-${{ github.run_id }}
           path: live-upload

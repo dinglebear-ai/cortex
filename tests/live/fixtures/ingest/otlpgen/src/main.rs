@@ -1,3 +1,5 @@
+//! Generate deterministic OTLP payloads for live ingestion qualification.
+
 use std::{env, fs};
 use opentelemetry_proto::tonic::{
     collector::{logs::v1::ExportLogsServiceRequest, metrics::v1::ExportMetricsServiceRequest, trace::v1::ExportTraceServiceRequest},

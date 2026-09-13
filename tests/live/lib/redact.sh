@@ -13,20 +13,7 @@ live_register_secret() {
 }
 
 live_redact_stream() {
-  local file secret text
-  text="$(cat)"
-  file="$(live_secret_file)"
-  if [[ -f "$file" ]]; then
-    while IFS= read -r secret; do
-      [[ -n "$secret" ]] && text="${text//"$secret"/[REDACTED]}"
-    done <"$file"
-  fi
-  printf '%s' "$text" | sed -E \
-    -e 's/(Authorization:[[:space:]]*(Bearer|Basic)[[:space:]]+)[^[:space:]"}]+/\1[REDACTED]/Ig' \
-    -e 's/((token|secret|password|passwd|api[_-]?key|access[_-]?key|client[_-]?secret|refresh[_-]?token|session|cookie)[=:][[:space:]]*)[^[:space:]&;]+/\1[REDACTED]/Ig' \
-    -e 's/("(token|secret|password|passwd|api[_-]?key|access[_-]?key|client[_-]?secret|refresh[_-]?token|session|cookie)"[[:space:]]*:[[:space:]]*")[^"]+"/\1[REDACTED]"/Ig' \
-    -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[REDACTED]@#Ig' \
-    -e 's/(-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----).*/\1 [REDACTED]/Ig'
+  python3 "$(dirname "${BASH_SOURCE[0]}")/redact.py" "$(live_secret_file)" "${LIVE_REDACT_MAX_BYTES:-104857600}"
 }
 
 live_secret_scan() {

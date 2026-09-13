@@ -1458,11 +1458,7 @@ fn bounded_snapshot_timeout_yields_to_later_source_without_late_persistence() {
     )
     .unwrap();
 
-    let _delay = SnapshotDelayGuard::for_file(
-        "000-stalled-codex.jsonl",
-        std::time::Duration::from_millis(450),
-    );
-    let started = std::time::Instant::now();
+    let _delay = SnapshotWorkerGuard::for_file("000-stalled-codex.jsonl");
     let result = index_roots_with_options(
         &pool,
         IndexOptions {
@@ -1479,10 +1475,6 @@ fn bounded_snapshot_timeout_yields_to_later_source_without_late_persistence() {
     .unwrap();
 
     assert_eq!(result.source_deadline_exceeded, 1, "result={result:#?}");
-    assert!(
-        started.elapsed() < std::time::Duration::from_millis(300),
-        "a stalled reader held the scan longer than its deadline"
-    );
     let ingested_fast: i64 = pool
         .get()
         .unwrap()
@@ -1497,7 +1489,7 @@ fn bounded_snapshot_timeout_yields_to_later_source_without_late_persistence() {
     // The worker remains intentionally detached until the OS read returns.
     // It owns no persistence capability, so completion cannot create a source
     // or imports after the scanner classified it as deferred.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    _delay.finish();
     let late_source_rows: i64 = pool
         .get()
         .unwrap()
@@ -1534,10 +1526,7 @@ fn bounded_gemini_snapshot_timeout_yields_to_later_gemini_without_late_persisten
     )
     .unwrap();
 
-    let _delay = SnapshotDelayGuard::for_file(
-        "session-000-stalled.json",
-        std::time::Duration::from_millis(450),
-    );
+    let _delay = SnapshotWorkerGuard::for_file("session-000-stalled.json");
     let result = index_roots_with_options(
         &pool,
         IndexOptions {
@@ -1566,7 +1555,7 @@ fn bounded_gemini_snapshot_timeout_yields_to_later_gemini_without_late_persisten
         )
         .unwrap();
     assert_eq!(fast_rows, 1);
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    _delay.finish();
     let late_rows: i64 = pool
         .get()
         .unwrap()
@@ -1598,10 +1587,7 @@ fn saturated_snapshot_workers_defer_without_starving_later_source_on_retry() {
         r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"healthy source after saturation"}}"#,
     )
     .unwrap();
-    let delay = SnapshotDelayGuard::for_files([
-        ("000-stalled.jsonl", std::time::Duration::from_millis(450)),
-        ("001-stalled.jsonl", std::time::Duration::from_millis(450)),
-    ]);
+    let delay = SnapshotWorkerGuard::for_files(["000-stalled.jsonl", "001-stalled.jsonl"]);
     let options = IndexOptions {
         root_override: Some(root),
         scan_budget: Some(ScanBudget {
@@ -1619,7 +1605,6 @@ fn saturated_snapshot_workers_defer_without_starving_later_source_on_retry() {
         "attempted sources advance cursor"
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
     drop(delay);
     let second = index_roots_with_options(&pool, options, None).unwrap();
     assert_eq!(second.snapshot_capacity_deferred, 0, "result={second:#?}");
@@ -1739,7 +1724,7 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
         r#"{"sessionId":"later-provider","messages":[{"id":"later","content":"later provider discovered despite huge root"}]}"#,
     )
     .unwrap();
-    let _delay = SnapshotDelayGuard::for_file("projects", std::time::Duration::from_secs(3));
+    let _delay = SnapshotWorkerGuard::for_file("projects");
     let result = index_roots_with_options(
         &pool,
         IndexOptions {
@@ -1762,7 +1747,7 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
         "capped discovery records its last visited entry"
     );
     assert!(
-        !snapshot_test_delay_completed("projects"),
+        !snapshot_test_worker_released("projects"),
         "a slow provider-root discovery blocked until the delayed worker completed"
     );
     let later_provider_rows: i64 = pool
@@ -1780,7 +1765,6 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
     // must prove that the recorded entry cursor itself, not another timeout,
     // reaches the deferred descendant.
     drop(_delay);
-    std::thread::sleep(std::time::Duration::from_millis(250));
     for _ in 0..4 {
         let pass = index_roots_with_options(
             &pool,

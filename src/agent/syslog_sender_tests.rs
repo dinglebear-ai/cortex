@@ -12,6 +12,8 @@ fn backoff_ms_doubles_until_capped() {
 fn quota_eviction_creates_a_payload_free_gap() {
     let source_key = "source-000000000000000000000001";
     let mut spool = SpoolState {
+        journal_sequence: 0,
+        journal_failed: false,
         source_instance: "host-a".into(),
         source_epoch: 1,
         next_sequence: 0,
@@ -47,6 +49,8 @@ fn exact_receipt_advances_only_the_matching_record() {
     let state = Arc::new(Mutex::new(SenderState {
         spool_path: path.clone(),
         spool: SpoolState {
+            journal_sequence: 0,
+            journal_failed: false,
             source_instance: "host-a".into(),
             source_epoch: 1,
             next_sequence: 2,
@@ -87,6 +91,8 @@ fn incomplete_duplicate_and_unknown_receipts_fail_closed() {
     let state = Arc::new(Mutex::new(SenderState {
         spool_path: path,
         spool: SpoolState {
+            journal_sequence: 0,
+            journal_failed: false,
             source_instance: "host-a".into(),
             source_epoch: 1,
             next_sequence: 3,
@@ -149,6 +155,8 @@ fn receipt_save_failure_restores_records_gaps_and_dispatched_keys() {
     let state = Arc::new(Mutex::new(SenderState {
         spool_path: path,
         spool: SpoolState {
+            journal_sequence: 0,
+            journal_failed: false,
             records: VecDeque::from([item.clone()]),
             gaps: VecDeque::from([loss.clone()]),
             dispatched_gap_keys: HashSet::from([loss.idempotency_key.clone()]),
@@ -196,6 +204,8 @@ fn source_quota_emits_only_maximal_contiguous_loss_intervals() {
         records.push_back(source_record(other, sequence));
     }
     let mut spool = SpoolState {
+        journal_sequence: 0,
+        journal_failed: false,
         records,
         ..SpoolState::default()
     };
@@ -272,6 +282,8 @@ fn receiver_failure_plans_are_bounded_and_leave_spool_records_untouched() {
     let state = Arc::new(Mutex::new(SenderState {
         spool_path: dir.path().join("spool.json"),
         spool: SpoolState {
+            journal_sequence: 0,
+            journal_failed: false,
             source_instance: "host-a".into(),
             source_epoch: 1,
             next_sequence: 1,
@@ -306,6 +318,8 @@ fn retry_jitter_varies_with_entropy_and_stays_within_the_bounded_window() {
 fn receiver_outage_spool_is_bounded_and_records_a_gap_when_it_evicts() {
     let source_key = "source-000000000000000000000001";
     let mut spool = SpoolState {
+        journal_sequence: 0,
+        journal_failed: false,
         source_instance: "host-a".into(),
         source_epoch: 1,
         next_sequence: MAX_SOURCE_SPOOL_RECORDS as u64,
@@ -348,6 +362,8 @@ fn round_robin_dispatch_keeps_a_quiet_source_visible_behind_a_noisy_one() {
     let noisy = "source-000000000000000000000001";
     let quiet = "source-000000000000000000000002";
     let mut spool = SpoolState {
+        journal_sequence: 0,
+        journal_failed: false,
         source_instance: "host-a".into(),
         source_epoch: 1,
         next_sequence: 0,
@@ -390,6 +406,8 @@ fn path_like_source_key_is_never_serialized_into_spool_or_delivery_request() {
     let source_key = stable_source_key(raw_source);
     let record = source_record(&format!("host-a:{source_key}"), 1);
     let spool = SpoolState {
+        journal_sequence: 0,
+        journal_failed: false,
         source_instance: "host-a".into(),
         source_epoch: 1,
         next_sequence: 0,
@@ -479,6 +497,8 @@ fn corrupt_newer_generation_never_reactivates_an_older_valid_generation() {
     std::fs::write(&path, b"corrupt-primary").unwrap();
     std::fs::write(&recovery, b"corrupt-recovery").unwrap();
     let old = SpoolState {
+        journal_sequence: 0,
+        journal_failed: false,
         evicted_records: 77,
         ..SpoolState::default()
     };
@@ -594,6 +614,8 @@ fn aggregate_cap_bounds_high_cardinality_sources_and_records_each_loss_window() 
         })
         .collect();
     let mut spool = SpoolState {
+        journal_sequence: 0,
+        journal_failed: false,
         source_instance: "host-a".into(),
         source_epoch: 1,
         next_sequence: 0,
@@ -661,6 +683,8 @@ fn dispatched_gap_identity_stays_immutable_during_later_compaction() {
     let state = Arc::new(Mutex::new(SenderState {
         spool_path: dir.path().join("spool.json"),
         spool: SpoolState {
+            journal_sequence: 0,
+            journal_failed: false,
             source_instance: "host-a".into(),
             gaps: VecDeque::from([first.clone()]),
             ..SpoolState::default()

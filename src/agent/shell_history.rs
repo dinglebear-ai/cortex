@@ -292,6 +292,16 @@ async fn scan_and_forward(
     }
 
     if records.is_empty() {
+        // Invalid rows still consume the raw scan budget. Persist their progress
+        // without a POST so they cannot permanently hide subsequent valid rows.
+        if let Some(new_line) = new_zsh_line {
+            checkpoint.zsh_line = new_line;
+        }
+        if let Some((ts, id)) = new_atuin_cursor {
+            checkpoint.atuin_timestamp_ns = ts;
+            checkpoint.atuin_id = id;
+        }
+        save_checkpoint(&config.checkpoint_path, checkpoint)?;
         return Ok(0);
     }
 

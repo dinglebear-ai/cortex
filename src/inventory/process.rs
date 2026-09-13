@@ -51,7 +51,10 @@ pub async fn run_command_bytes_capped(
     max_output_bytes: usize,
 ) -> Result<CommandOutputBytes> {
     let start = Instant::now();
-    let mut child = crate::env::tokio_command(program)
+    let mut command = crate::env::tokio_command(program);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -60,24 +63,24 @@ pub async fn run_command_bytes_capped(
         .spawn()
         .map_err(|error| anyhow!("{program} spawn failed: {error}"))?;
 
+    #[cfg(unix)]
+    let _group = ProcessGroup(child.id());
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let stdout_task =
-        tokio::spawn(async move { read_capped_bytes(&mut stdout, max_output_bytes).await });
     let stderr_max_bytes = max_output_bytes.min(MAX_COMMAND_OUTPUT_BYTES);
-    let stderr_task =
-        tokio::spawn(async move { read_capped_bytes(&mut stderr, stderr_max_bytes).await });
-    let wait = tokio::time::timeout(timeout, child.wait()).await;
-    let status = match wait {
-        Ok(Ok(status)) => Some(status.code().unwrap_or(-1)),
-        Ok(Err(error)) => {
-            stdout_task.abort();
-            stderr_task.abort();
-            return Err(anyhow!("{program} wait failed: {error}"));
-        }
+    // These futures own no detached tasks: cancellation drops both pipe readers.
+    // One deadline covers exit AND inherited-pipe EOF.
+    let completed = tokio::time::timeout(timeout, async {
+        tokio::try_join!(
+            async { child.wait().await.map_err(anyhow::Error::from) },
+            read_capped_bytes(&mut stdout, max_output_bytes),
+            read_capped_bytes(&mut stderr, stderr_max_bytes),
+        )
+    })
+    .await;
+    let (status, (stdout, out_truncated), (stderr, err_truncated)) = match completed {
+        Ok(result) => result?,
         Err(_) => {
-            stdout_task.abort();
-            stderr_task.abort();
             let _ = child.kill().await;
             return Err(anyhow!(
                 "{program} timed out after {}ms",
@@ -85,8 +88,7 @@ pub async fn run_command_bytes_capped(
             ));
         }
     };
-    let (stdout, out_truncated) = stdout_task.await??;
-    let (stderr, err_truncated) = stderr_task.await??;
+    let status = Some(status.code().unwrap_or(-1));
     let stderr = String::from_utf8_lossy(&stderr);
     let (stderr, redaction_truncated) = redact_error(&stderr);
     Ok(CommandOutputBytes {
@@ -96,6 +98,22 @@ pub async fn run_command_bytes_capped(
         elapsed_ms: start.elapsed().as_millis(),
         truncated: out_truncated || err_truncated || redaction_truncated,
     })
+}
+
+#[cfg(unix)]
+struct ProcessGroup(Option<u32>);
+
+#[cfg(unix)]
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            // The child was placed in its own process group before exec. Kill
+            // inherited-pipe descendants on completion, timeout and cancellation.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+    }
 }
 
 async fn read_capped_bytes<R: AsyncReadExt + Unpin>(

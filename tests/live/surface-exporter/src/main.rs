@@ -1,3 +1,5 @@
+//! Export the compiled Cortex surface contract for live qualification.
+
 fn main() {
     match cortex::surfaces::export_json() {
         Ok(contract) => println!("{contract}"),

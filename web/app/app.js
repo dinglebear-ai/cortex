@@ -324,27 +324,33 @@
     });
   }
 
-  async function checkV1Compatibility() {
+  let requestGeneration = 0;
+
+  async function checkV1Compatibility(generation) {
     try {
       const payload = await apiGet("/api/v1/investigation/version");
+      if (generation !== requestGeneration) return;
       if (payload.ui_version && payload.ui_version !== appVersion) {
         setV1State("Version skew", `Server expects ${payload.ui_version}`, "warn");
       } else {
         setV1State("Compatible", "Investigation API v1 is available", "");
       }
     } catch (error) {
+      if (generation !== requestGeneration) return;
       setV1State("Unavailable", "/api/v1 is not mounted; Ask + Explain is disabled", "warn");
     }
   }
 
   async function refresh() {
+    const generation = ++requestGeneration;
     if (!bearerToken) {
       renderAnswer("Bearer token required", "Enter CORTEX_API_TOKEN to load live API data.", "warn");
       return;
     }
 
     try {
-      await checkV1Compatibility();
+      await checkV1Compatibility(generation);
+      if (generation !== requestGeneration) return;
       const [version, stats, hosts, tail] = await Promise.all([
         apiGet("/api/version"),
         apiGet("/api/stats"),
@@ -352,6 +358,7 @@
         apiGet("/api/tail?n=25"),
       ]);
 
+      if (generation !== requestGeneration) return;
       latestHosts = hosts.hosts || hosts.items || [];
       latestLogs = tail.logs || tail.entries || tail.items || [];
       ui.serverVersion.textContent = version.version || "Unknown";
@@ -363,6 +370,7 @@
       renderTimeline(latestLogs);
       renderAnswer("Live workspace connected", "Cortex returned version, stats, hosts, and recent log evidence. Ask a question to run the /api/v1 Ask + Explain workflow.", "success");
     } catch (error) {
+      if (generation !== requestGeneration) return;
       setBadge(ui.logStatus, "Error", "error");
       renderAnswer("Backend unavailable", error.message, "error");
     }
@@ -374,8 +382,11 @@
       renderAnswer("Bearer token required", "Connect before asking Cortex for live evidence.", "warn");
       return;
     }
+    const generation = ++requestGeneration;
+    ui.answerStack.dataset.askState = "pending";
     try {
       const envelope = await apiPost("/api/v1/investigations/ask", { prompt: query });
+      if (generation !== requestGeneration) return;
       latestLogs = envelope.result?.logs || [];
       renderClaims(query, envelope);
       renderTimeline(latestLogs);
@@ -385,7 +396,10 @@
       } else {
         setBadge(ui.logStatus, "Explained", "success");
       }
+      ui.answerStack.dataset.askState = "complete";
     } catch (error) {
+      if (generation !== requestGeneration) return;
+      ui.answerStack.dataset.askState = "failed";
       renderAnswer("Ask failed", error.message, "error");
     }
   }
@@ -397,6 +411,12 @@
   });
 
   ui.clearToken.addEventListener("click", () => {
+    ++requestGeneration;
+    ui.answerStack.dataset.askState = "idle";
+    ui.serverVersion.textContent = "--";
+    ui.schemaVersion.textContent = "Schema --";
+    ui.hostCount.textContent = "--";
+    ui.logCount.textContent = "--";
     bearerToken = "";
     ui.tokenForm.reset();
     latestHosts = [];

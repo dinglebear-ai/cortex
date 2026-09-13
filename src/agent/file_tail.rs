@@ -1,12 +1,9 @@
 //! Durable HTTP forwarding for configured fleet-agent file tails.
 
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader, SeekFrom};
 
 use crate::agent_file_tail_ingest::{AgentFileTailIngestRequest, AgentFileTailRecord};
 
@@ -27,32 +24,20 @@ pub async fn run(config: FileTailForwardConfig) -> Result<()> {
         .timeout(Duration::from_secs(30))
         .build()
         .context("failed to build file-tail forwarder client")?;
-    let mut reader = open_at_end(&config.source.path).await?;
-    let mut position = reader.stream_position().await?;
+    let mut reader = super::tail_reader::TailReader::open(&config.source.path).await?;
     loop {
-        let mut line = String::new();
-        let read = reader.read_line(&mut line).await?;
-        if read == 0 {
-            if file_was_truncated(&config.source.path, position).await {
-                reader = open_at_end(&config.source.path).await?;
-                position = reader.stream_position().await?;
-            }
+        let Some(line) = reader.next_line().await? else {
             tokio::time::sleep(Duration::from_millis(EOF_SLEEP_MS)).await;
             continue;
-        }
-
+        };
         let raw = line.trim_end_matches(['\r', '\n']);
         if raw.is_empty() {
-            position = position.saturating_add(read as u64);
             continue;
         }
         while let Err(error) = send_line(&client, &config, raw).await {
             tracing::warn!(error = %error, path = %config.source.path.display(), "agent file-tail delivery failed; retrying current line");
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
-        // Advance only after the server accepts the line; transient failures
-        // retry this exact line instead of silently skipping it.
-        position = position.saturating_add(read as u64);
     }
 }
 
@@ -115,21 +100,6 @@ fn source_id(tag: &str) -> String {
     } else {
         trimmed.chars().take(255).collect()
     }
-}
-
-async fn open_at_end(path: &Path) -> Result<BufReader<File>> {
-    let mut file = File::open(path)
-        .await
-        .with_context(|| format!("open {}", path.display()))?;
-    file.seek(SeekFrom::End(0)).await?;
-    Ok(BufReader::new(file))
-}
-
-async fn file_was_truncated(path: &Path, position: u64) -> bool {
-    tokio::fs::metadata(path)
-        .await
-        .map(|metadata| metadata.len() < position)
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -10,24 +10,44 @@ use super::syslog_sender::{SyslogSender, format_rfc5424, local0_pri};
 /// RFC 5424 syslog to the given sender.  Unix-only.
 #[cfg(unix)]
 pub async fn run_journald_forwarder(hostname: &str, sender: Arc<SyslogSender>) -> Result<()> {
-    let mut child = crate::env::tokio_command("journalctl")
+    let child = crate::env::tokio_command("journalctl")
         .args(["-f", "-o", "json", "--no-pager"])
+        .kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .context("spawn journalctl")?;
 
+    forward_child(child, hostname, sender).await
+}
+
+#[cfg(unix)]
+async fn forward_child(
+    mut child: tokio::process::Child,
+    hostname: &str,
+    sender: Arc<SyslogSender>,
+) -> Result<()> {
     let stdout = child.stdout.take().context("journalctl stdout")?;
     let mut lines = BufReader::new(stdout).lines();
 
-    while let Some(line) = lines.next_line().await? {
-        if let Some(syslog_line) = parse_entry(hostname, &line) {
-            sender.send_from("journald", syslog_line).await?;
+    let forwarded: Result<()> = async {
+        while let Some(line) = lines.next_line().await? {
+            if let Some(syslog_line) = parse_entry(hostname, &line) {
+                sender.send_from("journald", syslog_line).await?;
+            }
         }
+        Ok(())
     }
-
-    child.wait().await.context("journalctl exited")?;
-    Ok(())
+    .await;
+    if let Err(error) = forwarded {
+        // Reap before the supervisor starts another follower. kill_on_drop also
+        // covers cancellation while either read or delivery is pending.
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error);
+    }
+    let status = child.wait().await.context("wait for journalctl")?;
+    anyhow::bail!("journalctl stream ended unexpectedly: {status}")
 }
 
 #[cfg(not(unix))]

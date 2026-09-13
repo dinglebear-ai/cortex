@@ -168,27 +168,28 @@ Restoring a backup is a stop-the-world operation — never copy a backup over a
 live WAL-mode database.
 
 ```bash
+# Capture the installed image (it includes sqlite3); if already stopped, set
+# CORTEX_RESTORE_IMAGE to the local Cortex image you previously deployed.
+CORTEX_RESTORE_IMAGE="${CORTEX_RESTORE_IMAGE:-$(docker inspect --format '{{.Image}}' cortex)}"
+
 # 1. Stop the service.
 cortex compose down --yes        # or: docker compose down
 
 # 2a. Default named volume: restore through a one-shot helper using the same
 #     stable volume name as Compose. Backups are on the off-volume host mount.
-docker run --rm \
+# Run from the repository root so the reviewed restore helper is available.
+docker run --rm --user 0:0 --entrypoint sh \
   -v "${CORTEX_VOLUME_NAME:-cortex-data}:/data" \
   -v "${CORTEX_BACKUP_DIR:-$HOME/.cortex/backups}:/backups:ro" \
-  debian:bookworm-slim sh -c \
-  'cp /backups/syslog-<timestamp>.db /data/cortex.db && \
-   test ! -f /backups/auth-<timestamp>.db || cp /backups/auth-<timestamp>.db /data/auth.db; \
-   test ! -f /backups/auth-jwt-<timestamp>.pem || cp /backups/auth-jwt-<timestamp>.pem /data/auth-jwt.pem; \
-   test ! -f /backups/integration-credential-<timestamp>.key || cp /backups/integration-credential-<timestamp>.key /data/integration-credential.key; \
-   rm -f /data/cortex.db-wal /data/cortex.db-shm /data/auth.db-wal /data/auth.db-shm'
+  -v "$PWD/scripts/restore-backup.sh:/restore-backup.sh:ro" \
+  "$CORTEX_RESTORE_IMAGE" /restore-backup.sh /backups TIMESTAMP /data
 
-# 2b. Bind-mounted /data: copy directly to the configured host directory.
-cp /path/to/backups/syslog-<timestamp>.db /absolute/data/path/cortex.db
-cp /path/to/backups/auth-<timestamp>.db /absolute/data/path/auth.db
-cp /path/to/backups/auth-jwt-<timestamp>.pem /absolute/data/path/auth-jwt.pem
-cp /path/to/backups/integration-credential-<timestamp>.key /absolute/data/path/integration-credential.key
-rm -f /absolute/data/path/cortex.db-wal /absolute/data/path/cortex.db-shm
+# 2b. Bind-mounted /data: use the same staged-copy helper.
+sh scripts/restore-backup.sh /path/to/backups TIMESTAMP /absolute/data/path
+# Stop here if the helper fails. It stages every backup copy before replacing
+# current files, checks SQLite integrity, and removes WAL/SHM only for databases
+# actually restored. Optional auth.db, auth-jwt.pem, and integration-credential.key
+# backups are staged and restored together. The host helper requires sqlite3.
 
 # 3. Fix bind-mount ownership. The container runs as a non-root UID (1000 by
 #    default) and writes auth.db / auth-jwt.pem with that UID — a restore

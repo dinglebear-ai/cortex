@@ -163,3 +163,32 @@ async fn concurrent_backfill_calls_return_busy_instead_of_racing() {
         "second concurrent backfill call must be rejected"
     );
 }
+
+#[tokio::test]
+#[serial(hook_backfill_guard)]
+async fn backfill_recovers_original_file_instead_of_display_text() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    let path = dir.path().join("source.jsonl");
+    std::fs::write(&path, format!("{HOOK_ATTACHMENT_JSON}\n")).unwrap();
+    let id = insert_claude_hook_log_row(&pool, "display summary only");
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE logs SET ai_transcript_path=?1,metadata_json='{\"line_no\":0}' WHERE id=?2",
+            rusqlite::params![path.to_str().unwrap(), id],
+        )
+        .unwrap();
+    let first = service
+        .backfill_hook_events(HookBackfillRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(first.inserted, 1);
+    assert_eq!(first.parse_errors, 0);
+    std::fs::remove_file(path).unwrap();
+    let missing = service
+        .backfill_hook_events(HookBackfillRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(missing.source_unavailable, 1);
+}

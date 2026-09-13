@@ -55,3 +55,19 @@ async fn byte_command_output_preserves_non_utf8_stdout() {
     assert_eq!(output.stdout, vec![255]);
     assert!(!output.truncated);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn deadline_includes_pipes_inherited_by_descendant() {
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_command(
+            "sh",
+            &["-c", "sleep 30 & exit 0"],
+            Duration::from_millis(100),
+        ),
+    )
+    .await
+    .expect("pipe completion escaped the deadline");
+    assert!(result.unwrap_err().to_string().contains("timed out"));
+}
