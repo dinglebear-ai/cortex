@@ -438,3 +438,26 @@ fn capability_check_is_redacted_and_reports_fresh_transcript_delivery() {
     assert!(!rendered.contains("top-secret"));
     assert!(!rendered.contains(&checkpoint.to_string_lossy().to_string()));
 }
+
+#[test]
+fn systemd_unit_start_limit_leaves_room_for_a_self_update_rollback() {
+    // A rollback needs MAX_ATTEMPTS failed starts plus the restored one inside
+    // the start-limit window, or systemd gives up before the rollback runs.
+    let unit = heartbeat_agent_unit(
+        Path::new("/home/agent/.local/bin/cortex"),
+        Path::new("/home/agent/.cortex/heartbeat-agent.env"),
+        Path::new("/home/agent/.cortex/heartbeat-host-id"),
+    )
+    .unwrap();
+    let burst: u32 = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("StartLimitBurst="))
+        .expect("unit sets StartLimitBurst")
+        .parse()
+        .unwrap();
+    assert!(
+        burst > crate::agent::self_update::MAX_ATTEMPTS,
+        "StartLimitBurst={burst} must exceed MAX_ATTEMPTS={}",
+        crate::agent::self_update::MAX_ATTEMPTS
+    );
+}

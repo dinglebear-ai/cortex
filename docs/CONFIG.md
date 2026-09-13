@@ -211,7 +211,7 @@ CLI/REST/MCP mutations.
 | --- | --- | --- | --- | --- |
 | `CORTEX_HOST` | no | `127.0.0.1` | no | HTTP listen host for MCP endpoint (loopback by default; non-loopback binds require `CORTEX_TOKEN`, OAuth, or the trusted-gateway pair) |
 | `CORTEX_PORT` | no | `3100` | no | HTTP listen port for MCP endpoint |
-| `CORTEX_TOKEN` | no | (none) | **yes** | Bearer token for `/mcp` auth. Generate: `openssl rand -hex 32`. When unset, auth is disabled. |
+| `CORTEX_TOKEN` | no | (none) | **yes** | Static bearer for `/mcp`, machine ingest (including OTLP `/v1/logs`), and `/health/full`. Generate: `openssl rand -hex 32`. Unset does not disable OAuth; non-loopback startup requires an allowed auth policy. Loopback/trusted-gateway policies bypass static checks; under mounted auth, `/health/full` denies requests without this token. REST uses its separate API tokens. |
 | `CORTEX_ALLOWED_HOSTS` | no | (none) | no | Extra comma-separated Host header values for RMCP Host validation |
 | `CORTEX_ALLOWED_ORIGINS` | no | (none) | no | Extra comma-separated browser origins for RMCP Origin validation |
 

@@ -3,6 +3,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"; export LIVE_PROJECT_ROOT="$ROOT"
 # shellcheck disable=SC1090
 for lib in common lock redact events command lease resources report artifacts contracts budgets; do source "$ROOT/tests/live/lib/$lib.sh"; done
+live_require_modern_bash || exit 64
+live_install_err_trap
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 passes=0
 ok() { "$@"; passes=$((passes+1)); }
@@ -106,7 +108,7 @@ live_cleanup_resources "$provider" 5
 
 # Wrong provider and corrupt/symlink manifests fail closed.
 touch "$marker"; live_resource_transition two file PLANNED "$provider" '' '[]' '' '{}' '[]' one; live_resource_transition two file CREATING "$provider" intent-two '[]' digest-two '{}' '[]' one; live_resource_transition two file IDENTIFIED "$provider" "$marker" "$argv" digest-two '{}' "$verify" one; live_resource_transition two file CREATED "$provider" "$marker" "$argv" digest-two '{}' "$verify" one
-jq -e --arg run "$LIVE_RUN_ID" 'select(.key=="two" and .parent_key=="one" and .labels["cortex.live.run_id"]==$run and .labels["cortex.live.provider"]=="daemon:test")' "$(live_resource_file)" >/dev/null
+jq -e -s --arg run "$LIVE_RUN_ID" 'any(.[]; .key=="two" and .parent_key=="one" and .labels["cortex.live.run_id"]==$run and .labels["cortex.live.provider"]=="daemon:test")' "$(live_resource_file)" >/dev/null
 reject live_cleanup_resources daemon:other 5
 [[ -e "$marker" ]]
 cp "$(live_resource_file)" "$tmp/good.jsonl"; printf '{bad' >>"$(live_resource_file)"
@@ -230,11 +232,12 @@ env -u LIVE_RUN_ID -u LIVE_RUN_ROOT -u LIVE_SURFACE_CONTRACT \
 wait "$noop_one"; wait "$noop_two"
 [[ "$(find "$noop_runs" -mindepth 1 -maxdepth 1 -type d -name 'cortex-e2e-*' | wc -l | tr -d ' ')" == 2 ]]
 legacy_events="$(find "$noop_runs" -name events.jsonl -type f -exec grep -l 'legacy_result' {} \;)"
-[[ -n "$legacy_events" ]] && jq -e 'select(.kind=="legacy_result" and .payload.schema=="cortex-live-legacy-result-v1" and .payload.isolated_from_capability_ledger==true and .payload.result=="pass")' "$legacy_events" >/dev/null
+[[ -n "$legacy_events" ]] && jq -e -s 'any(.[]; .kind=="legacy_result" and .payload.schema=="cortex-live-legacy-result-v1" and .payload.isolated_from_capability_ledger==true and .payload.result=="pass")' "$legacy_events" >/dev/null
 
 bash "$ROOT/tests/live/phases/artifacts/selftest.sh"
 bash "$ROOT/tests/live/phases/surfaces/resource-selftest.sh"
 bash "$ROOT/tests/live/selftest/artifact-upload.sh"
+bash "$ROOT/tests/live/selftest/harness-guard.sh"
 bash "$ROOT/tests/live/lib/aggregate-selftest.sh"
 python3 "$ROOT/tests/live/selftest/review-regressions.py"
 bash "$ROOT/tests/live/phases/mutation/selftest.sh"

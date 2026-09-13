@@ -10,7 +10,7 @@ stage=$(mktemp -d "$data_dir/.restore.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 # Every copy must finish before any current database or recovery sidecar changes.
 cp "$backup_dir/syslog-$stamp.db" "$stage/cortex.db"
-for entry in "auth-$stamp.db:auth.db" "auth-jwt-$stamp.pem:auth-jwt.pem"; do
+for entry in "auth-$stamp.db:auth.db" "auth-jwt-$stamp.pem:auth-jwt.pem" "integration-credential-$stamp.key:integration-credential.key"; do
   source=${entry%:*}; target=${entry#*:}
   if [ -e "$backup_dir/$source" ]; then
     cp "$backup_dir/$source" "$stage/$target"
@@ -26,7 +26,7 @@ for target in cortex.db auth.db; do
     fi
   fi
 done
-for target in cortex.db auth.db auth-jwt.pem; do
+for target in cortex.db auth.db auth-jwt.pem integration-credential.key; do
   if [ -f "$stage/$target" ]; then
     mv -f "$stage/$target" "$data_dir/$target"
     case "$target" in *.db) rm -f "$data_dir/$target-wal" "$data_dir/$target-shm";; esac

@@ -52,6 +52,7 @@ use crate::db::agent_observatory as observatory;
 use crate::mcp::{AuthPolicy, build_auth_layer};
 use crate::surfaces::{get, post};
 
+mod credential_generation;
 mod investigation;
 
 /// Crate version cached at compile time (CARGO_PKG_VERSION).
@@ -469,10 +470,7 @@ pub fn resolved_integration_profile(
         format!("cortex_{:x}", Sha256::digest(seed.as_bytes()))
     };
     let public_url = config.mcp.auth.public_url.clone();
-    let token_generation = config.api.api_token.as_deref().map_or_else(
-        || "none".to_string(),
-        |token| format!("{:x}", Sha256::digest(token.as_bytes()))[..16].to_string(),
-    );
+    let token_generation = credential_generation::resolve(config)?;
     let modes = if config.mcp.auth.mode == crate::config::AuthMode::OAuth {
         serde_json::json!(["static_bearer", "oauth2"])
     } else {
@@ -2489,8 +2487,10 @@ fn cors_layer(port: u16, loopback_bind: bool, allowed_origins: &[String]) -> Cor
 // Maintenance routes use the dual-permit pattern described on
 // `MAINTENANCE_PERMIT` above: vacuum/checkpoint hold MAINTENANCE_PERMIT for the
 // duration of the awaited service call, while reads continue to acquire from
-// `CortexService::db_permits` independently. `db_status` and `db_integrity` are
-// read-side and bypass MAINTENANCE_PERMIT entirely.
+// `CortexService::db_permits` independently. `db_status` is read-side and
+// bypasses MAINTENANCE_PERMIT entirely. The integrity routes single-flight on
+// it inside the service and answer contention with 503 `{"error": "db
+// maintenance already in progress"}` (see docs/api.md).
 
 /// `GET /api/db/status` — cached PRAGMA snapshot (read).
 async fn db_status(State(state): State<ApiState>) -> impl IntoResponse {

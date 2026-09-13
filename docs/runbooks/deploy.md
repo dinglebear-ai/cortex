@@ -111,7 +111,7 @@ cortex db backup --output /path/to/backup.db
 ```
 
 `scripts/backup.sh` performs a WAL-safe checkpoint and SQLite `.backup` from
-the host and also captures `auth.db` / `auth-jwt.pem` when present. For
+the host and also captures `auth.db` / `auth-jwt.pem` / `integration-credential.key` when present. For
 scheduled backups, see "Automated backups (systemd timer)" below.
 
 ## Heavy SQLite Migration Upgrade
@@ -188,14 +188,16 @@ docker run --rm --user 0:0 --entrypoint sh \
 sh scripts/restore-backup.sh /path/to/backups TIMESTAMP /absolute/data/path
 # Stop here if the helper fails. It stages every backup copy before replacing
 # current files, checks SQLite integrity, and removes WAL/SHM only for databases
-# actually restored. The bind-mounted helper requires sqlite3 on the host.
+# actually restored. Optional auth.db, auth-jwt.pem, and integration-credential.key
+# backups are staged and restored together. The host helper requires sqlite3.
 
 # 3. Fix bind-mount ownership. The container runs as a non-root UID (1000 by
 #    default) and writes auth.db / auth-jwt.pem with that UID — a restore
 #    done as root or your login user leaves files the container cannot open.
 docker run --rm -v "${CORTEX_VOLUME_NAME:-cortex-data}:/data" debian:bookworm-slim \
   chown 1000:1000 /data/cortex.db
-#    (also restore + chown auth.db / auth-jwt.pem if you backed them up)
+#    (also restore + chown auth.db / auth-jwt.pem / integration-credential.key
+#    if you backed them up)
 
 # 4. Verify integrity before starting (direct SQLite — the HTTP API is down).
 ( unset CORTEX_USE_HTTP; cortex db integrity )   # PRAGMA integrity_check

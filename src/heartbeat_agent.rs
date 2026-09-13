@@ -1430,17 +1430,50 @@ pub fn backoff_duration(attempt: u32) -> Duration {
     Duration::from_millis(millis.min(4_000))
 }
 
-pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
-    let host_id = load_or_create_host_id(&config.host_id_path)?;
+/// Run the self-update rollback check before any other startup step that can
+/// fail. A freshly installed binary that cannot start with the existing
+/// configuration must still count the failed attempt, so it is rolled back
+/// instead of exiting before the rollback is reached and crash-looping. A
+/// failing rollback check does not stop startup (a healthy binary must not exit
+/// over marker trouble), but its cause is attached if the next step fails too.
+pub fn rollback_then<T>(
+    rollback_check: impl FnOnce() -> Result<()>,
+    next: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let rollback_error = rollback_check().err();
+    if let Some(error) = &rollback_error {
+        tracing::error!(
+            error = format!("{error:#}"),
+            "agent update rollback check failed"
+        );
+    }
+    next().map_err(|error| match rollback_error {
+        Some(rollback) => error.context(format!(
+            "self-update rollback check also failed: {rollback:#}"
+        )),
+        None => error,
+    })
+}
+
+/// How long to wait before retrying to clear an update marker that could not be
+/// removed after a successful heartbeat.
+const UPDATE_CONFIRM_RETRY: Duration = Duration::from_secs(600);
+
+/// Configuration checks that must pass before the agent does any work.
+fn startup_preflight(config: &HeartbeatAgentConfig) -> Result<()> {
     if let Some(target) = config.target.as_deref() {
         validate_ingest_transport(target, config.allow_trusted_overlay_http)?;
     }
+    Ok(())
+}
 
-    // If we are running immediately after a self-update, confirm it settled or
-    // roll back to the previous binary. May re-exec and not return.
-    if let Err(error) = crate::agent::self_update::confirm_or_rollback() {
-        tracing::error!(error = %error, "agent update rollback check failed");
-    }
+pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
+    // The CLI entry already ran the rollback check before building the config;
+    // this guard (a no-op on a second call) covers any other caller.
+    rollback_then(crate::agent::self_update::confirm_or_rollback, || {
+        startup_preflight(&config)
+    })?;
+    let host_id = load_or_create_host_id(&config.host_id_path)?;
 
     // Server-coordinated auto-update keeps the agent binary in lockstep with the
     // cortex server it reports to. Opt out with CORTEX_AGENT_AUTO_UPDATE=false.
@@ -1448,6 +1481,9 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
         .map(|v| !(v.eq_ignore_ascii_case("false") || v == "0"))
         .unwrap_or(true);
     let mut update_confirmed = false;
+    // After a failed marker clear, retry on this cadence rather than on every
+    // heartbeat, so a stuck marker is reported without flooding the logs.
+    let mut next_confirm_attempt = Instant::now();
 
     // Spawn Docker / journald / file-tail / AI-transcript forwarding streams as a background task.
     let mut streams_task = None;
@@ -1570,9 +1606,11 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
             Ok(directive) => {
                 attempt = 0;
                 // First successful heartbeat after a swap finalizes the update.
-                if !update_confirmed {
-                    crate::agent::self_update::confirm_update_success();
-                    update_confirmed = true;
+                if !update_confirmed && Instant::now() >= next_confirm_attempt {
+                    update_confirmed = crate::agent::self_update::confirm_update_success();
+                    if !update_confirmed {
+                        next_confirm_attempt = Instant::now() + UPDATE_CONFIRM_RETRY;
+                    }
                 }
                 if let Some(directive) = directive {
                     let update_needed = crate::agent::self_update::update_needed(&directive);
