@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.16.3](https://github.com/dinglebear-ai/cortex/compare/v3.16.2...v3.16.3) (2026-09-13)
+
+
+### Fixed
+
+* harden ingestion, recovery, and review qualification ([#244](https://github.com/dinglebear-ai/cortex/issues/244)) ([4455dc4](https://github.com/dinglebear-ai/cortex/commit/4455dc430c787984c2c8ee12246b2bd7e46a77a0))
+
 ## [3.16.2](https://github.com/dinglebear-ai/cortex/compare/v3.16.1...v3.16.2) (2026-09-11)
 
 
