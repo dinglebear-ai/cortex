@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
+use sha2::{Digest, Sha256};
 
 use crate::agent_file_tail_ingest::{AgentFileTailIngestRequest, AgentFileTailRecord};
 
@@ -34,18 +35,16 @@ pub async fn run(config: FileTailForwardConfig) -> Result<()> {
         if raw.is_empty() {
             continue;
         }
-        while let Err(error) = send_line(&client, &config, raw).await {
+        let record = build_record(&config, raw);
+        while let Err(error) = send_record(&client, &config, &record).await {
             tracing::warn!(error = %error, path = %config.source.path.display(), "agent file-tail delivery failed; retrying current line");
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
 }
 
-async fn send_line(
-    client: &reqwest::Client,
-    config: &FileTailForwardConfig,
-    line: &str,
-) -> Result<()> {
+fn build_record(config: &FileTailForwardConfig, line: &str) -> AgentFileTailRecord {
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let tag = config.source.tag.as_deref().unwrap_or("file-tail");
     let source_id = source_id(tag);
     let path_basename = config
@@ -54,17 +53,29 @@ async fn send_line(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
-    let record = AgentFileTailRecord {
+    let digest = Sha256::digest(format!(
+        "{}\0{}\0{}\0{}",
+        config.hostname, source_id, timestamp, line
+    ));
+    AgentFileTailRecord {
+        idempotency_key: hex::encode(digest),
         hostname: config.hostname.clone(),
         source_id,
         tag: tag.to_string(),
         path_basename: path_basename.to_string(),
-        timestamp: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        timestamp,
         message: line.to_string(),
-    };
+    }
+}
+
+async fn send_record(
+    client: &reqwest::Client,
+    config: &FileTailForwardConfig,
+    record: &AgentFileTailRecord,
+) -> Result<()> {
     let url = format!("{}/v1/file-tails", config.target.trim_end_matches('/'));
     let mut request = client.post(url).json(&AgentFileTailIngestRequest {
-        records: vec![record],
+        records: vec![record.clone()],
     });
     if let Some(token) = &config.token {
         request = request.bearer_auth(token);

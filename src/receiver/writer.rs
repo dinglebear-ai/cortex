@@ -111,7 +111,10 @@ pub(crate) async fn batch_writer(
                 // Cooperative shutdown: drain remaining entries from the channel
                 // then flush one final batch before exiting. This prevents log
                 // loss when the runtime receives SIGTERM.
-                Ok(()) = shutdown.changed(), if *shutdown.borrow() => {
+                Ok(()) = shutdown.changed() => {
+                    if !*shutdown.borrow() {
+                        continue;
+                    }
                     // Drain whatever is already in the channel without blocking.
                     while let Ok(entry) = rx.try_recv() {
                         batch.push(entry);

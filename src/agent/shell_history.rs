@@ -66,10 +66,29 @@ impl ShellHistoryForwardConfig {
 struct Checkpoint {
     /// Lines already forwarded from `zsh_history_path`.
     zsh_line: usize,
+    #[serde(default)]
+    zsh_prefix_hash: String,
     /// Atuin cursor: `(timestamp_ns, id)` of the last forwarded row.
     atuin_timestamp_ns: i64,
     #[serde(default)]
     atuin_id: String,
+}
+
+fn zsh_prefix_hash(path: &std::path::Path, lines: usize) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut digest = Sha256::new();
+    let mut buf = Vec::new();
+    for _ in 0..lines {
+        buf.clear();
+        if reader.read_until(b'\n', &mut buf)? == 0 {
+            break;
+        }
+        digest.update(&buf);
+    }
+    Ok(hex::encode(digest.finalize()))
 }
 
 fn load_checkpoint(path: &std::path::Path) -> Checkpoint {
@@ -250,12 +269,15 @@ async fn scan_and_forward(
     let mut new_atuin_cursor = None;
 
     if let Some(path) = &config.zsh_history_path {
-        match scan_zsh(
-            path,
-            &config.hostname,
-            checkpoint.zsh_line,
-            MAX_BATCH_RECORDS,
-        ) {
+        let current_prefix = zsh_prefix_hash(path, checkpoint.zsh_line).unwrap_or_default();
+        let from_line = if !checkpoint.zsh_prefix_hash.is_empty()
+            && current_prefix != checkpoint.zsh_prefix_hash
+        {
+            0
+        } else {
+            checkpoint.zsh_line
+        };
+        match scan_zsh(path, &config.hostname, from_line, MAX_BATCH_RECORDS) {
             Ok((mut zsh_records, new_line)) => {
                 if new_line != checkpoint.zsh_line {
                     new_zsh_line = Some(new_line);
@@ -296,6 +318,11 @@ async fn scan_and_forward(
         // without a POST so they cannot permanently hide subsequent valid rows.
         if let Some(new_line) = new_zsh_line {
             checkpoint.zsh_line = new_line;
+            checkpoint.zsh_prefix_hash = config
+                .zsh_history_path
+                .as_deref()
+                .and_then(|path| zsh_prefix_hash(path, new_line).ok())
+                .unwrap_or_default();
         }
         if let Some((ts, id)) = new_atuin_cursor {
             checkpoint.atuin_timestamp_ns = ts;
@@ -327,6 +354,11 @@ async fn scan_and_forward(
     // request retries the same records next cycle instead of losing them.
     if let Some(new_line) = new_zsh_line {
         checkpoint.zsh_line = new_line;
+        checkpoint.zsh_prefix_hash = config
+            .zsh_history_path
+            .as_deref()
+            .and_then(|path| zsh_prefix_hash(path, new_line).ok())
+            .unwrap_or_default();
     }
     if let Some((ts, id)) = new_atuin_cursor {
         checkpoint.atuin_timestamp_ns = ts;

@@ -122,6 +122,7 @@ fn checkpoint_round_trips_through_disk() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint_path = dir.path().join("checkpoint.json");
     let checkpoint = Checkpoint {
+        zsh_prefix_hash: String::new(),
         zsh_line: 42,
         atuin_timestamp_ns: 123,
         atuin_id: "row-9".to_string(),
@@ -224,4 +225,41 @@ async fn invalid_page_advances_disk_cursor_before_later_valid_command() {
         1
     );
     assert_eq!(checkpoint.zsh_line, 501);
+}
+
+#[tokio::test]
+async fn same_length_zsh_rewrite_replays_the_new_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history");
+    write_file(&path, ": 1716500000:1;echo old\n");
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let config = ShellHistoryForwardConfig {
+        zsh_history_path: Some(path.clone()),
+        atuin_db_path: None,
+        target: server.uri(),
+        token: None,
+        hostname: "host".into(),
+        checkpoint_path: dir.path().join("checkpoint"),
+        poll_interval: Duration::from_secs(1),
+    };
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    write_file(&path, ": 1716500001:1;echo new\n");
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
 }

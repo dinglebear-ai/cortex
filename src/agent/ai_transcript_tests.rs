@@ -181,6 +181,17 @@ fn collect_files_never_follows_symlinked_transcript() {
 }
 
 #[test]
+fn collect_files_enforces_the_shared_window_inside_a_flat_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    for index in 0..(MAX_FORWARD_FILES + 8) {
+        write_file(&dir.path().join(format!("{index:04}.jsonl")), "{}\n");
+    }
+    let mut files = Vec::new();
+    collect_files_after(dir.path(), &mut files, None).unwrap();
+    assert_eq!(files.len(), MAX_FORWARD_FILES);
+}
+
+#[test]
 fn read_new_lines_returns_only_lines_past_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.jsonl");
@@ -219,6 +230,24 @@ fn read_new_lines_respects_limit_and_reports_checkpoint_at_cutoff_not_eof() {
         vec![(2, "line2".to_string()), (3, "line3".to_string())]
     );
     assert_eq!(checkpoint, 4);
+}
+
+#[test]
+fn read_new_lines_bounds_aggregate_raw_bytes_and_preserves_the_next_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("large.jsonl");
+    let line = format!(
+        "{{\"text\":\"{}\"}}\n",
+        "x".repeat(MAX_FORWARD_BODY_BYTES / 2)
+    );
+    write_file(&path, &(line.clone() + &line + &line));
+    let (first, first_line, first_offset) = read_new_lines_from_offset(&path, 0, 0, 10).unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first_line, 1);
+    let (second, second_line, _) =
+        read_new_lines_from_offset(&path, first_line, first_offset, 10).unwrap();
+    assert!(!second.is_empty());
+    assert!(second_line > first_line);
 }
 
 #[test]

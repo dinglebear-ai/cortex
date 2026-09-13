@@ -229,15 +229,18 @@ fn scrub_aws_access_key() {
         scrub_prompts: true,
         ..Default::default()
     };
-    let e = entry(
+    let mut e = entry(
         "claude-code",
         "Found AKIAIOSFODNN7EXAMPLE in the env file",
         "10.0.0.1:1",
         "info",
     );
+    e.raw = "<14>1 2026-05-07T00:00:00Z host claude-code - - - Found AKIAIOSFODNN7EXAMPLE in the env file".to_string();
     let out = enrich_entry(e, &cfg);
     assert!(out.message.contains("[REDACTED]"));
     assert!(!out.message.contains("AKIAIOSFODNN7EXAMPLE"));
+    assert!(out.raw.contains("[REDACTED]"));
+    assert!(!out.raw.contains("AKIAIOSFODNN7EXAMPLE"));
 }
 
 #[test]
@@ -455,6 +458,19 @@ fn enriches_claude_project_from_transcript_path_in_raw() {
             "/home/jmagar/.claude/projects/-home-jmagar-workspace-cortex/3a8bdaf9-721c-4e0b-8a6b-cffe2740c8d5.jsonl"
         )
     );
+}
+
+#[test]
+#[serial]
+fn remote_transcript_path_claims_do_not_touch_the_local_index_cache() {
+    CLAUDE_PROJECT_INDEX_CACHE.lock().unwrap().clear();
+    let cfg = EnrichmentConfig::default();
+    for index in 0..300 {
+        let mut claimed = entry("claude-transcript", "{}", "10.0.0.7", "info");
+        claimed.raw = format!("file=\"/tmp/remote-{index}/session.jsonl\"");
+        let _ = enrich_entry(claimed, &cfg);
+    }
+    assert!(CLAUDE_PROJECT_INDEX_CACHE.lock().unwrap().is_empty());
 }
 
 #[test]

@@ -67,6 +67,9 @@ pub(super) fn collect_files_after(
         .collect::<Result<Vec<_>>>()?;
     paths.sort();
     for path in paths {
+        if out.len() >= MAX_FORWARD_FILES {
+            break;
+        }
         let metadata = fs::symlink_metadata(&path)
             .with_context(|| format!("inspect transcript path {}", path.display()))?;
         if metadata.file_type().is_symlink() {
@@ -170,6 +173,7 @@ pub(super) fn read_new_lines_from_offset(
     file.seek(SeekFrom::Start(byte_offset))?;
     let mut reader = BufReader::new(file);
     let mut out = Vec::new();
+    let mut retained_bytes = 0usize;
     let mut line_no = from_line;
     while out.len() < limit {
         let before = reader.stream_position()?;
@@ -179,6 +183,11 @@ pub(super) fn read_new_lines_from_offset(
             reader.seek(SeekFrom::Start(before))?;
             break;
         };
+        if !out.is_empty() && retained_bytes.saturating_add(line.len()) > MAX_FORWARD_BODY_BYTES {
+            reader.seek(SeekFrom::Start(before))?;
+            break;
+        }
+        retained_bytes = retained_bytes.saturating_add(line.len());
         out.push((line_no, line));
         line_no += 1;
     }

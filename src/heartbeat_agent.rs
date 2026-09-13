@@ -770,18 +770,32 @@ struct LinuxDiskCapacityProbe {
     mount: MountProbeTarget,
 }
 
+static DISK_CAPACITY_PROBE_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+
 impl HeartbeatProbe for LinuxDiskCapacityProbe {
     fn name(&self) -> &'static str {
         "disk_capacity"
     }
 
     fn collect(&self) -> Pin<Box<dyn Future<Output = Result<ProbeOutput>> + Send + '_>> {
+        let path = self.mount.path.clone();
+        let fs_type = self.mount.fs_type.clone();
         Box::pin(async move {
-            let (bytes_total, bytes_free) = statvfs_bytes(&self.mount.path)?;
+            let permit = DISK_CAPACITY_PROBE_PERMITS
+                .acquire()
+                .await
+                .map_err(|_| anyhow::anyhow!("disk capacity probe lane closed"))?;
+            let probe_path = path.clone();
+            let (bytes_total, bytes_free) = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                statvfs_bytes(&probe_path)
+            })
+            .await
+            .context("disk capacity probe task failed")??;
             Ok(ProbeOutput::Disk(HeartbeatDisk {
                 kind: "mount".to_string(),
-                name: self.mount.path.display().to_string(),
-                fs_type: self.mount.fs_type.clone(),
+                name: path.display().to_string(),
+                fs_type,
                 bytes_total: Some(bytes_total),
                 bytes_free: Some(bytes_free),
                 bytes_used: Some(bytes_total.saturating_sub(bytes_free)),
@@ -1464,6 +1478,9 @@ fn startup_preflight(config: &HeartbeatAgentConfig) -> Result<()> {
     if let Some(target) = config.target.as_deref() {
         validate_ingest_transport(target, config.allow_trusted_overlay_http)?;
     }
+    if let Some(target) = config.syslog_forward_target.as_deref() {
+        validate_ingest_transport(target, config.allow_trusted_overlay_http)?;
+    }
     Ok(())
 }
 
@@ -1881,7 +1898,13 @@ fn write_private(path: &Path, content: &str) -> Result<()> {
 
 fn bounded_probe_error(name: &str, error: &anyhow::Error) -> String {
     let mut text = format!("{name}: {error}");
-    text.truncate(240);
+    if text.len() > 240 {
+        let mut boundary = 240;
+        while !text.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        text.truncate(boundary);
+    }
     text
 }
 

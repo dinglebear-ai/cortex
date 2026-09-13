@@ -281,30 +281,10 @@ sync-container:
     done < <(find "${HOME}/.claude/plugins/cache/jmagar-lab/cortex" -maxdepth 3 -name "cortex" \( -type f -o -type l \) -print0 2>/dev/null)
     echo "cortex → $CORTEX_BIN"
 
-    # 3. Rebuild the Docker image only when its build inputs changed (tracked via a
-    #    sentinel), then (re)start the cortex compose service.
-    container_sentinel="$CORTEX_TARGET_DIR/.container-built"
-    image_stale=0
-    if [ ! -f "$container_sentinel" ]; then
-      image_stale=1
-    else
-      while IFS= read -r -d '' input; do
-        if [ "$input" -nt "$container_sentinel" ]; then
-          image_stale=1
-          break
-        fi
-      done < <(git ls-files -z -- config/Dockerfile docker-compose.yml)
-    fi
-    if [ "$image_stale" -eq 1 ]; then
-      docker compose build cortex
-      mkdir -p "$(dirname "$container_sentinel")"
-      touch "$container_sentinel"
-      docker compose up -d cortex --no-deps
-    else
-      echo "docker image is current"
-      docker compose up -d cortex --no-deps --no-build
-    fi
-    docker compose restart cortex
+    # 3. Let Compose's content-aware build cache evaluate the complete build
+    #    context, including Rust sources and Cargo manifests, before recreation.
+    docker compose build cortex
+    docker compose up -d cortex --no-deps
     docker compose ps cortex
     echo "container synced"
 

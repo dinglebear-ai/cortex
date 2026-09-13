@@ -74,6 +74,7 @@ pub struct ShellHistoryIngestState {
     pool: Arc<DbPool>,
     api_token: Option<String>,
     auth_policy: AuthPolicy,
+    storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
 }
 
 impl ShellHistoryIngestState {
@@ -82,7 +83,16 @@ impl ShellHistoryIngestState {
             pool,
             api_token,
             auth_policy,
+            storage: Arc::new(parking_lot::Mutex::new(None)),
         }
+    }
+
+    pub fn with_storage_state(
+        mut self,
+        storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
+    ) -> Self {
+        self.storage = storage;
+        self
     }
 }
 
@@ -167,20 +177,35 @@ async fn ingest_handler(
         )
             .into_response();
     }
-
     let pool = Arc::clone(&state.pool);
+    let storage = Arc::clone(&state.storage);
     let entries: Vec<LogBatchEntry> = request
         .records
         .into_iter()
         .map(to_log_batch_entry)
         .collect();
-    let join_result =
-        tokio::task::spawn_blocking(move || db::insert_logs_batch(&pool, &entries)).await;
+    let join_result = tokio::task::spawn_blocking(move || {
+        if storage
+            .lock()
+            .as_ref()
+            .is_some_and(|state| state.write_blocked)
+        {
+            anyhow::bail!("storage_write_blocked");
+        }
+        db::insert_logs_batch(&pool, &entries)
+    })
+    .await;
 
     match join_result {
         Ok(Ok(accepted)) => (
             StatusCode::OK,
             Json(ShellHistoryIngestResponse { accepted }),
+        )
+            .into_response(),
+        Ok(Err(error)) if error.to_string() == "storage_write_blocked" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("retry-after", "5")],
+            Json(json!({"error": "storage_write_blocked"})),
         )
             .into_response(),
         Ok(Err(error)) => {

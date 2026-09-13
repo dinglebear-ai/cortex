@@ -442,8 +442,10 @@ pub(super) async fn tcp_listener(
     let mut reject_logged = false;
     let mut last_reject_log = std::time::Instant::now();
     let mut total_rejected: u64 = 0;
+    let mut connections = Vec::new();
 
     loop {
+        connections.retain(|task: &tokio_util::task::AbortOnDropHandle<()>| !task.is_finished());
         match listener.accept().await {
             Ok((stream, addr)) => {
                 accept_backoff_ms = 100;
@@ -452,18 +454,20 @@ pub(super) async fn tcp_listener(
                         let available_permits = sem.available_permits();
                         let ingest = ingest.clone();
                         let cidrs = Arc::clone(&allowed_cidrs);
-                        tokio::spawn(async move {
-                            let _permit = permit;
-                            handle_tcp_connection(
-                                stream,
-                                addr,
-                                ingest,
-                                max_size,
-                                idle_timeout_secs,
-                                &cidrs,
-                            )
-                            .await;
-                        });
+                        connections.push(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+                            async move {
+                                let _permit = permit;
+                                handle_tcp_connection(
+                                    stream,
+                                    addr,
+                                    ingest,
+                                    max_size,
+                                    idle_timeout_secs,
+                                    &cidrs,
+                                )
+                                .await;
+                            },
+                        )));
                         debug!(
                             peer = %addr,
                             active_connections = max_connections.saturating_sub(available_permits),

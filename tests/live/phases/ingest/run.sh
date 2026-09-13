@@ -36,6 +36,16 @@ live_ingest_mcp_search() {
   grep -F "$marker" "$output" >/dev/null
 }
 
+live_ingest_mcp_assert_absent() {
+  local marker="$1" output="$2"
+  curl -fsS --max-time 8 -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -d "$(jq -cn --arg q "\"$marker\"" '{jsonrpc:"2.0",id:42,method:"tools/call",params:{name:"cortex",arguments:{action:"search",query:$q,limit:10}}}')" \
+    "$(live_ingest_http /mcp)" >"$output"
+  jq -e '.result != null and ((.result.isError // false) == false) and (.error == null)' "$output" >/dev/null
+  ! grep -F "$marker" "$output" >/dev/null
+}
+
 live_ingest_rest_search() {
   local marker="$1" output="$2"
   curl -fsS --max-time 8 -G -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" \
@@ -111,7 +121,7 @@ live_ingest_syslog() {
   { printf '<134>'; printf '%9000s' "$rejected"; printf '\n<131>1 2026-08-27T12:00:07Z survivor app 14 ID53 - %s\n' "$survivor"; } | nc -w 3 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT" || true
   printf '<134>invalid-utf8-\xff\xfe\n' | nc -w 3 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT" || true
   live_ingest_wait_marker "$survivor" syslog-survivor 10
-  if live_ingest_mcp_search "$rejected" "$LIVE_RUN_ROOT/artifacts/syslog-oversize-query.json"; then live_die 'oversized record was ingested'; return 1; fi
+  live_ingest_mcp_assert_absent "$rejected" "$LIVE_RUN_ROOT/artifacts/syslog-oversize-query.json" || { live_die 'oversized record absence check failed'; return 1; }
   live_budget_add fixture_records 7; live_budget_add connections 4; live_budget_add fixture_bytes 9400
   live_ingest_case syslog.adversarial pass artifacts/syslog-oversize-query.json
 }
@@ -157,12 +167,12 @@ live_ingest_downtime() {
   live_ingest_wait_marker "$udp_recovered" downtime-udp-recovered 73
   # A TCP proxy may accept locally while its upstream is absent. Acceptance is
   # not durability: prove the first attempt was not stored before retrying.
-  if live_ingest_mcp_search "$tcp_retry" "$LIVE_RUN_ROOT/artifacts/downtime-tcp-before-retry.json"; then live_die 'TCP attempt made during downtime was unexpectedly stored'; return 1; fi
+  live_ingest_mcp_assert_absent "$tcp_retry" "$LIVE_RUN_ROOT/artifacts/downtime-tcp-before-retry.json" || { live_die 'TCP downtime absence check failed'; return 1; }
   jq -cn --argjson tcp_exit "$tcp_exit" --arg http_status "${status:-000}" '{udp_ingress_while_down:"stopped",udp_recovery:"observed",tcp_proxy_exit:$tcp_exit,http_status_while_down:$http_status,tcp_contract:"retry_required_after_unconfirmed_delivery"}' >"$LIVE_RUN_ROOT/artifacts/downtime-transport.json"
   printf '<134>1 2026-08-27T12:10:02Z retry tcp 72 ID72 - %s\n' "$tcp_retry" | nc -w 3 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"; live_ingest_wait_marker "$tcp_retry" downtime-tcp-retry 71
   local body; body="$(jq -cn --arg m "$http_retry" '[{started_at:"2026-08-27T12:10:03Z",finished_at:"2026-08-27T12:10:04Z",duration_ms:1000,exit_status:0,command:$m,cwd:null,agent:$m,command_surface:null,hostname:$m,user:null,pid:72,session_id:$m,schema_version:1,content_scrubbed:true}]')"
   [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/downtime-http-retry.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/agent-commands)")" == 200 ]]; live_ingest_wait_marker "$http_retry" downtime-http-retry 72
-  if live_ingest_mcp_search "$udp_lost" "$LIVE_RUN_ROOT/artifacts/downtime-udp-loss-query.json"; then live_die 'UDP datagram sent during downtime survived'; return 1; fi
+  live_ingest_mcp_assert_absent "$udp_lost" "$LIVE_RUN_ROOT/artifacts/downtime-udp-loss-query.json" || { live_die 'UDP downtime absence check failed'; return 1; }
   live_ingest_case downtime.udp-loss pass artifacts/downtime-udp-loss-query.json
   live_ingest_case downtime.tcp-retry pass artifacts/downtime-transport.json
   live_ingest_case downtime.http-retry pass artifacts/ingest-downtime-http-retry-72-rest.json
@@ -254,7 +264,7 @@ live_ingest_syslog_forward() {
 
 live_ingest_otlp() {
   live_ingest_bound_producer otlp 15 22000000 90
-  local signal status fixture_dir="$LIVE_RUN_ROOT/otlp-fixtures" otlp_id baseline_logs baseline_metrics
+  local signal status rejected fixture_dir="$LIVE_RUN_ROOT/otlp-fixtures" otlp_id baseline_logs baseline_metrics
   otlp_id="$(live_ingest_identity otlp 40)"
   cargo run --quiet --locked --manifest-path "$LIVE_PROJECT_ROOT/tests/live/fixtures/ingest/otlpgen/Cargo.toml" -- "$otlp_id" "$fixture_dir"
   curl -fsS --max-time 8 -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" "$(live_ingest_http /health/full)" >"$LIVE_RUN_ROOT/artifacts/otlp-baseline-health.json"
@@ -262,6 +272,8 @@ live_ingest_otlp() {
   for signal in logs metrics traces; do
     live_ingest_account_file 1 "$fixture_dir/$signal.pb"
     status="$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/otlp-${signal}-response.pb" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary "@$fixture_dir/$signal.pb" "$(live_ingest_http "/v1/$signal")")"; [[ "$status" == 200 ]]
+    rejected="$(cargo run --quiet --locked --manifest-path "$LIVE_PROJECT_ROOT/tests/live/fixtures/ingest/otlpgen/Cargo.toml" -- decode-response "$signal" "$LIVE_RUN_ROOT/artifacts/otlp-${signal}-response.pb")"
+    [[ "$rejected" == 0 ]]
     status="$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/otlp-${signal}-json.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary '{}' "$(live_ingest_http "/v1/$signal")")"
     # The legacy logs lane decodes bounded protobuf bytes regardless of the
     # media-type header, while the newer metrics/traces lanes require the OTLP
@@ -338,7 +350,7 @@ live_ingest_file_tail() {
   end_pre="$(live_ingest_marker file-tail-end-pre 36)"; end_post="$(live_ingest_marker file-tail-end-post 37)"
   docker exec "$candidate" sh -c 'printf "%s\n" "$1" > /file-tail-root/end.log' sh "$end_pre"
   live_ingest_file_tail_api "$(jq -cn --arg id "$end_id" '{op:"add",id:$id,path:"/file-tail-root/end.log",tag:"start-end",start_at_end:true}')" "$LIVE_RUN_ROOT/artifacts/file-tail-end-add.json"
-  sleep 2; if live_ingest_mcp_search "$end_pre" "$LIVE_RUN_ROOT/artifacts/file-tail-end-pre-query.json"; then live_die 'start_at_end ingested preexisting line'; return 1; fi
+  sleep 2; live_ingest_mcp_assert_absent "$end_pre" "$LIVE_RUN_ROOT/artifacts/file-tail-end-pre-query.json" || { live_die 'start_at_end absence check failed'; return 1; }
   docker exec "$candidate" sh -c 'printf "%s\n" "$1" >> /file-tail-root/end.log' sh "$end_post"; live_ingest_wait_marker "$end_post" file-tail-end-post 37
   live_ingest_file_tail_api "$(jq -cn --arg id "$end_id" '{op:"remove",id:$id}')" /dev/null
   live_ingest_case filetail.start-position pass artifacts/ingest-file-tail-end-post-37-rest.json
@@ -377,7 +389,7 @@ live_ingest_file_tail() {
   live_ingest_file_tail_api "$(jq -cn --arg id "$race_id" '{op:"add",id:$id,path:"/file-tail-root/race.log",tag:"hostile",start_at_end:false}')" "$LIVE_RUN_ROOT/artifacts/file-tail-toctou.stdout" 2>"$LIVE_RUN_ROOT/artifacts/file-tail-toctou.stderr" || true
   wait "$swap_pid"
   sleep 2
-  if live_ingest_mcp_search "$forbidden" "$LIVE_RUN_ROOT/artifacts/file-tail-toctou-query.json"; then live_die 'file-tail TOCTOU target was ingested'; return 1; fi
+  live_ingest_mcp_assert_absent "$forbidden" "$LIVE_RUN_ROOT/artifacts/file-tail-toctou-query.json" || { live_die 'file-tail TOCTOU absence check failed'; return 1; }
   live_ingest_file_tail_api "$(jq -cn --arg id "$race_id" '{op:"remove",id:$id}')" /dev/null 2>/dev/null || true
   live_ingest_file_tail_api "$(jq -cn --arg id "$id" '{op:"remove",id:$id}')" "$LIVE_RUN_ROOT/artifacts/file-tail-remove.json"
   live_resource_transition "filetail-$id" file-tail-registration CLEANING "$provider" "$id" "$cleanup" "$digest" "$labels" "$verify"

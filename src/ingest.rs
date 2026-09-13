@@ -147,6 +147,27 @@ impl IngestTx {
         }
     }
 
+    /// Atomically reserve capacity for a complete request before enqueueing it.
+    /// A failed reservation enqueues no entries, so retrying the request cannot
+    /// duplicate a partially accepted prefix.
+    pub(crate) fn try_send_batch(&self, entries: Vec<db::LogBatchEntry>) -> Result<(), TrySendErr> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let permits = self.tx.try_reserve_many(entries.len()).map_err(|error| {
+            self.observability.record_enqueue_error(self.queue_depth());
+            match error {
+                mpsc::error::TrySendError::Closed(_) => TrySendErr::Closed,
+                mpsc::error::TrySendError::Full(_) => TrySendErr::Full,
+            }
+        })?;
+        for (permit, entry) in permits.zip(entries) {
+            permit.send(IngestEnvelope::best_effort(entry));
+        }
+        self.observability.record_enqueue_ok(self.queue_depth());
+        Ok(())
+    }
+
     /// Best-effort current channel capacity (slots currently free). Used by
     /// the OTLP handler to pre-flight a multi-record batch and reject with
     /// 503 *before* any partial enqueue, avoiding duplicate-on-retry.

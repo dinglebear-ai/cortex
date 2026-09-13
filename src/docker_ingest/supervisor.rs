@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use futures_util::{FutureExt, StreamExt};
 use tokio::task::JoinHandle;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::config::{DockerHostConfig, DockerIngestConfig};
 use crate::db::DbPool;
@@ -198,7 +199,7 @@ async fn run_host_once(
         "Docker ingest discovered containers"
     );
 
-    let mut log_tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
+    let mut log_tasks: HashMap<String, AbortOnDropHandle<()>> = HashMap::new();
     let runtime = HostRuntime {
         config,
         host,
@@ -237,7 +238,7 @@ struct HostRuntime<'a> {
 
 async fn follow_container_events(
     runtime: &HostRuntime<'_>,
-    log_tasks: &mut HashMap<String, JoinHandle<()>>,
+    log_tasks: &mut HashMap<String, AbortOnDropHandle<()>>,
     event_since_unix: i64,
 ) -> Result<()> {
     let docker = runtime.client.docker();
@@ -287,7 +288,7 @@ async fn follow_container_events(
     Ok(())
 }
 
-fn prune_finished_tasks(tasks: &mut HashMap<String, JoinHandle<()>>) {
+fn prune_finished_tasks(tasks: &mut HashMap<String, AbortOnDropHandle<()>>) {
     tasks.retain(|container_id, handle| {
         if !handle.is_finished() {
             return true;
@@ -357,7 +358,7 @@ fn jittered_reconnect_delay_ms(base_ms: u64, key: &str) -> u64 {
 
 fn spawn_log_task_if_absent(
     runtime: &HostRuntime<'_>,
-    tasks: &mut HashMap<String, JoinHandle<()>>,
+    tasks: &mut HashMap<String, AbortOnDropHandle<()>>,
     container: ContainerMeta,
 ) {
     if tasks.contains_key(&container.id) {
@@ -434,7 +435,7 @@ fn spawn_log_task_if_absent(
             );
         }
     });
-    tasks.insert(container_id, handle);
+    tasks.insert(container_id, AbortOnDropHandle::new(handle));
 }
 
 async fn follow_container_logs_once(

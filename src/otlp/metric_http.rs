@@ -133,33 +133,57 @@ pub(super) async fn metrics_handler(
     let mut normalized = Vec::new();
     let mut rejected = 0usize;
     let mut seen = 0usize;
+    let mut normalized_bytes = 0usize;
     let mut invalid = false;
     let mut over_cap = false;
     for resource in &req.resource_metrics {
         for scope in &resource.scope_metrics {
             for metric in &scope.metrics {
+                let point_count = metric_point_count(metric);
+                let remaining = MAX_METRIC_POINTS_PER_REQUEST.saturating_sub(seen);
+                seen = seen.saturating_add(point_count);
+                let byte_limited = metric_normalization_budget(
+                    resource.resource.as_ref(),
+                    scope.scope.as_ref(),
+                    normalized_bytes,
+                    remaining,
+                );
+                if byte_limited == 0 {
+                    rejected = rejected.saturating_add(point_count);
+                    over_cap = true;
+                    continue;
+                }
+                let admitted = point_count.min(byte_limited);
+                let bounded_metric = bounded_metric(metric, admitted);
+                if point_count > admitted {
+                    rejected = rejected.saturating_add(point_count - admitted);
+                    over_cap = true;
+                }
                 match normalize_metric_with_privacy(
                     resource.resource.as_ref(),
                     &resource.schema_url,
                     scope.scope.as_ref(),
                     &scope.schema_url,
-                    metric,
+                    &bounded_metric,
                     &ingest.privacy,
                     &received_at,
                 ) {
                     Ok(points) => {
                         for point in points {
-                            seen += 1;
-                            if seen > MAX_METRIC_POINTS_PER_REQUEST {
+                            let point_bytes = metric_point_bytes(&point);
+                            if normalized_bytes.saturating_add(point_bytes)
+                                > MAX_NORMALIZED_METRIC_BYTES
+                            {
                                 rejected += 1;
                                 over_cap = true;
                             } else {
+                                normalized_bytes += point_bytes;
                                 normalized.push(point.into());
                             }
                         }
                     }
                     Err(error) => {
-                        rejected += metric_point_count(metric).max(1);
+                        rejected += admitted.max(1);
                         invalid = true;
                         tracing::debug!(error = %error, source_ip = %peer, "Rejected invalid OTLP metric");
                     }
@@ -247,6 +271,63 @@ pub(super) async fn metrics_handler(
     );
     tracing::info!(source_ip = %peer, accepted = result.accepted, duplicates = result.duplicates, rejected, "OTLP metrics ingested");
     metric_success_response(rejected, &messages)
+}
+
+const MAX_NORMALIZED_METRIC_BYTES: usize = 16 * 1024 * 1024;
+
+fn metric_normalization_budget(
+    resource: Option<&opentelemetry_proto::tonic::resource::v1::Resource>,
+    scope: Option<&opentelemetry_proto::tonic::common::v1::InstrumentationScope>,
+    normalized_bytes: usize,
+    count_budget: usize,
+) -> usize {
+    let remaining_bytes = MAX_NORMALIZED_METRIC_BYTES.saturating_sub(normalized_bytes);
+    // JSON escaping can expand arbitrary UTF-8 and attribute keys. Use a
+    // conservative multiplier plus fixed per-point fields so the normalizer
+    // never materializes a vector larger than the aggregate budget.
+    let shared_wire_bytes = resource
+        .map_or(0, Message::encoded_len)
+        .saturating_add(scope.map_or(0, Message::encoded_len));
+    let estimated_point_bytes = shared_wire_bytes.saturating_mul(6).saturating_add(1024);
+    count_budget.min(remaining_bytes / estimated_point_bytes.max(1))
+}
+
+fn metric_point_bytes(point: &crate::otlp::metrics::MetricPointInput) -> usize {
+    point.point_key.len()
+        + point.metric_name.len()
+        + point.description.len()
+        + point.unit.len()
+        + point.instrument_kind.len()
+        + point.hostname.len()
+        + point.resource_json.len()
+        + point.attributes_json.len()
+        + point.value_json.len()
+        + point.exemplars_json.len()
+        + point.received_at.len()
+        + point.service_name.as_ref().map_or(0, String::len)
+        + point.service_version.as_ref().map_or(0, String::len)
+        + point.scope_name.as_ref().map_or(0, String::len)
+        + point.scope_version.as_ref().map_or(0, String::len)
+        + point.ai_tool.as_ref().map_or(0, String::len)
+        + point.ai_project.as_ref().map_or(0, String::len)
+        + point.ai_session_id.as_ref().map_or(0, String::len)
+}
+
+fn bounded_metric(
+    metric: &opentelemetry_proto::tonic::metrics::v1::Metric,
+    limit: usize,
+) -> opentelemetry_proto::tonic::metrics::v1::Metric {
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+    let mut metric = metric.clone();
+    match metric.data.as_mut() {
+        Some(Data::Gauge(value)) => value.data_points.truncate(limit),
+        Some(Data::Sum(value)) => value.data_points.truncate(limit),
+        Some(Data::Histogram(value)) => value.data_points.truncate(limit),
+        Some(Data::ExponentialHistogram(value)) => value.data_points.truncate(limit),
+        Some(Data::Summary(value)) => value.data_points.truncate(limit),
+        None => {}
+    }
+    metric
 }
 
 fn metric_point_count(metric: &opentelemetry_proto::tonic::metrics::v1::Metric) -> usize {

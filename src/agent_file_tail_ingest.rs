@@ -26,6 +26,7 @@ pub const MAX_RECORDS_PER_BATCH: usize = 2_000;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentFileTailRecord {
+    pub idempotency_key: String,
     pub hostname: String,
     pub source_id: String,
     pub tag: String,
@@ -50,6 +51,9 @@ pub struct AgentFileTailIngestState {
     pool: Arc<DbPool>,
     api_token: Option<String>,
     auth_policy: AuthPolicy,
+    storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
+    enrichment: crate::receiver::enrichment::EnrichmentConfig,
+    pipeline: Arc<crate::enrich::EnrichmentPipeline>,
 }
 
 impl AgentFileTailIngestState {
@@ -58,7 +62,20 @@ impl AgentFileTailIngestState {
             pool,
             api_token,
             auth_policy,
+            storage: Arc::new(parking_lot::Mutex::new(None)),
+            enrichment: Default::default(),
+            pipeline: Arc::new(crate::enrich::EnrichmentPipeline::new()),
         }
+    }
+
+    pub fn with_ingest_policy(
+        mut self,
+        storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
+        enrichment: crate::receiver::enrichment::EnrichmentConfig,
+    ) -> Self {
+        self.storage = storage;
+        self.enrichment = enrichment;
+        self
     }
 }
 
@@ -80,6 +97,7 @@ fn valid_identity(value: &str) -> bool {
 fn to_log_batch_entry(record: AgentFileTailRecord) -> Result<LogBatchEntry, &'static str> {
     if !valid_identity(&record.hostname)
         || !valid_identity(&record.source_id)
+        || !valid_identity(&record.idempotency_key)
         || record.tag.trim().is_empty()
         || record.tag.len() > 255
         || record.path_basename.trim().is_empty()
@@ -150,7 +168,12 @@ async fn ingest_handler(
         )
             .into_response();
     }
-    let entries: Vec<_> = match request
+    let receipt_keys: Vec<_> = request
+        .records
+        .iter()
+        .map(|record| record.idempotency_key.clone())
+        .collect();
+    let mut entries: Vec<_> = match request
         .records
         .into_iter()
         .map(to_log_batch_entry)
@@ -165,11 +188,26 @@ async fn ingest_handler(
                 .into_response();
         }
     };
+    for entry in &mut entries {
+        *entry = crate::receiver::enrichment::enrich_entry(entry.clone(), &state.enrichment);
+        state.pipeline.dispatch(entry);
+    }
     let pool = Arc::clone(&state.pool);
-    match tokio::task::spawn_blocking(move || db::insert_logs_batch(&pool, &entries)).await {
+    let storage = Arc::clone(&state.storage);
+    match tokio::task::spawn_blocking(move || {
+        persist_idempotent(&pool, &storage, &entries, &receipt_keys)
+    })
+    .await
+    {
         Ok(Ok(accepted)) => (
             StatusCode::OK,
             Json(AgentFileTailIngestResponse { accepted }),
+        )
+            .into_response(),
+        Ok(Err(error)) if error.to_string() == "storage_write_blocked" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("retry-after", "5")],
+            Json(json!({"error": "storage_write_blocked"})),
         )
             .into_response(),
         Ok(Err(error)) => {
@@ -189,6 +227,43 @@ async fn ingest_handler(
                 .into_response()
         }
     }
+}
+
+fn persist_idempotent(
+    pool: &DbPool,
+    storage: &parking_lot::Mutex<Option<crate::db::StorageBudgetState>>,
+    entries: &[LogBatchEntry],
+    keys: &[String],
+) -> anyhow::Result<usize> {
+    let mut conn = db::write_conn(pool)?;
+    if storage
+        .lock()
+        .as_ref()
+        .is_some_and(|state| state.write_blocked)
+    {
+        anyhow::bail!("storage_write_blocked");
+    }
+    let tx = conn.transaction()?;
+    let mut accepted = 0;
+    for (entry, key) in entries.iter().zip(keys) {
+        let receipt_key = format!("agent-file-tail:{key}");
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM syslog_forward_receipts WHERE idempotency_key = ?1)",
+            [&receipt_key],
+            |row| row.get(0),
+        )?;
+        if exists {
+            continue;
+        }
+        let ids = db::insert_logs_batch_in_tx(&tx, std::slice::from_ref(entry))?;
+        tx.execute(
+            "INSERT INTO syslog_forward_receipts (idempotency_key, source_instance, source_epoch, sequence, canonical_log_id, receipt_kind, request_fingerprint) VALUES (?1, ?2, 0, 0, ?3, 'record', ?1)",
+            rusqlite::params![receipt_key, entry.source_ip, ids[0]],
+        )?;
+        accepted += 1;
+    }
+    tx.commit()?;
+    Ok(accepted)
 }
 
 fn is_authorized(state: &AgentFileTailIngestState, peer: &SocketAddr, headers: &HeaderMap) -> bool {

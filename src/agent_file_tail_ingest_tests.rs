@@ -27,6 +27,7 @@ fn app() -> (Router, tempfile::TempDir) {
 
 fn record() -> serde_json::Value {
     serde_json::json!({
+        "idempotency_key": "test-record-1",
         "hostname": "devhost",
         "source_id": "app-log",
         "tag": "my-app",
@@ -118,4 +119,49 @@ fn maps_to_distinct_agent_file_tail_envelope() {
         serde_json::from_str(entry.metadata_json.as_deref().unwrap()).unwrap();
     assert_eq!(metadata["source_kind"], "agent-file-tail");
     assert_eq!(metadata["path_basename"], "app.log");
+}
+
+#[test]
+fn persistence_is_idempotent_and_obeys_storage_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage_config = StorageConfig::for_test(dir.path().join("tails.db"));
+    let pool = crate::db::init_pool(&storage_config).unwrap();
+    let parsed: AgentFileTailRecord = serde_json::from_value(record()).unwrap();
+    let key = parsed.idempotency_key.clone();
+    let entry = to_log_batch_entry(parsed).unwrap();
+    let storage = parking_lot::Mutex::new(Some(crate::db::StorageBudgetState {
+        metrics: crate::db::get_storage_metrics(&pool, &storage_config).unwrap(),
+        write_blocked: true,
+    }));
+    assert_eq!(
+        persist_idempotent(
+            &pool,
+            &storage,
+            std::slice::from_ref(&entry),
+            std::slice::from_ref(&key)
+        )
+        .unwrap_err()
+        .to_string(),
+        "storage_write_blocked"
+    );
+    storage.lock().as_mut().unwrap().write_blocked = false;
+    assert_eq!(
+        persist_idempotent(
+            &pool,
+            &storage,
+            std::slice::from_ref(&entry),
+            std::slice::from_ref(&key)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        persist_idempotent(&pool, &storage, &[entry], &[key]).unwrap(),
+        0
+    );
+    let conn = pool.get().unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
 }
