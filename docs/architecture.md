@@ -9,7 +9,8 @@ updated: 2026-07-30
 cortex is one binary, but operationally it is three sub-products sharing a
 SQLite database and a service layer:
 
-1. **Log intelligence core** — syslog UDP/TCP ingest, OTLP `/v1/logs`,
+1. **Log intelligence core** — syslog UDP/TCP ingest, OTLP HTTP/protobuf
+   `/v1/logs`, `/v1/metrics`, and `/v1/traces`,
    host-local agent Docker log ingest, legacy central pull Docker compatibility,
    AI transcript indexing, FTS5 search, and the
    56-action `cortex` MCP tool plus the `/api/*` REST mirror. Source: `src/receiver/`,
@@ -34,7 +35,7 @@ SQLite database and a service layer:
 | `db/` | core | SQLite pool + 58 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
 | `receiver/` + `receiver.rs` | core | UDP + TCP listeners (supervised with restart + backoff), RFC 3164/5424 + CEF parsing |
 | `ingest.rs` | core | mpsc channel + batch writer (one pool connection reserved for this writer) |
-| `otlp.rs` | core | OTLP/HTTP `POST /v1/logs` (protobuf, 4 MiB cap) |
+| `otlp.rs` + `otlp/` | core | OTLP/HTTP protobuf ingest: `POST /v1/logs` (4 MiB cap), `POST /v1/metrics` and `POST /v1/traces` (8 MiB cap); all use `CORTEX_TOKEN` auth |
 | `agent/`, `heartbeat_agent.rs` | inventory | Host-local cortex agent, including Docker log streaming from the local socket |
 | `docker_ingest/` | core | Legacy central pull container stdout/stderr + lifecycle events via explicit remote Docker Engine HTTP endpoints |
 | `mcp/` | core | RMCP Streamable HTTP server, `ACTION_SPECS` registry, scope gates, `/health` + `/health/full` |

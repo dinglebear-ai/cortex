@@ -108,9 +108,16 @@ pub async fn run_file_forwarder(
             parsed.procid,
             parsed.message,
         );
-        sender
-            .send_from(&format!("file:{}", path.display()), forwarded)
-            .await?;
+        let source = format!("file:{}", path.display());
+        loop {
+            match sender.send_from(&source, forwarded.clone()).await {
+                Ok(()) => break,
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "file forwarder spool failed; retrying current record");
+                    sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
     }
 }
 

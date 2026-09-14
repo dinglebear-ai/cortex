@@ -861,6 +861,24 @@ fn startup_preflight_accepts_an_explicit_trusted_overlay() {
 }
 
 #[test]
+#[serial]
+fn startup_preflight_rejects_plaintext_syslog_override() {
+    let _target = EnvGuard::set("CORTEX_HEARTBEAT_TARGET", "https://cortex.example.test");
+    let _syslog = EnvGuard::set("CORTEX_AGENT_SYSLOG_FORWARD_TARGET", "http://10.0.0.8:3100");
+    let _overlay = EnvGuard::unset("CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP");
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
+    assert!(startup_preflight(&config).is_err());
+}
+
+#[test]
+fn bounded_probe_error_is_unicode_safe() {
+    let error = anyhow::anyhow!("{}é", "x".repeat(224));
+    let diagnostic = bounded_probe_error("disk_capacity", &error);
+    assert!(diagnostic.len() <= 240);
+    assert!(std::str::from_utf8(diagnostic.as_bytes()).is_ok());
+}
+
+#[test]
 fn rollback_then_runs_the_rollback_check_before_a_failing_config_step() {
     // Loading or validating the configuration can fail too (a stricter env-file
     // check, an unknown option); the rollback check must already have run.

@@ -7,7 +7,7 @@ use super::super::models::FileTailSource;
 use super::super::path_policy::{validate_file_tail_path, validate_opened_file_tail_path};
 use super::super::platform::{file_identity, open_read_no_follow};
 
-const FILE_TAIL_FINGERPRINT_BYTES: usize = 256;
+pub(crate) const FILE_TAIL_FINGERPRINT_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FileIdentity {
@@ -131,7 +131,7 @@ async fn reopen_from_start(source: &FileTailSource) -> Result<OpenedTailFile> {
     })
 }
 
-async fn file_prefix_fingerprint(
+pub(crate) async fn file_prefix_fingerprint(
     file: &mut tokio::fs::File,
     limit: usize,
 ) -> std::io::Result<Vec<u8>> {
@@ -143,7 +143,7 @@ async fn file_prefix_fingerprint(
     Ok(buf)
 }
 
-async fn open_validated_tail_file(path: &str) -> Result<tokio::fs::File> {
+pub(crate) async fn open_validated_tail_file(path: &str) -> Result<tokio::fs::File> {
     validate_file_tail_path(path)?;
     let path = path.to_string();
     let std_file = tokio::task::spawn_blocking({

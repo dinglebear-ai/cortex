@@ -549,7 +549,9 @@ impl RuntimeCore {
         let state = crate::shell_history_ingest::ShellHistoryIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
+            Arc::clone(&self.storage_state),
         );
         crate::shell_history_ingest::router(state)
     }
@@ -558,7 +560,21 @@ impl RuntimeCore {
         let state = crate::agent_file_tail_ingest::AgentFileTailIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
+            Arc::clone(&self.storage_state),
+            EnrichmentConfig {
+                authelia_source_ip: self.config.enrichment.authelia_source_ip.clone(),
+                adguard_source_ip: self.config.enrichment.adguard_source_ip.clone(),
+                agent_docker_source_prefixes: self
+                    .config
+                    .enrichment
+                    .agent_docker_source_prefixes
+                    .clone(),
+                agent_docker_trust_any_source: self.config.enrichment.agent_docker_trust_any_source,
+                scrub_prompts: self.config.enrichment.scrub_prompts,
+                api_token: self.config.mcp.api_token.0.clone(),
+            },
         );
         crate::agent_file_tail_ingest::router(state)
     }

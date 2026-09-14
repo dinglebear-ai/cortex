@@ -1168,10 +1168,10 @@ pub struct UnpermittedLane {
 /// "reserved" connection came to be contended by a dozen writers.
 ///
 /// A lane belongs here when it calls `DbPool::get()` outside
-/// `CortexService::run_db`. HTTP write handlers (heartbeat, OTLP traces and
-/// metrics) are deliberately absent: they are unbounded by construction, so no
-/// reservation could cover them. They bound themselves the other way, by
-/// answering a retryable 503 on pool exhaustion rather than queueing.
+/// `CortexService::run_db`. HTTP write handlers (heartbeat, OTLP metrics, and
+/// OTLP traces) are deliberately absent: they are unbounded by construction,
+/// so no reservation could cover them. They bound themselves the other way,
+/// by answering a retryable 503 on pool exhaustion rather than queueing.
 pub const UNPERMITTED_CONNECTION_LANES: &[UnpermittedLane] = &[
     // `receiver::writer` — one flush task; starving it drops rows whose
     // `durable_ack` is `None` (UDP syslog, docker ingest, OTLP logs, file tails).
@@ -2399,8 +2399,9 @@ pub(crate) fn validate_auth_config(config: &Config, check_bind: bool) -> anyhow:
         if has_oauth && !has_static_token {
             return Err(anyhow::anyhow!(
                 "MCP host `{}` is not a loopback address and CORTEX_AUTH_MODE=oauth is \
-                 configured without CORTEX_TOKEN. OTLP /v1/logs only supports the static \
-                 Bearer token gate today, so this would expose unauthenticated OTLP writes. \
+                 configured without CORTEX_TOKEN. OTLP /v1/logs, /v1/metrics, and \
+                 /v1/traces only support the static Bearer token gate today, so this would \
+                 expose unauthenticated OTLP writes. \
                  Set CORTEX_TOKEN, bind to 127.0.0.1 / ::1, or enable an upstream auth \
                  gateway with CORTEX_NO_AUTH=true and CORTEX_TRUSTED_GATEWAY_NO_AUTH=true.",
                 config.mcp.host

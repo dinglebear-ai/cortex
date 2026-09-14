@@ -89,6 +89,7 @@ static IMFILE_PATH: LazyLock<Regex> =
 
 static CLAUDE_PROJECT_INDEX_CACHE: LazyLock<Mutex<HashMap<PathBuf, Option<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+const CLAUDE_PROJECT_INDEX_CACHE_CAPACITY: usize = 256;
 
 /// Patterns scrubbed from AI-source message bodies. Each matches the entire
 /// secret token; the matched text is replaced with `[REDACTED]`.
@@ -199,6 +200,7 @@ pub(crate) fn enrich_entry(mut entry: LogBatchEntry, config: &EnrichmentConfig) 
 
     if config.scrub_prompts && entry.app_name.as_deref().is_some_and(is_ai_source) {
         entry.message = scrub_secrets(&entry.message, config.api_token.as_deref());
+        entry.raw = scrub_secrets(&entry.raw, config.api_token.as_deref());
     }
 
     entry
@@ -478,7 +480,7 @@ fn enrich_ai_metadata(entry: &mut LogBatchEntry) {
     if let Some(path) = extract_imfile_path(&entry.raw) {
         entry.ai_transcript_path = Some(path.clone());
         if entry.ai_project.is_none() {
-            entry.ai_project = project_from_transcript_path(&path);
+            entry.ai_project = project_from_transcript_path_for_source(&path, &entry.source_ip);
         }
         if entry.ai_session_id.is_none() {
             entry.ai_session_id = session_id_from_path(&path);
@@ -511,6 +513,20 @@ fn session_id_from_path(path: &str) -> Option<String> {
 
 pub(crate) fn project_from_transcript_path(path: &str) -> Option<String> {
     if let Some(project) = project_from_sessions_index(path) {
+        return Some(project);
+    }
+    if let Some(project_part) = path.split("/.claude/projects/").nth(1) {
+        let encoded = project_part.split('/').next()?;
+        return decode_claude_project(encoded).map(|project| normalize_ai_project_path(&project));
+    }
+    None
+}
+
+fn project_from_transcript_path_for_source(path: &str, source_ip: &str) -> Option<String> {
+    let local = source_ip
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback());
+    if local && let Some(project) = project_from_sessions_index(path) {
         return Some(project);
     }
     if let Some(project_part) = path.split("/.claude/projects/").nth(1) {
@@ -556,6 +572,11 @@ fn project_from_sessions_index(path: &str) -> Option<String> {
         })
         .map(|project| normalize_ai_project_path(&project));
 
+    if cache.len() >= CLAUDE_PROJECT_INDEX_CACHE_CAPACITY
+        && let Some(oldest) = cache.keys().next().cloned()
+    {
+        cache.remove(&oldest);
+    }
     cache.insert(index_path, project.clone());
     project
 }

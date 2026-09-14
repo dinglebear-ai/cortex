@@ -2,6 +2,35 @@
 
 use super::*;
 
+pub(in crate::agent::ai_transcript) fn read_new_lines_from_offset(
+    path: &Path,
+    from_line: usize,
+    byte_offset: u64,
+    limit: usize,
+) -> Result<JsonlReadWindow> {
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    file.seek(SeekFrom::Start(byte_offset))?;
+    let mut reader = BufReader::new(file);
+    let mut out = Vec::new();
+    let mut retained_bytes = 0usize;
+    let mut line_no = from_line;
+    while out.len() < limit {
+        let before = reader.stream_position()?;
+        let Some(line) = read_bounded_jsonl_line(&mut reader)? else {
+            reader.seek(SeekFrom::Start(before))?;
+            break;
+        };
+        if !out.is_empty() && retained_bytes.saturating_add(line.len()) > MAX_FORWARD_BODY_BYTES {
+            reader.seek(SeekFrom::Start(before))?;
+            break;
+        }
+        retained_bytes = retained_bytes.saturating_add(line.len());
+        out.push((line_no, line));
+        line_no += 1;
+    }
+    Ok((out, line_no, reader.stream_position()?))
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(in crate::agent::ai_transcript) struct Checkpoint {
     /// Canonical path string -> lines already forwarded.

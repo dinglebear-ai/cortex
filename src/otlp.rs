@@ -220,42 +220,15 @@ async fn logs_handler(
     let entries = build_entries(&req, peer);
     let count = entries.len();
 
-    // Pre-flight capacity check: reject the WHOLE request with 503 if the
-    // channel can't fit it. Without this, partial accept (entries 0..N
-    // queued, N+1 hits Full, return 503) leads to OTel exporter retry of
-    // the full batch — duplicating the rows already accepted. See review
-    // threads PRRT_*ALWfA / *ALb_p / *ALYDZ.
-    if state.ingest.capacity() < count {
-        tracing::warn!(
-            source_ip = %peer,
-            requested = count,
-            available = state.ingest.capacity(),
-            "OTLP write channel insufficient capacity — returning 503 (no partial accept)"
-        );
-        return OtlpError::ChannelFull.into_response();
-    }
-
-    // Capacity reservation is best-effort (concurrent senders may consume
-    // slots between check and send). On Full mid-loop we still 503, which
-    // can in the worst case duplicate a few records on retry, but the
-    // pre-flight makes the common case clean.
-    for entry in entries {
-        match state.ingest.try_send(entry) {
-            Ok(()) => {}
-            Err(crate::ingest::TrySendErr::Full) => {
-                tracing::warn!(
-                    source_ip = %peer,
-                    "OTLP write channel filled mid-batch — returning 503"
-                );
-                return OtlpError::ChannelFull.into_response();
-            }
-            Err(crate::ingest::TrySendErr::Closed) => {
-                tracing::error!(
-                    source_ip = %peer,
-                    "OTLP write channel CLOSED — batch writer task is dead"
-                );
-                return OtlpError::WriterUnavailable.into_response();
-            }
+    match state.ingest.try_send_batch(entries) {
+        Ok(()) => {}
+        Err(crate::ingest::TrySendErr::Full) => {
+            tracing::warn!(source_ip = %peer, requested = count, "OTLP write channel insufficient capacity — returning 503 (no partial accept)");
+            return OtlpError::ChannelFull.into_response();
+        }
+        Err(crate::ingest::TrySendErr::Closed) => {
+            tracing::error!(source_ip = %peer, "OTLP write channel CLOSED — batch writer task is dead");
+            return OtlpError::WriterUnavailable.into_response();
         }
     }
 

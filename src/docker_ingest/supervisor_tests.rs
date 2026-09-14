@@ -1,5 +1,6 @@
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::config::{DockerHostConfig, DockerIngestConfig};
 use crate::db::{DockerCheckpoint, LogBatchEntry};
@@ -251,12 +252,15 @@ fn active_stream_guards_increment_and_decrement_observability_counters() {
 #[tokio::test]
 async fn prune_finished_tasks_removes_completed_tasks_and_keeps_running_tasks() {
     let mut tasks = HashMap::from([
-        ("done".to_string(), tokio::spawn(async {})),
+        (
+            "done".to_string(),
+            AbortOnDropHandle::new(tokio::spawn(async {})),
+        ),
         (
             "running".to_string(),
-            tokio::spawn(async {
+            AbortOnDropHandle::new(tokio::spawn(async {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-            }),
+            })),
         ),
     ]);
 
@@ -272,7 +276,9 @@ async fn prune_finished_tasks_removes_completed_tasks_and_keeps_running_tasks() 
 async fn prune_finished_tasks_removes_panicked_tasks_without_panicking() {
     let mut tasks = HashMap::from([(
         "panic".to_string(),
-        tokio::spawn(async { panic!("simulated docker log task panic") }),
+        AbortOnDropHandle::new(tokio::spawn(async {
+            panic!("simulated docker log task panic")
+        })),
     )]);
 
     tokio::task::yield_now().await;

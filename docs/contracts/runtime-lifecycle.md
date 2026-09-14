@@ -18,7 +18,7 @@ Companion contracts: `docs/contracts/config-schema.md` (knobs that drive these m
 
 | Invocation | Mode | Starts | Skips | Use when |
 |---|---|---|---|---|
-| `cortex` (no args) or `cortex serve mcp` | **ServeMcp** | UDP+TCP syslog listeners, batch writer, retention task, storage-budget task, docker-ingest tasks (when enabled), HTTP MCP server on `[mcp].port`, OTLP `/v1/logs` mount, optional non-MCP `/api` mount | — | Production daemon — the one host per fleet that ingests and stores logs. |
+| `cortex` (no args) or `cortex serve mcp` | **ServeMcp** | UDP+TCP syslog listeners, batch writer, retention task, storage-budget task, docker-ingest tasks (when enabled), HTTP MCP server on `[mcp].port`, OTLP HTTP/protobuf `/v1/logs` (4 MiB), `/v1/metrics` (8 MiB), and `/v1/traces` (8 MiB) mounts, optional non-MCP `/api` mount | — | Production daemon — the one host per fleet that ingests and stores logs. |
 | `cortex mcp` | **StdioMcp** | RMCP stdio transport bound to the same SQLite store (read-mostly query path) | All listeners; no HTTP port is bound; auth policy is forced to `LoopbackDev` (process isolation is the trust boundary) | Wiring `cortex` into an MCP client (Claude Code plugin, Codex) on a query-only client host. |
 | `cortex setup [check\|repair\|doctor\|ai-index-timer …]` | **Setup** | One-shot setup phases (write `~/.cortex/.env`, render compose, install systemd timers, etc.) | Never binds listeners; never starts maintenance tasks | First-run install, plugin hook reruns, dev-mode rewires. |
 | `cortex doctor [binary] [--json]` | **Doctor** | One-shot health audit (setup, compose, binary, AI transcripts) | Never binds listeners | Diagnostics / smoke checks. |
@@ -97,6 +97,13 @@ Body is JSON. **Field additions are always allowed** (additive minor change); re
   "status": "ok" | "error",
   "otlp_logs_received": <u64>,
   "otlp_decode_errors": <u64>,
+  "otlp_metrics_accepted": <u64>,
+  "otlp_metrics_duplicates": <u64>,
+  "otlp_metrics_rejected": <u64>,
+  "otlp_metrics_backpressure": <u64>,
+  "otlp_metrics_auth_failures": <u64>,
+  "otlp_metrics_decode_errors": <u64>,
+  "otlp_metrics_persistence_errors": <u64>,
   "ingest": {
     // Ingest counters
     "syslog_udp_packets_received":            <u64>,
@@ -153,7 +160,7 @@ Field groupings (Prometheus / Grafana consumers may rely on these prefixes):
   agents stream Docker logs from each host's local Docker socket.
 - `ingest_*` — channel/queue state between listeners and writer.
 - `writer_*` — batch writer + storage-budget interaction.
-- `otlp_*` — OTLP `/v1/logs` receiver counters (top-level, not under `ingest`).
+- `otlp_*` — OTLP receiver counters for logs and metrics (top-level, not under `ingest`; trace counters are not currently exposed here).
 
 **Compatibility rule.** Removing or renaming any field listed above is a major-version break. Adding new fields under `ingest`, adding top-level keys (e.g. `agents`, `pollers`), or extending grouped counters is additive and minor.
 

@@ -16,7 +16,7 @@ spread across the code and setup docs.
 | Syslog UDP/TCP `:1514` | unauthenticated | any reachable sender can submit frames; restrict by bind address, firewall, or `CORTEX_ALLOWED_SOURCE_CIDRS` |
 | MCP HTTP `/mcp` | bearer auth when `CORTEX_TOKEN` is set | `cortex:read` for read actions, `cortex:admin` for write/admin actions |
 | OAuth/JWT | disabled unless `CORTEX_AUTH_MODE=oauth` | Google identity plus the configured cortex allowlist; static token is disabled by default in OAuth mode |
-| OTLP `/v1/logs` | loopback or bearer-token protected | OAuth JWTs do not authorize OTLP ingest today |
+| OTLP `/v1/logs`, `/v1/metrics`, `/v1/traces` | loopback or `CORTEX_TOKEN` protected | HTTP/protobuf only; logs allow 4 MiB, metrics and traces allow 8 MiB; OAuth JWTs do not authorize OTLP ingest today |
 | Docker ingest | host-local agent for current deployments; legacy pull disabled unless configured | trust the deployed host-local cortex agent and its local Docker socket access; legacy central pull endpoints must stay private/read-only |
 | SSH inventory/deploy | disabled unless hosts are configured | inventory and remote Docker events use validated host aliases, strict host keys, shared concurrency limits, and retry backoff; deploy uses the same host validation, `--` delimiter, and host-key argument policy |
 

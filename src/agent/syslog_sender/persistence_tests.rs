@@ -355,7 +355,11 @@ fn journal_hashes_source_paths_and_replays_legacy_raw_keys_without_identity_drif
     );
     let source_instance = state.spool.records[0].source_instance.clone();
     // Emulate a journal from before the typed canonical-source format.
-    let legacy = serde_json::json!({"sequence":1,"at":"2026-09-12T12:00:00Z","records":[[raw,"legacy-format"]]});
+    let legacy = serde_json::json!({
+        "sequence": 1,
+        "at": chrono::Utc::now().to_rfc3339(),
+        "records": [[raw, "legacy-format"]]
+    });
     std::fs::write(&journal_path, format!("{legacy}\n")).unwrap();
     let loaded = load_spool(&path);
     assert_eq!(loaded.spool.records[0].source_instance, source_instance);

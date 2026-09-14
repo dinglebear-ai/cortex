@@ -131,6 +131,19 @@ async fn tail_file_until_cancelled(
     let mut checkpoint_dirty = false;
     let mut checkpoint_time = now_iso();
     loop {
+        // Detect same-inode copytruncate/rewrite before consuming bytes at the
+        // old cursor. Otherwise a fast regrow can be read as a fabricated suffix.
+        if line.is_empty()
+            && let Some(next) =
+                reopen_if_rotated_or_truncated(source, identity, position, &fingerprint).await?
+        {
+            reader = BufReader::new(next.file);
+            position = next.position;
+            durable_position = next.position;
+            identity = next.identity;
+            fingerprint = next.fingerprint;
+            pending_rotation_since = None;
+        }
         tokio::select! {
             _ = token.cancelled() => {
                 if checkpoint_dirty {
@@ -222,6 +235,13 @@ async fn tail_file_until_cancelled(
                     return Err(error);
                 }
                 durable_position = position;
+                if fingerprint.len() < super::io::FILE_TAIL_FINGERPRINT_BYTES {
+                    let mut current = super::io::open_validated_tail_file(&source.path).await?;
+                    fingerprint = super::io::file_prefix_fingerprint(
+                        &mut current,
+                        super::io::FILE_TAIL_FINGERPRINT_BYTES,
+                    ).await?;
+                }
                 checkpoint_time.clone_from(&now);
                 checkpoint_dirty = true;
                 let checkpoint_persisted = if last_checkpoint_flush.elapsed() >= CHECKPOINT_FLUSH_INTERVAL {

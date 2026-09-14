@@ -127,8 +127,8 @@ impl IngestTx {
     }
 
     /// Non-blocking send. Returns `Err(TrySendErr::Full)` when the channel is
-    /// at capacity so the OTLP HTTP handler can return 503 instead of awaiting
-    /// and holding the connection open. The dropped entry is not returned —
+    /// at capacity so non-blocking ingest callers can apply their own
+    /// backpressure policy instead of awaiting. The dropped entry is not returned —
     /// the caller's contract is "best effort, drop on backpressure."
     pub(crate) fn try_send(&self, entry: db::LogBatchEntry) -> Result<(), TrySendErr> {
         match self.tx.try_send(IngestEnvelope::best_effort(entry)) {
@@ -147,9 +147,29 @@ impl IngestTx {
         }
     }
 
-    /// Best-effort current channel capacity (slots currently free). Used by
-    /// the OTLP handler to pre-flight a multi-record batch and reject with
-    /// 503 *before* any partial enqueue, avoiding duplicate-on-retry.
+    /// Atomically reserve capacity for a complete request before enqueueing it.
+    /// A failed reservation enqueues no entries, so retrying the request cannot
+    /// duplicate a partially accepted prefix.
+    pub(crate) fn try_send_batch(&self, entries: Vec<db::LogBatchEntry>) -> Result<(), TrySendErr> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let permits = self.tx.try_reserve_many(entries.len()).map_err(|error| {
+            self.observability.record_enqueue_error(self.queue_depth());
+            match error {
+                mpsc::error::TrySendError::Closed(_) => TrySendErr::Closed,
+                mpsc::error::TrySendError::Full(_) => TrySendErr::Full,
+            }
+        })?;
+        for (permit, entry) in permits.zip(entries) {
+            permit.send(IngestEnvelope::best_effort(entry));
+        }
+        self.observability.record_enqueue_ok(self.queue_depth());
+        Ok(())
+    }
+
+    /// Best-effort current channel capacity (slots currently free). Listener
+    /// callers use this signal to stop reading before a non-blocking enqueue.
     pub(crate) fn capacity(&self) -> usize {
         self.tx.capacity()
     }
@@ -328,6 +348,31 @@ mod shutdown_tests {
     use super::*;
     use std::time::Duration;
 
+    fn entry(message: &str) -> db::LogBatchEntry {
+        db::LogBatchEntry {
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            hostname: "test-host".into(),
+            facility: None,
+            severity: "info".into(),
+            app_name: None,
+            process_id: None,
+            message: message.into(),
+            raw: message.into(),
+            source_ip: "127.0.0.1".into(),
+            docker_checkpoint: None,
+            ai_tool: None,
+            ai_project: None,
+            ai_session_id: None,
+            ai_transcript_path: None,
+            metadata_json: None,
+            http_status: None,
+            auth_outcome: None,
+            dns_blocked: None,
+            event_action: None,
+            parse_error: None,
+        }
+    }
+
     fn test_ingest(handle: JoinHandle<()>) -> IngestTx {
         let (tx, _rx) = mpsc::channel(1);
         IngestTx::from_envelope_sender_for_test(tx).with_writer_handle_for_test(handle)
@@ -362,5 +407,23 @@ mod shutdown_tests {
         let stopped = progress.load(std::sync::atomic::Ordering::SeqCst);
         tokio::task::yield_now().await;
         assert_eq!(progress.load(std::sync::atomic::Ordering::SeqCst), stopped);
+    }
+
+    #[tokio::test]
+    async fn failed_batch_reservation_enqueues_none_of_the_batch() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let ingest = IngestTx::from_envelope_sender_for_test(tx);
+        ingest.try_send(entry("occupied")).unwrap();
+
+        assert_eq!(
+            ingest.try_send_batch(vec![entry("batch-a"), entry("batch-b")]),
+            Err(TrySendErr::Full)
+        );
+
+        assert_eq!(rx.recv().await.unwrap().entry.message, "occupied");
+        assert!(
+            rx.try_recv().is_err(),
+            "failed reservation must enqueue no prefix"
+        );
     }
 }

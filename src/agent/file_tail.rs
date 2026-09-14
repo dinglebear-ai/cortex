@@ -1,15 +1,21 @@
 //! Durable HTTP forwarding for configured fleet-agent file tails.
 
 use std::time::Duration;
+use std::{
+    process,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
+use sha2::{Digest, Sha256};
 
 use crate::agent_file_tail_ingest::{AgentFileTailIngestRequest, AgentFileTailRecord};
 
 use super::syslog_file::FileTailSource;
 
 const EOF_SLEEP_MS: u64 = 500;
+static DELIVERY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct FileTailForwardConfig {
@@ -34,18 +40,17 @@ pub async fn run(config: FileTailForwardConfig) -> Result<()> {
         if raw.is_empty() {
             continue;
         }
-        while let Err(error) = send_line(&client, &config, raw).await {
+        let record = build_record(&config, raw);
+        while let Err(error) = send_record(&client, &config, &record).await {
             tracing::warn!(error = %error, path = %config.source.path.display(), "agent file-tail delivery failed; retrying current line");
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
 }
 
-async fn send_line(
-    client: &reqwest::Client,
-    config: &FileTailForwardConfig,
-    line: &str,
-) -> Result<()> {
+fn build_record(config: &FileTailForwardConfig, line: &str) -> AgentFileTailRecord {
+    let now = Utc::now();
+    let timestamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
     let tag = config.source.tag.as_deref().unwrap_or("file-tail");
     let source_id = source_id(tag);
     let path_basename = config
@@ -54,17 +59,55 @@ async fn send_line(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
-    let record = AgentFileTailRecord {
+    let sequence = DELIVERY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let idempotency_key = delivery_key(
+        config,
+        &source_id,
+        &timestamp,
+        line,
+        now.timestamp_nanos_opt().unwrap_or_default(),
+        sequence,
+    );
+    AgentFileTailRecord {
+        idempotency_key: Some(idempotency_key),
         hostname: config.hostname.clone(),
         source_id,
         tag: tag.to_string(),
         path_basename: path_basename.to_string(),
-        timestamp: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        timestamp,
         message: line.to_string(),
-    };
+    }
+}
+
+fn delivery_key(
+    config: &FileTailForwardConfig,
+    source_id: &str,
+    timestamp: &str,
+    line: &str,
+    created_at_nanos: i64,
+    sequence: u64,
+) -> String {
+    let digest = Sha256::digest(format!(
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        process::id(),
+        created_at_nanos,
+        sequence,
+        config.hostname,
+        source_id,
+        timestamp,
+        line
+    ));
+    hex::encode(digest)
+}
+
+async fn send_record(
+    client: &reqwest::Client,
+    config: &FileTailForwardConfig,
+    record: &AgentFileTailRecord,
+) -> Result<()> {
     let url = format!("{}/v1/file-tails", config.target.trim_end_matches('/'));
     let mut request = client.post(url).json(&AgentFileTailIngestRequest {
-        records: vec![record],
+        records: vec![record.clone()],
     });
     if let Some(token) = &config.token {
         request = request.bearer_auth(token);
