@@ -163,37 +163,6 @@ pub(super) fn read_new_lines(
     Ok((out, line_no))
 }
 
-pub(super) fn read_new_lines_from_offset(
-    path: &Path,
-    from_line: usize,
-    byte_offset: u64,
-    limit: usize,
-) -> Result<JsonlReadWindow> {
-    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    file.seek(SeekFrom::Start(byte_offset))?;
-    let mut reader = BufReader::new(file);
-    let mut out = Vec::new();
-    let mut retained_bytes = 0usize;
-    let mut line_no = from_line;
-    while out.len() < limit {
-        let before = reader.stream_position()?;
-        let Some(line) = read_bounded_jsonl_line(&mut reader)? else {
-            // Preserve the last complete-record boundary when the writer has
-            // only appended part of its next JSONL record.
-            reader.seek(SeekFrom::Start(before))?;
-            break;
-        };
-        if !out.is_empty() && retained_bytes.saturating_add(line.len()) > MAX_FORWARD_BODY_BYTES {
-            reader.seek(SeekFrom::Start(before))?;
-            break;
-        }
-        retained_bytes = retained_bytes.saturating_add(line.len());
-        out.push((line_no, line));
-        line_no += 1;
-    }
-    Ok((out, line_no, reader.stream_position()?))
-}
-
 pub(super) fn read_bounded_jsonl_line(reader: &mut BufReader<fs::File>) -> Result<Option<String>> {
     let mut line = Vec::new();
     let mut oversized = false;
@@ -376,7 +345,6 @@ thread_local! {
     static PREFIX_HASH_BYTES_READ: Cell<u64> = const { Cell::new(0) };
 }
 
-/// Bytes this thread has fed to acknowledged-prefix hashing.
 #[cfg(test)]
 pub(super) fn prefix_hash_bytes_read() -> u64 {
     PREFIX_HASH_BYTES_READ.with(Cell::get)
@@ -416,13 +384,10 @@ pub(super) fn jsonl_prefix_hasher(path: &Path, byte_offset: u64) -> Result<Sha25
     Ok(hasher)
 }
 
-/// The persisted form of a prefix digest: the format the forwarder has always
-/// written, so existing checkpoints verify unchanged.
 pub(super) fn finish_digest(hasher: &Sha256) -> String {
     format!("sha256:{:x}", hasher.clone().finalize())
 }
 
-/// Digest of `[0, byte_offset)` in its persisted form.
 #[cfg(test)]
 pub(super) fn jsonl_prefix_digest(path: &Path, byte_offset: u64) -> Result<String> {
     Ok(finish_digest(&jsonl_prefix_hasher(path, byte_offset)?))
@@ -470,8 +435,6 @@ pub(super) fn capability_coverage(source_kind: scanner::SourceKind) -> EvidenceC
     let coverage = |lane| {
         provider
             .map(|provider| scanner::providers::definition(provider).forwarding_coverage(lane))
-            // An explicitly configured generic file remains a bounded,
-            // parseable transcript input, but never inherits provider events.
             .unwrap_or_else(|| match lane {
                 scanner::providers::ProviderLane::Transcript => {
                     scanner::providers::Coverage::Partial

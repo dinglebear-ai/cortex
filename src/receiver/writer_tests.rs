@@ -446,3 +446,45 @@ async fn storage_blocked_flush_caps_retained_rows_and_counts_discards() {
     assert_eq!(batch.len(), 1000);
     assert_eq!(observability.snapshot().writer_logs_discarded, 100);
 }
+
+#[tokio::test]
+async fn shutdown_signal_flushes_queued_rows_before_long_deadline() {
+    let (pool, storage, _dir) = test_pool();
+    let state = Arc::new(Mutex::new(Some(db::StorageBudgetState {
+        metrics: db::get_storage_metrics(&pool, &storage).unwrap(),
+        write_blocked: false,
+    })));
+    let observability = Arc::new(crate::observability::RuntimeObservability::default());
+    let context = WriterContext::new(
+        Arc::clone(&pool),
+        storage,
+        state,
+        crate::receiver::enrichment::EnrichmentConfig::default(),
+        Arc::new(crate::enrich::EnrichmentPipeline::new()),
+        observability,
+    );
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tx.send(crate::ingest::IngestEnvelope::best_effort(make_entry(
+        "flush on shutdown",
+    )))
+    .await
+    .unwrap();
+
+    let writer = tokio::spawn(batch_writer(
+        rx,
+        context,
+        100,
+        tokio::time::Duration::from_secs(3_600),
+        shutdown_rx,
+    ));
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), writer)
+        .await
+        .expect("shutdown must not wait for the flush deadline")
+        .unwrap();
+
+    let rows = db::tail_logs(&pool, None, None, None, None, 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].message, "flush on shutdown");
+}

@@ -10,13 +10,13 @@ Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.
 
 It collects logs and operational evidence, stores them in SQLite with FTS5 search, and exposes one shared intelligence layer through CLI, REST, MCP, and a bundled browser workspace.
 
-Cortex began as a syslog receiver. It now covers network logs, Docker, managed files, OpenTelemetry logs, host heartbeats, fleet inventory, shell and agent activity, and Claude, Codex, Gemini CLI, and Antigravity transcripts. It correlates those sources into timelines, incidents, and an evidence-backed topology graph without making the graph a second source of truth.
+Cortex began as a syslog receiver. It now covers network logs, Docker, managed files, OpenTelemetry logs, metrics, and traces, host heartbeats, fleet inventory, shell and agent activity, and Claude, Codex, Gemini CLI, and Antigravity transcripts. It correlates those sources into timelines, incidents, and an evidence-backed topology graph without making the graph a second source of truth.
 
 ## At a glance
 
 | Area | What Cortex provides |
 | --- | --- |
-| Ingest | UDP/TCP syslog, OTLP/HTTP logs, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
+| Ingest | UDP/TCP syslog, OTLP/HTTP logs, metrics, and traces, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
 | Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 58 sequential schema migrations |
 | Investigation | Search, filtering, context, timelines, patterns, anomaly comparison, cross-source correlation, recurring error signatures, deterministic incident bundles, and graph explanations |
 | Fleet intelligence | SSH and API inventory collectors, host state, service topology, container and route relationships, redacted evidence, and rebuildable graph projections |
@@ -158,7 +158,7 @@ Cortex is one Rust binary with multiple operating modes. The same application an
 ```text
                          INGESTION
 
-  Syslog UDP/TCP       OTLP logs          Docker agent / pull
+  Syslog UDP/TCP       OTLP signals       Docker agent / pull
   Managed file tails  Heartbeats         Claude / Codex / Gemini / Antigravity
   Shell history       Agent commands     Fleet inventory
           \               |                    /
@@ -220,18 +220,16 @@ Syslog has no application-layer authentication. Restrict senders with network co
 
 Built-in enrichment recognizes useful signals from AdGuard, Authelia, Docker lifecycle events, fail2ban, Linux kernel and OOM events, SWAG, reverse-proxy logs, and host-local Cortex Docker agent metadata. Source gates can restrict enrichment that would otherwise trust a marker inside an unauthenticated syslog body.
 
-### OpenTelemetry logs
+### OpenTelemetry ingestion
 
-Cortex accepts OTLP/HTTP log export requests at `POST /v1/logs` on the shared HTTP listener. Requests are bounded to 4 MiB and flow into the normal Cortex writer.
+Cortex accepts protobuf OTLP/HTTP export requests on the shared HTTP listener. Logs use `POST /v1/logs` with a 4 MiB body limit and flow through the normal writer. Metrics use `POST /v1/metrics` and traces use `POST /v1/traces`, each with an 8 MiB body limit and dedicated storage. Metric requests admit at most 5,000 points and also enforce a bounded normalized payload budget.
 
 Current OTLP scope is intentionally narrow:
 
-- Logs over HTTP are supported.
-- OTLP traces are not accepted.
-- OTLP metrics are not accepted.
+- Logs, traces, and metrics over HTTP/protobuf are supported.
 - OTLP/gRPC is not implemented.
 
-`POST /v1/logs` authenticates with **`CORTEX_TOKEN`** — the same static MCP bearer token that guards `POST /mcp`, read from the managed `~/.cortex/.env` on a deployed host. It is **not** `CORTEX_API_TOKEN` (REST `/api/*`) and **not** `CORTEX_API_ADMIN_TOKEN`. Loopback and trusted-gateway policies skip the check. An OAuth-only deployment with no static token denies OTLP outright, because machine exporters have no OAuth flow — so a non-loopback OAuth-only `/v1/logs` exposure is rejected at startup unless `CORTEX_TOKEN` is set.
+All three OTLP endpoints authenticate with **`CORTEX_TOKEN`** — the same static MCP bearer token that guards `POST /mcp`, read from the managed `~/.cortex/.env` on a deployed host. It is **not** `CORTEX_API_TOKEN` (REST `/api/*`) and **not** `CORTEX_API_ADMIN_TOKEN`. Loopback and trusted-gateway policies skip the check. An OAuth-only deployment with no static token denies OTLP outright, because machine exporters have no OAuth flow — so a non-loopback OAuth-only OTLP exposure is rejected at startup unless `CORTEX_TOKEN` is set.
 
 ### Docker logs and events
 
@@ -665,7 +663,7 @@ Cortex intentionally separates transport credentials and capabilities.
 ### Ingest endpoints
 
 - Syslog itself is unauthenticated. Use CIDR and network controls.
-- OTLP logs, heartbeats, AI transcripts, shell history, and agent-command forwarding use the Cortex bearer-token policy when configured.
+- OTLP logs, metrics, and traces, plus heartbeats, AI transcripts, shell history, and agent-command forwarding, use the Cortex bearer-token policy when configured.
 - Unauthenticated forwarding endpoints are loopback-only unless the operator explicitly establishes another trusted boundary.
 
 ### Data handling
@@ -695,7 +693,7 @@ Cortex uses SQLite with:
 - Online backup support
 - Integrity checks, checkpoints, and vacuum workflows
 
-The current schema history contains 58 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry. Forwarding receipts have a seven-day replay horizon and are removed when their canonical evidence is deleted. Senders retain unacknowledged spool records; retries beyond the horizon are new ingestion attempts.
+The current schema history contains 58 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry. Server forwarding receipts have a seven-day replay horizon and are removed when their canonical evidence is deleted. The sender spool is intentionally shorter and bounded: an individual source retains at most 1,024 records or 1 MiB and evicts records older than one day; the aggregate spool retains at most 4,096 records or 4 MiB. Eviction removes the original payload and retains a pending gap marker so evidence loss remains visible. A retry after the server receipt horizon is a new ingestion attempt.
 
 ### Authoritative and derived data
 
@@ -933,7 +931,7 @@ Design plans, runbooks, and session logs under `docs/plans`, `docs/runbooks`, an
 Cortex is intentionally opinionated:
 
 - It is a single-node SQLite service, not a distributed ingestion cluster.
-- OTLP support is logs-over-HTTP only. Traces, metrics, and OTLP/gRPC are outside the current implementation.
+- OTLP logs, metrics, and traces are supported over HTTP/protobuf. OTLP/gRPC is outside the current implementation.
 - Syslog does not authenticate senders. Network and CIDR controls matter.
 - The graph is derived evidence, not authoritative configuration state.
 - MCP and REST expose bounded operations, not arbitrary SQL or unaudited log mutation.

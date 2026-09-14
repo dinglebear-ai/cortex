@@ -1,6 +1,10 @@
 //! Durable HTTP forwarding for configured fleet-agent file tails.
 
 use std::time::Duration;
+use std::{
+    process,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
@@ -11,6 +15,7 @@ use crate::agent_file_tail_ingest::{AgentFileTailIngestRequest, AgentFileTailRec
 use super::syslog_file::FileTailSource;
 
 const EOF_SLEEP_MS: u64 = 500;
+static DELIVERY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct FileTailForwardConfig {
@@ -44,7 +49,8 @@ pub async fn run(config: FileTailForwardConfig) -> Result<()> {
 }
 
 fn build_record(config: &FileTailForwardConfig, line: &str) -> AgentFileTailRecord {
-    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let now = Utc::now();
+    let timestamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
     let tag = config.source.tag.as_deref().unwrap_or("file-tail");
     let source_id = source_id(tag);
     let path_basename = config
@@ -53,12 +59,17 @@ fn build_record(config: &FileTailForwardConfig, line: &str) -> AgentFileTailReco
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
-    let digest = Sha256::digest(format!(
-        "{}\0{}\0{}\0{}",
-        config.hostname, source_id, timestamp, line
-    ));
+    let sequence = DELIVERY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let idempotency_key = delivery_key(
+        config,
+        &source_id,
+        &timestamp,
+        line,
+        now.timestamp_nanos_opt().unwrap_or_default(),
+        sequence,
+    );
     AgentFileTailRecord {
-        idempotency_key: hex::encode(digest),
+        idempotency_key: Some(idempotency_key),
         hostname: config.hostname.clone(),
         source_id,
         tag: tag.to_string(),
@@ -66,6 +77,27 @@ fn build_record(config: &FileTailForwardConfig, line: &str) -> AgentFileTailReco
         timestamp,
         message: line.to_string(),
     }
+}
+
+fn delivery_key(
+    config: &FileTailForwardConfig,
+    source_id: &str,
+    timestamp: &str,
+    line: &str,
+    created_at_nanos: i64,
+    sequence: u64,
+) -> String {
+    let digest = Sha256::digest(format!(
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        process::id(),
+        created_at_nanos,
+        sequence,
+        config.hostname,
+        source_id,
+        timestamp,
+        line
+    ));
+    hex::encode(digest)
 }
 
 async fn send_record(

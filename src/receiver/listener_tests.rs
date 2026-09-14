@@ -101,6 +101,42 @@ async fn tcp_connection_preserves_all_lines_when_ingest_queue_is_saturated() {
 }
 
 #[tokio::test]
+async fn aborting_tcp_listener_terminates_open_connection_handlers() {
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = probe.local_addr().unwrap();
+    drop(probe);
+    let (tx, _rx) = tokio::sync::mpsc::channel::<crate::db::LogBatchEntry>(4);
+    let ingest = crate::ingest::IngestTx::from_sender_for_test(tx);
+    let bind = addr.to_string();
+    let listener_task = tokio::spawn(async move {
+        tcp_listener(&bind, ingest, 256, 4, 3_600, Arc::new(Vec::new())).await
+    });
+
+    let mut client = loop {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(client) => break client,
+            Err(_) => tokio::task::yield_now().await,
+        }
+    };
+    tokio::task::yield_now().await;
+    listener_task.abort();
+    let _ = listener_task.await;
+
+    use tokio::io::AsyncReadExt;
+    let mut byte = [0u8; 1];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(1), client.read(&mut byte))
+        .await
+        .expect("listener cancellation must abort open child handlers");
+    match read {
+        Ok(0) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+        other => {
+            panic!("expected EOF or connection reset after listener cancellation, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
 async fn tcp_connection_closes_oversized_unterminated_line_after_bounded_drain() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::db::LogBatchEntry>(16);
     let ingest = crate::ingest::IngestTx::from_sender_for_test(tx);

@@ -89,7 +89,7 @@ For every row in §4:
 | `server_name` | — | string | `"cortex"` | public | restart-only | — | — | Reported in MCP capabilities |
 | `no_auth` | `NO_AUTH` or `CORTEX_NO_AUTH` | bool | `false` | public | restart-only | see §6 | `no_auth` | Disables service-local MCP auth; non-loopback binds also require `trusted_gateway_no_auth` |
 | `trusted_gateway_no_auth` | `CORTEX_TRUSTED_GATEWAY_NO_AUTH` | bool | `false` | public | restart-only | see §6 | — | Allows `no_auth` on non-loopback binds only when an upstream gateway enforces auth |
-| `api_token` | `CORTEX_TOKEN` (preferred), `CORTEX_API_TOKEN` (deprecated) | string | `None` | **secret** | restart-only | non-empty if set | `api_token` | Static Bearer token; deprecated env var logs a warning |
+| `api_token` | `CORTEX_TOKEN` (preferred), `CORTEX_API_TOKEN` (deprecated) | string | `None` | **secret** | restart-only | non-empty if set | `api_token` | Static Bearer token for MCP and all OTLP HTTP/protobuf signals; deprecated env var logs a warning |
 | `allowed_hosts` | `CORTEX_ALLOWED_HOSTS` | csv list | `[]` | public | restart-only | — | — | Extra Host headers RMCP accepts. Compose prepends `cortex,cortex:3100` and appends this operator value. |
 | `allowed_origins` | `CORTEX_ALLOWED_ORIGINS` | csv list | `[]` | public | restart-only | — | — | Extra browser Origins |
 
@@ -316,7 +316,7 @@ These are checked in `src/config.rs::validate_*` and `src/runtime.rs::reject_uns
    - `mcp.host` does not resolve to a loopback `IpAddr`, AND
    - `mcp.no_auth == false` or `mcp.trusted_gateway_no_auth == false`, AND
    - Neither a static token (`mcp.api_token`) nor `auth.mode == OAuth` is configured.
-   - **OAuth-only on a non-loopback bind also requires `mcp.api_token`** because OTLP `/v1/logs` honors only the static bearer gate in V1. This is enforced once in `validate_auth_config` and again as defense-in-depth in `runtime.rs::reject_unsafe_otlp_oauth_only_exposure`.
+   - **OAuth-only on a non-loopback bind also requires `mcp.api_token`** because OTLP HTTP/protobuf `/v1/logs`, `/v1/metrics`, and `/v1/traces` all honor only the static bearer gate in V1. Logs allow 4 MiB request bodies; metrics and traces allow 8 MiB. This is enforced once in `validate_auth_config` and again as defense-in-depth in `runtime.rs::reject_unsafe_otlp_oauth_only_exposure`.
 2. **Storage budget shape.** When `storage.max_db_size_mb > 0`: `storage.recovery_db_size_mb > 0` AND `storage.recovery_db_size_mb < storage.max_db_size_mb`. When `storage.max_db_size_mb == 0`: `storage.recovery_db_size_mb` MUST also be `0`. Symmetric rule for `min_free_disk_mb` / `recovery_free_disk_mb` (recovery must be **greater than** min).
 3. **OAuth admin email required.** With `auth.mode == oauth`, `admin_email` must be non-empty because it is the only config-backed email gate cortex passes into lab-auth today. Non-empty `allowed_emails` is rejected in OAuth mode until cortex can pass or enforce that config list. `mcp.no_auth=true` short-circuits auth validation because auth config is ignored under `LoopbackDev` or `TrustedGatewayUnscoped`.
 4. **OAuth prerequisite triple.** `public_url`, `google_client_id`, `google_client_secret` are all required when `auth.mode == oauth`.

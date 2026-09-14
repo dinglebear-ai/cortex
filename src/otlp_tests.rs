@@ -18,8 +18,9 @@ use opentelemetry_proto::tonic::collector::metrics::v1::{
 use opentelemetry_proto::tonic::collector::trace::v1::{
     ExportTraceServiceRequest, ExportTraceServiceResponse,
 };
+use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 use opentelemetry_proto::tonic::metrics::v1::{
-    Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics,
+    Exemplar, Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, exemplar,
     number_data_point::Value as NumberValue,
 };
 use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
@@ -190,6 +191,34 @@ fn metric_point(time: u64) -> NumberDataPoint {
         value: Some(NumberValue::AsInt(42)),
         ..Default::default()
     }
+}
+
+fn string_attribute(key: &str, value: String) -> KeyValue {
+    KeyValue {
+        key: key.to_string(),
+        value: Some(AnyValue {
+            value: Some(any_value::Value::StringValue(value)),
+        }),
+        ..Default::default()
+    }
+}
+
+fn large_escaping_metric_point(time: u64) -> NumberDataPoint {
+    // A protobuf string can require six times as many bytes once serialized to
+    // JSON. Split the payload between point attributes and exemplar attributes
+    // so the regression covers both normalization paths without exceeding the
+    // per-field 256 KiB JSON validation limit.
+    let payload = "\u{0001}".repeat(32 * 1024);
+    let mut point = metric_point(time);
+    point.attributes = vec![string_attribute("point.payload", payload.clone())];
+    point.exemplars = vec![Exemplar {
+        filtered_attributes: vec![string_attribute("exemplar.payload", payload)],
+        time_unix_nano: time,
+        span_id: vec![0x22; 8],
+        trace_id: vec![0x11; 16],
+        value: Some(exemplar::Value::AsInt(42)),
+    }];
+    point
 }
 
 async fn call_metrics(
@@ -386,6 +415,26 @@ async fn metrics_handler_reports_invalid_point_as_partial_success() {
 }
 
 #[tokio::test]
+async fn metrics_handler_reports_missing_instrument_as_partial_success() {
+    let test = state_with_token(None);
+    let mut request = metric_request(Vec::new());
+    request.resource_metrics[0].scope_metrics[0].metrics[0].data = None;
+
+    let response = call_metrics(&test.state, protobuf_headers(None), request).await;
+    let partial = decode_metric_response(response)
+        .await
+        .partial_success
+        .unwrap();
+    assert_eq!(partial.rejected_data_points, 1);
+    assert!(
+        partial
+            .error_message
+            .contains("invalid metric points rejected")
+    );
+    assert_eq!(metric_rows(&test.pool), 0);
+}
+
+#[tokio::test]
 async fn metric_request_over_cap_reports_excess_as_partial_success() {
     let test = state_with_token(None);
     let points = (1..=(MAX_METRIC_POINTS_PER_REQUEST + 1))
@@ -402,6 +451,28 @@ async fn metric_request_over_cap_reports_excess_as_partial_success() {
         metric_rows(&test.pool),
         MAX_METRIC_POINTS_PER_REQUEST as i64
     );
+}
+
+#[tokio::test]
+async fn metric_byte_budget_admits_borrowed_point_prefix_and_reports_exact_rejections() {
+    let test = state_with_token(None);
+    let points = (0..100)
+        .map(|offset| large_escaping_metric_point(1_700_000_000_000_000_000 + offset as u64))
+        .collect();
+
+    let response = call_metrics(&test.state, protobuf_headers(None), metric_request(points)).await;
+    let partial = decode_metric_response(response)
+        .await
+        .partial_success
+        .unwrap();
+
+    assert_eq!(partial.rejected_data_points, 58);
+    assert!(
+        partial
+            .error_message
+            .contains("normalized metric byte limit")
+    );
+    assert_eq!(metric_rows(&test.pool), 42);
 }
 
 #[tokio::test]

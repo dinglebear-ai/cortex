@@ -549,9 +549,10 @@ impl RuntimeCore {
         let state = crate::shell_history_ingest::ShellHistoryIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
-        )
-        .with_storage_state(Arc::clone(&self.storage_state));
+            Arc::clone(&self.storage_state),
+        );
         crate::shell_history_ingest::router(state)
     }
 
@@ -559,9 +560,8 @@ impl RuntimeCore {
         let state = crate::agent_file_tail_ingest::AgentFileTailIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
-        )
-        .with_ingest_policy(
             Arc::clone(&self.storage_state),
             EnrichmentConfig {
                 authelia_source_ip: self.config.enrichment.authelia_source_ip.clone(),

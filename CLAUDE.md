@@ -98,17 +98,17 @@ Tests: unit tests live in sidecar files beside their source modules (e.g. `src/d
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 1514 | UDP + TCP | Syslog receiver (not 514 — avoids `CAP_NET_BIND_SERVICE`) |
-| 3100 | TCP | Shared HTTP listener: MCP (`POST /mcp`), health (`GET /health`), OTLP logs (`POST /v1/logs`), REST (`/api/*`, `/api/v1/*`), and the browser workspace (`/app`) |
+| 3100 | TCP | Shared HTTP listener: MCP (`POST /mcp`), health (`GET /health`), OTLP HTTP/protobuf logs (`POST /v1/logs`, 4 MiB), metrics (`POST /v1/metrics`, 8 MiB), traces (`POST /v1/traces`, 8 MiB), REST (`/api/*`, `/api/v1/*`), and the browser workspace (`/app`) |
 
 **Token map for port 3100** — three distinct env vars, do not conflate them:
 
 | Env var | Config field | Guards |
 |---------|--------------|--------|
-| `CORTEX_TOKEN` | `mcp.api_token` | `POST /mcp` **and OTLP `POST /v1/logs`**, plus heartbeat/forwarding ingest |
+| `CORTEX_TOKEN` | `mcp.api_token` | `POST /mcp` **and all OTLP endpoints** (`POST /v1/logs`, `/v1/metrics`, `/v1/traces`), plus heartbeat/forwarding ingest |
 | `CORTEX_API_TOKEN` | `api.api_token` | REST `/api/*` only — required at startup because `/api/*` is always mounted |
 | `CORTEX_API_ADMIN_TOKEN` | `api.admin_token` | Privileged REST maintenance / file-tail routes |
 
-OTLP `/v1/logs` authenticates with **`CORTEX_TOKEN`** — read from the managed `~/.cortex/.env` on a deployed host. It is **not** `CORTEX_API_TOKEN` and **not** `CORTEX_API_ADMIN_TOKEN`. Loopback and trusted-gateway auth policies skip the check entirely; an OAuth-only deployment with no static token **denies** OTLP, because machine exporters have no OAuth flow — so non-loopback OAuth-only `/v1/logs` exposure is blocked at startup unless `CORTEX_TOKEN` is set. See `src/otlp/auth.rs`.
+OTLP HTTP/protobuf `/v1/logs`, `/v1/metrics`, and `/v1/traces` all authenticate with **`CORTEX_TOKEN`** — read from the managed `~/.cortex/.env` on a deployed host. Logs allow 4 MiB request bodies; metrics and traces allow 8 MiB. The token is **not** `CORTEX_API_TOKEN` and **not** `CORTEX_API_ADMIN_TOKEN`. Loopback and trusted-gateway auth policies skip the check entirely; an OAuth-only deployment with no static token **denies** OTLP, because machine exporters have no OAuth flow — so non-loopback OAuth-only OTLP exposure is blocked at startup unless `CORTEX_TOKEN` is set. See `src/otlp/auth.rs`.
 
 ## MCP Tools
 

@@ -147,11 +147,12 @@ pub mod testing {
         );
         let token = state.config.api_token.0.clone();
         let policy = state.auth_policy.clone();
+        let storage_state = Arc::new(parking_lot::Mutex::new(None));
         let ingest = crate::ingest::start_writer_from_receiver_config(
             &crate::config::ReceiverConfig::default(),
             storage,
             Arc::clone(&pool),
-            Arc::new(parking_lot::Mutex::new(None)),
+            Arc::clone(&storage_state),
             crate::receiver::enrichment::EnrichmentConfig::default(),
             Arc::clone(&state.observability),
         );
@@ -196,14 +197,19 @@ pub mod testing {
                 crate::shell_history_ingest::ShellHistoryIngestState::new(
                     Arc::clone(&pool),
                     token.clone(),
+                    Default::default(),
                     policy.clone(),
+                    Arc::clone(&storage_state),
                 ),
             ))
             .merge(crate::agent_file_tail_ingest::router(
                 crate::agent_file_tail_ingest::AgentFileTailIngestState::new(
                     Arc::clone(&pool),
                     token,
+                    Default::default(),
                     policy,
+                    storage_state,
+                    Default::default(),
                 ),
             ));
         (state, auth_state, router)

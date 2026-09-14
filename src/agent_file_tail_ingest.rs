@@ -1,5 +1,6 @@
 //! Authenticated ingest for configured file tails forwarded by fleet agents.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -12,13 +13,16 @@ use axum::{
 };
 use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::db::{self, DbPool, LogBatchEntry};
 use crate::enrich::{SourceKind, stamp_source_kind};
 use crate::mcp::AuthPolicy;
+use crate::syslog_forward_ingest::ForwardingPrincipal;
 
 pub const BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_RECORDS_PER_BATCH: usize = 2_000;
@@ -26,7 +30,8 @@ pub const MAX_RECORDS_PER_BATCH: usize = 2_000;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentFileTailRecord {
-    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     pub hostname: String,
     pub source_id: String,
     pub tag: String,
@@ -50,6 +55,7 @@ pub struct AgentFileTailIngestResponse {
 pub struct AgentFileTailIngestState {
     pool: Arc<DbPool>,
     api_token: Option<String>,
+    forwarding_agent_tokens: Arc<HashMap<String, String>>,
     auth_policy: AuthPolicy,
     storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
     enrichment: crate::receiver::enrichment::EnrichmentConfig,
@@ -57,25 +63,23 @@ pub struct AgentFileTailIngestState {
 }
 
 impl AgentFileTailIngestState {
-    pub fn new(pool: Arc<DbPool>, api_token: Option<String>, auth_policy: AuthPolicy) -> Self {
-        Self {
-            pool,
-            api_token,
-            auth_policy,
-            storage: Arc::new(parking_lot::Mutex::new(None)),
-            enrichment: Default::default(),
-            pipeline: Arc::new(crate::enrich::EnrichmentPipeline::new()),
-        }
-    }
-
-    pub fn with_ingest_policy(
-        mut self,
+    pub fn new(
+        pool: Arc<DbPool>,
+        api_token: Option<String>,
+        forwarding_agent_tokens: HashMap<String, String>,
+        auth_policy: AuthPolicy,
         storage: Arc<parking_lot::Mutex<Option<crate::db::StorageBudgetState>>>,
         enrichment: crate::receiver::enrichment::EnrichmentConfig,
     ) -> Self {
-        self.storage = storage;
-        self.enrichment = enrichment;
-        self
+        Self {
+            pool,
+            api_token,
+            forwarding_agent_tokens: Arc::new(forwarding_agent_tokens),
+            auth_policy,
+            storage,
+            enrichment,
+            pipeline: Arc::new(crate::enrich::EnrichmentPipeline::new()),
+        }
     }
 }
 
@@ -97,7 +101,10 @@ fn valid_identity(value: &str) -> bool {
 fn to_log_batch_entry(record: AgentFileTailRecord) -> Result<LogBatchEntry, &'static str> {
     if !valid_identity(&record.hostname)
         || !valid_identity(&record.source_id)
-        || !valid_identity(&record.idempotency_key)
+        || record
+            .idempotency_key
+            .as_deref()
+            .is_some_and(|key| !valid_identity(key))
         || record.tag.trim().is_empty()
         || record.tag.len() > 255
         || record.path_basename.trim().is_empty()
@@ -144,13 +151,14 @@ async fn ingest_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !is_authorized(&state, &peer, &headers) {
+    let Some(principal) = authenticated_forwarder(&state, &peer, &headers) else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "unauthorized"})),
         )
             .into_response();
-    }
+    };
+    let receipt_namespace = principal.receipt_namespace();
     let request: AgentFileTailIngestRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
         Err(error) => {
@@ -168,14 +176,10 @@ async fn ingest_handler(
         )
             .into_response();
     }
-    let receipt_keys: Vec<_> = request
-        .records
-        .iter()
-        .map(|record| record.idempotency_key.clone())
-        .collect();
     let mut entries: Vec<_> = match request
         .records
-        .into_iter()
+        .iter()
+        .cloned()
         .map(to_log_batch_entry)
         .collect()
     {
@@ -194,8 +198,9 @@ async fn ingest_handler(
     }
     let pool = Arc::clone(&state.pool);
     let storage = Arc::clone(&state.storage);
+    let records = request.records;
     match tokio::task::spawn_blocking(move || {
-        persist_idempotent(&pool, &storage, &entries, &receipt_keys)
+        persist_idempotent(&pool, &storage, &entries, &records, &receipt_namespace)
     })
     .await
     {
@@ -204,10 +209,15 @@ async fn ingest_handler(
             Json(AgentFileTailIngestResponse { accepted }),
         )
             .into_response(),
-        Ok(Err(error)) if error.to_string() == "storage_write_blocked" => (
+        Ok(Err(error)) if error.downcast_ref::<StorageBlocked>().is_some() => (
             StatusCode::SERVICE_UNAVAILABLE,
             [("retry-after", "5")],
             Json(json!({"error": "storage_write_blocked"})),
+        )
+            .into_response(),
+        Ok(Err(error)) if error.downcast_ref::<IdempotencyConflict>().is_some() => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "idempotency_conflict"})),
         )
             .into_response(),
         Ok(Err(error)) => {
@@ -233,7 +243,8 @@ fn persist_idempotent(
     pool: &DbPool,
     storage: &parking_lot::Mutex<Option<crate::db::StorageBudgetState>>,
     entries: &[LogBatchEntry],
-    keys: &[String],
+    records: &[AgentFileTailRecord],
+    receipt_namespace: &str,
 ) -> anyhow::Result<usize> {
     let mut conn = db::write_conn(pool)?;
     if storage
@@ -241,44 +252,165 @@ fn persist_idempotent(
         .as_ref()
         .is_some_and(|state| state.write_blocked)
     {
-        anyhow::bail!("storage_write_blocked");
+        return Err(StorageBlocked.into());
     }
     let tx = conn.transaction()?;
-    let mut accepted = 0;
-    for (entry, key) in entries.iter().zip(keys) {
-        let receipt_key = format!("agent-file-tail:{key}");
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM syslog_forward_receipts WHERE idempotency_key = ?1)",
-            [&receipt_key],
-            |row| row.get(0),
-        )?;
-        if exists {
+    let mut pending = Vec::with_capacity(entries.len());
+    let mut pending_receipts: HashMap<String, (String, String)> = HashMap::new();
+    for (index, record) in records.iter().enumerate() {
+        let Some(key) = record.idempotency_key.as_deref() else {
+            pending.push((index, None));
             continue;
-        }
-        let ids = db::insert_logs_batch_in_tx(&tx, std::slice::from_ref(entry))?;
+        };
+        let source_identity = opaque_receipt_value(&format!(
+            "{receipt_namespace}\0{}\0{}",
+            record.hostname, record.source_id
+        ));
+        let receipt_key =
+            opaque_receipt_value(&format!("agent-file-tail\0{source_identity}\0{key}"));
+        let fingerprint = request_fingerprint(receipt_namespace, record)?;
         tx.execute(
-            "INSERT INTO syslog_forward_receipts (idempotency_key, source_instance, source_epoch, sequence, canonical_log_id, receipt_kind, request_fingerprint) VALUES (?1, ?2, 0, 0, ?3, 'record', ?1)",
-            rusqlite::params![receipt_key, entry.source_ip, ids[0]],
+            "DELETE FROM syslog_forward_receipts
+             WHERE idempotency_key = ?1
+               AND NOT EXISTS (SELECT 1 FROM logs WHERE id = canonical_log_id)",
+            [&receipt_key],
         )?;
-        accepted += 1;
+        let stored = tx
+            .query_row(
+                "SELECT source_instance, receipt_kind, request_fingerprint
+                 FROM syslog_forward_receipts WHERE idempotency_key = ?1",
+                [&receipt_key],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        match stored {
+            None => {}
+            Some((stored_source, stored_kind, stored_fingerprint))
+                if stored_source == source_identity
+                    && stored_kind == "record"
+                    && stored_fingerprint == fingerprint =>
+            {
+                continue;
+            }
+            Some(_) => return Err(IdempotencyConflict.into()),
+        }
+        if let Some((pending_source, pending_fingerprint)) = pending_receipts.get(&receipt_key) {
+            if pending_source == &source_identity && pending_fingerprint == &fingerprint {
+                continue;
+            }
+            return Err(IdempotencyConflict.into());
+        }
+        pending_receipts.insert(
+            receipt_key.clone(),
+            (source_identity.clone(), fingerprint.clone()),
+        );
+        pending.push((
+            index,
+            Some(PendingReceipt {
+                receipt_key,
+                source_identity,
+                fingerprint,
+            }),
+        ));
+    }
+    let pending_entries: Vec<_> = pending.iter().map(|(index, _)| &entries[*index]).collect();
+    let ids = db::insert_logs_batch_in_tx(&tx, &pending_entries)?;
+    for ((_, receipt), canonical_log_id) in pending.iter().zip(&ids) {
+        let Some(receipt) = receipt else {
+            continue;
+        };
+        tx.execute(
+            "INSERT INTO syslog_forward_receipts (idempotency_key, source_instance, source_epoch, sequence, canonical_log_id, receipt_kind, request_fingerprint) VALUES (?1, ?2, 0, 0, ?3, 'record', ?4)",
+            rusqlite::params![
+                receipt.receipt_key,
+                receipt.source_identity,
+                canonical_log_id,
+                receipt.fingerprint
+            ],
+        )?;
     }
     tx.commit()?;
-    Ok(accepted)
+    if !ids.is_empty() {
+        crate::db::agent_observatory::notify_projection_work();
+    }
+    Ok(ids.len())
 }
 
-fn is_authorized(state: &AgentFileTailIngestState, peer: &SocketAddr, headers: &HeaderMap) -> bool {
-    if matches!(state.auth_policy, AuthPolicy::LoopbackDev) {
-        return peer.ip().is_loopback();
+struct PendingReceipt {
+    receipt_key: String,
+    source_identity: String,
+    fingerprint: String,
+}
+
+fn opaque_receipt_value(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+#[derive(Debug)]
+struct StorageBlocked;
+
+impl std::fmt::Display for StorageBlocked {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("storage_write_blocked")
     }
-    let (Some(expected), Some(auth)) = (
-        state.api_token.as_deref(),
-        headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok()),
-    ) else {
-        return false;
-    };
-    parse_bearer_token(auth).is_some_and(|token| tokens_equal(&token, expected))
+}
+
+impl std::error::Error for StorageBlocked {}
+
+fn request_fingerprint(
+    receipt_namespace: &str,
+    record: &AgentFileTailRecord,
+) -> anyhow::Result<String> {
+    Ok(opaque_receipt_value(&format!(
+        "{receipt_namespace}\0{}",
+        serde_json::to_string(record)?
+    )))
+}
+
+#[derive(Debug)]
+struct IdempotencyConflict;
+
+impl std::fmt::Display for IdempotencyConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("idempotency_conflict")
+    }
+}
+
+impl std::error::Error for IdempotencyConflict {}
+
+fn authenticated_forwarder(
+    state: &AgentFileTailIngestState,
+    peer: &SocketAddr,
+    headers: &HeaderMap,
+) -> Option<ForwardingPrincipal> {
+    if matches!(state.auth_policy, AuthPolicy::LoopbackDev) {
+        return peer
+            .ip()
+            .is_loopback()
+            .then_some(ForwardingPrincipal::Loopback);
+    }
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_bearer_token)?;
+    if let Some(identity) = state
+        .forwarding_agent_tokens
+        .iter()
+        .find_map(|(expected, identity)| tokens_equal(&token, expected).then(|| identity.clone()))
+    {
+        return Some(ForwardingPrincipal::Named(identity));
+    }
+    state
+        .api_token
+        .as_deref()
+        .filter(|expected| tokens_equal(&token, expected))
+        .map(|_| ForwardingPrincipal::SharedBearer)
 }
 
 #[cfg(test)]
