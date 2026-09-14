@@ -51,9 +51,21 @@ impl ServerHandler for CortexRmcpServer {
     ) -> Result<ListToolsResult, ErrorData> {
         // tools/list requires AuthContext when policy is Mounted (but no scope).
         // LoopbackDev bypasses the check entirely.
-        require_auth_context(&self.state, &context)?;
-
-        let tools = rmcp_tool_definitions()?;
+        let auth = require_auth_context(&self.state, &context)?;
+        // Advertise the effects this credential can actually execute. Admin
+        // actions remain scope-gated in call_tool; unauthenticated development
+        // mode can execute them and must retain conservative annotations.
+        let read_only =
+            auth.is_some_and(|auth| !auth.scopes.iter().any(|scope| scope == "cortex:admin"));
+        let mut tools = rmcp_tool_definitions()?;
+        for tool in &mut tools {
+            let mut annotations = rmcp::model::ToolAnnotations::default();
+            annotations.read_only_hint = Some(read_only);
+            annotations.destructive_hint = Some(!read_only);
+            annotations.idempotent_hint = Some(false);
+            annotations.open_world_hint = Some(true);
+            tool.annotations = Some(annotations);
+        }
         tracing::info!(tool_count = tools.len(), "MCP tools listed");
         Ok(ListToolsResult {
             tools,

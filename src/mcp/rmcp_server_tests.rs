@@ -1314,6 +1314,19 @@ async fn mounted_policy_with_auth_context_permits_tools_list() {
 }
 
 #[tokio::test]
+async fn tool_annotations_respect_authenticated_scope() {
+    for (scopes, read_only) in [(vec!["cortex:read"], true), (vec!["cortex:admin"], false)] {
+        let (state, _pool, _dir) = mounted_state();
+        let router = rmcp_router_with_auth(state, auth_ctx_with_scopes(scopes));
+        let (_, response) =
+            post_rmcp(router, jsonrpc_request(180, "tools/list", Some(json!({})))).await;
+        let annotations = &response["result"]["tools"][0]["annotations"];
+        assert_eq!(annotations["readOnlyHint"], json!(read_only));
+        assert_eq!(annotations["destructiveHint"], json!(!read_only));
+    }
+}
+
+#[tokio::test]
 async fn mounted_policy_with_auth_context_permits_schema_resources() {
     let (state, _pool, _dir) = mounted_state();
     let auth = auth_ctx_with_scopes(vec![]);
