@@ -192,6 +192,35 @@ fn event_actions_advertise_canonical_mcp_time_bounds() {
 }
 
 #[test]
+fn incident_and_event_actions_expose_specialized_filters() {
+    let properties = &tool_definitions()[0]["inputSchema"]["properties"];
+    for field in [
+        "skill",
+        "plugin",
+        "tool_name",
+        "mcp_server",
+        "mcp_tool",
+        "hook_event",
+        "hook_name",
+        "hook_source",
+        "evidence_kind",
+        "incident_id",
+        "signals",
+        "min_score",
+        "is_error",
+        "hostname",
+    ] {
+        assert!(
+            properties.get(field).is_some(),
+            "missing MCP schema field {field}"
+        );
+    }
+    assert_eq!(properties["signals"]["type"], "array");
+    assert_eq!(properties["min_score"]["type"], "number");
+    assert_eq!(properties["is_error"]["type"], "boolean");
+}
+
+#[test]
 fn tool_definition_exposes_agent_cost_metadata() {
     let tools = tool_definitions();
     let metadata = tools[0]["x-cortex-action-metadata"].as_array().unwrap();

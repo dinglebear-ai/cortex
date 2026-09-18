@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 58;
+pub const KNOWN_SCHEMA_VERSION: i64 = 60;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -396,6 +396,15 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
             tokenize='porter unicode61'
         );
 
+        -- Transcript-only FTS keeps AI/session searches out of the much larger
+        -- syslog/Docker corpus while preserving the same message tokenizer.
+        CREATE VIRTUAL TABLE IF NOT EXISTS ai_logs_fts USING fts5(
+            message,
+            content='logs',
+            content_rowid='id',
+            tokenize='porter unicode61'
+        );
+
         -- Trigger to keep FTS in sync on INSERT only.
         -- DELETE and UPDATE triggers are intentionally absent: bulk DELETEs during
         -- retention purge and storage-budget enforcement fire the trigger for every
@@ -405,6 +414,20 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         -- periodic incremental merge (merge=500,250).
         CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
             INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS logs_ai_transcript AFTER INSERT ON logs
+        WHEN new.ai_tool IS NOT NULL BEGIN
+            INSERT INTO ai_logs_fts(rowid, message) VALUES (new.id, new.message);
+        END;
+
+        -- Unlike the global FTS index, transcript volume is small enough to
+        -- keep deletions exact. This also makes extractor-revision replay remove
+        -- stale transcript terms instead of leaving phantom AI search entries.
+        CREATE TRIGGER IF NOT EXISTS logs_ad_transcript AFTER DELETE ON logs
+        WHEN old.ai_tool IS NOT NULL BEGIN
+            INSERT INTO ai_logs_fts(ai_logs_fts, rowid, message)
+            VALUES ('delete', old.id, old.message);
         END;
 
         -- Hostname registry for quick lookups
@@ -2379,6 +2402,10 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              CREATE INDEX IF NOT EXISTS idx_ai_mcp_events_error_time
                  ON ai_mcp_events(is_error, timestamp)
                  WHERE is_error = 1;
+             CREATE INDEX IF NOT EXISTS idx_ai_mcp_events_call_log_id
+                 ON ai_mcp_events(call_log_id) WHERE call_log_id IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_ai_mcp_events_result_log_id
+                 ON ai_mcp_events(result_log_id) WHERE result_log_id IS NOT NULL;
 
              INSERT OR IGNORE INTO schema_migrations (version) VALUES (39);
              COMMIT;",
@@ -2458,6 +2485,8 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
                  ON ai_hook_events(ai_tool, ai_project, ai_session_id, timestamp);
              CREATE INDEX IF NOT EXISTS idx_ai_hook_events_evidence_time
                  ON ai_hook_events(evidence_kind, timestamp);
+             CREATE INDEX IF NOT EXISTS idx_ai_hook_events_log_id
+                 ON ai_hook_events(log_id) WHERE log_id IS NOT NULL;
 
              INSERT OR IGNORE INTO schema_migrations (version) VALUES (40);
              COMMIT;",
@@ -3474,6 +3503,85 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         )?;
         tx.commit()?;
         tracing::info!("Migration 58: indexed recurring-error graph evidence lookup");
+    }
+
+    // Migration 59: transcript extraction semantics now persist speaker roles
+    // and recognize modern Claude skill command envelopes. Existing completed
+    // transcript checkpoints are revision 0 and will be atomically reset and
+    // replayed on their next scan.
+    if !migration_applied(&conn, 59)? {
+        let tx = conn.transaction()?;
+        if table_exists(&tx, "transcript_sources")? {
+            add_column_if_missing(
+                &tx,
+                "transcript_sources",
+                "extractor_revision",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (59)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 59: versioned transcript extraction checkpoints");
+    }
+
+    // Migration 60: AI/session full-text search no longer competes with the
+    // global syslog/Docker FTS corpus. Rebuild this derived index from only
+    // transcript rows, then keep it current with transcript INSERT/DELETE triggers. If an
+    // interrupted upgrade left the table without the migration marker, drop and
+    // rebuild it deterministically before marking the migration complete.
+    if !migration_applied(&conn, 60)? {
+        tracing::info!(
+            "Migration 60: building transcript-only FTS index; this may take time on large transcript histories"
+        );
+        let started = std::time::Instant::now();
+        let mcp_indexes = if table_exists(&conn, "ai_mcp_events")? {
+            "CREATE INDEX IF NOT EXISTS idx_ai_mcp_events_call_log_id
+                 ON ai_mcp_events(call_log_id) WHERE call_log_id IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_ai_mcp_events_result_log_id
+                 ON ai_mcp_events(result_log_id) WHERE result_log_id IS NOT NULL;"
+        } else {
+            ""
+        };
+        let hook_index = if table_exists(&conn, "ai_hook_events")? {
+            "CREATE INDEX IF NOT EXISTS idx_ai_hook_events_log_id
+                 ON ai_hook_events(log_id) WHERE log_id IS NOT NULL;"
+        } else {
+            ""
+        };
+        conn.execute_batch(&format!(
+            "BEGIN IMMEDIATE;
+             DROP TRIGGER IF EXISTS logs_ai_transcript;
+             DROP TRIGGER IF EXISTS logs_ad_transcript;
+             DROP TABLE IF EXISTS ai_logs_fts;
+             CREATE VIRTUAL TABLE ai_logs_fts USING fts5(
+                 message,
+                 content='logs',
+                 content_rowid='id',
+                 tokenize='porter unicode61'
+             );
+             INSERT INTO ai_logs_fts(rowid, message)
+                 SELECT id, message FROM logs WHERE ai_tool IS NOT NULL;
+             CREATE TRIGGER logs_ai_transcript AFTER INSERT ON logs
+             WHEN new.ai_tool IS NOT NULL BEGIN
+                 INSERT INTO ai_logs_fts(rowid, message) VALUES (new.id, new.message);
+             END;
+             CREATE TRIGGER logs_ad_transcript AFTER DELETE ON logs
+             WHEN old.ai_tool IS NOT NULL BEGIN
+                 INSERT INTO ai_logs_fts(ai_logs_fts, rowid, message)
+                 VALUES ('delete', old.id, old.message);
+             END;
+             {mcp_indexes}
+             {hook_index}
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (60);
+             COMMIT;",
+        ))?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "Migration 60: transcript-only FTS index ready"
+        );
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

@@ -10,9 +10,124 @@ use rusqlite::OptionalExtension;
 
 #[test]
 fn documented_schema_count_matches_known_version() {
-    assert_eq!(KNOWN_SCHEMA_VERSION, 58);
-    assert!(include_str!("../../README.md").contains("58 sequential schema migrations"));
-    assert!(include_str!("../../docs/architecture.md").contains("58 sequential migrations"));
+    assert_eq!(KNOWN_SCHEMA_VERSION, 60);
+    assert!(include_str!("../../README.md").contains("60 sequential schema migrations"));
+    assert!(include_str!("../../docs/architecture.md").contains("60 sequential migrations"));
+}
+
+#[test]
+fn migration_59_versions_transcript_extractor_checkpoints() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&test_storage_config(dir.path().join("migration-59.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(transcript_sources)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "extractor_revision"));
+    let default_revision: i64 = conn
+        .query_row(
+            "SELECT dflt_value FROM pragma_table_info('transcript_sources') WHERE name='extractor_revision'",
+            [],
+            |row| {
+                let raw: String = row.get(0)?;
+                Ok(raw.trim_matches('\'').parse::<i64>().unwrap())
+            },
+        )
+        .unwrap();
+    assert_eq!(default_revision, 0);
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 59",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+}
+
+#[test]
+fn migration_60_creates_transcript_only_fts_and_insert_trigger() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&test_storage_config(dir.path().join("migration-60.db"))).unwrap();
+
+    let mut ai = migration_test_log();
+    ai.message = "transcriptneedle".into();
+    ai.raw = ai.message.clone();
+    let mut ordinary = migration_test_log();
+    ordinary.message = "systemneedle".into();
+    ordinary.raw = ordinary.message.clone();
+    ordinary.ai_tool = None;
+    ordinary.ai_project = None;
+    ordinary.ai_session_id = None;
+    insert_logs_batch(&pool, &[ai, ordinary]).unwrap();
+
+    let conn = pool.get().unwrap();
+    let transcript_matches: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ai_logs_fts WHERE ai_logs_fts MATCH 'transcriptneedle'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let system_matches: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ai_logs_fts WHERE ai_logs_fts MATCH 'systemneedle'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(transcript_matches, 1);
+    assert_eq!(system_matches, 0);
+
+    let ai_log_id: i64 = conn
+        .query_row(
+            "SELECT id FROM logs WHERE message = 'transcriptneedle'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute("DELETE FROM logs WHERE id = ?1", [ai_log_id])
+        .unwrap();
+    let after_delete: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ai_logs_fts WHERE ai_logs_fts MATCH 'transcriptneedle'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        after_delete, 0,
+        "AI FTS must remove deleted transcript rows"
+    );
+
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 60",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
+
+    let indexes = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_ai_mcp_events_call_log_id', 'idx_ai_mcp_events_result_log_id', 'idx_ai_hook_events_log_id') ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        indexes,
+        vec![
+            "idx_ai_hook_events_log_id".to_string(),
+            "idx_ai_mcp_events_call_log_id".to_string(),
+            "idx_ai_mcp_events_result_log_id".to_string(),
+        ]
+    );
 }
 
 #[test]

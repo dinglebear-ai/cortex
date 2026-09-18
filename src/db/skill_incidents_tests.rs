@@ -33,7 +33,7 @@ fn make_ai_entry(
         ai_project: Some(project.to_string()),
         ai_session_id: Some(session_id.to_string()),
         ai_transcript_path: Some(format!("{project}/{session_id}.jsonl")),
-        metadata_json: None,
+        metadata_json: Some(serde_json::json!({"event_kind": "user"}).to_string()),
         http_status: None,
         auth_outcome: None,
         dns_blocked: None,
@@ -153,6 +153,68 @@ fn search_ai_skill_incidents_groups_by_skill_session_window_and_scores() {
     assert_eq!(incident.priority_label, "medium");
     assert!(!incident.incident_id.is_empty());
     assert!(incident.incident_id.starts_with("skill-inc-"));
+}
+
+#[test]
+fn assistant_acknowledgment_is_not_counted_as_user_correction() {
+    let (pool, _dir) = test_pool();
+    let skill_log = make_ai_entry(
+        "2026-01-01T00:00:00Z",
+        "devhost",
+        "codex",
+        "/tmp/project-role",
+        "sess-role",
+        "loaded skill review-skill",
+    );
+    let mut assistant = make_ai_entry(
+        "2026-01-01T00:01:00Z",
+        "devhost",
+        "codex",
+        "/tmp/project-role",
+        "sess-role",
+        "You're right, that is wrong and I should correct it.",
+    );
+    assistant.metadata_json = Some(serde_json::json!({"event_kind": "assistant"}).to_string());
+    insert_logs_batch(&pool, &[skill_log, assistant]).unwrap();
+    let conn = pool.get().unwrap();
+    let log_id: i64 = conn
+        .query_row("SELECT id FROM logs ORDER BY id LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    drop(conn);
+    insert_skill_event(
+        &pool,
+        log_id,
+        "codex",
+        "/tmp/project-role",
+        "sess-role",
+        "devhost",
+        "2026-01-01T00:00:00Z",
+        "review-skill",
+        None,
+    );
+    let result = search_ai_skill_incidents(
+        &pool,
+        &AiSkillIncidentParams {
+            skill: Some("review-skill".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.incidents.len(), 1);
+    assert_eq!(
+        result.incidents[0]
+            .signal_counts
+            .user_correction_after_skill,
+        0
+    );
+    assert!(
+        !result.incidents[0]
+            .signals_present
+            .iter()
+            .any(|signal| signal == "user_correction_after_skill")
+    );
 }
 
 #[test]

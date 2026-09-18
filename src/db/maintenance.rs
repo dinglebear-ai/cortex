@@ -610,29 +610,31 @@ fn fts_incremental_merge(pool: &DbPool, deleted_rows: usize, merge_pages: u32) {
     for i in 0..iterations {
         match crate::db::write_conn(pool) {
             Ok(conn) => {
-                match conn.execute(
-                    "INSERT INTO logs_fts(logs_fts, rank) VALUES('merge', ?1)",
-                    [pages],
-                ) {
-                    Ok(_) => {
-                        tracing::trace!(
-                            iteration = i + 1,
-                            total_iterations = iterations,
-                            pages,
-                            "FTS incremental merge iteration"
-                        );
-                    }
-                    Err(e) => {
-                        // A correctly-formed merge only errors on a genuine
-                        // operational problem (busy/locked) or real corruption.
-                        // Log and stop — never auto-escalate to optimize/rebuild,
-                        // which rewrite the entire index under the write lock.
-                        tracing::warn!(
-                            error = %e,
-                            iteration = i + 1,
-                            "FTS incremental merge failed; stopping (no auto optimize/rebuild)"
-                        );
-                        return;
+                for index in ["logs_fts", "ai_logs_fts"] {
+                    let sql = format!("INSERT INTO {index}({index}, rank) VALUES('merge', ?1)");
+                    match conn.execute(&sql, [pages]) {
+                        Ok(_) => {
+                            tracing::trace!(
+                                index,
+                                iteration = i + 1,
+                                total_iterations = iterations,
+                                pages,
+                                "FTS incremental merge iteration"
+                            );
+                        }
+                        Err(e) => {
+                            // A correctly-formed merge only errors on a genuine
+                            // operational problem (busy/locked) or real corruption.
+                            // Log and stop — never auto-escalate to optimize/rebuild,
+                            // which rewrite the entire index under the write lock.
+                            tracing::warn!(
+                                error = %e,
+                                index,
+                                iteration = i + 1,
+                                "FTS incremental merge failed; stopping (no auto optimize/rebuild)"
+                            );
+                            return;
+                        }
                     }
                 }
             }

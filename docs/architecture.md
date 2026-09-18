@@ -12,7 +12,7 @@ SQLite database and a service layer:
 1. **Log intelligence core** — syslog UDP/TCP ingest, OTLP HTTP/protobuf
    `/v1/logs`, `/v1/metrics`, and `/v1/traces`,
    host-local agent Docker log ingest, legacy central pull Docker compatibility,
-   AI transcript indexing, FTS5 search, and the
+   AI transcript indexing, global FTS5 log search, transcript-only FTS5 session search, and the
    56-action `cortex` MCP tool plus the `/api/*` REST mirror. Source: `src/receiver/`,
    `src/ingest.rs`, `src/otlp.rs`, `src/agent/`, `src/docker_ingest/`, `src/db/`,
    `src/mcp/`, `src/api.rs`, `src/app/`.
@@ -32,7 +32,7 @@ SQLite database and a service layer:
 | `config.rs` | all | Layered config: defaults → `config.toml` → `~/.cortex/.env` → process env; startup validation (non-loopback auth gate) |
 | `runtime.rs` + `runtime/` | all | `RuntimeCore`: wires pool, ingest, auth policy; spawns the maintenance tasks below |
 | `app/` | core | `CortexService` service layer — shared limits/validation for MCP, REST, and CLI |
-| `db/` | core | SQLite pool + 58 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
+| `db/` | core | SQLite pool + 60 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
 | `receiver/` + `receiver.rs` | core | UDP + TCP listeners (supervised with restart + backoff), RFC 3164/5424 + CEF parsing |
 | `ingest.rs` | core | mpsc channel + batch writer (one pool connection reserved for this writer) |
 | `otlp.rs` + `otlp/` | core | OTLP/HTTP protobuf ingest: `POST /v1/logs` (4 MiB cap), `POST /v1/metrics` and `POST /v1/traces` (8 MiB cap); all use `CORTEX_TOKEN` auth |

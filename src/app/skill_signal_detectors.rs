@@ -62,6 +62,22 @@ fn contains_any_phrase(haystack_lower: &str, phrases: &[&str]) -> bool {
     phrases.iter().any(|p| haystack_lower.contains(p))
 }
 
+/// Return true only for transcript rows explicitly persisted as user-authored.
+/// Unknown/legacy speaker metadata is intentionally not guessed; extractor
+/// revision replay repairs historical rows before incident scoring.
+pub fn transcript_event_is_user(metadata_json: Option<&str>) -> bool {
+    metadata_json
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| {
+            value
+                .get("event_kind")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some("user")
+}
+
 pub fn detect_user_correction(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     contains_any_phrase(&lower, USER_CORRECTION_PHRASES)

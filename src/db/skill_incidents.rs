@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use crate::app::skill_signal_detectors::{
     detect_ignored_instruction, detect_overlong_loop, detect_scope_or_source_confusion,
-    detect_tool_failure, detect_user_correction,
+    detect_tool_failure, detect_user_correction, transcript_event_is_user,
 };
 
 use super::pool::DbPool;
@@ -252,16 +252,16 @@ pub fn search_ai_skill_incidents(
             .unwrap_or_else(|_| last_seen.clone());
 
         let mut anchor_stmt = conn.prepare(
-            "SELECT id, message FROM logs
+            "SELECT id, message, metadata_json FROM logs
              WHERE ai_session_id = ?1 AND ai_project = ?2 AND ai_tool = ?3
                AND timestamp >= ?4 AND timestamp <= ?5
              ORDER BY timestamp ASC
              LIMIT 500",
         )?;
-        let anchor_rows: Vec<(i64, String)> = anchor_stmt
+        let anchor_rows: Vec<(i64, String, Option<String>)> = anchor_stmt
             .query_map(
                 rusqlite::params![session_id, project, tool, win_from, win_to],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get(2)?)),
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
@@ -270,9 +270,10 @@ pub fn search_ai_skill_incidents(
         let tool_call_rows = anchor_rows.len();
         let mut has_correction_or_frustration = false;
 
-        for (id, message) in &anchor_rows {
+        for (id, message, metadata_json) in &anchor_rows {
             let mut hit = false;
-            if detect_user_correction(message) {
+            if transcript_event_is_user(metadata_json.as_deref()) && detect_user_correction(message)
+            {
                 counts.user_correction_after_skill += 1;
                 has_correction_or_frustration = true;
                 hit = true;

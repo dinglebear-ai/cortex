@@ -127,7 +127,64 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 "tool": {
                     "type": "string",
                     "enum": ["claude", "codex", "gemini"],
-                    "description": "For action=filter, sessions, search_sessions, abuse, ai_correlate, usage_blocks, project_context, or list_ai_projects: AI tool filter."
+                    "description": "AI tool filter for transcript/session correlation and skill/MCP/hook event or incident actions."
+                },
+                "skill": {
+                    "type": "string",
+                    "description": "For skill_events, skill_incidents, or skill_investigate: exact skill name filter."
+                },
+                "plugin": {
+                    "type": "string",
+                    "description": "For skill_events, skill_incidents, or skill_investigate: exact plugin name filter."
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "For mcp_events, mcp_incidents, or mcp_investigate: raw MCP tool-call name filter."
+                },
+                "mcp_server": {
+                    "type": "string",
+                    "description": "For mcp_events, mcp_incidents, or mcp_investigate: MCP server filter."
+                },
+                "mcp_tool": {
+                    "type": "string",
+                    "description": "For mcp_events, mcp_incidents, or mcp_investigate: MCP tool filter."
+                },
+                "hook_event": {
+                    "type": "string",
+                    "description": "For hook_events, hook_incidents, or hook_investigate: hook event filter."
+                },
+                "hook_name": {
+                    "type": "string",
+                    "description": "For hook_events, hook_incidents, or hook_investigate: hook name filter."
+                },
+                "hook_source": {
+                    "type": "string",
+                    "description": "For hook_events, hook_incidents, or hook_investigate: hook source filter."
+                },
+                "evidence_kind": {
+                    "type": "string",
+                    "description": "For hook_events or hook_incidents: exact evidence-kind filter."
+                },
+                "incident_id": {
+                    "type": "string",
+                    "description": "For skill_investigate, mcp_investigate, or hook_investigate: exact incident id."
+                },
+                "signals": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "For skill_incidents, mcp_incidents, or hook_incidents: require one or more signal types."
+                },
+                "min_score": {
+                    "type": "number",
+                    "description": "For skill_incidents, mcp_incidents, or hook_incidents: minimum incident priority score."
+                },
+                "is_error": {
+                    "type": "boolean",
+                    "description": "For mcp_events: when true, return only failed MCP calls."
+                },
+                "hostname": {
+                    "type": "string",
+                    "description": "Hostname filter for skill, MCP, or hook event/incident actions."
                 },
                 "source": {
                     "type": "string",
@@ -170,7 +227,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "session_id": {
                     "type": "string",
-                    "description": "For action=filter or ai_correlate: exact AI session id filter."
+                    "description": "Exact AI session id filter for transcript correlation and skill/MCP/hook event or incident actions."
                 },
                 "branch": {"type":"string","maxLength":512,"description":"For action=evidence_scope: exact Git branch projected by Agent Observatory."},
                 "worktree": {"type":"string","maxLength":4096,"description":"For action=evidence_scope: exact absolute worktree path projected by Agent Observatory."},
@@ -290,7 +347,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "correlation_window_minutes": {
                     "type": "integer",
-                    "description": "For action=abuse_investigate: minutes before first and after last anchor for nearby non-AI log correlation, default 5, max 120."
+                    "description": "Evidence-correlation window for abuse_investigate, skill_investigate, mcp_investigate, or hook_investigate; default 5, max 120."
                 },
                 "group_by": {
                     "type": "string",

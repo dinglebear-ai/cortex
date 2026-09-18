@@ -38,8 +38,68 @@ fn ensure_source_reuses_existing_source_id() {
             last_error: None,
             source_revision: None,
             scan_state: SourceScanState::Complete,
+            extractor_revision: 0,
         }
     );
+}
+
+#[test]
+fn reset_source_removes_all_transcript_derived_projections() {
+    let (pool, _dir) = test_pool();
+    let store = CheckpointStore::new(&pool);
+    let path = "/tmp/replay.jsonl";
+    let source_id = store.ensure_source(path, "codex_session").unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute(
+        "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json)
+         VALUES ('2026-01-01T00:00:00Z', 'host-a', 'info', 'transcript row', 'transcript row', 'transcript://codex_session', 'codex', '/tmp/project', 'sess-1', ?1, '{\"event_kind\":\"user\"}')",
+        [path],
+    ).unwrap();
+    let log_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO ai_skill_events (log_id, ai_tool, hostname, timestamp, skill_name, event_kind, evidence_kind)
+         VALUES (?1, 'codex', 'host-a', '2026-01-01T00:00:00Z', 'review-skill', 'codex_skill_block', 'transcript_content')",
+        [log_id],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO ai_mcp_events (call_log_id, result_log_id, ai_tool, hostname, timestamp, call_id, tool_name, event_kind)
+         VALUES (NULL, ?1, 'codex', 'host-a', '2026-01-01T00:00:00Z', 'call-1', 'tool-result', 'result')",
+        [log_id],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO ai_hook_events (log_id, ai_tool, hostname, timestamp, hook_event, status, evidence_kind)
+         VALUES (?1, 'codex', 'host-a', '2026-01-01T00:00:00Z', 'PostToolUse', 'ok', 'runtime_transcript')",
+        [log_id],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO transcript_import_records (source_id, record_key) VALUES (?1, 'record-1')",
+        [source_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    store.reset_source(source_id, path).unwrap();
+
+    let conn = pool.get().unwrap();
+    for table in [
+        "logs",
+        "ai_skill_events",
+        "ai_mcp_events",
+        "ai_hook_events",
+        "transcript_import_records",
+    ] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table} must be replaced during source replay");
+    }
+    drop(conn);
+    let metadata = store.source_metadata(source_id).unwrap().unwrap();
+    assert_eq!(metadata.scan_state, SourceScanState::Restart);
+    assert_eq!(metadata.extractor_revision, 0);
+    assert_eq!(metadata.file_size, None);
 }
 
 #[test]
@@ -283,6 +343,7 @@ fn partial_checkpoint_persists_full_source_metadata_and_recovery_state() {
             last_error: None,
             source_revision: Some("revision-1".to_string()),
             scan_state: SourceScanState::Boundary,
+            extractor_revision: crate::scanner::TRANSCRIPT_EXTRACTOR_REVISION,
         })
     );
 

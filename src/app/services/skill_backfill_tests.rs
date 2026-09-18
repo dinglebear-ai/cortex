@@ -176,6 +176,43 @@ async fn real_run_inserts_events_and_is_idempotent() {
 
 #[tokio::test]
 #[serial(skill_backfill_guard)]
+async fn backfill_recovers_modern_claude_skill_command_envelope() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    insert_claude_log_row(
+        &pool,
+        dir.path(),
+        "session-command.jsonl",
+        r#"{"sessionId":"sess-command","message":{"role":"user","content":[{"type":"text","text":"<command-message>vibin:repo-status</command-message> <command-name>/vibin:repo-status</command-name>"}]}}"#,
+    );
+
+    let result = service
+        .backfill_skill_events(SkillBackfillRequest {
+            since: None,
+            limit: Some(100),
+            dry_run: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.scanned, 1);
+    assert_eq!(result.inserted, 1);
+    assert_eq!(result.source_unavailable, 0);
+
+    let conn = pool.get().unwrap();
+    let (skill, plugin, kind): (String, Option<String>, String) = conn
+        .query_row(
+            "SELECT skill_name, skill_plugin, event_kind FROM ai_skill_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(skill, "vibin:repo-status");
+    assert_eq!(plugin.as_deref(), Some("vibin"));
+    assert_eq!(kind, "claude_skill_command");
+}
+
+#[tokio::test]
+#[serial(skill_backfill_guard)]
 async fn claude_row_without_transcript_path_counts_as_source_unavailable() {
     // The gap this fix addresses: a legacy row with no `ai_transcript_path`/
     // `metadata_json` has no way to recover the raw JSON that once carried

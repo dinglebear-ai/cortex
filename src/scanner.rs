@@ -26,7 +26,8 @@ use crate::scanner::mcp_events::{
     extract_antigravity_mcp_events, extract_claude_mcp_events, extract_codex_mcp_events,
 };
 use crate::scanner::skill_events::{
-    extract_claude_skill_events, extract_codex_skill_events_with_kind,
+    claude_line_may_contain_skill_event, extract_claude_skill_events,
+    extract_codex_skill_events_with_kind,
 };
 
 pub(crate) mod antigravity;
@@ -50,6 +51,7 @@ const MAX_INDEX_CHUNK_RECORDS: usize = 500;
 const MAX_INDEX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_AI_PROJECT_CHARS: usize = 512;
 const MAX_AI_SESSION_ID_CHARS: usize = 128;
+pub(crate) const TRANSCRIPT_EXTRACTOR_REVISION: i64 = 2;
 const MAX_TRANSCRIPT_PATH_CHARS: usize = 1024;
 const MAX_SESSION_METADATA_CHARS: usize = 512;
 const MAX_ABANDONED_SNAPSHOT_WORKERS: usize = 2;
@@ -936,6 +938,15 @@ pub fn index_file_with_options(
     } else {
         None
     };
+    if stored_metadata.as_ref().is_some_and(|metadata| {
+        metadata.file_size.is_some() && metadata.extractor_revision != TRANSCRIPT_EXTRACTOR_REVISION
+    }) {
+        // Extractor semantics changed. Preserve neither old import receipts nor
+        // derived log/event rows: reset atomically and replay this source using
+        // the current extractor revision.
+        checkpoint_store.reset_source(source_id, &canonical)?;
+        stored_metadata = None;
+    }
     let bounded_stream = options.scan_budget.is_some_and(|budget| {
         snapshot.is_none() && current_metadata.size > budget.per_source_max_bytes
     });
@@ -1237,7 +1248,7 @@ pub fn index_file_with_options(
                         // line as `None`.
                         match &parsed.raw_value {
                             Some(value)
-                                if line_text.contains("attributionSkill")
+                                if claude_line_may_contain_skill_event(line_text)
                                     || line_text.contains("hook_") =>
                             {
                                 ChunkSkillSource::Claude(value.clone())
@@ -2712,13 +2723,22 @@ impl TranscriptSessionMetadata {
 
 pub(crate) fn transcript_event_kind(value: &serde_json::Value) -> String {
     let payload = value.get("payload").unwrap_or(value);
-    let kind = payload
+    let payload_type = payload
         .get("type")
         .or_else(|| value.get("type"))
-        .or_else(|| payload.get("role"))
+        .and_then(serde_json::Value::as_str);
+    let role = payload
+        .get("role")
         .or_else(|| value.get("role"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("unknown");
+        .and_then(serde_json::Value::as_str);
+    // Codex wraps conversational messages as payload.type="message" and stores
+    // the actual speaker in payload.role. Prefer that role or every message
+    // becomes "unknown", which poisons speaker-sensitive incident signals.
+    let kind = if payload_type == Some("message") {
+        role.or(payload_type).unwrap_or("unknown")
+    } else {
+        payload_type.or(role).unwrap_or("unknown")
+    };
     match kind {
         "user" | "human" => "user",
         "assistant" => "assistant",
