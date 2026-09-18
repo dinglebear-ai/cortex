@@ -1207,6 +1207,90 @@ fn search_ai_sessions_query_plan_uses_session_host_time_index() {
 }
 
 #[test]
+fn search_ai_sessions_pushes_tool_and_time_scope_into_fts_candidates() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            make_ai_entry(
+                "2026-09-10T12:00:00Z",
+                "host-a",
+                "claude",
+                "/tmp/project",
+                "old-claude",
+                "error before the requested window",
+            ),
+            make_ai_entry(
+                "2026-09-12T12:00:00Z",
+                "host-a",
+                "claude",
+                "/tmp/project",
+                "recent-claude",
+                "error inside the requested window",
+            ),
+            make_ai_entry(
+                "2026-09-12T12:01:00Z",
+                "host-a",
+                "codex",
+                "/tmp/project",
+                "recent-codex",
+                "error from a different provider",
+            ),
+        ],
+    )
+    .unwrap();
+
+    let params = SearchAiSessionsParams {
+        query: "error".into(),
+        ai_tool: Some("claude".into()),
+        since: Some("2026-09-11T00:00:00Z".into()),
+        limit: Some(5),
+        ..Default::default()
+    };
+    let result = search_ai_sessions(&pool, &params).unwrap();
+    assert_eq!(result.sessions.len(), 1);
+    assert_eq!(result.sessions[0].ai_session_id, "recent-claude");
+
+    let (sql, bindings) = search_ai_sessions_sql(&params, 5);
+    assert!(
+        sql.contains("INDEXED BY idx_logs_ai_timestamp_tool"),
+        "time-bounded session search must derive a safe FTS rowid floor from the AI-only time index:\n{sql}"
+    );
+    assert!(
+        sql.contains("ai_logs_fts.rowid >="),
+        "time-bounded session search must push its safe rowid floor into FTS:\n{sql}"
+    );
+
+    let Some(rusqlite::types::Value::Text(fts_query)) = bindings.first() else {
+        panic!("first search_sessions binding must be the FTS query");
+    };
+    assert!(
+        fts_query.contains("message : (error)") && fts_query.contains("ai_tool : \"claude\""),
+        "tool scope must be pushed into the transcript FTS query itself; got {fts_query:?}"
+    );
+}
+
+#[test]
+fn search_ai_sessions_does_not_interpolate_unsafe_tool_scope_into_fts() {
+    let params = SearchAiSessionsParams {
+        query: "needle".into(),
+        ai_tool: Some("claude\" OR message:error".into()),
+        limit: Some(5),
+        ..Default::default()
+    };
+
+    let (sql, bindings) = search_ai_sessions_sql(&params, 5);
+    let Some(rusqlite::types::Value::Text(fts_query)) = bindings.first() else {
+        panic!("first search_sessions binding must be the FTS query");
+    };
+    assert_eq!(fts_query, "message : (needle)");
+    assert!(
+        sql.contains("l.ai_tool = ?"),
+        "unsafe provider values must fall back to the parameterized relational equality filter"
+    );
+}
+
+#[test]
 fn search_ai_sessions_finds_rows_inserted_after_rollup_refresh() {
     let (pool, _dir) = test_pool();
     insert_logs_batch(

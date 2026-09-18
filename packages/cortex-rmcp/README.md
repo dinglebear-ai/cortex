@@ -17,7 +17,7 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 | Area | What Cortex provides |
 | --- | --- |
 | Ingest | UDP/TCP syslog, OTLP/HTTP logs, metrics, and traces, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
-| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 60 sequential schema migrations |
+| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 61 sequential schema migrations |
 | Investigation | Search, filtering, context, timelines, patterns, anomaly comparison, cross-source correlation, recurring error signatures, deterministic incident bundles, and graph explanations |
 | Fleet intelligence | SSH and API inventory collectors, host state, service topology, container and route relationships, redacted evidence, and rebuildable graph projections |
 | AI operations | Claude, Codex, Gemini CLI, and Antigravity session indexing; skill, MCP, and hook event extraction where each provider exposes them; incident clustering; and guarded local LLM assessments |
@@ -685,7 +685,7 @@ Cortex uses SQLite with:
 
 - WAL mode
 - A bounded r2d2 connection pool
-- FTS5 external-content indexing with `logs_fts` for the complete log corpus and a transcript-only `ai_logs_fts` projection for AI session search
+- FTS5 external-content indexing with `logs_fts` for the complete log corpus and a transcript-only `ai_logs_fts` projection that indexes message text plus provider scope for AI session search
 - Covering and composite indexes for common filters and timelines
 - Transactional batch writes
 - Durable source checkpoints and parse errors
@@ -693,7 +693,7 @@ Cortex uses SQLite with:
 - Online backup support
 - Integrity checks, checkpoints, and vacuum workflows
 
-The current schema history contains 60 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry. Migration 60 builds the transcript-only `ai_logs_fts` index once from rows with `ai_tool IS NOT NULL`; on large transcript histories this can hold the startup write transaction while that smaller derived index is populated. Subsequent transcript inserts and deletes maintain it incrementally, while global `logs_fts` remains the full-corpus search index. Server forwarding receipts have a seven-day replay horizon and are removed when their canonical evidence is deleted. The sender spool is intentionally shorter and bounded: an individual source retains at most 1,024 records or 1 MiB and evicts records older than one day; the aggregate spool retains at most 4,096 records or 4 MiB. Eviction removes the original payload and retains a pending gap marker so evidence loss remains visible. A retry after the server receipt horizon is a new ingestion attempt.
+The current schema history contains 61 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry. Migration 60 introduced the transcript-only `ai_logs_fts` projection. Migration 61 rebuilds that derived index with provider scope and adds an AI-only `(timestamp, ai_tool)` index so time-bounded session searches can derive a safe rowid floor before FTS walks common terms. On large transcript histories these one-time derived-index rebuilds can hold the startup write transaction while they populate. Subsequent transcript inserts and deletes maintain `ai_logs_fts` incrementally, while global `logs_fts` remains the full-corpus search index. Server forwarding receipts have a seven-day replay horizon and are removed when their canonical evidence is deleted. The sender spool is intentionally shorter and bounded: an individual source retains at most 1,024 records or 1 MiB and evicts records older than one day; the aggregate spool retains at most 4,096 records or 4 MiB. Eviction removes the original payload and retains a pending gap marker so evidence loss remains visible. A retry after the server receipt horizon is a new ingestion attempt.
 
 ### Authoritative and derived data
 
