@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.16.3](https://github.com/dinglebear-ai/cortex/compare/v3.16.2...v3.16.3) (2026-09-18)
+
+
+### Fixed
+
+* harden ingestion, recovery, and review qualification ([#244](https://github.com/dinglebear-ai/cortex/issues/244)) ([4455dc4](https://github.com/dinglebear-ai/cortex/commit/4455dc430c787984c2c8ee12246b2bd7e46a77a0))
+* **ingest:** remediate comprehensive review findings ([#246](https://github.com/dinglebear-ai/cortex/issues/246)) ([12a41e9](https://github.com/dinglebear-ai/cortex/commit/12a41e9645ad17f121000bd1c4c4adb27fd6d88d))
+* repair transcript skill evidence and search ([#247](https://github.com/dinglebear-ai/cortex/issues/247)) ([03ba04d](https://github.com/dinglebear-ai/cortex/commit/03ba04dfd406f1c9511a4bbd540d32e2002d973d))
+
 ## [3.16.2](https://github.com/dinglebear-ai/cortex/compare/v3.16.1...v3.16.2) (2026-09-11)
 
 
