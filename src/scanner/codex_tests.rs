@@ -132,6 +132,7 @@ fn codex_parser_does_not_invent_a_title_from_transcript_content() {
         .unwrap();
     assert!(parsed.session_metadata.title.is_none());
     assert!(parsed.session_metadata.title_provenance.is_none());
+    assert_eq!(parsed.event_kind, "user");
 }
 
 #[test]

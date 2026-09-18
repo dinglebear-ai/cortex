@@ -479,7 +479,11 @@ async fn shutdown_signal_flushes_queued_rows_before_long_deadline() {
         shutdown_rx,
     ));
     shutdown_tx.send(true).unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(2), writer)
+    // Keep this bound orders of magnitude below the 3,600s flush interval, but
+    // leave enough scheduler/SQLite headroom for the full 3k-test suite running
+    // concurrently on loaded CI hosts. The isolated path normally completes in
+    // well under a second; this asserts prompt shutdown, not machine idleness.
+    tokio::time::timeout(std::time::Duration::from_secs(10), writer)
         .await
         .expect("shutdown must not wait for the flush deadline")
         .unwrap();

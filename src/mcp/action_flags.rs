@@ -374,6 +374,7 @@ pub(super) const SKILL_INCIDENT_FLAGS: &[FlagSpec] = &[
 
 pub(super) const SKILL_INVESTIGATE_FLAGS: &[FlagSpec] = &[
     AI_INCIDENT_ID_FLAG,
+    AI_SKILL_FLAG,
     AI_PLUGIN_FLAG,
     AI_TOOL_FLAG,
     AI_PROJECT_FLAG,

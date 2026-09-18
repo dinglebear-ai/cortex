@@ -1166,8 +1166,15 @@ fn search_ai_sessions_query_plan_uses_session_host_time_index() {
     let (sql, bindings) = search_ai_sessions_sql(&params, 10);
     assert!(sql.contains("candidates AS MATERIALIZED"));
     assert!(
-        sql.contains("FROM logs_fts") && sql.contains("WHERE logs_fts MATCH ?1"),
-        "session search candidates must be FTS-first"
+        !sql.contains(
+            "FROM logs_fts
+"
+        ),
+        "session search must not scan the global syslog FTS index"
+    );
+    assert!(
+        sql.contains("FROM ai_logs_fts") && sql.contains("WHERE ai_logs_fts MATCH ?1"),
+        "session search candidates must use the transcript-only FTS index"
     );
     assert!(
         sql.contains("LIMIT 5000"),

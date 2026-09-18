@@ -127,6 +127,66 @@ fn extracts_nested_message_attribution_fields() {
 }
 
 #[test]
+fn extracts_package_qualified_claude_command_envelope() {
+    let value = json!({
+        "sessionId": "sess-command",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "<command-message>  vibin:repo-status  </command-message> <command-name> /vibin:repo-status </command-name>"
+            }]
+        }
+    });
+    let events = extract_claude_skill_events(&value);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].skill_name, "vibin:repo-status");
+    assert_eq!(events[0].skill_plugin.as_deref(), Some("vibin"));
+    assert_eq!(events[0].event_kind, SkillEventKind::ClaudeSkillCommand);
+    assert_eq!(
+        events[0].evidence_kind,
+        SkillEvidenceKind::TranscriptContent
+    );
+}
+
+#[test]
+fn ignores_unqualified_claude_command_envelopes() {
+    let value = json!({
+        "type": "user",
+        "content": "<command-message>help</command-message><command-name>/help</command-name>"
+    });
+    assert!(extract_claude_skill_events(&value).is_empty());
+}
+
+#[test]
+fn ignores_assistant_quoted_claude_command_envelope() {
+    let value = json!({
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "text",
+                "text": "Example: <command-message>vibin:repo-status</command-message> <command-name>/vibin:repo-status</command-name>"
+            }]
+        }
+    });
+    assert!(extract_claude_skill_events(&value).is_empty());
+}
+
+#[test]
+fn structured_claude_attribution_wins_over_duplicate_command_envelope() {
+    let value = json!({
+        "attributionSkill": "repo-status",
+        "attributionPlugin": "vibin",
+        "content": "<command-message>vibin:repo-status</command-message>"
+    });
+    let events = extract_claude_skill_events(&value);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].skill_name, "repo-status");
+    assert_eq!(events[0].skill_plugin.as_deref(), Some("vibin"));
+    assert_eq!(events[0].event_kind, SkillEventKind::ClaudeAttribution);
+}
+
+#[test]
 fn emits_nothing_when_attribution_fields_absent() {
     let value = json!({"sessionId": "sess-1", "content": "just chatting"});
     assert!(extract_claude_skill_events(&value).is_empty());

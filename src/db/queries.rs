@@ -1408,10 +1408,10 @@ fn search_ai_sessions_sql(
                    l.hostname,
                    l.timestamp,
                    l.message
-            FROM logs_fts
-            JOIN logs l ON l.id = logs_fts.rowid
-            WHERE logs_fts MATCH ?1{filters}
-            ORDER BY logs_fts.rowid DESC
+            FROM ai_logs_fts
+            JOIN logs l ON l.id = ai_logs_fts.rowid
+            WHERE ai_logs_fts MATCH ?1{filters}
+            ORDER BY ai_logs_fts.rowid DESC
             LIMIT {}
          ),
          bounded_candidates AS MATERIALIZED (

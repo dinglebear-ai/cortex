@@ -802,6 +802,7 @@ fn append_start_requires_stored_content_hash() {
         last_error: None,
         source_revision: None,
         scan_state: checkpoint::SourceScanState::Complete,
+        extractor_revision: TRANSCRIPT_EXTRACTOR_REVISION,
     };
     let current = FileMetadata {
         size: 20,
@@ -2528,6 +2529,36 @@ fn indexing_claude_transcript_extracts_skill_events() {
     assert_eq!(skill_name, "cortex-troubleshoot");
     assert_eq!(plugin.as_deref(), Some("cortex"));
     assert_eq!(event_kind, "claude_attribution");
+}
+
+#[test]
+fn indexing_claude_command_envelope_extracts_skill_events() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("claude-command-skill.jsonl");
+    std::fs::write(
+        &file,
+        concat!(
+            r#"{"sessionId":"sess-command","message":{"role":"user","content":[{"type":"text","text":"<command-message>vibin:repo-status</command-message> <command-name>/vibin:repo-status</command-name>"}]}}"#,
+            "
+"
+        ),
+    )
+    .unwrap();
+
+    let result = index_file(&pool, &file, "explicit_file").unwrap();
+    assert_eq!(result.ingested, 1);
+
+    let conn = pool.get().unwrap();
+    let (skill_name, plugin, event_kind): (String, Option<String>, String) = conn
+        .query_row(
+            "SELECT skill_name, skill_plugin, event_kind FROM ai_skill_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(skill_name, "vibin:repo-status");
+    assert_eq!(plugin.as_deref(), Some("vibin"));
+    assert_eq!(event_kind, "claude_skill_command");
 }
 
 #[test]

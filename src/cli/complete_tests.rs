@@ -160,6 +160,7 @@ fn refreshed_event_leaves_expose_exact_parser_flags() {
             "sessions skillinvestigate",
             &[
                 "--incident-id",
+                "--skill",
                 "--plugin",
                 "--tool",
                 "--project",

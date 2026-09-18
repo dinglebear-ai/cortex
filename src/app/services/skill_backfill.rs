@@ -74,7 +74,8 @@ use tokio::sync::Semaphore;
 use crate::db::{DbPool, SkillEventInsert, insert_skill_events};
 use crate::scanner::read_transcript_lines;
 use crate::scanner::skill_events::{
-    extract_claude_skill_events, extract_codex_skill_events_with_kind,
+    claude_line_may_contain_skill_event, extract_claude_skill_events,
+    extract_codex_skill_events_with_kind,
 };
 
 use super::super::models::{SkillBackfillRequest, SkillBackfillResult};
@@ -243,7 +244,7 @@ fn run_backfill(
                     };
                     // Cheap short-circuit on the actual raw JSON line (not
                     // the scrubbed `row.message`) before parsing.
-                    if !line_text.contains("attributionSkill") {
+                    if !claude_line_may_contain_skill_event(line_text) {
                         continue;
                     }
                     match serde_json::from_str::<serde_json::Value>(line_text) {

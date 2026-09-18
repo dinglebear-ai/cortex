@@ -34,7 +34,7 @@ fn make_ai_entry(
         ai_project: Some(project.to_string()),
         ai_session_id: Some(session_id.to_string()),
         ai_transcript_path: Some(format!("{project}/{session_id}.jsonl")),
-        metadata_json: None,
+        metadata_json: Some(serde_json::json!({"event_kind": "user"}).to_string()),
         http_status: None,
         auth_outcome: None,
         dns_blocked: None,

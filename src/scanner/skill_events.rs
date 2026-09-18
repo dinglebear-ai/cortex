@@ -2,9 +2,9 @@
 //!
 //! Two independent extractors feed the same [`ExtractedSkillEvent`] shape:
 //! - Claude: structured `attributionSkill` / `attributionPlugin` JSON fields
-//!   (top-level or `message.*` nesting — a third `payload.*` candidate was
-//!   deliberately NOT added: no observed transcript sample confirms that
-//!   shape, so it would be speculative).
+//!   plus observed package-qualified skill command envelopes such as
+//!   `<command-message>vibin:repo-status</command-message>` and
+//!   `<command-name>/vibin:repo-status</command-name>`.
 //! - Codex: native skill headers in transcript content, including truncated
 //!   bodies, and separately typed successful command-read evidence. A JSON
 //!   marker in ordinary message text is never command-execution evidence.
@@ -29,6 +29,7 @@ const MAX_SKILL_FIELD_CHARS: usize = 256;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillEventKind {
     ClaudeAttribution,
+    ClaudeSkillCommand,
     CodexSkillBlock,
     CodexSkillRead,
 }
@@ -37,6 +38,7 @@ impl SkillEventKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ClaudeAttribution => "claude_attribution",
+            Self::ClaudeSkillCommand => "claude_skill_command",
             Self::CodexSkillBlock => "codex_skill_block",
             Self::CodexSkillRead => "codex_skill_read",
         }
@@ -115,20 +117,79 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
     }
 }
 
-/// Extract Claude skill-attribution events from a raw transcript JSON value.
-/// Checks top-level and `message.*` nesting for `attributionSkill` /
-/// `attributionPlugin` string fields (Claude transcripts use flat top-level
-/// fields on user-facing records and nested `message.*` fields on some
-/// tool-result records). Returns one event per candidate location that has a
-/// non-empty `attributionSkill`; at most one event in practice since a single
-/// transcript line only has one of the two shapes.
+/// Cheap raw-line guard shared by live ingest and historical backfill.
+/// Modern Claude desktop sessions do not consistently emit `attributionSkill`;
+/// package-qualified skill invocations are instead represented by command
+/// envelopes in the user message.
+pub(crate) fn claude_line_may_contain_skill_event(line: &str) -> bool {
+    line.contains("attributionSkill")
+        || line.contains("<command-message>")
+        || line.contains("<command-name>")
+}
+
+static CLAUDE_SKILL_COMMAND_TAG: LazyLock<Regex> = LazyLock::new(|| {
+    // Only package-qualified commands are strong enough evidence to call a
+    // Claude command a skill invocation. Unqualified slash commands can be
+    // ordinary built-ins or plugin commands and remain intentionally ignored.
+    Regex::new(
+        r"(?s)<command-message>\s*/?([A-Za-z0-9_.-]+:[A-Za-z0-9_.:-]+)\s*</command-message>|<command-name>\s*/?([A-Za-z0-9_.-]+:[A-Za-z0-9_.:-]+)\s*</command-name>",
+    )
+    .expect("static regex")
+});
+
+fn collect_claude_text(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => out.push(text.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    out.push(text.to_string());
+                } else {
+                    for field in ["text", "content"] {
+                        if let Some(text) = item.get(field).and_then(serde_json::Value::as_str) {
+                            out.push(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn claude_record_is_user(value: &serde_json::Value) -> bool {
+    value
+        .pointer("/message/role")
+        .or_else(|| value.get("role"))
+        .or_else(|| value.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|role| matches!(role, "user" | "human"))
+}
+
+fn claude_event_identity(event: &ExtractedSkillEvent) -> String {
+    if event.skill_name.contains(':') {
+        event.skill_name.clone()
+    } else if let Some(plugin) = event.skill_plugin.as_deref() {
+        format!("{plugin}:{}", event.skill_name)
+    } else {
+        event.skill_name.clone()
+    }
+}
+
+/// Extract Claude skill events from a raw transcript JSON value.
 ///
-/// Eng review Fix 1: callers should already have skipped calling this
-/// function at all when the source text doesn't contain `"attributionSkill"`
-/// as a substring — this function itself has nothing further to
-/// short-circuit on since it operates on an already-parsed `Value`, not raw
-/// text.
+/// Supported evidence shapes:
+/// - structured `attributionSkill` / `attributionPlugin` fields at top-level
+///   or under `message.*`;
+/// - observed package-qualified command envelopes such as
+///   `<command-message>vibin:repo-status</command-message>` and
+///   `<command-name>/vibin:repo-status</command-name>` in message content.
+///
+/// Duplicate evidence for the same skill on one transcript row is collapsed,
+/// preferring the structured attribution when both forms are present.
 pub fn extract_claude_skill_events(value: &serde_json::Value) -> Vec<ExtractedSkillEvent> {
+    let mut events = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let candidates = [
         value,
         value.get("message").unwrap_or(&serde_json::Value::Null),
@@ -151,11 +212,43 @@ pub fn extract_claude_skill_events(value: &serde_json::Value) -> Vec<ExtractedSk
             evidence_kind: SkillEvidenceKind::StructuredJsonField,
         };
         if let Some(normalized) = event.normalized() {
-            return vec![normalized];
+            seen.insert(claude_event_identity(&normalized));
+            events.push(normalized);
         }
-        return Vec::new();
+        break;
     }
-    Vec::new()
+
+    if !claude_record_is_user(value) {
+        return events;
+    }
+
+    let mut text = Vec::new();
+    if let Some(content) = value.get("content") {
+        collect_claude_text(content, &mut text);
+    }
+    if let Some(content) = value.pointer("/message/content") {
+        collect_claude_text(content, &mut text);
+    }
+    for fragment in text {
+        for captures in CLAUDE_SKILL_COMMAND_TAG.captures_iter(&fragment) {
+            let Some(raw_name) = captures.get(1).or_else(|| captures.get(2)) else {
+                continue;
+            };
+            let event = ExtractedSkillEvent {
+                skill_name: raw_name.as_str().to_string(),
+                skill_plugin: None,
+                event_kind: SkillEventKind::ClaudeSkillCommand,
+                evidence_kind: SkillEvidenceKind::TranscriptContent,
+            };
+            let Some(normalized) = event.normalized() else {
+                continue;
+            };
+            if seen.insert(claude_event_identity(&normalized)) {
+                events.push(normalized);
+            }
+        }
+    }
+    events
 }
 
 /// Matches legacy name-only blocks or a complete native name/path header.

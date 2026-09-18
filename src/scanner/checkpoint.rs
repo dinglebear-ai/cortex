@@ -27,6 +27,7 @@ pub struct SourceMetadata {
     pub source_revision: Option<String>,
     /// The recovery point represented by `last_offset`.
     pub scan_state: SourceScanState,
+    pub extractor_revision: i64,
 }
 
 /// The only scanner recovery states persisted for a transcript source.
@@ -134,9 +135,9 @@ impl<'a> CheckpointStore<'a> {
         file_mtime: Option<i64>,
     ) -> Result<bool> {
         let conn = self.pool.get()?;
-        let Some((stored_size, stored_mtime, last_error, scan_state)) = conn
+        let Some((stored_size, stored_mtime, last_error, scan_state, extractor_revision)) = conn
             .query_row(
-                "SELECT file_size, file_mtime, last_error, scan_state
+                "SELECT file_size, file_mtime, last_error, scan_state, extractor_revision
                  FROM transcript_sources
                  WHERE id = ?1",
                 [source_id],
@@ -146,6 +147,7 @@ impl<'a> CheckpointStore<'a> {
                         row.get::<_, Option<i64>>(1)?,
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
                     ))
                 },
             )
@@ -157,14 +159,15 @@ impl<'a> CheckpointStore<'a> {
         Ok(last_error.is_none()
             && SourceScanState::from_db_value(scan_state) == SourceScanState::Complete
             && stored_size == Some(file_size as i64)
-            && stored_mtime == file_mtime)
+            && stored_mtime == file_mtime
+            && extractor_revision == crate::scanner::TRANSCRIPT_EXTRACTOR_REVISION)
     }
 
     pub fn source_metadata(&self, source_id: i64) -> Result<Option<SourceMetadata>> {
         let conn = self.pool.get()?;
         conn.query_row(
             "SELECT file_size, file_mtime, content_hash, last_offset, last_error,
-                    source_revision, scan_state
+                    source_revision, scan_state, extractor_revision
              FROM transcript_sources
              WHERE id = ?1",
             [source_id],
@@ -177,6 +180,7 @@ impl<'a> CheckpointStore<'a> {
                     last_error: row.get(4)?,
                     source_revision: row.get(5)?,
                     scan_state: SourceScanState::from_db_value(row.get(6)?),
+                    extractor_revision: row.get(7)?,
                 })
             },
         )
@@ -194,6 +198,21 @@ impl<'a> CheckpointStore<'a> {
         tx.execute(
             "DELETE FROM transcript_parse_errors WHERE source_id = ?1",
             [source_id],
+        )?;
+        // Source replay replaces every transcript-derived projection. Some MCP
+        // result-only and hook rows intentionally use SET NULL for ordinary log
+        // retention, so remove those projections explicitly before deleting the
+        // source logs or stale events could survive a parser/extractor replay.
+        tx.execute(
+            "DELETE FROM ai_mcp_events
+             WHERE call_log_id IN (SELECT id FROM logs WHERE ai_transcript_path = ?1)
+                OR result_log_id IN (SELECT id FROM logs WHERE ai_transcript_path = ?1)",
+            [canonical_path],
+        )?;
+        tx.execute(
+            "DELETE FROM ai_hook_events
+             WHERE log_id IN (SELECT id FROM logs WHERE ai_transcript_path = ?1)",
+            [canonical_path],
         )?;
         tx.execute(
             "DELETE FROM logs WHERE ai_transcript_path = ?1",
@@ -219,6 +238,7 @@ impl<'a> CheckpointStore<'a> {
                  last_offset = 0,
                  source_revision = NULL,
                  scan_state = 'restart',
+                 extractor_revision = 0,
                  last_indexed_at = NULL,
                  last_error = NULL
              WHERE id = ?1",
@@ -655,6 +675,7 @@ pub fn update_complete_source_metadata_in_tx(
              last_offset = ?5,
              source_revision = ?6,
              scan_state = 'complete',
+             extractor_revision = ?7,
              last_indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
              last_error = NULL
          WHERE id = ?1",
@@ -665,6 +686,7 @@ pub fn update_complete_source_metadata_in_tx(
             file_metadata.content_hash,
             file_metadata.size as i64,
             source_revision,
+            crate::scanner::TRANSCRIPT_EXTRACTOR_REVISION,
         ],
     )?;
     Ok(())
@@ -695,6 +717,7 @@ pub fn update_partial_source_metadata_in_tx(
              last_offset = ?5,
              source_revision = ?6,
              scan_state = ?7,
+             extractor_revision = ?8,
              last_indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
              last_error = NULL
          WHERE id = ?1",
@@ -706,6 +729,7 @@ pub fn update_partial_source_metadata_in_tx(
             last_offset,
             source_revision,
             scan_state.as_db_value(),
+            crate::scanner::TRANSCRIPT_EXTRACTOR_REVISION,
         ],
     )?;
     Ok(())

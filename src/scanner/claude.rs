@@ -15,7 +15,8 @@ pub fn parse_line(
     let value: Value = serde_json::from_str(line)?;
     let message = extract_message(&value);
     let mut session_metadata = extract_session_metadata(&value);
-    let has_structured_evidence = line.contains("attributionSkill") || line.contains("hook_");
+    let has_structured_evidence =
+        super::skill_events::claude_line_may_contain_skill_event(line) || line.contains("hook_");
     if message.is_empty()
         && session_metadata == TranscriptSessionMetadata::default()
         && !has_structured_evidence

@@ -10,7 +10,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::app::skill_signal_detectors::{detect_tool_failure, detect_user_correction};
+use crate::app::skill_signal_detectors::{
+    detect_tool_failure, detect_user_correction, transcript_event_is_user,
+};
 
 use super::models::LogEntry;
 use super::pool::DbPool;
@@ -309,7 +311,10 @@ pub fn investigate_ai_skill_incidents(
 
         let mut nearby_user_corrections: Vec<LogEntry> = nearby_logs
             .iter()
-            .filter(|e| detect_user_correction(&e.message))
+            .filter(|e| {
+                transcript_event_is_user(e.metadata_json.as_deref())
+                    && detect_user_correction(&e.message)
+            })
             .cloned()
             .collect();
         let nearby_user_corrections_truncated = nearby_user_corrections.len() > NEARBY_SUBSET_CAP;
