@@ -51,7 +51,15 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 
 ### Install the CLI
 
-The npm launcher is the fastest path for local CLI and stdio MCP use:
+The first-class guided path is:
+
+```sh
+npx skills add dinglebear-ai/cortex --skill install-cortex
+```
+
+Start a fresh agent task and invoke `$install-cortex`. It chooses server or client-only role, delegates to the canonical installer/setup engine, configures auth/network/storage, and verifies the live client connection.
+
+The npm launcher remains the fastest manual path for local CLI and stdio MCP use:
 
 ```bash
 npx -y @dinglebear/cortex --help
