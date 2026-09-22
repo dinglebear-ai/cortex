@@ -233,6 +233,10 @@ pub struct SessionSourceEvidenceSummary {
 pub struct SessionObservatoryEvidence {
     pub runs: Vec<db::agent_observatory::ObservatoryRunRow>,
     pub ambiguous_run: bool,
+    pub parent_run: Option<db::agent_observatory::ObservatoryRunRow>,
+    pub previous_run: Option<db::agent_observatory::ObservatoryRunRow>,
+    pub actors: Vec<db::agent_observatory::ObservatoryActorRow>,
+    pub actors_truncated: bool,
     pub related_runs: Vec<db::agent_observatory::ObservatoryRunRow>,
     pub related_runs_truncated: bool,
     pub repository: Option<db::agent_observatory::ObservatoryRepositoryRow>,

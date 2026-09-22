@@ -311,3 +311,55 @@ fn run_resolution_reports_unknown_runs_as_none() {
     assert_eq!(identity.provider_tool.as_deref(), Some("openai"));
     assert_eq!(identity.native_session_id, "session");
 }
+
+#[test]
+fn run_reads_expose_lineage_and_bounded_actors() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("run-lineage.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('parent','parent-session','codex','host','completed','2026-08-21T09:00:00Z','2026-08-21T09:00:00Z','2026-08-21T09:30:00Z')", []).unwrap();
+    let parent_id = conn.last_insert_rowid();
+    conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('previous','previous-session','codex','host','completed','2026-08-21T09:30:00Z','2026-08-21T09:30:00Z','2026-08-21T09:45:00Z')", []).unwrap();
+    let previous_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,parent_run_id,previous_run_id,status,status_observed_at,started_at,last_activity_at) VALUES('current','session','codex','host',?1,?2,'active','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z','2026-08-21T10:10:00Z')",
+        rusqlite::params![parent_id, previous_id],
+    ).unwrap();
+    let run_id = conn.last_insert_rowid();
+    for (key, native, activity) in [
+        ("actor-a", "subagent-a", "2026-08-21T10:05:00Z"),
+        ("actor-b", "subagent-b", "2026-08-21T10:06:00Z"),
+    ] {
+        conn.execute(
+            "INSERT INTO agent_run_actors(actor_key,run_id,native_actor_id,actor_type,display_name,started_at,last_activity_at,metadata_json) VALUES(?1,?2,?3,'subagent',?3,'2026-08-21T10:00:00Z',?4,'{}')",
+            rusqlite::params![key, run_id, native, activity],
+        ).unwrap();
+    }
+    drop(conn);
+
+    let current = resolve_observatory_run_row(&pool, run_id).unwrap().unwrap();
+    assert_eq!(current.parent_run_id, Some(parent_id));
+    assert_eq!(current.previous_run_id, Some(previous_id));
+    assert_eq!(
+        resolve_observatory_run_row(&pool, parent_id)
+            .unwrap()
+            .unwrap()
+            .run_key,
+        "parent"
+    );
+    assert_eq!(
+        resolve_observatory_run_row(&pool, previous_id)
+            .unwrap()
+            .unwrap()
+            .run_key,
+        "previous"
+    );
+
+    let actors = list_observatory_run_actors(&pool, run_id, 1).unwrap();
+    assert_eq!(
+        actors.len(),
+        2,
+        "bounded reads return limit + 1 for truncation detection"
+    );
+    assert_eq!(actors[0].native_actor_id, "subagent-b");
+}

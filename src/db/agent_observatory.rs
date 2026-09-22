@@ -61,12 +61,13 @@ pub use queries::{get_worktree_by_key, reconcile_repository};
 #[path = "agent_observatory_read.rs"]
 mod read;
 pub use read::{
-    AgentEventQuery, AgentRunQuery, EvidenceScopePage, EvidenceScopeQuery, ObservatoryEventRow,
-    ObservatoryMetricRow, ObservatoryRepositoryRow, ObservatoryRunRow, ObservatorySpanRow,
-    ObservatoryWorktreeRow, RepositoryQuery, RunTelemetryIdentity, TelemetryQuery,
-    list_observatory_events, list_observatory_metrics, list_observatory_repositories,
-    list_observatory_runs, list_observatory_spans, list_observatory_worktrees,
-    resolve_observatory_repository, resolve_observatory_run, resolve_observatory_worktree,
+    AgentEventQuery, AgentRunQuery, EvidenceScopePage, EvidenceScopeQuery, ObservatoryActorRow,
+    ObservatoryEventRow, ObservatoryMetricRow, ObservatoryRepositoryRow, ObservatoryRunRow,
+    ObservatorySpanRow, ObservatoryWorktreeRow, RepositoryQuery, RunTelemetryIdentity,
+    TelemetryQuery, list_observatory_events, list_observatory_metrics,
+    list_observatory_repositories, list_observatory_run_actors, list_observatory_runs,
+    list_observatory_spans, list_observatory_worktrees, resolve_observatory_repository,
+    resolve_observatory_run, resolve_observatory_run_row, resolve_observatory_worktree,
     scoped_evidence_events,
 };
 

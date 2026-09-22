@@ -259,6 +259,21 @@ impl CortexService {
                         "Agent Observatory run disappeared during session investigation"
                     )
                 })?;
+                let parent_run = match run.parent_run_id {
+                    Some(id) => db::agent_observatory::resolve_observatory_run_row(pool, id)?,
+                    None => None,
+                };
+                let previous_run = match run.previous_run_id {
+                    Some(id) => db::agent_observatory::resolve_observatory_run_row(pool, id)?,
+                    None => None,
+                };
+                let mut actors = db::agent_observatory::list_observatory_run_actors(
+                    pool,
+                    run_id,
+                    section_limit as usize + 1,
+                )?;
+                let actors_truncated = actors.len() > section_limit as usize;
+                actors.truncate(section_limit as usize);
                 let worktree = match run.primary_worktree_id {
                     Some(id) => db::agent_observatory::resolve_observatory_worktree(pool, id)?,
                     None => None,
@@ -318,6 +333,10 @@ impl CortexService {
                 Ok(models::SessionObservatoryEvidence {
                     runs,
                     ambiguous_run,
+                    parent_run,
+                    previous_run,
+                    actors,
+                    actors_truncated,
                     related_runs,
                     related_runs_truncated,
                     repository,
@@ -404,6 +423,15 @@ impl CortexService {
         if !notifications.is_empty() {
             source_counts.insert("notification".to_string(), notifications.len());
         }
+        if !observatory.actors.is_empty() {
+            source_counts.insert("observatory_actor".to_string(), observatory.actors.len());
+        }
+        if observatory.parent_run.is_some() {
+            source_counts.insert("parent_run".to_string(), 1);
+        }
+        if observatory.previous_run.is_some() {
+            source_counts.insert("previous_run".to_string(), 1);
+        }
         if !observatory.related_runs.is_empty() {
             source_counts.insert(
                 "same_worktree_run".to_string(),
@@ -442,6 +470,9 @@ impl CortexService {
         }
         if observatory.ambiguous_run {
             partial_reasons.push("observatory_run_ambiguous".to_string());
+        }
+        if observatory.actors_truncated {
+            partial_reasons.push("observatory_actors_truncated".to_string());
         }
         if observatory.related_runs_truncated {
             partial_reasons.push("observatory_related_runs_truncated".to_string());
