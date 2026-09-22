@@ -2,7 +2,7 @@
 
 use super::DbPool;
 use anyhow::{Context, Result};
-use rusqlite::{Row, params_from_iter, types::Value};
+use rusqlite::{OptionalExtension, Row, params_from_iter, types::Value};
 #[path = "agent_observatory_read_cursor.rs"]
 mod cursor;
 use cursor::{bounded_limit, int_cursor, push_filter, text_cursor};
@@ -71,6 +71,74 @@ pub fn list_observatory_repositories(
         })?
         .collect::<rusqlite::Result<_>>()
         .context("list observatory repositories")
+}
+
+pub fn resolve_observatory_repository(
+    pool: &DbPool,
+    repository_id: i64,
+) -> Result<Option<ObservatoryRepositoryRow>> {
+    let conn = pool.get()?;
+    conn.query_row(
+        "SELECT r.id,r.repository_key,r.hostname,r.primary_path,r.display_name,r.first_seen_at,r.last_seen_at,r.removed_at,(SELECT COUNT(*) FROM repository_worktrees w WHERE w.repository_id=r.id),(SELECT COUNT(*) FROM agent_runs a JOIN agent_run_worktrees rw ON rw.run_id=a.id JOIN repository_worktrees w ON w.id=rw.worktree_id WHERE w.repository_id=r.id AND a.status IN ('starting','active','waiting','idle')) FROM repositories r WHERE r.id=?1",
+        [repository_id],
+        |r| {
+            Ok(ObservatoryRepositoryRow {
+                id: r.get(0)?,
+                key: r.get(1)?,
+                hostname: r.get(2)?,
+                primary_path: r.get(3)?,
+                name: r.get(4)?,
+                first_seen_at: r.get(5)?,
+                last_seen_at: r.get(6)?,
+                removed_at: r.get(7)?,
+                worktree_count: r.get(8)?,
+                active_run_count: r.get(9)?,
+            })
+        },
+    )
+    .optional()
+    .context("resolve observatory repository")
+}
+
+pub fn resolve_observatory_worktree(
+    pool: &DbPool,
+    worktree_id: i64,
+) -> Result<Option<ObservatoryWorktreeRow>> {
+    let conn = pool.get()?;
+    conn.query_row(
+        "SELECT id,worktree_key,repository_id,hostname,path,branch_ref,branch_name,head_sha,upstream_ref,detached,bare,locked,lock_reason,prunable,prune_reason,dirty,staged_count,unstaged_count,untracked_count,ahead,behind,first_seen_at,last_seen_at,removed_at FROM repository_worktrees WHERE id=?1",
+        [worktree_id],
+        |r| {
+            Ok(ObservatoryWorktreeRow {
+                id: r.get(0)?,
+                key: r.get(1)?,
+                repository_id: r.get(2)?,
+                hostname: r.get(3)?,
+                path: r.get(4)?,
+                branch_ref: r.get(5)?,
+                branch: r.get(6)?,
+                head_sha: r.get(7)?,
+                upstream_ref: r.get(8)?,
+                detached: r.get(9)?,
+                bare: r.get(10)?,
+                locked: r.get(11)?,
+                lock_reason: r.get(12)?,
+                prunable: r.get(13)?,
+                prune_reason: r.get(14)?,
+                dirty: r.get(15)?,
+                staged: r.get(16)?,
+                unstaged: r.get(17)?,
+                untracked: r.get(18)?,
+                ahead: r.get(19)?,
+                behind: r.get(20)?,
+                first_seen_at: r.get(21)?,
+                last_seen_at: r.get(22)?,
+                removed_at: r.get(23)?,
+            })
+        },
+    )
+    .optional()
+    .context("resolve observatory worktree")
 }
 
 /// Historical and follow-safe evidence projection for one branch/worktree.

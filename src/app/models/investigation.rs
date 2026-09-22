@@ -177,6 +177,103 @@ pub struct AskInvestigationResponse {
     pub logs: Vec<AppLogSummary>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionInvestigateRequest {
+    pub session_id: String,
+    pub tool: Option<String>,
+    pub project: Option<String>,
+    pub host: Option<String>,
+    pub limit: Option<u32>,
+    pub window_minutes: Option<u32>,
+    pub severity_min: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionExternalReferenceKind {
+    GithubPullRequest,
+    GithubIssue,
+    GithubReference,
+    LinearIssue,
+    Url,
+    CommitSha,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SessionExternalReference {
+    pub kind: SessionExternalReferenceKind,
+    pub value: String,
+    pub source_position: Option<i64>,
+    pub evidence_kind: String,
+    pub trust_level: String,
+    pub verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRetentionLineageEntry {
+    pub log_id: i64,
+    pub hostname: String,
+    pub app_name: Option<String>,
+    pub severity: String,
+    pub ai_project: Option<String>,
+    pub ai_tool: Option<String>,
+    pub ai_session_id: Option<String>,
+    pub retained_until_epoch: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionSourceEvidenceSummary {
+    pub count: usize,
+    pub log_ids: Vec<i64>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionObservatoryEvidence {
+    pub runs: Vec<db::agent_observatory::ObservatoryRunRow>,
+    pub ambiguous_run: bool,
+    pub related_runs: Vec<db::agent_observatory::ObservatoryRunRow>,
+    pub related_runs_truncated: bool,
+    pub repository: Option<db::agent_observatory::ObservatoryRepositoryRow>,
+    pub worktree: Option<db::agent_observatory::ObservatoryWorktreeRow>,
+    pub commits: Vec<db::agent_observatory::AgentRunAttributedCommit>,
+    pub events: Vec<db::agent_observatory::ObservatoryEventRow>,
+    pub spans: Vec<db::agent_observatory::ObservatorySpanRow>,
+    pub metrics: Vec<db::agent_observatory::ObservatoryMetricRow>,
+    pub events_truncated: bool,
+    pub spans_truncated: bool,
+    pub metrics_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInvestigateResponse {
+    pub session: AiSessionEntry,
+    pub transcript: Vec<RenderedSessionEvent>,
+    pub transcript_has_more: bool,
+    pub correlation: Option<GraphSessionCorrelation>,
+    pub graph_neighborhood: Option<AppGraphResponse>,
+    pub skill_events: Vec<SkillEventEntry>,
+    pub skill_events_truncated: bool,
+    pub mcp_events: Vec<McpEventEntry>,
+    pub mcp_events_truncated: bool,
+    pub hook_events: Vec<HookEventEntry>,
+    pub hook_events_truncated: bool,
+    pub artifact_evidence: Vec<ArtifactEvidenceEntry>,
+    pub artifact_evidence_truncated: bool,
+    pub observatory: SessionObservatoryEvidence,
+    pub incident_context: IncidentContextResponse,
+    pub notifications: Vec<db::notifications::FiringRow>,
+    pub notifications_truncated: bool,
+    pub retention_lineage: Vec<SessionRetentionLineageEntry>,
+    pub retention_lineage_truncated: bool,
+    pub related_sessions: Vec<AiSessionEntry>,
+    pub external_references: Vec<SessionExternalReference>,
+    pub source_counts: BTreeMap<String, usize>,
+    pub source_evidence: BTreeMap<String, SessionSourceEvidenceSummary>,
+    pub partial_reasons: Vec<String>,
+}
+
 pub fn app_entity_summary(entity: &GraphEntity) -> AppEntitySummary {
     AppEntitySummary {
         id: entity.id,

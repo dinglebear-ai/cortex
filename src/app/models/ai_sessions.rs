@@ -5,6 +5,7 @@ use super::*;
 pub struct ListSessionsRequest {
     pub project: Option<String>,
     pub tool: Option<String>,
+    pub session_id: Option<String>,
     pub host: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,

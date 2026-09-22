@@ -29,6 +29,12 @@ pub struct AgentRunCommitRow {
     pub metadata_json: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentRunAttributedCommit {
+    pub relation: AgentRunCommitRow,
+    pub commit: super::GitCommitRow,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRunCommitUpsert {
     pub run_id: i64,
@@ -176,7 +182,6 @@ pub fn upsert_agent_run_commit(
     Ok(relation)
 }
 
-#[cfg(test)]
 pub fn list_agent_run_commits(pool: &DbPool, run_id: i64) -> Result<Vec<AgentRunCommitRow>> {
     if run_id <= 0 {
         bail!("run_id must be positive");
@@ -188,6 +193,49 @@ pub fn list_agent_run_commits(pool: &DbPool, run_id: i64) -> Result<Vec<AgentRun
     Ok(statement
         .query_map([run_id], row)?
         .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn list_agent_run_attributed_commits(
+    pool: &DbPool,
+    run_id: i64,
+) -> Result<Vec<AgentRunAttributedCommit>> {
+    let relations = list_agent_run_commits(pool, run_id)?;
+    let connection = pool.get().context("acquire database connection")?;
+    let mut statement = connection.prepare(
+        "SELECT id, repository_id, sha, parent_shas_json, author_name, author_email_hash,
+                authored_at, committed_at, subject, changed_files, insertions, deletions,
+                changed_paths_json, first_observed_at, last_observed_at, reachable, metadata_json
+           FROM git_commits WHERE id = ?1",
+    )?;
+    relations
+        .into_iter()
+        .map(|relation| {
+            let commit = statement
+                .query_row([relation.commit_id], |row| {
+                    Ok(super::GitCommitRow {
+                        id: row.get(0)?,
+                        repository_id: row.get(1)?,
+                        sha: row.get(2)?,
+                        parent_shas_json: row.get(3)?,
+                        author_name: row.get(4)?,
+                        author_email_hash: row.get(5)?,
+                        authored_at: row.get(6)?,
+                        committed_at: row.get(7)?,
+                        subject: row.get(8)?,
+                        changed_files: row.get(9)?,
+                        insertions: row.get(10)?,
+                        deletions: row.get(11)?,
+                        changed_paths_json: row.get(12)?,
+                        first_observed_at: row.get(13)?,
+                        last_observed_at: row.get(14)?,
+                        reachable: row.get(15)?,
+                        metadata_json: row.get(16)?,
+                    })
+                })
+                .context("resolve attributed git commit")?;
+            Ok(AgentRunAttributedCommit { relation, commit })
+        })
+        .collect()
 }
 
 pub fn commit_attribution_evidence(
