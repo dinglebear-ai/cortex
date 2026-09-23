@@ -26,19 +26,17 @@
 //! through `api.rs`.
 //!
 //! **Claude row recovery**: `logs.message` for a Claude row is
-//! `claude::extract_message()`'s plain-text `content` extraction (e.g. "hi")
-//! — it never carries the raw `attributionSkill`/`attributionPlugin` JSON
-//! fields, unlike Codex where the transcript text itself (including the
-//! `<skill><name>` tag) survives `scrub_ai_message` intact. The only place
-//! that data still exists is the original JSONL file on disk, so Claude rows
-//! are recovered by re-reading the specific source line (via the shared
-//! `scanner::read_transcript_lines` helper, which applies the same bounded,
-//! newline-delimited record semantics as the ingest path) located by the
-//! persisted `ai_transcript_path` column and the `line_no` scanner.rs recorded
-//! in `metadata_json` at ingest time. Rows whose source file or line can no
-//! longer be located (deleted/rotated/legacy metadata predating `line_no`, or
-//! a line now exceeding the record-size bound) are counted in
-//! `source_unavailable` rather than treated as an error.
+//! `claude::extract_message()`'s plain-text `content` extraction. It does not
+//! retain raw `attributionSkill`/`attributionPlugin` JSON fields, so those
+//! still require the original JSONL source line. Modern package-qualified
+//! `<command-message>` / `<command-name>` envelopes are different: they are
+//! user-message content and survive both normalization and privacy-preserving
+//! transcript forwarding. The backfill therefore extracts those envelopes
+//! directly from a persisted user `logs.message` first, then falls back to
+//! `scanner::read_transcript_lines` for structured attribution when the source
+//! path plus `metadata_json.line_no` are locally recoverable. Rows with neither
+//! persisted command evidence nor a recoverable source are counted in
+//! `source_unavailable` rather than silently treated as complete.
 //!
 //! **Idempotency caveat**: re-running the backfill is a no-op *only while the
 //! source transcript files are unchanged*. Because the recovered `skill_name`
@@ -74,7 +72,7 @@ use tokio::sync::Semaphore;
 use crate::db::{DbPool, SkillEventInsert, insert_skill_events};
 use crate::scanner::read_transcript_lines;
 use crate::scanner::skill_events::{
-    claude_line_may_contain_skill_event, extract_claude_skill_events,
+    ExtractedSkillEvent, claude_line_may_contain_skill_event, extract_claude_skill_events,
     extract_codex_skill_events_with_kind,
 };
 
@@ -114,6 +112,38 @@ struct CandidateRow {
     message: String,
     ai_transcript_path: Option<String>,
     metadata_json: Option<String>,
+}
+
+fn extract_forwarded_claude_skill_events(row: &CandidateRow) -> Vec<ExtractedSkillEvent> {
+    if !row.message.contains("<command-message>") && !row.message.contains("<command-name>") {
+        return Vec::new();
+    }
+    let is_user = row
+        .metadata_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("event_kind")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|event_kind| event_kind == "user");
+    if !is_user {
+        return Vec::new();
+    }
+
+    extract_claude_skill_events(&serde_json::json!({
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": row.message.as_str()
+                }
+            ]
+        }
+    }))
 }
 
 impl CortexService {
@@ -174,17 +204,20 @@ fn run_backfill(
         result.scanned += rows.len() as u64;
         remaining = remaining.saturating_sub(rows.len() as u64);
 
-        // Resolve every Claude row's source line up front, grouped by file so
-        // rows sharing a transcript file open and scan it once per chunk. Two
-        // borrowed maps over `rows` (no owned-String clones): `row_source` maps
-        // each row id to its `(path, line_no)`, and `wanted_by_file` collects
-        // the distinct line numbers to pull from each file. See the "Claude row
-        // recovery" note at the top of this file for why `row.message` can't be
-        // used directly.
+        // Resolve source lines only for Claude rows that cannot be recovered
+        // from a persisted command envelope. Rows sharing a transcript file
+        // open and scan it once per chunk. Two borrowed maps over `rows` (no
+        // owned-String clones): `row_source` maps each row id to its
+        // `(path, line_no)`, and `wanted_by_file` collects the distinct line
+        // numbers to pull from each file. See the "Claude row recovery" note at
+        // the top of this file for the normalized-message/source split.
         let mut row_source: HashMap<i64, (&str, usize)> = HashMap::new();
         let mut wanted_by_file: HashMap<&str, HashSet<usize>> = HashMap::new();
         for row in &rows {
             if row.ai_tool != "claude" {
+                continue;
+            }
+            if !extract_forwarded_claude_skill_events(row).is_empty() {
                 continue;
             }
             match (
@@ -228,30 +261,35 @@ fn run_backfill(
         for row in &rows {
             let extracted = match row.ai_tool.as_str() {
                 "claude" => {
-                    let Some(&(path, line_no)) = row_source.get(&row.id) else {
-                        // Already counted in `source_unavailable` above.
-                        continue;
-                    };
-                    let Some(line_text) = resolved.get(&(path, line_no)) else {
-                        result.source_unavailable += 1;
-                        tracing::debug!(
-                            log_id = row.id,
-                            path,
-                            line_no,
-                            "skill backfill: transcript line unavailable (missing file or line out of range)"
-                        );
-                        continue;
-                    };
-                    // Cheap short-circuit on the actual raw JSON line (not
-                    // the scrubbed `row.message`) before parsing.
-                    if !claude_line_may_contain_skill_event(line_text) {
-                        continue;
-                    }
-                    match serde_json::from_str::<serde_json::Value>(line_text) {
-                        Ok(value) => extract_claude_skill_events(&value),
-                        Err(_) => {
-                            result.parse_errors += 1;
+                    let forwarded = extract_forwarded_claude_skill_events(row);
+                    if !forwarded.is_empty() {
+                        forwarded
+                    } else {
+                        let Some(&(path, line_no)) = row_source.get(&row.id) else {
+                            // Already counted in `source_unavailable` above.
                             continue;
+                        };
+                        let Some(line_text) = resolved.get(&(path, line_no)) else {
+                            result.source_unavailable += 1;
+                            tracing::debug!(
+                                log_id = row.id,
+                                path,
+                                line_no,
+                                "skill backfill: transcript line unavailable (missing file or line out of range)"
+                            );
+                            continue;
+                        };
+                        // Cheap short-circuit on the actual raw JSON line (not
+                        // the scrubbed `row.message`) before parsing.
+                        if !claude_line_may_contain_skill_event(line_text) {
+                            continue;
+                        }
+                        match serde_json::from_str::<serde_json::Value>(line_text) {
+                            Ok(value) => extract_claude_skill_events(&value),
+                            Err(_) => {
+                                result.parse_errors += 1;
+                                continue;
+                            }
                         }
                     }
                 }

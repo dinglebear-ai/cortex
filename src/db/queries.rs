@@ -1373,6 +1373,19 @@ pub fn search_ai_sessions(
 
 const CANDIDATE_CAP: usize = 5_000;
 
+fn ai_session_fts_query(query: &str, tool: Option<&str>) -> String {
+    let mut scoped = format!("message : ({query})");
+    if let Some(tool) = tool.filter(|tool| {
+        !tool.is_empty()
+            && tool
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    }) {
+        scoped.push_str(&format!(" AND ai_tool : \"{tool}\""));
+    }
+    scoped
+}
+
 fn search_ai_sessions_sql(
     params: &SearchAiSessionsParams,
     limit: usize,
@@ -1382,7 +1395,21 @@ fn search_ai_sessions_sql(
     let mut query_params = SqlParams::new(2);
     query_params
         .bindings
-        .push(rusqlite::types::Value::Text(params.query.clone()));
+        .push(rusqlite::types::Value::Text(ai_session_fts_query(
+            &params.query,
+            params.ai_tool.as_deref(),
+        )));
+    let mut fts_rowid_floor = String::new();
+    if let Some(since) = &params.since {
+        let idx = query_params.push_text(since.clone());
+        fts_rowid_floor = format!(
+            " AND ai_logs_fts.rowid >= COALESCE(
+                (SELECT MIN(id)
+                 FROM logs INDEXED BY idx_logs_ai_timestamp_tool
+                 WHERE ai_tool IS NOT NULL AND timestamp >= ?{idx}),
+                9223372036854775807)"
+        );
+    }
     push_ai_scope_filters(
         &mut filters,
         &mut query_params,
@@ -1410,7 +1437,7 @@ fn search_ai_sessions_sql(
                    l.message
             FROM ai_logs_fts
             JOIN logs l ON l.id = ai_logs_fts.rowid
-            WHERE ai_logs_fts MATCH ?1{filters}
+            WHERE ai_logs_fts MATCH ?1{fts_rowid_floor}{filters}
             ORDER BY ai_logs_fts.rowid DESC
             LIMIT {}
          ),
