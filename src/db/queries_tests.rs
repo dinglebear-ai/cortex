@@ -3424,6 +3424,7 @@ fn bench_stats_and_sessions() {
     let params = ListAiSessionsParams {
         ai_project: None,
         ai_tool: None,
+        ai_session_id: None,
         host: None,
         since: None,
         until: None,
