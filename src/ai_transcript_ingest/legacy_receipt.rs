@@ -14,15 +14,63 @@ impl std::fmt::Display for IdempotencyConflict {
 
 impl std::error::Error for IdempotencyConflict {}
 
+fn v2_fingerprint_with_locator(
+    envelope: &EvidenceEnvelope,
+    locator: &str,
+) -> anyhow::Result<String> {
+    // Supplemental display metadata can change without a transcript revision.
+    // Keep the persisted v2 format rollback-compatible with older Cortex
+    // releases; locator mutability is handled during replay verification.
+    let mut evidence = envelope.clone();
+    evidence.source.title = None;
+    evidence.source.title_provenance = None;
+    evidence.source.locator = locator.to_string();
+    let encoded = serde_json::to_vec(&evidence)?;
+    Ok(format!("evidence-v2:sha256:{:x}", Sha256::digest(encoded)))
+}
+
 fn envelope_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
-    // Display metadata and the file's location can change without changing
-    // the transcript record (for example, when Codex archives a session).
+    v2_fingerprint_with_locator(envelope, &envelope.source.locator)
+}
+
+fn transient_v3_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
+    // A pre-review patched deployment briefly wrote v3 receipts whose only
+    // semantic difference was excluding the movable locator. Continue to read
+    // those receipts and lazily rebind them to the durable v2 format.
     let mut evidence = envelope.clone();
     evidence.source.title = None;
     evidence.source.title_provenance = None;
     evidence.source.locator.clear();
-    let encoded = serde_json::to_vec(&evidence)?;
-    Ok(format!("evidence-v3:sha256:{:x}", Sha256::digest(encoded)))
+    Ok(format!(
+        "evidence-v3:sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&evidence)?)
+    ))
+}
+
+fn stored_locator(
+    tx: &rusqlite::Transaction<'_>,
+    key: &str,
+) -> anyhow::Result<Option<String>> {
+    Ok(tx
+        .query_row(
+            "SELECT l.ai_transcript_path FROM ai_transcript_forward_receipts r
+             JOIN logs l ON l.id = r.log_id WHERE r.source_record_id = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+fn canonical_v2_fingerprint(
+    tx: &rusqlite::Transaction<'_>,
+    key: &str,
+    envelope: &EvidenceEnvelope,
+) -> anyhow::Result<Option<String>> {
+    let Some(locator) = stored_locator(tx, key)? else {
+        return Ok(None);
+    };
+    Ok(Some(v2_fingerprint_with_locator(envelope, &locator)?))
 }
 
 fn v2_fingerprint_matches(
@@ -31,27 +79,14 @@ fn v2_fingerprint_matches(
     envelope: &EvidenceEnvelope,
     previous: &str,
 ) -> anyhow::Result<bool> {
-    let stored_locator: Option<String> = tx
-        .query_row(
-            "SELECT l.ai_transcript_path FROM ai_transcript_forward_receipts r
-             JOIN logs l ON l.id = r.log_id WHERE r.source_record_id = ?1",
-            [key],
-            |row| row.get(0),
-        )
-        .optional()?
-        .flatten();
-    let Some(stored_locator) = stored_locator else {
-        return Ok(false);
-    };
-    let mut original = envelope.clone();
-    original.source.title = None;
-    original.source.title_provenance = None;
-    original.source.locator = stored_locator;
-    Ok(previous
-        == format!(
-            "evidence-v2:sha256:{:x}",
-            Sha256::digest(serde_json::to_vec(&original)?)
-        ))
+    Ok(canonical_v2_fingerprint(tx, key, envelope)?.as_deref() == Some(previous))
+}
+
+fn transient_v3_fingerprint_matches(
+    envelope: &EvidenceEnvelope,
+    previous: &str,
+) -> anyhow::Result<bool> {
+    Ok(previous == transient_v3_fingerprint(envelope)?)
 }
 
 fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: bool) -> String {
@@ -284,28 +319,67 @@ fn insert_envelopes_with_identity(
             .optional()?;
         if let Some(previous_fingerprint) = already_accepted {
             if previous_fingerprint.as_deref() != Some(request_fingerprint.as_str()) {
-                // Old hashes included titles. Rebind only after comparing all
-                // immutable evidence against the canonical row, never merely
-                // because the caller reused an existing source-record ID.
-                let matches = match previous_fingerprint.as_deref() {
-                    Some(previous) if previous.starts_with("evidence-v2:sha256:") => {
-                        v2_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?
-                    }
-                    Some(previous) if previous.starts_with("sha256:") => {
-                        old_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?
-                    }
-                    Some(_) => false,
-                    None => legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?,
-                };
+                // Compatibility fingerprints are validated against the
+                // canonical row before any rebinding. Persist v2 so a rollback
+                // to the previous Cortex release can still read receipts
+                // created by this version.
+                let (matches, replacement_fingerprint) =
+                    match previous_fingerprint.as_deref() {
+                        Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
+                            let matches = transient_v3_fingerprint_matches(&envelope, previous)?;
+                            let replacement = if matches {
+                                canonical_v2_fingerprint(&tx, &stored_receipt_key, &envelope)?
+                            } else {
+                                None
+                            };
+                            (matches, replacement)
+                        }
+                        Some(previous) if previous.starts_with("evidence-v2:sha256:") => (
+                            v2_fingerprint_matches(
+                                &tx,
+                                &stored_receipt_key,
+                                &envelope,
+                                previous,
+                            )?,
+                            None,
+                        ),
+                        Some(previous) if previous.starts_with("sha256:") => {
+                            let matches = old_fingerprint_matches(
+                                &tx,
+                                &stored_receipt_key,
+                                &envelope,
+                                previous,
+                            )?;
+                            let replacement = if matches {
+                                canonical_v2_fingerprint(&tx, &stored_receipt_key, &envelope)?
+                            } else {
+                                None
+                            };
+                            (matches, replacement)
+                        }
+                        Some(_) => (false, None),
+                        None => {
+                            let matches =
+                                legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?;
+                            let replacement = if matches {
+                                canonical_v2_fingerprint(&tx, &stored_receipt_key, &envelope)?
+                            } else {
+                                None
+                            };
+                            (matches, replacement)
+                        }
+                    };
                 if !matches {
                     return Err(IdempotencyConflict.into());
                 }
-                tx.execute(
-                    "UPDATE ai_transcript_forward_receipts
-                     SET request_fingerprint = ?2
-                     WHERE source_record_id = ?1",
-                    rusqlite::params![stored_receipt_key, request_fingerprint],
-                )?;
+                if let Some(replacement_fingerprint) = replacement_fingerprint {
+                    tx.execute(
+                        "UPDATE ai_transcript_forward_receipts
+                         SET request_fingerprint = ?2
+                         WHERE source_record_id = ?1",
+                        rusqlite::params![stored_receipt_key, replacement_fingerprint],
+                    )?;
+                }
             }
             receipts.push(AiTranscriptReceipt {
                 source_record_id: envelope.source_record_id,
