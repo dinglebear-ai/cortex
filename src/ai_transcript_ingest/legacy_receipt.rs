@@ -341,7 +341,7 @@ fn insert_envelopes_with_identity(
                                 previous,
                             )?;
                             let replacement = if matches {
-                                canonical_v2_fingerprint(&tx, &stored_receipt_key, &envelope)?
+                                canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
                             } else {
                                 None
                             };
@@ -352,7 +352,7 @@ fn insert_envelopes_with_identity(
                             let matches =
                                 legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?;
                             let replacement = if matches {
-                                canonical_v2_fingerprint(&tx, &stored_receipt_key, &envelope)?
+                                canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
                             } else {
                                 None
                             };
