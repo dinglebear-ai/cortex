@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 60;
+pub const KNOWN_SCHEMA_VERSION: i64 = 61;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -400,6 +400,7 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         -- syslog/Docker corpus while preserving the same message tokenizer.
         CREATE VIRTUAL TABLE IF NOT EXISTS ai_logs_fts USING fts5(
             message,
+            ai_tool,
             content='logs',
             content_rowid='id',
             tokenize='porter unicode61'
@@ -418,7 +419,8 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
 
         CREATE TRIGGER IF NOT EXISTS logs_ai_transcript AFTER INSERT ON logs
         WHEN new.ai_tool IS NOT NULL BEGIN
-            INSERT INTO ai_logs_fts(rowid, message) VALUES (new.id, new.message);
+            INSERT INTO ai_logs_fts(rowid, message, ai_tool)
+            VALUES (new.id, new.message, new.ai_tool);
         END;
 
         -- Unlike the global FTS index, transcript volume is small enough to
@@ -426,8 +428,8 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         -- stale transcript terms instead of leaving phantom AI search entries.
         CREATE TRIGGER IF NOT EXISTS logs_ad_transcript AFTER DELETE ON logs
         WHEN old.ai_tool IS NOT NULL BEGIN
-            INSERT INTO ai_logs_fts(ai_logs_fts, rowid, message)
-            VALUES ('delete', old.id, old.message);
+            INSERT INTO ai_logs_fts(ai_logs_fts, rowid, message, ai_tool)
+            VALUES ('delete', old.id, old.message, old.ai_tool);
         END;
 
         -- Hostname registry for quick lookups
@@ -3581,6 +3583,52 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis(),
             "Migration 60: transcript-only FTS index ready"
+        );
+    }
+
+    // Migration 61: production dogfood showed that a common FTS term can
+    // still walk a large fraction of transcript history before post-FTS tool
+    // and time filters are applied. Index the small provider value inside the
+    // transcript FTS itself and add an AI-only timestamp index used to derive
+    // an exact-safe rowid floor for bounded searches. Rebuild is derived and
+    // atomic, matching migration 60's crash-recovery behavior.
+    if !migration_applied(&conn, 61)? {
+        tracing::info!(
+            "Migration 61: rebuilding transcript FTS with provider scope; this may take time on large transcript histories"
+        );
+        let started = std::time::Instant::now();
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE INDEX IF NOT EXISTS idx_logs_ai_timestamp_tool
+                 ON logs(timestamp, ai_tool) WHERE ai_tool IS NOT NULL;
+             DROP TRIGGER IF EXISTS logs_ai_transcript;
+             DROP TRIGGER IF EXISTS logs_ad_transcript;
+             DROP TABLE IF EXISTS ai_logs_fts;
+             CREATE VIRTUAL TABLE ai_logs_fts USING fts5(
+                 message,
+                 ai_tool,
+                 content='logs',
+                 content_rowid='id',
+                 tokenize='porter unicode61'
+             );
+             INSERT INTO ai_logs_fts(rowid, message, ai_tool)
+                 SELECT id, message, ai_tool FROM logs WHERE ai_tool IS NOT NULL;
+             CREATE TRIGGER logs_ai_transcript AFTER INSERT ON logs
+             WHEN new.ai_tool IS NOT NULL BEGIN
+                 INSERT INTO ai_logs_fts(rowid, message, ai_tool)
+                 VALUES (new.id, new.message, new.ai_tool);
+             END;
+             CREATE TRIGGER logs_ad_transcript AFTER DELETE ON logs
+             WHEN old.ai_tool IS NOT NULL BEGIN
+                 INSERT INTO ai_logs_fts(ai_logs_fts, rowid, message, ai_tool)
+                 VALUES ('delete', old.id, old.message, old.ai_tool);
+             END;
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (61);
+             COMMIT;",
+        )?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "Migration 61: provider-scoped transcript FTS index ready"
         );
     }
 

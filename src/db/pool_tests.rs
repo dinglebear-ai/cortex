@@ -10,9 +10,9 @@ use rusqlite::OptionalExtension;
 
 #[test]
 fn documented_schema_count_matches_known_version() {
-    assert_eq!(KNOWN_SCHEMA_VERSION, 60);
-    assert!(include_str!("../../README.md").contains("60 sequential schema migrations"));
-    assert!(include_str!("../../docs/architecture.md").contains("60 sequential migrations"));
+    assert_eq!(KNOWN_SCHEMA_VERSION, 61);
+    assert!(include_str!("../../README.md").contains("61 sequential schema migrations"));
+    assert!(include_str!("../../docs/architecture.md").contains("61 sequential migrations"));
 }
 
 #[test]
@@ -128,6 +128,65 @@ fn migration_60_creates_transcript_only_fts_and_insert_trigger() {
             "idx_ai_mcp_events_result_log_id".to_string(),
         ]
     );
+}
+
+#[test]
+fn migration_61_scopes_transcript_fts_by_tool_and_indexes_ai_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&test_storage_config(dir.path().join("migration-61.db"))).unwrap();
+    let conn = pool.get().unwrap();
+
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(ai_logs_fts)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "ai_tool"));
+
+    let index_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_logs_ai_timestamp_tool'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_exists, 1);
+    drop(conn);
+
+    let mut claude = migration_test_log();
+    claude.ai_tool = Some("claude".into());
+    claude.ai_session_id = Some("migration-claude".into());
+    claude.message = "sharedneedle from claude".into();
+    claude.raw = claude.message.clone();
+
+    let mut codex = migration_test_log();
+    codex.ai_tool = Some("codex".into());
+    codex.ai_session_id = Some("migration-codex".into());
+    codex.message = "sharedneedle from codex".into();
+    codex.raw = codex.message.clone();
+    insert_logs_batch(&pool, &[claude, codex]).unwrap();
+
+    let conn = pool.get().unwrap();
+    let claude_matches: i64 = conn
+        .query_row(
+            r#"SELECT COUNT(*) FROM ai_logs_fts
+             WHERE ai_logs_fts MATCH 'message : (sharedneedle) AND ai_tool : "claude"'"#,
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(claude_matches, 1);
+
+    let marker_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 61",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker_count, 1);
 }
 
 #[test]
