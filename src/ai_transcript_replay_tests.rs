@@ -1,6 +1,87 @@
 use super::*;
 
 #[tokio::test]
+async fn archived_transcript_replay_accepts_a_changed_locator() {
+    use sha2::{Digest, Sha256};
+
+    let (app, dir) = test_app(Some("secret"));
+    let original = sample_record();
+    let envelope: EvidenceEnvelope = serde_json::from_value(original["envelope"].clone()).unwrap();
+    let mut v2_evidence = scrub_envelope(envelope).unwrap();
+    v2_evidence.source.title = None;
+    v2_evidence.source.title_provenance = None;
+    let v2_fingerprint = format!(
+        "evidence-v2:sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&v2_evidence).unwrap())
+    );
+
+    let first = app
+        .clone()
+        .oneshot(transcript_request(
+            json!({"records": [original]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = ?1",
+        [&v2_fingerprint],
+    )
+    .unwrap();
+
+    let mut archived = sample_record();
+    archived["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
+    let replay = app
+        .clone()
+        .oneshot(transcript_request(
+            json!({"records": [archived.clone()]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(replay.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["receipts"][0]["disposition"], "duplicate");
+
+    archived["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "1".repeat(64)));
+    let second_replay = app
+        .clone()
+        .oneshot(transcript_request(
+            json!({"records": [archived]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_replay.status(), StatusCode::OK);
+    let fingerprint: String = conn
+        .query_row(
+            "SELECT request_fingerprint FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(fingerprint.starts_with("evidence-v3:sha256:"));
+
+    let mut changed_evidence = sample_record();
+    changed_evidence["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "1".repeat(64)));
+    changed_evidence["envelope"]["message"] = json!("different evidence");
+    let conflict = app
+        .oneshot(transcript_request(
+            json!({"records": [changed_evidence]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let log_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(log_count, 1);
+}
+
+#[tokio::test]
 async fn title_changes_and_missing_metadata_are_duplicate_replays() {
     let (app, dir) = test_app(Some("secret"));
     for title in [Some("Before"), Some("After"), None] {
@@ -30,7 +111,7 @@ async fn title_changes_and_missing_metadata_are_duplicate_replays() {
 }
 
 #[tokio::test]
-async fn old_full_envelope_receipt_accepts_title_only_changes_but_not_evidence_changes() {
+async fn old_full_envelope_receipt_accepts_title_and_locator_changes_but_not_evidence_changes() {
     check_old_receipt_replay(false).await;
     check_old_receipt_replay(true).await;
 }
@@ -93,6 +174,7 @@ async fn check_old_receipt_replay(timestamp_absent: bool) {
         replay["envelope"]["timestamp"] = serde_json::Value::Null;
     }
     replay["envelope"]["source"]["title"] = json!("Renamed");
+    replay["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
     let renamed = app
         .clone()
         .oneshot(transcript_request(

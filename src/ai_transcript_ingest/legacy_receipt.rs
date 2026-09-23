@@ -15,12 +15,43 @@ impl std::fmt::Display for IdempotencyConflict {
 impl std::error::Error for IdempotencyConflict {}
 
 fn envelope_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
-    // Supplemental display metadata can change without a transcript revision.
+    // Display metadata and the file's location can change without changing
+    // the transcript record (for example, when Codex archives a session).
     let mut evidence = envelope.clone();
     evidence.source.title = None;
     evidence.source.title_provenance = None;
+    evidence.source.locator.clear();
     let encoded = serde_json::to_vec(&evidence)?;
-    Ok(format!("evidence-v2:sha256:{:x}", Sha256::digest(encoded)))
+    Ok(format!("evidence-v3:sha256:{:x}", Sha256::digest(encoded)))
+}
+
+fn v2_fingerprint_matches(
+    tx: &rusqlite::Transaction<'_>,
+    key: &str,
+    envelope: &EvidenceEnvelope,
+    previous: &str,
+) -> anyhow::Result<bool> {
+    let stored_locator: Option<String> = tx
+        .query_row(
+            "SELECT l.ai_transcript_path FROM ai_transcript_forward_receipts r
+             JOIN logs l ON l.id = r.log_id WHERE r.source_record_id = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(stored_locator) = stored_locator else {
+        return Ok(false);
+    };
+    let mut original = envelope.clone();
+    original.source.title = None;
+    original.source.title_provenance = None;
+    original.source.locator = stored_locator;
+    Ok(previous
+        == format!(
+            "evidence-v2:sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&original)?)
+        ))
 }
 
 fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: bool) -> String {
@@ -65,6 +96,7 @@ fn old_fingerprint_matches(
     let mut original = envelope.clone();
     original.source.title = source.title;
     original.source.title_provenance = source.title_provenance;
+    original.source.locator = source.locator;
     Ok(previous
         == format!(
             "sha256:{:x}",
@@ -86,7 +118,7 @@ fn legacy_receipt_matches(
             "SELECT r.envelope_version, r.provider, r.source_identity,
                     r.source_epoch, r.source_revision,
                     l.timestamp, l.message, l.ai_project, l.ai_session_id,
-                    l.ai_transcript_path, l.metadata_json
+                    l.metadata_json
              FROM ai_transcript_forward_receipts r
              JOIN logs l ON l.id = r.log_id
              WHERE r.source_record_id = ?1",
@@ -103,7 +135,6 @@ fn legacy_receipt_matches(
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Option<String>>(10)?,
                 ))
             },
         )
@@ -118,7 +149,6 @@ fn legacy_receipt_matches(
         message,
         ai_project,
         ai_session_id,
-        locator,
         metadata_json,
     )) = stored
     else {
@@ -136,9 +166,11 @@ fn legacy_receipt_matches(
     let mut incoming_source = envelope.source.clone();
     incoming_source.title = None;
     incoming_source.title_provenance = None;
+    incoming_source.locator.clear();
     if let Some(source) = &mut stored_source {
         source.title = None;
         source.title_provenance = None;
+        source.locator.clear();
     }
     let stored_capabilities = metadata
         .get("capabilities")
@@ -171,7 +203,6 @@ fn legacy_receipt_matches(
         && message == envelope.message
         && ai_project == envelope.ai_project
         && ai_session_id == envelope.ai_session_id
-        && locator.as_deref() == Some(envelope.source.locator.as_str())
         // A legacy canonical row does not record whether its timestamp came
         // from the source envelope or the receiver clock. Requiring the replay
         // to supply the stored value avoids silently binding an ambiguous
@@ -257,6 +288,9 @@ fn insert_envelopes_with_identity(
                 // immutable evidence against the canonical row, never merely
                 // because the caller reused an existing source-record ID.
                 let matches = match previous_fingerprint.as_deref() {
+                    Some(previous) if previous.starts_with("evidence-v2:sha256:") => {
+                        v2_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?
+                    }
                     Some(previous) if previous.starts_with("sha256:") => {
                         old_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?
                     }
