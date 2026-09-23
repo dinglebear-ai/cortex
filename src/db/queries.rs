@@ -758,6 +758,11 @@ pub fn list_ai_sessions_live(
         bindings.push(rusqlite::types::Value::Text(tool.clone()));
         idx += 1;
     }
+    if let Some(session_id) = &params.ai_session_id {
+        sql.push_str(&format!(" AND ai_session_id = ?{idx}"));
+        bindings.push(rusqlite::types::Value::Text(session_id.clone()));
+        idx += 1;
+    }
     if let Some(hostname) = &params.host {
         sql.push_str(&format!(" AND hostname = ?{idx}"));
         bindings.push(rusqlite::types::Value::Text(hostname.clone()));
@@ -852,6 +857,11 @@ fn list_ai_sessions_from_rollup(
     if let Some(tool) = &params.ai_tool {
         sql.push_str(&format!(" AND ai_tool = ?{idx}"));
         bindings.push(rusqlite::types::Value::Text(tool.clone()));
+        idx += 1;
+    }
+    if let Some(session_id) = &params.ai_session_id {
+        sql.push_str(&format!(" AND ai_session_id = ?{idx}"));
+        bindings.push(rusqlite::types::Value::Text(session_id.clone()));
         idx += 1;
     }
     if let Some(hostname) = &params.host {
@@ -2085,6 +2095,7 @@ pub fn correlate_session_graph(
 
     Ok(SessionGraphInputs {
         bounds: Some((start, end)),
+        session_entity_keys: session_keys,
         discovered_hosts,
         discovered_entities,
         used_graph,
