@@ -2,6 +2,13 @@ use std::time::Instant;
 
 use super::*;
 
+use super::session_investigation_support::{
+    build_session_source_counts, extract_session_external_references,
+    related_sessions_for_investigation, session_investigation_metadata,
+    summarize_session_source_evidence, timestamp_inclusive_between,
+};
+
+
 impl CortexService {
     pub async fn session_investigate(
         &self,
@@ -352,95 +359,37 @@ impl CortexService {
             })
             .await?;
 
-        let related_sessions = self
-            .list_sessions(ListSessionsRequest {
-                project: Some(session.project.clone()),
-                tool: None,
-                session_id: None,
-                host: None,
-                since: Some(session.first_seen.clone()),
-                until: Some(session.last_seen.clone()),
-                limit: Some(50),
-            })
-            .await?
-            .sessions
-            .into_iter()
-            .filter(|candidate| candidate.session_key != session.session_key)
-            .take(20)
-            .collect::<Vec<_>>();
+        let related_sessions = related_sessions_for_investigation(self, &session).await?;
 
         let external_references = extract_session_external_references(&transcript_page.events);
         let source_evidence = summarize_session_source_evidence(
             correlated.graph_correlation.as_ref(),
             section_limit as usize,
         );
-        let mut source_counts = source_evidence
-            .iter()
-            .map(|(kind, summary)| (kind.clone(), summary.count))
-            .collect::<BTreeMap<_, _>>();
-        for event in &observatory.events {
-            *source_counts
-                .entry(format!("observatory:{}", event.source_kind))
-                .or_default() += 1;
-        }
-        if !skill_events.events.is_empty() {
-            source_counts.insert("skill_event".to_string(), skill_events.events.len());
-        }
-        if !mcp_events.events.is_empty() {
-            source_counts.insert("mcp_event".to_string(), mcp_events.events.len());
-        }
-        if !hook_events.events.is_empty() {
-            source_counts.insert("hook_event".to_string(), hook_events.events.len());
-        }
-        if !artifact_evidence.is_empty() {
-            source_counts.insert("artifact_evidence".to_string(), artifact_evidence.len());
-        }
-        if !observatory.spans.is_empty() {
-            source_counts.insert("otlp_span".to_string(), observatory.spans.len());
-        }
-        if !observatory.metrics.is_empty() {
-            source_counts.insert("otlp_metric".to_string(), observatory.metrics.len());
-        }
-        if let Some(graph) = graph_neighborhood.as_ref() {
-            source_counts.insert("graph_entity".to_string(), graph.entities.len());
-            source_counts.insert("graph_relationship".to_string(), graph.relationships.len());
-            source_counts.insert("graph_evidence".to_string(), graph.evidence.len());
-        }
-        if let Some(correlation) = correlated.graph_correlation.as_ref()
-            && !correlation.heartbeat_summaries.is_empty()
-        {
-            source_counts.insert(
-                "heartbeat_summary".to_string(),
-                correlation.heartbeat_summaries.len(),
-            );
-        }
-        if !incident_context.error_logs.is_empty() {
-            source_counts.insert(
-                "incident_error_log".to_string(),
-                incident_context.error_logs.len(),
-            );
-        }
-        if !notifications.is_empty() {
-            source_counts.insert("notification".to_string(), notifications.len());
-        }
-        if !observatory.actors.is_empty() {
-            source_counts.insert("observatory_actor".to_string(), observatory.actors.len());
-        }
-        if observatory.parent_run.is_some() {
-            source_counts.insert("parent_run".to_string(), 1);
-        }
-        if observatory.previous_run.is_some() {
-            source_counts.insert("previous_run".to_string(), 1);
-        }
-        if !observatory.related_runs.is_empty() {
-            source_counts.insert(
-                "same_worktree_run".to_string(),
-                observatory.related_runs.len(),
-            );
-        }
-        if !retention_lineage.is_empty() {
-            source_counts.insert("retention_lineage".to_string(), retention_lineage.len());
-        }
+        let graph_counts = graph_neighborhood.as_ref().map(|graph| {
+            (
+                graph.entities.len(),
+                graph.relationships.len(),
+                graph.evidence.len(),
+            )
+        });
+        let heartbeat_summary_count = correlated
+            .graph_correlation
+            .as_ref()
+            .map_or(0, |value| value.heartbeat_summaries.len());
+        let source_counts = build_session_source_counts(
+            &source_evidence,
+            &observatory,
+            skill_events.events.len(),
+            mcp_events.events.len(),
+            hook_events.events.len(),
+            artifact_evidence.len(),
+            graph_counts,
+            heartbeat_summary_count,
+            incident_context.error_logs.len(),
+            notifications.len(),
+            retention_lineage.len(),
+        );
 
         let mut partial_reasons = Vec::new();
         if transcript_page.has_more {
@@ -535,152 +484,6 @@ impl CortexService {
             },
         })
     }
-}
-
-fn session_investigation_metadata(
-    budget: &InvestigationBudget,
-    started: Instant,
-    correlation: Option<&GraphSessionCorrelation>,
-    has_graph_neighborhood: bool,
-    partial_reasons: &[String],
-    transcript_rows: usize,
-    evidence_rows: usize,
-) -> InvestigationMetadata {
-    let graph_calls = u32::from(correlation.is_some()) + u32::from(has_graph_neighborhood);
-    let log_rows = correlation.map_or(0, |value| value.logs.len() as u32);
-    let partial = !partial_reasons.is_empty();
-    InvestigationMetadata {
-        server_version: env!("CARGO_PKG_VERSION").to_string(),
-        schema_version: INVESTIGATION_UI_VERSION.to_string(),
-        graph_projection_status: correlation
-            .map(|value| if value.used_graph { "used" } else { "fallback" }.to_string()),
-        source_watermark: None,
-        degraded_reasons: correlation
-            .filter(|value| !value.used_graph)
-            .map(|_| vec!["session_graph_entity_unavailable".to_string()])
-            .unwrap_or_default(),
-        truncated: partial,
-        truncation_reasons: partial_reasons.to_vec(),
-        partial,
-        partial_reasons: partial_reasons.to_vec(),
-        auth_state: "bearer".to_string(),
-        budget: budget.clone(),
-        budget_used: InvestigationBudgetUsed {
-            graph_calls,
-            log_rows,
-            evidence_rows: evidence_rows.min(u32::MAX as usize) as u32,
-            candidate_explanations: 0,
-            wall_time_ms: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
-            payload_bytes: 0,
-        },
-        payload_limit_bytes: budget.max_payload_bytes,
-        version_skew: (transcript_rows > 200).then(|| "transcript_limit_exceeded".to_string()),
-    }
-}
-
-fn summarize_session_source_evidence(
-    correlation: Option<&GraphSessionCorrelation>,
-    requested_limit: usize,
-) -> BTreeMap<String, models::SessionSourceEvidenceSummary> {
-    let id_limit = requested_limit.clamp(1, 50);
-    let mut summaries = BTreeMap::<String, models::SessionSourceEvidenceSummary>::new();
-    let Some(correlation) = correlation else {
-        return summaries;
-    };
-
-    for row in &correlation.logs {
-        let kind = row
-            .source_kind
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        let summary = summaries.entry(kind).or_default();
-        summary.count += 1;
-        if summary.log_ids.len() < id_limit {
-            summary.log_ids.push(row.entry.id);
-        } else {
-            summary.truncated = true;
-        }
-    }
-
-    summaries
-}
-
-fn timestamp_inclusive_between(value: &str, start: &str, end: &str) -> bool {
-    let Ok(value) = chrono::DateTime::parse_from_rfc3339(value) else {
-        return false;
-    };
-    let Ok(start) = chrono::DateTime::parse_from_rfc3339(start) else {
-        return false;
-    };
-    let Ok(end) = chrono::DateTime::parse_from_rfc3339(end) else {
-        return false;
-    };
-    value >= start && value <= end
-}
-
-fn extract_session_external_references(
-    events: &[models::RenderedSessionEvent],
-) -> Vec<models::SessionExternalReference> {
-    let mut references = std::collections::BTreeSet::new();
-    for event in events {
-        for raw in event.text.split_whitespace() {
-            let token = raw.trim_matches(|ch: char| {
-                matches!(
-                    ch,
-                    ',' | '.' | ';' | ':' | ')' | '(' | ']' | '[' | '}' | '{' | '"' | '\''
-                )
-            });
-            if token.is_empty() {
-                continue;
-            }
-            let kind = if token.starts_with("http://") || token.starts_with("https://") {
-                if token.contains("github.com/") && token.contains("/pull/") {
-                    models::SessionExternalReferenceKind::GithubPullRequest
-                } else if token.contains("github.com/") && token.contains("/issues/") {
-                    models::SessionExternalReferenceKind::GithubIssue
-                } else {
-                    models::SessionExternalReferenceKind::Url
-                }
-            } else if looks_like_linear_identifier(token) {
-                models::SessionExternalReferenceKind::LinearIssue
-            } else if token.strip_prefix('#').is_some_and(|number| {
-                !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
-            }) {
-                models::SessionExternalReferenceKind::GithubReference
-            } else if looks_like_commit_sha(token) {
-                models::SessionExternalReferenceKind::CommitSha
-            } else {
-                continue;
-            };
-            references.insert(models::SessionExternalReference {
-                kind,
-                value: safe_passive_text(token, 500),
-                source_position: Some(event.position),
-                evidence_kind: "transcript_text".to_string(),
-                trust_level: "claimed".to_string(),
-                verified: false,
-            });
-        }
-    }
-    references.into_iter().collect()
-}
-
-fn looks_like_linear_identifier(token: &str) -> bool {
-    let Some((prefix, suffix)) = token.split_once('-') else {
-        return false;
-    };
-    (2..=12).contains(&prefix.len())
-        && prefix
-            .chars()
-            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
-        && !suffix.is_empty()
-        && suffix.chars().all(|ch| ch.is_ascii_digit())
-}
-
-fn looks_like_commit_sha(token: &str) -> bool {
-    (7..=40).contains(&token.len())
-        && token.chars().all(|ch| ch.is_ascii_hexdigit())
-        && token.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
 use super::*;
+use super::super::session_investigation_support::looks_like_linear_identifier;
+
 
 fn event(position: i64, text: &str) -> models::RenderedSessionEvent {
     models::RenderedSessionEvent {
