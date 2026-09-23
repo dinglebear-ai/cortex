@@ -128,6 +128,25 @@ async fn transient_v3_receipt_rebinds_to_rollback_safe_v2() {
     )
     .unwrap();
 
+    let mut changed = sample_record();
+    changed["envelope"]["message"] = json!("changed transient v3 evidence");
+    let conflict = app
+        .clone()
+        .oneshot(transcript_request(
+            json!({"records": [changed]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let fingerprint: String = conn
+        .query_row(
+            "SELECT request_fingerprint FROM ai_transcript_forward_receipts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fingerprint, transient_v3);
+
     let mut archived = sample_record();
     archived["envelope"]["source"]["locator"] =
         json!(format!("sha256:{}", "f".repeat(64)));
