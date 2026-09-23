@@ -47,39 +47,22 @@ fn transient_v3_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<Strin
     ))
 }
 
-fn stored_locator(
-    tx: &rusqlite::Transaction<'_>,
-    key: &str,
-) -> anyhow::Result<Option<String>> {
-    Ok(tx
-        .query_row(
-            "SELECT l.ai_transcript_path FROM ai_transcript_forward_receipts r
-             JOIN logs l ON l.id = r.log_id WHERE r.source_record_id = ?1",
-            [key],
-            |row| row.get(0),
-        )
-        .optional()?
-        .flatten())
-}
-
 fn canonical_v2_fingerprint(
-    tx: &rusqlite::Transaction<'_>,
-    key: &str,
     envelope: &EvidenceEnvelope,
+    stored_locator: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
-    let Some(locator) = stored_locator(tx, key)? else {
+    let Some(locator) = stored_locator else {
         return Ok(None);
     };
-    Ok(Some(v2_fingerprint_with_locator(envelope, &locator)?))
+    Ok(Some(v2_fingerprint_with_locator(envelope, locator)?))
 }
 
 fn v2_fingerprint_matches(
-    tx: &rusqlite::Transaction<'_>,
-    key: &str,
     envelope: &EvidenceEnvelope,
+    stored_locator: Option<&str>,
     previous: &str,
 ) -> anyhow::Result<bool> {
-    Ok(canonical_v2_fingerprint(tx, key, envelope)?.as_deref() == Some(previous))
+    Ok(canonical_v2_fingerprint(envelope, stored_locator)?.as_deref() == Some(previous))
 }
 
 fn transient_v3_fingerprint_matches(
@@ -100,8 +83,8 @@ fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: 
     }
 }
 
-/// Reconstruct only mutable titles from the stored row, then check the old
-/// full-envelope hash. This also preserves timestamp-less exact replays: the
+/// Reconstruct mutable display/location metadata from the stored row, then
+/// check the old full-envelope hash. This also preserves timestamp-less exact replays: the
 /// hash, unlike a canonical log timestamp, retains their original `None`.
 fn old_fingerprint_matches(
     tx: &rusqlite::Transaction<'_>,
@@ -312,12 +295,20 @@ fn insert_envelopes_with_identity(
         )?;
         let already_accepted = tx
             .query_row(
-                "SELECT request_fingerprint FROM ai_transcript_forward_receipts WHERE source_record_id = ?1",
+                "SELECT r.request_fingerprint, l.ai_transcript_path
+                 FROM ai_transcript_forward_receipts r
+                 JOIN logs l ON l.id = r.log_id
+                 WHERE r.source_record_id = ?1",
                 [&stored_receipt_key],
-                |row| row.get::<_, Option<String>>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
             )
             .optional()?;
-        if let Some(previous_fingerprint) = already_accepted {
+        if let Some((previous_fingerprint, stored_locator)) = already_accepted {
             if previous_fingerprint.as_deref() != Some(request_fingerprint.as_str()) {
                 // Compatibility fingerprints are validated against the
                 // canonical row before any rebinding. Persist v2 so a rollback
@@ -328,7 +319,7 @@ fn insert_envelopes_with_identity(
                         Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
                             let matches = transient_v3_fingerprint_matches(&envelope, previous)?;
                             let replacement = if matches {
-                                canonical_v2_fingerprint(&tx, &stored_receipt_key, &envelope)?
+                                canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
                             } else {
                                 None
                             };
@@ -336,9 +327,8 @@ fn insert_envelopes_with_identity(
                         }
                         Some(previous) if previous.starts_with("evidence-v2:sha256:") => (
                             v2_fingerprint_matches(
-                                &tx,
-                                &stored_receipt_key,
                                 &envelope,
+                                stored_locator.as_deref(),
                                 previous,
                             )?,
                             None,

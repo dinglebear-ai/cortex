@@ -247,6 +247,7 @@ async fn check_old_receipt_replay(timestamp_absent: bool) {
     if timestamp_absent {
         original["envelope"]["timestamp"] = serde_json::Value::Null;
     }
+    let expected_v2 = receipt_v2_fingerprint(&original);
     let envelope: EvidenceEnvelope = serde_json::from_value(original["envelope"].clone()).unwrap();
     let scrubbed = scrub_envelope(envelope).unwrap();
     let old_hash = format!(
@@ -314,7 +315,7 @@ async fn check_old_receipt_replay(timestamp_absent: bool) {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(rebound, receipt_v2_fingerprint(&sample_record()));
+    assert_eq!(rebound, expected_v2);
     replay["envelope"]["message"] = json!("different evidence");
     let changed = app
         .oneshot(transcript_request(json!({"records": [replay]}).to_string()))
