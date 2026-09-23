@@ -104,7 +104,7 @@ prepare_oauth_env() {
     redirects="$(append_csv_unique "${redirects}" "${codex_callback}")"
   fi
   export CORTEX_AUTH_ALLOWED_REDIRECT_URIS="${redirects}"
-  export CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH="${CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH:-false}"
+  export CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH="${CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH:-true}"
 }
 
 main() {
