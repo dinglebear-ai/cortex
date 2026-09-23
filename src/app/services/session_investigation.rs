@@ -8,7 +8,6 @@ use super::session_investigation_support::{
     summarize_session_source_evidence, timestamp_inclusive_between,
 };
 
-
 impl CortexService {
     pub async fn session_investigate(
         &self,
