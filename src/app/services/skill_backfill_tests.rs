@@ -103,6 +103,28 @@ fn insert_legacy_claude_log_row_without_source(pool: &DbPool) -> i64 {
     insert_claude_row(pool, None)
 }
 
+fn insert_forwarded_claude_command_row(pool: &DbPool, message: &str) -> i64 {
+    let conn = pool.get().unwrap();
+    let metadata_json = serde_json::json!({
+        "content_scrubbed": true,
+        "event_kind": "user",
+        "source": {
+            "adapter_version": "cortex-ai-forwarder-v1",
+            "locator": "sha256:forwarded-transcript",
+            "provider": "claude"
+        },
+        "source_type": "transcript"
+    })
+    .to_string();
+    conn.execute(
+        "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json)
+         VALUES ('2026-09-04T02:10:01.475Z', 'devhost', 'info', ?1, '', 'transcript://claude_project', 'claude', 'cortex', 'sess-forwarded', 'sha256:forwarded-transcript', ?2)",
+        rusqlite::params![message, metadata_json],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
 #[tokio::test]
 #[serial(skill_backfill_guard)]
 async fn dry_run_reports_counts_without_inserting() {
@@ -209,6 +231,43 @@ async fn backfill_recovers_modern_claude_skill_command_envelope() {
     assert_eq!(skill, "vibin:repo-status");
     assert_eq!(plugin.as_deref(), Some("vibin"));
     assert_eq!(kind, "claude_skill_command");
+}
+
+#[tokio::test]
+#[serial(skill_backfill_guard)]
+async fn backfill_recovers_forwarded_scrubbed_claude_command_envelope() {
+    let (service, _dir) = test_service();
+    let pool = service.pool_for_test();
+    insert_forwarded_claude_command_row(
+        &pool,
+        "<command-message>vibin:review-pr</command-message> <command-name>/vibin:review-pr</command-name> <command-args>Labby 568 + Depot 79</command-args>",
+    );
+
+    let result = service
+        .backfill_skill_events(SkillBackfillRequest {
+            since: Some("2026-09-01T00:00:00Z".to_string()),
+            limit: Some(100),
+            dry_run: false,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(result.scanned, 1);
+    assert_eq!(result.inserted, 1);
+    assert_eq!(result.source_unavailable, 0);
+
+    let conn = pool.get().unwrap();
+    let (skill, plugin, kind, evidence): (String, Option<String>, String, String) = conn
+        .query_row(
+            "SELECT skill_name, skill_plugin, event_kind, evidence_kind FROM ai_skill_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(skill, "vibin:review-pr");
+    assert_eq!(plugin.as_deref(), Some("vibin"));
+    assert_eq!(kind, "claude_skill_command");
+    assert_eq!(evidence, "transcript_content");
 }
 
 #[tokio::test]

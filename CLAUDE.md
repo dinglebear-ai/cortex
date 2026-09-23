@@ -179,10 +179,11 @@ Scope taxonomy: every action requires `cortex:read` except the six **admin** act
 
 ## Plugin Skills
 
-Twelve skills ship with the Claude Code plugin — one directory each under `plugins/cortex/skills/<skill>/SKILL.md`:
+Thirteen skills ship with the Claude Code plugin — one directory each under `plugins/cortex/skills/<skill>/SKILL.md`:
 
 | Skill | Purpose |
 |-------|---------|
+| `install-cortex` | Install, secure, deploy, connect, and verify Cortex |
 | `cortex` | Primary log-intelligence skill |
 | `frustration-assessment` | Analyze `abuse_investigate` evidence bundles |
 | `hook-friction-assessment` | Analyze `hook_investigate` evidence bundles |
