@@ -729,6 +729,7 @@ pub fn list_ai_sessions_live(
 ) -> Result<Vec<AiSessionEntry>> {
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
+    let offset = params.offset.unwrap_or(0).min(10_000);
     let mut sql = String::from(
         "WITH filtered_logs AS MATERIALIZED (
             SELECT id, ai_project, ai_tool, ai_session_id, ai_transcript_path,
@@ -807,7 +808,7 @@ pub fn list_ai_sessions_live(
           GROUP BY f.ai_project, f.ai_tool, f.ai_session_id, f.hostname,
                    t.session_title, t.session_title_provenance
           ORDER BY last_seen DESC
-          LIMIT {limit}"
+          LIMIT {limit} OFFSET {offset}"
     ));
 
     let mut stmt = conn.prepare(&sql)?;
@@ -835,6 +836,7 @@ fn list_ai_sessions_from_rollup(
 ) -> Result<Vec<AiSessionEntry>> {
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
+    let offset = params.offset.unwrap_or(0).min(10_000);
     let mut sql = String::from(
         "SELECT ai_project, ai_tool, ai_session_id, ai_transcript_path,
                 hostname, first_seen, last_seen, event_count,
@@ -864,7 +866,9 @@ fn list_ai_sessions_from_rollup(
     // (the cost that made the live aggregation slow). Adding tiebreak columns
     // would reintroduce a temp b-tree, so ties stay engine-arbitrary here just
     // as they are in the live query.
-    sql.push_str(&format!(" ORDER BY last_seen DESC LIMIT {limit}"));
+    sql.push_str(&format!(
+        " ORDER BY last_seen DESC LIMIT {limit} OFFSET {offset}"
+    ));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {

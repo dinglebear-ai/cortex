@@ -153,6 +153,7 @@ impl SessionsArgs {
             since: self.since,
             until: self.until,
             limit: self.limit,
+            offset: None,
         }
     }
 }
