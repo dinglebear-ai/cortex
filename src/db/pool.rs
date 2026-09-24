@@ -2511,6 +2511,14 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         conn.execute_batch(&format!(
             "BEGIN IMMEDIATE;
 
+             -- A repaired database can replay this table rebuild after the
+             -- graph journal was installed. Evidence triggers reference the
+             -- relationship table while it is replaced; recreate them after
+             -- all migrations complete.
+             DROP TRIGGER IF EXISTS graph_evidence_insert_change;
+             DROP TRIGGER IF EXISTS graph_evidence_update_change;
+             DROP TRIGGER IF EXISTS graph_evidence_delete_change;
+
              CREATE TABLE graph_entities_new (
                  id            INTEGER PRIMARY KEY AUTOINCREMENT,
                  entity_type   TEXT NOT NULL CHECK (entity_type IN (
@@ -3654,12 +3662,26 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
                  occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
              );
              CREATE INDEX idx_graph_changes_time ON graph_change_events(occurred_at, seq);
-             CREATE TRIGGER graph_entity_insert_change AFTER INSERT ON graph_entities
+             INSERT INTO schema_migrations (version) VALUES (62);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 62: graph discovery change journal ready");
+    }
+
+    // Historical repair tests can replay a sparse pre-graph schema. Install
+    // capture triggers only once all graph tables exist; a later pool open
+    // recreates triggers after any table-rebuild migration has dropped them.
+    if table_exists(&conn, "graph_entities")?
+        && table_exists(&conn, "graph_relationships")?
+        && table_exists(&conn, "graph_relationship_evidence")?
+    {
+        conn.execute_batch(
+            "             CREATE TRIGGER IF NOT EXISTS graph_entity_insert_change AFTER INSERT ON graph_entities
              WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
                  INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type, entity_id)
                  VALUES ('entity', 'upsert', new.entity_type || char(31) || new.canonical_key, new.entity_type, new.id);
              END;
-             CREATE TRIGGER graph_entity_update_change AFTER UPDATE OF
+             CREATE TRIGGER IF NOT EXISTS graph_entity_update_change AFTER UPDATE OF
                  display_label, source_kind, source_id, trust_level, first_seen_at, last_seen_at
              ON graph_entities WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1
              AND (old.display_label IS NOT new.display_label OR old.source_kind IS NOT new.source_kind
@@ -3668,17 +3690,17 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
                  INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type, entity_id)
                  VALUES ('entity', 'upsert', new.entity_type || char(31) || new.canonical_key, new.entity_type, new.id);
              END;
-             CREATE TRIGGER graph_entity_delete_change AFTER DELETE ON graph_entities
+             CREATE TRIGGER IF NOT EXISTS graph_entity_delete_change AFTER DELETE ON graph_entities
              WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
                  INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type)
                  VALUES ('entity', 'delete', old.entity_type || char(31) || old.canonical_key, old.entity_type);
              END;
-             CREATE TRIGGER graph_relationship_insert_change AFTER INSERT ON graph_relationships
+             CREATE TRIGGER IF NOT EXISTS graph_relationship_insert_change AFTER INSERT ON graph_relationships
              WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
                  INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
                  VALUES ('relationship', 'upsert', new.relationship_key, new.id);
              END;
-             CREATE TRIGGER graph_relationship_update_change AFTER UPDATE OF
+             CREATE TRIGGER IF NOT EXISTS graph_relationship_update_change AFTER UPDATE OF
                  src_entity_id, dst_entity_id, relationship_type, reason_code, trust_level,
                  confidence, evidence_count, first_seen_at, last_seen_at
              ON graph_relationships WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1
@@ -3690,33 +3712,31 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
                  INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
                  VALUES ('relationship', 'upsert', new.relationship_key, new.id);
              END;
-             CREATE TRIGGER graph_relationship_delete_change AFTER DELETE ON graph_relationships
+             CREATE TRIGGER IF NOT EXISTS graph_relationship_delete_change AFTER DELETE ON graph_relationships
              WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
                  INSERT INTO graph_change_events (object_kind, operation, item_key)
                  VALUES ('relationship', 'delete', old.relationship_key);
              END;
-             CREATE TRIGGER graph_evidence_insert_change AFTER INSERT ON graph_relationship_evidence
+             CREATE TRIGGER IF NOT EXISTS graph_evidence_insert_change AFTER INSERT ON graph_relationship_evidence
              WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
                  INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
                  SELECT 'relationship', 'upsert', relationship_key, id
                  FROM graph_relationships WHERE id = new.relationship_id;
              END;
-             CREATE TRIGGER graph_evidence_update_change AFTER UPDATE ON graph_relationship_evidence
+             CREATE TRIGGER IF NOT EXISTS graph_evidence_update_change AFTER UPDATE ON graph_relationship_evidence
              WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
                  INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
                  SELECT 'relationship', 'upsert', relationship_key, id
                  FROM graph_relationships WHERE id = new.relationship_id;
              END;
-             CREATE TRIGGER graph_evidence_delete_change AFTER DELETE ON graph_relationship_evidence
+             CREATE TRIGGER IF NOT EXISTS graph_evidence_delete_change AFTER DELETE ON graph_relationship_evidence
              WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
                  INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
                  SELECT 'relationship', 'upsert', relationship_key, id
                  FROM graph_relationships WHERE id = old.relationship_id;
              END;
-             INSERT INTO schema_migrations (version) VALUES (62);
-             COMMIT;",
+"
         )?;
-        tracing::info!("Migration 62: graph discovery change journal ready");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {
