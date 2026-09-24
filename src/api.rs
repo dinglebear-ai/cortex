@@ -36,7 +36,8 @@ use crate::app::{
     CorrelateEventsRequest, CorrelateStateRequest, CortexService, DbBackupRequest,
     DbCheckpointRequest, DbIntegrityRequest, DbVacuumRequest, FeedLogsRequest, FileTailRequest,
     FilterLogsRequest, FleetStateRequest, GetErrorsRequest, GetLogRequest, GraphAroundRequest,
-    GraphEntityLookupRequest, GraphEvidenceLookupRequest, GraphExplainRequest, HostStateRequest,
+    GraphChangesRequest, GraphEntitiesRequest, GraphEntityLookupRequest,
+    GraphEvidenceLookupRequest, GraphExplainRequest, GraphRelationshipsRequest, HostStateRequest,
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
     ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListMcpEventsRequest,
     ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
@@ -354,6 +355,9 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         )
         .contract_route("GET /api/incident-context", get(incident_context))
         .contract_route("GET /api/graph/entity", get(graph_entity))
+        .contract_route("GET /api/graph/entities", get(graph_entities))
+        .contract_route("GET /api/graph/relationships", get(graph_relationships))
+        .contract_route("GET /api/graph/changes", get(graph_changes))
         .contract_route("GET /api/graph/around", get(graph_around))
         .contract_route("GET /api/graph/explain", get(graph_explain))
         .contract_route("GET /api/graph/evidence", get(graph_evidence))
@@ -1758,6 +1762,27 @@ async fn graph_entity(
     respond(state.service.graph_entity_lookup(q).await)
 }
 
+async fn graph_entities(
+    State(state): State<ApiState>,
+    Query(q): Query<GraphEntitiesRequest>,
+) -> axum::response::Response {
+    respond(state.service.graph_entities(q).await)
+}
+
+async fn graph_relationships(
+    State(state): State<ApiState>,
+    Query(q): Query<GraphRelationshipsRequest>,
+) -> axum::response::Response {
+    respond(state.service.graph_relationships(q).await)
+}
+
+async fn graph_changes(
+    State(state): State<ApiState>,
+    Query(q): Query<GraphChangesRequest>,
+) -> axum::response::Response {
+    respond(state.service.graph_changes(q).await)
+}
+
 async fn graph_around(
     State(state): State<ApiState>,
     Query(q): Query<GraphAroundRequest>,
@@ -2371,6 +2396,16 @@ async fn ai_prune_checkpoints(
 fn respond<T: serde::Serialize>(result: crate::app::ServiceResult<T>) -> axum::response::Response {
     match result {
         Ok(value) => Json(value).into_response(),
+        Err(crate::app::ServiceError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": msg, "recovery": "restart_snapshot"})),
+        )
+            .into_response(),
+        Err(crate::app::ServiceError::Gone(msg)) => (
+            StatusCode::GONE,
+            Json(json!({"error": msg, "recovery": "restart_snapshot"})),
+        )
+            .into_response(),
         Err(crate::app::ServiceError::InvalidInput(msg)) => {
             (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
         }
