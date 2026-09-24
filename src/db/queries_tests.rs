@@ -2012,6 +2012,7 @@ fn ai_session_queries_respect_filters() {
             since: Some("2026-01-01T00:00:00Z".into()),
             until: Some("2026-01-01T23:59:59Z".into()),
             limit: Some(10),
+            offset: None,
         },
     )
     .unwrap();
@@ -2347,6 +2348,7 @@ fn default_session_params() -> ListAiSessionsParams {
         since: None,
         until: None,
         limit: Some(100),
+        offset: None,
     }
 }
 
@@ -2384,6 +2386,40 @@ fn rollup_result_equals_live_aggregation() {
         assert_eq!(l.event_count, r.event_count, "event_count drift");
         assert_eq!(l.ai_transcript_path, r.ai_transcript_path);
     }
+}
+
+#[test]
+fn session_inventory_offset_pages_match_live_and_rollup() {
+    let (pool, _dir) = test_pool();
+    seed_ai_sessions(&pool);
+    let all = list_ai_sessions(&pool, &default_session_params()).unwrap();
+    let page = ListAiSessionsParams {
+        limit: Some(5),
+        offset: Some(5),
+        ..default_session_params()
+    };
+    let live = list_ai_sessions(&pool, &page).unwrap();
+    assert_eq!(live.len(), 5);
+    assert_eq!(
+        live.iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>(),
+        all[5..10]
+            .iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>()
+    );
+    refresh_ai_session_rollup(&pool).unwrap();
+    let rolled = list_ai_sessions(&pool, &page).unwrap();
+    assert_eq!(
+        rolled
+            .iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>(),
+        live.iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -3413,6 +3449,7 @@ fn bench_stats_and_sessions() {
         since: None,
         until: None,
         limit: Some(100),
+        offset: None,
     };
     let mut live_rows = 0usize;
     let sessions_live_latency = bench_percentiles_ms(20, || {

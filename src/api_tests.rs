@@ -1306,6 +1306,41 @@ async fn sessions_route_lists_ingested_session() {
 }
 
 #[tokio::test]
+async fn sessions_route_pages_metadata_with_offset() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    db::insert_logs_batch(
+        &pool,
+        &[
+            ai_entry(
+                "2026-01-01T00:00:00Z",
+                "host-a",
+                "info",
+                "first",
+                "cortex",
+                "codex",
+                "s1",
+            ),
+            ai_entry(
+                "2026-01-02T00:00:00Z",
+                "host-a",
+                "info",
+                "second",
+                "cortex",
+                "codex",
+                "s2",
+            ),
+        ],
+    )
+    .unwrap();
+    let app = router(state).unwrap();
+    let (status, value) = get_json(app, "/api/sessions?limit=1&offset=1", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["sessions"][0]["session_id"], "s1");
+    assert!(value["sessions"][0].get("message").is_none());
+}
+
+#[tokio::test]
 async fn ai_search_requires_query_param() {
     let (state, _pool, _dir) = test_state(Some("secret".into()));
     let app = router(state).unwrap();
