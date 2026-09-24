@@ -10,9 +10,9 @@ use rusqlite::OptionalExtension;
 
 #[test]
 fn documented_schema_count_matches_known_version() {
-    assert_eq!(KNOWN_SCHEMA_VERSION, 61);
-    assert!(include_str!("../../README.md").contains("61 sequential schema migrations"));
-    assert!(include_str!("../../docs/architecture.md").contains("61 sequential migrations"));
+    assert_eq!(KNOWN_SCHEMA_VERSION, 62);
+    assert!(include_str!("../../README.md").contains("62 sequential schema migrations"));
+    assert!(include_str!("../../docs/architecture.md").contains("62 sequential migrations"));
 }
 
 #[test]

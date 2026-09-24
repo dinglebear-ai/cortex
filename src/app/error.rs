@@ -8,6 +8,11 @@ use thiserror::Error;
 /// result chains until all call sites are migrated to explicit `map_err`.
 #[derive(Debug, Error)]
 pub enum ServiceError {
+    #[error("{0}")]
+    Conflict(String),
+
+    #[error("{0}")]
+    Gone(String),
     /// Caller-supplied argument was invalid.
     #[error("{0}")]
     InvalidInput(String),

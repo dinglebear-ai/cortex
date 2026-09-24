@@ -46,6 +46,9 @@ QUERY = {
     "/api/correlate": {"reference_time": "2026-08-27T00:00:00Z", "limit": "5"},
     "/api/correlate-state": {"reference_time": "2026-08-27T00:00:00Z", "limit": "5"},
     "/api/graph/entity": {"entity_type": "host", "key": "cortex-live"},
+    "/api/graph/entities": {"limit": "5"},
+    "/api/graph/relationships": {"limit": "5"},
+    "/api/graph/changes": {"limit": "5"},
     "/api/graph/around": {"entity_type": "host", "key": "cortex-live", "depth": "1", "limit": "5"},
     "/api/graph/explain": {"entity_type": "host", "key": "cortex-live", "depth": "1", "max_chains": "5"},
     "/api/graph/evidence": {"evidence_id": "1"},
@@ -167,6 +170,9 @@ CONTRACTS = {
     "GET /api/fleet-state": ("object", "hosts summary"),
     "GET /api/get": ("object", "log"),
     "GET /api/graph/around": ("object", "candidates entities evidence metadata next_queries relationships resolved_entity"),
+    "GET /api/graph/entities": ("object", "entities metadata next_cursor snapshot_cursor"),
+    "GET /api/graph/relationships": ("object", "metadata next_cursor relationships snapshot_cursor"),
+    "GET /api/graph/changes": ("object", "changes metadata next_cursor"),
     "GET /api/graph/entity": ("object", "candidates metadata resolved_entity"),
     "GET /api/graph/evidence": ("object", "dst_entity evidence metadata missing_source_reason relationship source_log_summary src_entity"),
     "GET /api/graph/explain": ("object", "candidates chains evidence metadata missing_evidence narrative next_queries open_questions resolved_entity"),
@@ -407,6 +413,14 @@ def main() -> int:
         raise RuntimeError("run-owned session identity was not discoverable") from error
     QUERY["/api/sessions/rendered"] = {**session_query, "limit": "5"}
     QUERY["/api/streams/sessions"] = session_query
+    graph_status, graph_payload, _ = request(base, "GET", "/api/graph/entities?limit=1", read_token, None)
+    try:
+        graph_cursor = json.loads(graph_payload)["snapshot_cursor"] if graph_status == 200 else None
+    except (KeyError, TypeError, json.JSONDecodeError):
+        graph_cursor = None
+    if not isinstance(graph_cursor, str) or not graph_cursor:
+        raise RuntimeError(f"graph inventory change cursor was not available: status={graph_status}")
+    QUERY["/api/graph/changes"]["cursor"] = graph_cursor
     for graph_path in ("/api/graph/entity", "/api/graph/around", "/api/graph/explain",
                        "/api/v1/graph/entity", "/api/v1/graph/around", "/api/v1/graph/explain"):
         QUERY[graph_path]["key"] = fixture_host

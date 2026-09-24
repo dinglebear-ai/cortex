@@ -271,6 +271,9 @@ pub(super) const API_SURFACE_SPECS: &[SurfaceSpec] = &[
         Read
     ),
     api!("/api/graph/entity", Graph, Canonical, Read),
+    api!("/api/graph/entities", Graph, Canonical, Read),
+    api!("/api/graph/relationships", Graph, Canonical, Read),
+    api!("/api/graph/changes", Graph, Canonical, Read),
     api!("/api/graph/around", Graph, Canonical, Read),
     api!("/api/graph/explain", Graph, Canonical, Read),
     api!("/api/graph/evidence", Graph, Canonical, Read),
