@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.17.0](https://github.com/dinglebear-ai/cortex/compare/v3.16.2...v3.17.0) (2026-09-24)
+
+
+### Added
+
+* add first-class install-cortex skill ([#249](https://github.com/dinglebear-ai/cortex/issues/249)) ([f708c51](https://github.com/dinglebear-ai/cortex/commit/f708c5118d3347531edc57220e9646512a30f94e))
+* **cortex:** expose bounded graph inventory and changes ([00ce2fa](https://github.com/dinglebear-ai/cortex/commit/00ce2fa5c311df8ddae247dbf955abf9052037d7))
+* **cortex:** page session inventory metadata ([2155f23](https://github.com/dinglebear-ai/cortex/commit/2155f23f9a205bbdff4085229025eb919ee821b7))
+
+
+### Fixed
+
+* harden ingestion, recovery, and review qualification ([#244](https://github.com/dinglebear-ai/cortex/issues/244)) ([4455dc4](https://github.com/dinglebear-ai/cortex/commit/4455dc430c787984c2c8ee12246b2bd7e46a77a0))
+* **ingest:** remediate comprehensive review findings ([#246](https://github.com/dinglebear-ai/cortex/issues/246)) ([12a41e9](https://github.com/dinglebear-ai/cortex/commit/12a41e9645ad17f121000bd1c4c4adb27fd6d88d))
+* recover forwarded Claude skills and scope session search ([#248](https://github.com/dinglebear-ai/cortex/issues/248)) ([3b9855e](https://github.com/dinglebear-ai/cortex/commit/3b9855e01d0f539d24977731aafdb36ca5a78dd0))
+* repair transcript skill evidence and search ([#247](https://github.com/dinglebear-ai/cortex/issues/247)) ([03ba04d](https://github.com/dinglebear-ai/cortex/commit/03ba04dfd406f1c9511a4bbd540d32e2002d973d))
+
 ## [3.16.2](https://github.com/dinglebear-ai/cortex/compare/v3.16.1...v3.16.2) (2026-09-11)
 
 
