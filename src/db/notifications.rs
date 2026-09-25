@@ -368,28 +368,35 @@ pub fn firings_recent(
     conn: &rusqlite::Connection,
     limit: i64,
     rule_id: Option<&str>,
+    hostname: Option<&str>,
     since: Option<&str>,
+    until: Option<&str>,
 ) -> rusqlite::Result<Vec<FiringRow>> {
     let clamped_limit = limit.clamp(1, 500);
     let mut stmt = conn.prepare(
         "SELECT id, outbox_id, rule_id, hostname, fired_at, status_code
          FROM notification_firings
          WHERE (?1 IS NULL OR rule_id = ?1)
-           AND (?2 IS NULL OR fired_at >= ?2)
+           AND (?2 IS NULL OR hostname = ?2)
+           AND (?3 IS NULL OR fired_at >= ?3)
+           AND (?4 IS NULL OR fired_at <= ?4)
          ORDER BY fired_at DESC
-         LIMIT ?3",
+         LIMIT ?5",
     )?;
     let rows = stmt
-        .query_map(params![rule_id, since, clamped_limit], |row| {
-            Ok(FiringRow {
-                id: row.get(0)?,
-                outbox_id: row.get(1)?,
-                rule_id: row.get(2)?,
-                hostname: row.get(3)?,
-                fired_at: row.get(4)?,
-                status_code: row.get(5)?,
-            })
-        })?
+        .query_map(
+            params![rule_id, hostname, since, until, clamped_limit],
+            |row| {
+                Ok(FiringRow {
+                    id: row.get(0)?,
+                    outbox_id: row.get(1)?,
+                    rule_id: row.get(2)?,
+                    hostname: row.get(3)?,
+                    fired_at: row.get(4)?,
+                    status_code: row.get(5)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }

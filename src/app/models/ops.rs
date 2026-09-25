@@ -84,7 +84,9 @@ pub struct UnackErrorResponse {
 pub struct NotificationsRecentRequest {
     pub limit: Option<i64>,
     pub rule_id: Option<String>,
+    pub hostname: Option<String>,
     pub since: Option<String>,
+    pub until: Option<String>,
 }
 
 impl NotificationsRecentRequest {

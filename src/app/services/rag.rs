@@ -69,7 +69,9 @@ impl CortexService {
         self.notifications_recent_checked(NotificationsRecentRequest {
             limit: Some(limit),
             rule_id,
+            hostname: None,
             since,
+            until: None,
         })
         .await
     }
@@ -85,7 +87,9 @@ impl CortexService {
                 &conn,
                 limit,
                 req.rule_id.as_deref(),
+                req.hostname.as_deref(),
                 req.since.as_deref(),
+                req.until.as_deref(),
             )
             .map_err(anyhow::Error::from)
         })

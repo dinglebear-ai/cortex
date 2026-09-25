@@ -419,6 +419,7 @@ pub struct GraphSessionCorrelation {
     /// discover related hosts; `false` for the time-windowed fallback (session
     /// not yet projected into the graph).
     pub used_graph: bool,
+    pub session_entity_keys: Vec<String>,
     pub discovered_hosts: Vec<String>,
     pub discovered_entities: Vec<String>,
     pub logs: Vec<CorrelatedLogRow>,

@@ -320,7 +320,9 @@ pub(crate) async fn run_notify_recent(mode: &CliMode, args: NotifyRecentArgs) ->
                 .notifications(cortex::app::NotificationsRecentRequest {
                     limit: Some(limit),
                     rule_id: args.rule_id,
+                    hostname: None,
                     since: args.since,
+                    until: None,
                 })
                 .await?;
             if json {

@@ -130,7 +130,9 @@ fn notifications_recent_request_owns_default_and_limit_clamp() {
         NotificationsRecentRequest {
             limit: None,
             rule_id: None,
+            hostname: None,
             since: None,
+            until: None,
         }
         .effective_limit(),
         50
@@ -139,7 +141,9 @@ fn notifications_recent_request_owns_default_and_limit_clamp() {
         NotificationsRecentRequest {
             limit: Some(10_000),
             rule_id: None,
+            hostname: None,
             since: None,
+            until: None,
         }
         .effective_limit(),
         500

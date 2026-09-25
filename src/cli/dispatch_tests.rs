@@ -247,7 +247,7 @@ fn sessions_args_into_request_snapshot() {
     let req = args.into_request();
     assert_eq!(
         format!("{req:?}"),
-        "ListSessionsRequest { project: Some(\"/home/me/proj\"), tool: Some(\"claude\"), host: None, since: None, until: None, limit: Some(20) }"
+        "ListSessionsRequest { project: Some(\"/home/me/proj\"), tool: Some(\"claude\"), session_id: None, host: None, since: None, until: None, limit: Some(20) }"
     );
 }
 

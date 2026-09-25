@@ -1924,6 +1924,7 @@ fn ai_session_queries_respect_filters() {
         &ListAiSessionsParams {
             ai_project: Some("/tmp/a".into()),
             ai_tool: Some("claude".into()),
+            ai_session_id: Some("s1".into()),
             host: Some("host-a".into()),
             since: Some("2026-01-01T00:00:00Z".into()),
             until: Some("2026-01-01T23:59:59Z".into()),
@@ -1933,6 +1934,19 @@ fn ai_session_queries_respect_filters() {
     .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].ai_session_id, "s1");
+
+    let by_session = list_ai_sessions(
+        &pool,
+        &ListAiSessionsParams {
+            ai_session_id: Some("s2".into()),
+            limit: Some(10),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(by_session.len(), 1);
+    assert_eq!(by_session[0].ai_session_id, "s2");
+    assert_eq!(by_session[0].ai_project, "/tmp/b");
 
     let searched = search_ai_sessions(
         &pool,
@@ -2259,6 +2273,7 @@ fn default_session_params() -> ListAiSessionsParams {
     ListAiSessionsParams {
         ai_project: None,
         ai_tool: None,
+        ai_session_id: None,
         host: None,
         since: None,
         until: None,
@@ -3325,6 +3340,7 @@ fn bench_stats_and_sessions() {
     let params = ListAiSessionsParams {
         ai_project: None,
         ai_tool: None,
+        ai_session_id: None,
         host: None,
         since: None,
         until: None,

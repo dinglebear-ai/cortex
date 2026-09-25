@@ -406,10 +406,12 @@ mod notifications_db_tests {
         )
         .unwrap();
 
-        let all = firings_recent(&conn, 10, None, None).expect("all firings");
+        let all =
+            firings_recent(&conn, 10, None, None, None, None).expect("all firings");
         assert_eq!(all.len(), 2);
 
-        let filtered = firings_recent(&conn, 10, Some("oom_kill"), None).expect("filtered");
+        let filtered =
+            firings_recent(&conn, 10, Some("oom_kill"), None, None, None).expect("filtered");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].rule_id, "oom_kill");
     }
