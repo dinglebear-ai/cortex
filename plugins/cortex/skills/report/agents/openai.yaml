@@ -1,9 +1,0 @@
-interface:
-  display_name: "Cortex Report"
-  short_description: "Summarize 24h syslog activity"
-  default_prompt: "Use $report to check all device logs from the last 24 hours and write an actionable markdown report."
-dependencies:
-  tools:
-    - type: "mcp"
-      value: "cortex"
-      description: "cortex MCP server exposing the cortex action-dispatch tool"

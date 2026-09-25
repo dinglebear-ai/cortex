@@ -1,1 +1,0 @@
-eth0: link up, 1000Mbps, full-duplex, lpa 0x45E1

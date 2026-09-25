@@ -1,9 +1,0 @@
-interface:
-  display_name: "Cortex Troubleshoot"
-  short_description: "Diagnose cortex failures"
-  default_prompt: "Use $troubleshoot to diagnose why cortex is not receiving logs from a host."
-dependencies:
-  tools:
-    - type: "mcp"
-      value: "cortex"
-      description: "cortex MCP server for hosts, stats, and recent log evidence"
