@@ -1,4 +1,0 @@
-services:
-  candidate:
-    environment:
-      CORTEX_STATIC_TOKEN_ADMIN: "true"

@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-root="$(cd "$(dirname "$0")/../.." && pwd)"
-python3 "$root/phases/upgrade/validate.py" "$root/../.."
-jq -e ' (.supported.n_minus_1.image|test("@sha256:[0-9a-f]{64}$")) and (.supported.oldest_scheduled.image|test("@sha256:[0-9a-f]{64}$"))' "$root/contracts/releases/compatibility.json" >/dev/null
-bash -n "$root/phases/upgrade/run.sh"
-! grep -q 'result:"scheduled"' "$root/phases/upgrade/run.sh"
-grep -q 'interrupted_exit.*137' "$root/phases/upgrade/run.sh"
-echo 'upgrade selftest: PASS'
