@@ -767,6 +767,10 @@ pub struct StorageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpConfig {
+    /// MCP tool projection mode. Legacy preserves the aggregate `cortex` tool;
+    /// atomic exposes one tool per ACTION_SPECS entry; both exposes both surfaces.
+    #[serde(default)]
+    pub tool_projection: McpToolProjection,
     /// HTTP listen host
     #[serde(default = "default_mcp_host")]
     pub host: String,
@@ -815,6 +819,19 @@ pub struct McpConfig {
     /// implicitly grant those operations.
     #[serde(default)]
     pub static_token_is_admin: bool,
+}
+
+/// Public MCP tool projection mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpToolProjection {
+    /// Compatibility surface: one aggregate `cortex` tool with an action discriminator.
+    #[default]
+    Legacy,
+    /// One MCP tool per ACTION_SPECS entry.
+    Atomic,
+    /// Advertise both the legacy aggregate tool and all atomic action tools.
+    Both,
 }
 
 /// Authentication mode for the MCP HTTP endpoint.
@@ -1341,6 +1358,7 @@ impl StorageConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
+            tool_projection: McpToolProjection::default(),
             host: default_mcp_host(),
             port: default_mcp_port(),
             server_name: default_server_name(),
