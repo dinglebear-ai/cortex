@@ -1,6 +1,0 @@
-interface:
-  display_name: "Install Cortex"
-  short_description: "Install, secure, and connect Cortex"
-  default_prompt: "Use $install-cortex to install or repair Cortex and connect my agent safely."
-policy:
-  allow_implicit_invocation: false

@@ -1,1 +1,0 @@
-2026/05/15 14:22:11 [error] 17#17: *4321 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 192.0.2.55, server: example.com, request: "GET / HTTP/2.0", upstream: "http://10.0.0.5:3000/"

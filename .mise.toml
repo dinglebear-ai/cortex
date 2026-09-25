@@ -1,6 +1,0 @@
-[tools]
-# The npm launcher declares only node >=18, so local development should follow
-# the current LTS line rather than an arbitrary CI snapshot.
-node = "lts"
-"cargo:cargo-nextest" = "0.9.140"
-"cargo:cargo-llvm-cov" = "0.8.7"

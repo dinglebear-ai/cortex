@@ -1,1 +1,0 @@
-audit: type=1300 audit(1700000000.000:42): foo bar baz
