@@ -1,5 +1,0 @@
-[notifications]
-dispatcher_interval_secs = 1
-
-[notifications.evaluators]
-evaluator_interval_secs = 5

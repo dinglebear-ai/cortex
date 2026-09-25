@@ -1,1 +1,0 @@
-2026-05-15 14:35:01,001 fail2ban.actions [992]: NOTICE [authelia] Restore Ban 198.51.100.4

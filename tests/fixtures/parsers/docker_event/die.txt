@@ -1,1 +1,0 @@
-docker container event: die container=postgres image=postgres:16 compose_project=stack compose_service=db exit_code=137

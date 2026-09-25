@@ -1,1 +1,0 @@
-br0: received packet on eth1 with own address as source address (addr:aa:bb:cc:dd:ee:ff, vlan:0)
