@@ -1,1 +1,0 @@
-2026-05-15 14:39:00,000 fail2ban.server [992]: ERROR Failed to fetch jail config

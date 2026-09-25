@@ -1,1 +1,0 @@
-docker container event: start container=traefik image=traefik:v3.0 compose_project=edge compose_service=router

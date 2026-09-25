@@ -1,5 +1,0 @@
-[docs]
-frontmatter-exclude = [
-  "docs/internal/**",
-  "docs/reviews/**",
-]

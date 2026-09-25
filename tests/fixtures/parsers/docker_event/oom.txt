@@ -1,1 +1,0 @@
-docker container event: oom container=plex image=plexinc/pms-docker:latest compose_project=media compose_service=plex
