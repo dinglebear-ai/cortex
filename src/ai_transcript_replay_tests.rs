@@ -3,8 +3,7 @@ use super::*;
 fn receipt_v2_fingerprint(record: &serde_json::Value) -> String {
     use sha2::{Digest, Sha256};
 
-    let envelope: EvidenceEnvelope =
-        serde_json::from_value(record["envelope"].clone()).unwrap();
+    let envelope: EvidenceEnvelope = serde_json::from_value(record["envelope"].clone()).unwrap();
     let mut evidence = scrub_envelope(envelope).unwrap();
     evidence.source.title = None;
     evidence.source.title_provenance = None;
@@ -17,8 +16,7 @@ fn receipt_v2_fingerprint(record: &serde_json::Value) -> String {
 fn transient_receipt_v3_fingerprint(record: &serde_json::Value) -> String {
     use sha2::{Digest, Sha256};
 
-    let envelope: EvidenceEnvelope =
-        serde_json::from_value(record["envelope"].clone()).unwrap();
+    let envelope: EvidenceEnvelope = serde_json::from_value(record["envelope"].clone()).unwrap();
     let mut evidence = scrub_envelope(envelope).unwrap();
     evidence.source.title = None;
     evidence.source.title_provenance = None;
@@ -56,8 +54,7 @@ async fn archived_transcript_replay_accepts_changed_locator_and_preserves_v2_rec
 
     for locator in ["f", "1"] {
         let mut archived = sample_record();
-        archived["envelope"]["source"]["locator"] =
-            json!(format!("sha256:{}", locator.repeat(64)));
+        archived["envelope"]["source"]["locator"] = json!(format!("sha256:{}", locator.repeat(64)));
         let replay = app
             .clone()
             .oneshot(transcript_request(
@@ -83,8 +80,7 @@ async fn archived_transcript_replay_accepts_changed_locator_and_preserves_v2_rec
     assert_eq!(fingerprint, original_v2);
 
     let mut changed_evidence = sample_record();
-    changed_evidence["envelope"]["source"]["locator"] =
-        json!(format!("sha256:{}", "1".repeat(64)));
+    changed_evidence["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "1".repeat(64)));
     changed_evidence["envelope"]["message"] = json!("different evidence");
     let conflict = app
         .oneshot(transcript_request(
@@ -148,8 +144,7 @@ async fn transient_v3_receipt_rebinds_to_rollback_safe_v2() {
     assert_eq!(fingerprint, transient_v3);
 
     let mut archived = sample_record();
-    archived["envelope"]["source"]["locator"] =
-        json!(format!("sha256:{}", "f".repeat(64)));
+    archived["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
     let replay = app
         .clone()
         .oneshot(transcript_request(
@@ -169,8 +164,7 @@ async fn transient_v3_receipt_rebinds_to_rollback_safe_v2() {
     assert_eq!(fingerprint, original_v2);
 
     let mut moved_again = sample_record();
-    moved_again["envelope"]["source"]["locator"] =
-        json!(format!("sha256:{}", "1".repeat(64)));
+    moved_again["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "1".repeat(64)));
     let replay = app
         .oneshot(transcript_request(
             json!({"records": [moved_again]}).to_string(),
@@ -203,8 +197,7 @@ async fn legacy_null_fingerprint_receipt_accepts_locator_move_and_rebinds_v2() {
     .unwrap();
 
     let mut archived = sample_record();
-    archived["envelope"]["source"]["locator"] =
-        json!(format!("sha256:{}", "f".repeat(64)));
+    archived["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
     let replay = app
         .clone()
         .oneshot(transcript_request(

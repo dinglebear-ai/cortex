@@ -314,51 +314,41 @@ fn insert_envelopes_with_identity(
                 // canonical row before any rebinding. Persist v2 so a rollback
                 // to the previous Cortex release can still read receipts
                 // created by this version.
-                let (matches, replacement_fingerprint) =
-                    match previous_fingerprint.as_deref() {
-                        Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
-                            let matches = transient_v3_fingerprint_matches(&envelope, previous)?;
-                            let replacement = if matches {
-                                canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
-                            } else {
-                                None
-                            };
-                            (matches, replacement)
-                        }
-                        Some(previous) if previous.starts_with("evidence-v2:sha256:") => (
-                            v2_fingerprint_matches(
-                                &envelope,
-                                stored_locator.as_deref(),
-                                previous,
-                            )?,
-                            None,
-                        ),
-                        Some(previous) if previous.starts_with("sha256:") => {
-                            let matches = old_fingerprint_matches(
-                                &tx,
-                                &stored_receipt_key,
-                                &envelope,
-                                previous,
-                            )?;
-                            let replacement = if matches {
-                                canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
-                            } else {
-                                None
-                            };
-                            (matches, replacement)
-                        }
-                        Some(_) => (false, None),
-                        None => {
-                            let matches =
-                                legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?;
-                            let replacement = if matches {
-                                canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
-                            } else {
-                                None
-                            };
-                            (matches, replacement)
-                        }
-                    };
+                let (matches, replacement_fingerprint) = match previous_fingerprint.as_deref() {
+                    Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
+                        let matches = transient_v3_fingerprint_matches(&envelope, previous)?;
+                        let replacement = if matches {
+                            canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                        } else {
+                            None
+                        };
+                        (matches, replacement)
+                    }
+                    Some(previous) if previous.starts_with("evidence-v2:sha256:") => (
+                        v2_fingerprint_matches(&envelope, stored_locator.as_deref(), previous)?,
+                        None,
+                    ),
+                    Some(previous) if previous.starts_with("sha256:") => {
+                        let matches =
+                            old_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?;
+                        let replacement = if matches {
+                            canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                        } else {
+                            None
+                        };
+                        (matches, replacement)
+                    }
+                    Some(_) => (false, None),
+                    None => {
+                        let matches = legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?;
+                        let replacement = if matches {
+                            canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                        } else {
+                            None
+                        };
+                        (matches, replacement)
+                    }
+                };
                 if !matches {
                     return Err(IdempotencyConflict.into());
                 }
