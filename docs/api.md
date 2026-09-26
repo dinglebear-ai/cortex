@@ -24,7 +24,7 @@ updated: 2026-07-30
 
 ## Endpoint matrix
 
-93 method/path bindings total. Scope is `read` (mounted via `axum::routing::get`,
+96 method/path bindings total. Scope is `read` (mounted via `axum::routing::get`,
 hits read-side `db_permits`) or `admin`. Database maintenance and integrity
 checks share one process-wide maintenance gate; concurrent attempts receive a
 busy response. Admin mutations are audited before the service call.
@@ -85,7 +85,7 @@ compatibility routes.
 
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| GET | `/api/sessions` | read | query: `project?`, `tool?`, `hostname?`, `from?`, `to?`, `limit?` | `ListSessionsResponse { count, sessions: [AiSessionEntry] }` | 200, 400, 401, 503, 500 | Y | Inventory of indexed AI transcripts. |
+| GET | `/api/sessions` | read | query: `project?`, `tool?`, `host?`, `since?`, `until?`, `limit?`, `offset?` | `ListSessionsResponse { count, sessions: [AiSessionEntry], rollup_as_of? }` | 200, 400, 401, 503, 500 | Y | Bounded pages of indexed AI transcript metadata; up to 1,000 sessions per response and offset capped at 10,000. No transcript text is returned. |
 | GET | `/api/sessions/rendered` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`, `limit?` | `RenderedSessionPageResponse` (`delivery=polling`, semantic events, durable next cursor, high-water mark, truncation and retry metadata) | 200, 400, 401, 503, 500 | Y | Keyset pagination by persisted `logs.id`, ascending. Maximum 200 events and 256 KiB per page; oversized event text is UTF-8-safely truncated with a parse warning. Schema: `contracts/rendered-session-page.schema.json`. Clients may hand its committed cursor to the native session stream. |
 | GET | `/api/sessions/search` | read | query: `query` (REQUIRED), `project?`, `tool?`, `from?`, `to?`, `limit?` (u32) | `SearchSessionsResponse { total_candidates, candidate_rows, candidate_cap, candidate_window_truncated, truncated, sessions: [SearchedSessionEntry], limit_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `limit` clamped at **100** — see Response size caps. |
 | GET | `/api/sessions/abuse` | read | query: `project?`, `tool?`, `from?`, `to?`, `limit?`, `before?` (u32), `after?` (u32), **`terms?`** (repeated key: `?terms=foo&terms=bar`) | `AbuseSearchResponse { terms, candidate_rows, candidate_cap, candidate_window_truncated, truncated, matches: [AbuseMatch], limit_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `limit` clamped at **500**. Decoded via `serde_qs::axum::QsQuery`, so `Vec<String>` is supported through repeated `terms=` keys (the CLI's `HttpClient` serializes the shared request type the same way). |
@@ -138,16 +138,21 @@ compatibility routes.
 | GET | `/api/compose/status` | read | (none) | `ComposeMcpStatus { container_name, ownership, runtime_state, health?, published_ports, diagnostics }` | 200, 401, 500 | Y | Redacted read-only projection. If the container cannot run Docker inspection, this still returns 200 with `runtime_state="docker_unavailable"` and diagnostic code `docker_unavailable`. |
 | GET | `/api/compose/doctor` | read | (none) | `ComposeMcpStatus { container_name, ownership, runtime_state, health?, published_ports, diagnostics }` | 200, 401, **503**, 500 | Y | Strict readiness check. Healthy Compose-owned deployment returns 200; Docker/ownership/runtime unready states return 503 with the same structured projection, not a generic error envelope. |
 
-### Investigation graph queries (4)
+### Investigation graph queries (7)
 
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/graph/entity` | read | query: `entity_id?` or `entity_type` + `key` or `alias_type` + `alias_key`; `payload_budget?` | `GraphEntityLookupResponse { resolved_entity?, candidates, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Resolves one graph entity by id, canonical key, or alias without rebuilding the projection. |
+| GET | `/api/graph/entities` | read | query: `limit?` (1–25), `cursor?`, `entity_type?`, `source_kind?`, `trust_level?`, `query?` | `{ entities, next_cursor?, snapshot_cursor, metadata }` | 200, 400, 401, 409, 503, 500 | Y | Stable ID-ordered inventory page with exact filters and bounded label/key search. |
+| GET | `/api/graph/relationships` | read | query: `limit?` (1–25), `cursor?`, `snapshot_cursor?` | `{ relationships, next_cursor?, snapshot_cursor, metadata }` | 200, 400, 401, 409, 503, 500 | Y | Relationship bootstrap from the same projection as entity pages. Includes up to 3 evidence IDs and their source kinds per relationship. |
+| GET | `/api/graph/changes` | read | query: `cursor` (required), `limit?` (1–25) | `{ changes, next_cursor, metadata }` | 200, 400, 401, 410, 503, 500 | Y | Ordered entity/relationship upserts and tombstones after snapshot bootstrap. |
 | GET | `/api/graph/around` | read | query: entity selector, `depth?` (1 only), `limit?`, `evidence_sample_limit?`, `payload_budget?` | `GraphAroundResponse { resolved_entity, entities, relationships, evidence, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Bounded one-hop neighborhood with allowlisted evidence samples. |
 | GET | `/api/graph/explain` | read | query: entity selector, `depth?` (clamped to 3), `beam_width?`, `max_chains?`, `evidence_sample_limit?`, `payload_budget?` | `GraphExplainResponse { resolved_entity, chains, narrative, open_questions, missing_evidence, next_queries, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Deterministic evidence-backed explanation; weak evidence becomes open questions, not causal claims. |
 | GET | `/api/graph/evidence` | read | query: `evidence_id` (REQUIRED, minimum 1), `payload_budget?` | `GraphEvidenceLookupResponse { evidence, relationship, src_entity, dst_entity, source_log_summary?, missing_source_reason?, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Proof lookup for one evidence row. Source summaries are redacted/truncated and exclude raw frames and raw metadata. |
 
-**Total: 93 method/path bindings** (current surface registry, including syslog,
+Inventory clients start at `/api/graph/entities`, follow `next_cursor` to exhaustion, then page `/api/graph/relationships` with the returned `snapshot_cursor`. A 409 means the projection changed between pages: discard that bootstrap and restart. After both inventories complete, poll `/api/graph/changes` with `snapshot_cursor`, applying events in sequence and storing each `next_cursor`. A 410 means the retained journal no longer covers the cursor: discard the local copy and bootstrap again. Change upserts reflect the latest committed projection; an object removed before its event is read becomes a tombstone. Responses report projection status, source watermark, completion time, degradation, and truncation. The journal retains at most seven days or 200,000 events, whichever is less; consumers should poll about once per minute and recover from expiry. This is a read-only surface under the same bearer authorization and heavy-read admission as other graph queries. Inventory exposes canonical `(entity_type, canonical_key)` identities, not aliases or raw logs/session content. Host, app, and service-instance names must not be merged by display label; resolve aliases with `/api/graph/entity`. Relationship keys are projection-scoped; apply tombstones and upserts when rebuilding changes endpoint IDs.
+
+**Total: 96 method/path bindings** (current surface registry, including syslog,
 surface-parity, AI, graph, compose, notification, error-ack, and DB routes;
 includes the 3 hook routes above, added alongside the `ai_hook_events`
 subsystem).

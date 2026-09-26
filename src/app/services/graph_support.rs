@@ -70,6 +70,7 @@ pub(super) fn graph_relationship_to_model(
         confidence: row.confidence,
         evidence_count: row.evidence_count,
         evidence_ids,
+        source_kinds: Vec::new(),
         first_seen_at: row.first_seen_at,
         last_seen_at: row.last_seen_at,
     }

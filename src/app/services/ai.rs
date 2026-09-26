@@ -81,6 +81,7 @@ impl CortexService {
             since: from,
             until: to,
             limit: req.limit,
+            offset: req.offset,
         };
         let (rows, rollup_as_of) = self
             .run_db("list_sessions", move |pool| {

@@ -69,6 +69,7 @@ pub struct ListAiSessionsParams {
     pub since: Option<String>,
     pub until: Option<String>,
     pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

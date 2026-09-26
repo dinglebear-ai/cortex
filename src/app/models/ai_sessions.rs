@@ -9,6 +9,8 @@ pub struct ListSessionsRequest {
     pub since: Option<String>,
     pub until: Option<String>,
     pub limit: Option<u32>,
+    /// Bounded page offset over the session rollup or a time-filtered query.
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

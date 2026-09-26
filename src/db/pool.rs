@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 61;
+pub const KNOWN_SCHEMA_VERSION: i64 = 62;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -2511,6 +2511,14 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         conn.execute_batch(&format!(
             "BEGIN IMMEDIATE;
 
+             -- A repaired database can replay this table rebuild after the
+             -- graph journal was installed. Evidence triggers reference the
+             -- relationship table while it is replaced; recreate them after
+             -- all migrations complete.
+             DROP TRIGGER IF EXISTS graph_evidence_insert_change;
+             DROP TRIGGER IF EXISTS graph_evidence_update_change;
+             DROP TRIGGER IF EXISTS graph_evidence_delete_change;
+
              CREATE TABLE graph_entities_new (
                  id            INTEGER PRIMARY KEY AUTOINCREMENT,
                  entity_type   TEXT NOT NULL CHECK (entity_type IN (
@@ -3630,6 +3638,105 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
             elapsed_ms = started.elapsed().as_millis(),
             "Migration 61: provider-scoped transcript FTS index ready"
         );
+    }
+
+    // Migration 62: bounded read-only graph discovery and durable change receipts.
+    // Triggers cover incremental and inventory writers; a full projection swap
+    // records its logical diff explicitly while capture is disabled in its tx.
+    if !migration_applied(&conn, 62)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE graph_change_capture (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+             );
+             INSERT INTO graph_change_capture VALUES (1, 1);
+             CREATE TABLE graph_change_events (
+                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                 object_kind TEXT NOT NULL CHECK (object_kind IN ('entity', 'relationship')),
+                 operation TEXT NOT NULL CHECK (operation IN ('upsert', 'delete')),
+                 item_key TEXT NOT NULL,
+                 entity_type TEXT,
+                 entity_id INTEGER,
+                 relationship_id INTEGER,
+                 occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             );
+             CREATE INDEX idx_graph_changes_time ON graph_change_events(occurred_at, seq);
+             INSERT INTO schema_migrations (version) VALUES (62);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 62: graph discovery change journal ready");
+    }
+
+    // Historical repair tests can replay a sparse pre-graph schema. Install
+    // capture triggers only once all graph tables exist; a later pool open
+    // recreates triggers after any table-rebuild migration has dropped them.
+    if table_exists(&conn, "graph_entities")?
+        && table_exists(&conn, "graph_relationships")?
+        && table_exists(&conn, "graph_relationship_evidence")?
+    {
+        conn.execute_batch(
+            "             CREATE TRIGGER IF NOT EXISTS graph_entity_insert_change AFTER INSERT ON graph_entities
+             WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type, entity_id)
+                 VALUES ('entity', 'upsert', new.entity_type || char(31) || new.canonical_key, new.entity_type, new.id);
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_entity_update_change AFTER UPDATE OF
+                 display_label, source_kind, source_id, trust_level, first_seen_at, last_seen_at
+             ON graph_entities WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1
+             AND (old.display_label IS NOT new.display_label OR old.source_kind IS NOT new.source_kind
+                  OR old.source_id IS NOT new.source_id OR old.trust_level IS NOT new.trust_level
+                  OR old.first_seen_at IS NOT new.first_seen_at OR old.last_seen_at IS NOT new.last_seen_at) BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type, entity_id)
+                 VALUES ('entity', 'upsert', new.entity_type || char(31) || new.canonical_key, new.entity_type, new.id);
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_entity_delete_change AFTER DELETE ON graph_entities
+             WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type)
+                 VALUES ('entity', 'delete', old.entity_type || char(31) || old.canonical_key, old.entity_type);
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_relationship_insert_change AFTER INSERT ON graph_relationships
+             WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
+                 VALUES ('relationship', 'upsert', new.relationship_key, new.id);
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_relationship_update_change AFTER UPDATE OF
+                 src_entity_id, dst_entity_id, relationship_type, reason_code, trust_level,
+                 confidence, evidence_count, first_seen_at, last_seen_at
+             ON graph_relationships WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1
+             AND (old.src_entity_id IS NOT new.src_entity_id OR old.dst_entity_id IS NOT new.dst_entity_id
+                  OR old.relationship_type IS NOT new.relationship_type OR old.reason_code IS NOT new.reason_code
+                  OR old.trust_level IS NOT new.trust_level OR old.confidence IS NOT new.confidence
+                  OR old.evidence_count IS NOT new.evidence_count OR old.first_seen_at IS NOT new.first_seen_at
+                  OR old.last_seen_at IS NOT new.last_seen_at) BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
+                 VALUES ('relationship', 'upsert', new.relationship_key, new.id);
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_relationship_delete_change AFTER DELETE ON graph_relationships
+             WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key)
+                 VALUES ('relationship', 'delete', old.relationship_key);
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_evidence_insert_change AFTER INSERT ON graph_relationship_evidence
+             WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
+                 SELECT 'relationship', 'upsert', relationship_key, id
+                 FROM graph_relationships WHERE id = new.relationship_id;
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_evidence_update_change AFTER UPDATE ON graph_relationship_evidence
+             WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
+                 SELECT 'relationship', 'upsert', relationship_key, id
+                 FROM graph_relationships WHERE id = new.relationship_id;
+             END;
+             CREATE TRIGGER IF NOT EXISTS graph_evidence_delete_change AFTER DELETE ON graph_relationship_evidence
+             WHEN (SELECT enabled FROM graph_change_capture WHERE id = 1) = 1 BEGIN
+                 INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
+                 SELECT 'relationship', 'upsert', relationship_key, id
+                 FROM graph_relationships WHERE id = old.relationship_id;
+             END;
+"
+        )?;
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

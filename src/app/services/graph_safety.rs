@@ -57,6 +57,7 @@ pub(super) fn graph_entity_safe(entity: GraphEntity) -> GraphEntity {
     GraphEntity {
         canonical_key: redact_graph_text(entity.canonical_key),
         display_label: redact_graph_text(entity.display_label),
+        source_kind: redact_graph_text(entity.source_kind),
         source_id: redact_graph_text(entity.source_id),
         ..entity
     }

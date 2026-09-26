@@ -15,9 +15,9 @@ use super::*;
 #[test]
 fn documented_rest_route_count_matches_router_registrations() {
     let binding_count = crate::surfaces::api_bindings().count();
-    assert_eq!(binding_count, 93, "update the documented API denominator");
-    assert!(include_str!("../docs/api.md").contains("93 method/path bindings total"));
-    assert!(include_str!("../docs/architecture.md").contains("(93 method/path bindings)"));
+    assert_eq!(binding_count, 96, "update the documented API denominator");
+    assert!(include_str!("../docs/api.md").contains("96 method/path bindings total"));
+    assert!(include_str!("../docs/architecture.md").contains("(96 method/path bindings)"));
 }
 
 /// Build the router for a test, layering a `MockConnectInfo` so handlers
@@ -1303,6 +1303,41 @@ async fn sessions_route_lists_ingested_session() {
     assert_eq!(value["count"], 1);
     assert_eq!(value["sessions"][0]["project"], "cortex");
     assert_eq!(value["sessions"][0]["tool"], "claude");
+}
+
+#[tokio::test]
+async fn sessions_route_pages_metadata_with_offset() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    db::insert_logs_batch(
+        &pool,
+        &[
+            ai_entry(
+                "2026-01-01T00:00:00Z",
+                "host-a",
+                "info",
+                "first",
+                "cortex",
+                "codex",
+                "s1",
+            ),
+            ai_entry(
+                "2026-01-02T00:00:00Z",
+                "host-a",
+                "info",
+                "second",
+                "cortex",
+                "codex",
+                "s2",
+            ),
+        ],
+    )
+    .unwrap();
+    let app = router(state).unwrap();
+    let (status, value) = get_json(app, "/api/sessions?limit=1&offset=1", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["sessions"][0]["session_id"], "s1");
+    assert!(value["sessions"][0].get("message").is_none());
 }
 
 #[tokio::test]
@@ -3441,6 +3476,273 @@ async fn fleet_state_accepts_include_ok_and_sort_params() {
 }
 
 // ─── /api/graph ─────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn graph_inventory_lists_a_bounded_authenticated_snapshot() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    db::insert_logs_batch(
+        &pool,
+        &[entry(
+            "2026-01-01T00:00:00.000Z",
+            "graph-api-host",
+            "info",
+            "graph api seed",
+            "10.0.0.8:514",
+        )],
+    )
+    .unwrap();
+    {
+        let _guard = db::graph::GRAPH_TEST_LOCK.lock();
+        db::graph::refresh_graph_projection(&pool).unwrap();
+    }
+    let app = test_router(state);
+    let (unauthorized, _) = get_json(app.clone(), "/api/graph/entities?limit=1", None).await;
+    assert_eq!(unauthorized, axum::http::StatusCode::UNAUTHORIZED);
+    let (status, value) = get_json(app, "/api/graph/entities?limit=1", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["entities"].as_array().unwrap().len(), 1);
+    assert!(value["snapshot_cursor"].is_string());
+}
+
+#[tokio::test]
+async fn graph_inventory_cursor_restarts_when_projection_changes() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    db::insert_logs_batch(
+        &pool,
+        &[
+            entry(
+                "2026-01-01T00:00:00.000Z",
+                "first-host",
+                "info",
+                "first",
+                "10.0.0.1:514",
+            ),
+            entry(
+                "2026-01-01T00:00:01.000Z",
+                "second-host",
+                "info",
+                "second",
+                "10.0.0.2:514",
+            ),
+        ],
+    )
+    .unwrap();
+    {
+        let _guard = db::graph::GRAPH_TEST_LOCK.lock();
+        db::graph::refresh_graph_projection(&pool).unwrap();
+    }
+    let app = test_router(state);
+    let (status, first) =
+        get_json(app.clone(), "/api/graph/entities?limit=1", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let (status, second) = get_json(
+        app.clone(),
+        &format!("/api/graph/entities?limit=1&cursor={cursor}"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_ne!(first["entities"][0]["id"], second["entities"][0]["id"]);
+
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO graph_entities (entity_type, canonical_key, display_label, trust_level)
+         VALUES ('host', 'third-host', 'third-host', 'claimed')",
+            [],
+        )
+        .unwrap();
+    let (status, changed) = get_json(
+        app,
+        &format!("/api/graph/entities?limit=1&cursor={cursor}"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert_eq!(changed["recovery"], "restart_snapshot");
+}
+
+#[tokio::test]
+async fn graph_change_feed_reports_upserts_deletions_and_expiry() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let (_, snapshot) = get_json(app.clone(), "/api/graph/entities?limit=1", Some("secret")).await;
+    let cursor = snapshot["snapshot_cursor"].as_str().unwrap();
+    let id: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "INSERT INTO graph_entities (entity_type, canonical_key, display_label, trust_level)
+         VALUES ('host', 'new-host', 'new-host', 'claimed') RETURNING id",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let (status, upsert) = get_json(
+        app.clone(),
+        &format!("/api/graph/changes?cursor={cursor}&limit=1"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(upsert["changes"][0]["operation"], "upsert");
+    assert_eq!(upsert["changes"][0]["entity"]["canonical_key"], "new-host");
+    let cursor = upsert["next_cursor"].as_str().unwrap();
+    pool.get()
+        .unwrap()
+        .execute("DELETE FROM graph_entities WHERE id = ?1", [id])
+        .unwrap();
+    let (status, deletion) = get_json(
+        app.clone(),
+        &format!("/api/graph/changes?cursor={cursor}"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(deletion["changes"][0]["operation"], "delete");
+    assert!(deletion["changes"][0]["entity"].is_null());
+    pool.get()
+        .unwrap()
+        .execute("DELETE FROM graph_change_events WHERE seq = 1", [])
+        .unwrap();
+    let (status, expired) = get_json(
+        app,
+        &format!(
+            "/api/graph/changes?cursor={}",
+            snapshot["snapshot_cursor"].as_str().unwrap()
+        ),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::GONE);
+    assert_eq!(expired["recovery"], "restart_snapshot");
+}
+
+#[tokio::test]
+async fn graph_relationship_inventory_bootstraps_with_matching_snapshot_and_provenance() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    db::insert_logs_batch(
+        &pool,
+        &[entry(
+            "2026-01-01T00:00:00.000Z",
+            "graph-api-host",
+            "info",
+            "graph api seed",
+            "10.0.0.8:514",
+        )],
+    )
+    .unwrap();
+    {
+        let _guard = db::graph::GRAPH_TEST_LOCK.lock();
+        db::graph::refresh_graph_projection(&pool).unwrap();
+    }
+    let app = test_router(state);
+    let (_, snapshot) = get_json(
+        app.clone(),
+        "/api/graph/entities?entity_type=host&limit=1",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(snapshot["entities"][0]["entity_type"], "host");
+    let snapshot_cursor = snapshot["snapshot_cursor"].as_str().unwrap();
+    let (status, page) = get_json(
+        app.clone(),
+        &format!("/api/graph/relationships?limit=1&snapshot_cursor={snapshot_cursor}"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(page["relationships"].as_array().unwrap().len(), 1);
+    assert!(
+        !page["relationships"][0]["evidence_ids"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !page["relationships"][0]["source_kinds"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE graph_relationship_evidence SET source_kind = 'heartbeat'
+             WHERE id = (SELECT MIN(id) FROM graph_relationship_evidence)",
+            [],
+        )
+        .unwrap();
+    let (change_status, changes) = get_json(
+        app.clone(),
+        &format!("/api/graph/changes?cursor={snapshot_cursor}"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(change_status, axum::http::StatusCode::OK);
+    assert!(changes["changes"].as_array().unwrap().iter().any(|change| {
+        change["object_kind"] == "relationship" && change["operation"] == "upsert"
+    }));
+    let (bad_status, _) = get_json(app, "/api/graph/entities?limit=26", Some("secret")).await;
+    assert_eq!(bad_status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn graph_full_rebuild_emits_tombstones_without_replaying_unchanged_rows() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    db::insert_logs_batch(
+        &pool,
+        &[entry(
+            "2026-01-01T00:00:00.000Z",
+            "kept-host",
+            "info",
+            "graph seed",
+            "10.0.0.8:514",
+        )],
+    )
+    .unwrap();
+    {
+        let _guard = db::graph::GRAPH_TEST_LOCK.lock();
+        db::graph::refresh_graph_projection(&pool).unwrap();
+    }
+    let app = test_router(state);
+    let (_, snapshot) = get_json(app.clone(), "/api/graph/entities?limit=1", Some("secret")).await;
+    let cursor = snapshot["snapshot_cursor"].as_str().unwrap();
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO graph_entities (entity_type, canonical_key, display_label, trust_level)
+         VALUES ('host', 'temporary-host', 'temporary-host', 'claimed')",
+            [],
+        )
+        .unwrap();
+    {
+        let _guard = db::graph::GRAPH_TEST_LOCK.lock();
+        db::graph::refresh_graph_projection(&pool).unwrap();
+    }
+    let (status, page) = get_json(
+        app.clone(),
+        &format!("/api/graph/changes?cursor={cursor}&limit=25"),
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let events = page["changes"].as_array().unwrap();
+    assert!(events.iter().any(|event| {
+        event["operation"] == "delete"
+            && event["item_key"]
+                .as_str()
+                .unwrap()
+                .contains("temporary-host")
+    }));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["item_key"].as_str().unwrap().contains("kept-host")),
+        "unchanged entities must not be replayed during a full rebuild"
+    );
+}
 
 #[tokio::test]
 async fn graph_routes_return_shared_service_payloads() {
