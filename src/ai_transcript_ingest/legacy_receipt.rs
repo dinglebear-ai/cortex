@@ -84,8 +84,9 @@ fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: 
 }
 
 /// Reconstruct mutable display/location metadata from the stored row, then
-/// check the old full-envelope hash. This also preserves timestamp-less exact replays: the
-/// hash, unlike a canonical log timestamp, retains their original `None`.
+/// check the old full-envelope hash. This also preserves timestamp-less exact
+/// replays: the hash, unlike a canonical log timestamp, retains their original
+/// `None`.
 fn old_fingerprint_matches(
     tx: &rusqlite::Transaction<'_>,
     key: &str,
@@ -93,7 +94,8 @@ fn old_fingerprint_matches(
     previous: &str,
 ) -> anyhow::Result<bool> {
     // An exact old hash is sufficient even if bounded log metadata omitted
-    // its source fields. Canonical metadata is needed only for a title change.
+    // its source fields. Canonical metadata is needed only when mutable title
+    // or locator metadata changed.
     if previous == format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(envelope)?)) {
         return Ok(true);
     }
@@ -312,8 +314,8 @@ fn insert_envelopes_with_identity(
             if previous_fingerprint.as_deref() != Some(request_fingerprint.as_str()) {
                 // Compatibility fingerprints are validated against the
                 // canonical row before any rebinding. Persist v2 so a rollback
-                // to the previous Cortex release can still read receipts
-                // created by this version.
+                // still recognizes the durable receipt format; locator-move
+                // tolerance itself is provided by this version's verifier.
                 let (matches, replacement_fingerprint) = match previous_fingerprint.as_deref() {
                     Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
                         let matches = transient_v3_fingerprint_matches(&envelope, previous)?;
