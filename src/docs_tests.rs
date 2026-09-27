@@ -1,5 +1,5 @@
 const CURRENT_DOCKER_DOCS: &[(&str, &str)] = &[
-    ("CLAUDE.md", include_str!("../CLAUDE.md")),
+    ("AGENTS.md", include_str!("../AGENTS.md")),
     ("README.md", include_str!("../README.md")),
     ("docs/CONFIG.md", include_str!("../docs/CONFIG.md")),
     ("docs/SETUP.md", include_str!("../docs/SETUP.md")),

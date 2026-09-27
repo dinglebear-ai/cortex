@@ -320,16 +320,16 @@ raw collector warnings, raw frames, or `metadata_json` are returned.
 | `/mcp` | POST | yes (when token set) | RMCP stateless Streamable HTTP endpoint |
 | `/mcp` | GET, DELETE | yes (when token set) | 401 first if token auth is enabled and the bearer token is missing/invalid; otherwise 405 in stateless mode |
 | `/health` | GET | no | Health check -- verifies DB connectivity |
-| `/api/search` | GET | yes when API enabled | Plain JSON log search |
-| `/api/tail` | GET | yes when API enabled | Plain JSON recent logs |
-| `/api/errors` | GET | yes when API enabled | Plain JSON error summary |
-| `/api/hosts` | GET | yes when API enabled | Plain JSON host list |
-| `/api/correlate` | GET | yes when API enabled | Plain JSON event correlation |
-| `/api/stats` | GET | yes when API enabled | Plain JSON database stats |
-| `/api/filter` | GET | yes when API enabled | Plain JSON structured log filtering |
-| `/api/timeline` | GET | yes when API enabled | Plain JSON bucketed timeline |
-| `/api/patterns` | GET | yes when API enabled | Plain JSON message pattern clusters |
-| `/api/notifications/recent` | GET | yes when API enabled | Recent notification firings |
+| `/api/search` | GET | REST token required | Plain JSON log search |
+| `/api/tail` | GET | REST token required | Plain JSON recent logs |
+| `/api/errors` | GET | REST token required | Plain JSON error summary |
+| `/api/hosts` | GET | REST token required | Plain JSON host list |
+| `/api/correlate` | GET | REST token required | Plain JSON event correlation |
+| `/api/stats` | GET | REST token required | Plain JSON database stats |
+| `/api/filter` | GET | REST token required | Plain JSON structured log filtering |
+| `/api/timeline` | GET | REST token required | Plain JSON bucketed timeline |
+| `/api/patterns` | GET | REST token required | Plain JSON message pattern clusters |
+| `/api/notifications/recent` | GET | REST token required | Recent notification firings |
 
 ## Docker
 
@@ -348,10 +348,13 @@ raw collector warnings, raw frames, or `metadata_json` are returned.
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `ci.yml` | push, PR | Lint (clippy), check, test |
-| `docker-publish.yml` | tag push | Build and publish Docker image to GHCR |
-| `publish-crates.yml` | tag push | Publish to crates.io |
-| `codex-plugin-scanner.yml` | PR | Validate Codex plugin manifest |
+| `ci.yml` | main push, PR to main, scheduled | Path-aware validation plus required instruction-authority checks |
+| `repository-contract.yml` | See workflow | Repository contract validation |
+| `live-qualification.yml` | See workflow | Explicit live qualification |
+| `release-please.yml` | successful main CI / dispatch | Release PR and version-carrier fixup |
+| `release.yml` | version tag / gated dispatch | Native release assets and npm launcher |
+| `docker-publish.yml` | published release / dispatch | Verify and publish container image |
+| `mcp-registry.yml` | published release / dispatch | MCP registry publication |
 
 ## Scripts
 
@@ -371,7 +374,7 @@ raw collector warnings, raw frames, or `metadata_json` are returned.
 
 | Crate | Purpose |
 | --- | --- |
-| `tokio` | Async runtime (full features) |
+| `tokio` | Async runtime (explicit feature selection) |
 | `axum` | HTTP framework for MCP server |
 | `tower-http` | CORS and tracing middleware |
 | `rusqlite` | SQLite driver (bundled, with FTS5) |
@@ -382,7 +385,8 @@ raw collector warnings, raw frames, or `metadata_json` are returned.
 | `toml` | Config file parsing |
 | `tracing` / `tracing-subscriber` | Structured logging |
 | `anyhow` | Error handling |
-| `subtle` | Constant-time token comparison |
+| `lab-auth` | Shared authentication implementation, pinned Git revision |
+| `rmcp` | Exact workspace-pinned MCP SDK |
 | `rustix` | Filesystem stats (free disk space) |
 
 ### Development

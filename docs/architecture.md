@@ -1,120 +1,80 @@
----
-title: "cortex architecture"
-created: 2026-05-18
-updated: 2026-07-30
----
+# Cortex architecture
 
-# cortex architecture
+Cortex combines a Rust service, host-local collection agents, a query CLI/MCP surface, deployment tooling, and a browser investigation workspace. It stores canonical evidence in SQLite and builds derived search, inventory, graph, and Agent Observatory views. See [AGENTS.md](../AGENTS.md) for contributor instructions.
 
-cortex is one binary, but operationally it is three sub-products sharing a
-SQLite database and a service layer:
-
-1. **Log intelligence core** — syslog UDP/TCP ingest, OTLP HTTP/protobuf
-   `/v1/logs`, `/v1/metrics`, and `/v1/traces`,
-   host-local agent Docker log ingest, legacy central pull Docker compatibility,
-   AI transcript indexing, global FTS5 log search, transcript-only FTS5 session search, and the
-   56-action `cortex` MCP tool plus the `/api/*` REST mirror. Source: `src/receiver/`,
-   `src/ingest.rs`, `src/otlp.rs`, `src/agent/`, `src/docker_ingest/`, `src/db/`,
-   `src/mcp/`, `src/api.rs`, `src/app/`.
-2. **Fleet SSH inventory / investigation graph** — SSH- and API-based homelab
-   inventory collection into `~/.cortex/inventory`, the normalized
-   `homelab.json` cache, heartbeat telemetry, and the rebuildable graph
-   projection behind the `map`/`graph` actions. Source: `src/inventory/`,
-   `src/heartbeat.rs`, `src/heartbeat_agent.rs`.
-3. **Deployment tooling** — install/repair of the shared `~/.cortex` Docker
-   Compose layout, live Compose-owner resolution, and diagnostics. Source:
-   `src/compose/`, `src/setup/`, `src/deploy.rs`, `src/doctor.rs`.
-
-## Module map
-
-| Module | Sub-product | Purpose |
-| --- | --- | --- |
-| `config.rs` | all | Layered config: defaults → `config.toml` → `~/.cortex/.env` → process env; startup validation (non-loopback auth gate) |
-| `runtime.rs` + `runtime/` | all | `RuntimeCore`: wires pool, ingest, auth policy; spawns the maintenance tasks below |
-| `app/` | core | `CortexService` service layer — shared limits/validation for MCP, REST, and CLI |
-| `db/` | core | SQLite pool + 62 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
-| `receiver/` + `receiver.rs` | core | UDP + TCP listeners (supervised with restart + backoff), RFC 3164/5424 + CEF parsing |
-| `ingest.rs` | core | mpsc channel + batch writer (one pool connection reserved for this writer) |
-| `otlp.rs` + `otlp/` | core | OTLP/HTTP protobuf ingest: `POST /v1/logs` (4 MiB cap), `POST /v1/metrics` and `POST /v1/traces` (8 MiB cap); all use `CORTEX_TOKEN` auth |
-| `agent/`, `heartbeat_agent.rs` | inventory | Host-local cortex agent, including Docker log streaming from the local socket |
-| `docker_ingest/` | core | Legacy central pull container stdout/stderr + lifecycle events via explicit remote Docker Engine HTTP endpoints |
-| `mcp/` | core | RMCP Streamable HTTP server, `ACTION_SPECS` registry, scope gates, `/health` + `/health/full` |
-| `api.rs` | core | Always-on `/api/*` REST surface (96 method/path bindings), bearer-token gated |
-| `scanner/`, `sessions_watch.rs` | core | AI transcript scanning/scrubbing and the host-side watch daemon |
-| `inventory/` | inventory | Collectors (SSH, Docker, UniFi/Unraid/media APIs), redaction, normalized cache |
-| `heartbeat.rs` / `heartbeat_agent.rs` | inventory | `POST /v1/heartbeats` ingest + host-local heartbeat agent |
-| `notifications/` | core | Apprise dispatcher, rule evaluators (incl. `ingest_silence`), daily digest |
-| `compose/`, `setup/`, `deploy.rs`, `doctor.rs` | deployment | Compose owner resolution, idempotent setup/repair, drift diagnostics |
-| `cli/` | all | Direct CLI with full MCP parity; routes via `/api/*` when `CORTEX_USE_HTTP=true` |
-
-## Background tasks
-
-Spawned by `RuntimeCore::spawn_maintenance_tasks` (`src/runtime.rs`) and
-supervised listeners:
-
-| Task | Cadence | Knob |
-| --- | --- | --- |
-| Retention purge (global + AdGuard 7d tags + heartbeats 14d) | hourly (fixed) | `CORTEX_RETENTION_DAYS` (0 disables the global age purge) |
-| Storage budget enforcement (DB-size delete / free-disk write-block) | every 60s | `CORTEX_CLEANUP_INTERVAL_SECS`, `CORTEX_MAX_DB_SIZE_MB`, `CORTEX_MIN_FREE_DISK_MB` |
-| Error-signature scan | every 3600s | `CORTEX_ERROR_DETECTION_ENABLED`, `CORTEX_ERROR_DETECTION_SCAN_INTERVAL_SECS` |
-| Notification dispatcher | every 30s | `[notifications] dispatcher_interval_secs` |
-| Notification evaluator (oom_kill, ingest_silence, ...) | every 300s | `[notifications.evaluators] evaluator_interval_secs` |
-| Notification daily digest | cron `0 8 * * *` (local) | `[notifications] digest_cron_local` |
-| Inventory refresh (+ graph projection) | every 300s + file watchers | `CORTEX_INVENTORY_REFRESH_INTERVAL_SECS` (0 disables), `CORTEX_INVENTORY_WATCH_ENABLED` |
-| Inventory graph backfill | one-shot at startup (skipped once complete) | — |
-| AI session rollup refresh | every 300s (eager first run) | fixed (`SESSION_ROLLUP_REFRESH_SECS`) |
-| Timeline hourly rollup (incremental) | every 60s | fixed (`TIMELINE_ROLLUP_REFRESH_SECS`) |
-| `PRAGMA optimize` (planner stats) | every 6h | fixed (`OPTIMIZE_INTERVAL_SECS`) |
-| Host-local agent Docker streams | continuous on deployed agents | agent deployment config + local Docker socket |
-| Legacy central pull Docker streams | continuous, reconnect with backoff | `CORTEX_DOCKER_INGEST_ENABLED`, `CORTEX_DOCKER_RECONNECT_INITIAL_MS` / `_MAX_MS` |
-| Syslog UDP/TCP listeners | continuous, supervised restart + backoff | `CORTEX_RECEIVER_HOST` / `_PORT` |
-
-A dead syslog listener fails `/health` with 503; per-listener liveness
-(`not_started` / `alive` / `down`) is reported in the `/health/full` ingest
-snapshot as `syslog_udp_listener_state` / `syslog_tcp_listener_state`.
-
-## Caller → database paths (post v0.26)
-
-This captures how callers reach the SQLite database after the v0.26
-CLI-over-HTTP cutover (epic `cortex-0p8r`). It complements the endpoint
-matrix in [`docs/api.md`](api.md).
+## Data flow
 
 ```text
-AI clients ──▶ /mcp (rmcp streamable HTTP)        ─┐
-                                                   │
-CLI default ──▶ /api/* (REST)                      ├──▶ container SyslogService ──▶ SQLite (/data)
-   [CORTEX_USE_HTTP=true since v0.26]              │       (db_permits pool + MAINTENANCE_PERMIT)
-                                                   │
-CLI explicit "unset CORTEX_USE_HTTP"  ─────────────┘
-   ──▶ direct SQLite (RuntimeCore::load_query_only, read-only)
-
-cortex sessions watch (systemd) ────────────────────────────▶ direct SQLite
-   (service.add_ai_file; long-running daemon on the host)
-
-cortex mcp stdio (spawned by AI clients) ─────────────▶ direct SQLite
-   (one-shot stdio session bound to the host's DB path)
+Syslog UDP/TCP ────────────────> receiver/parser ─────┐
+Host-local agent HTTP batches -> ingest adapters ────┤
+OTLP HTTP/protobuf ────────────> OTLP adapters ───────┤
+Local transcript/file sources -> scanner/watch ──────┤
+Inventory collectors ─────────> normalized cache ────┤
+                                                    v
+                              validated, bounded persistence
+                                                    |
+                          SQLite evidence + derived projections
+                                                    ^
+                                                    |
+                  CortexService + shared per-process query limits
+                     ^                 ^                   ^
+                   /mcp          /api/* and /api/v1/*    local CLI/stdio
+                                       ^
+                              HTTP CLI / browser /app
 ```
 
-## Ownership
+The diagram groups source families; they do not all use the same table, queue, or transaction. Logs, heartbeats, metrics, traces, ingest receipts, and graph/Observatory projections retain their own typed storage and contracts. A projection is rebuildable evidence-derived state, not a second authoritative event history.
 
-The container is the **canonical query-path owner**: every `/api/*`
-caller — REST CLI, AI client over `/mcp`, anything routed through
-SWAG — funnels through one `SyslogService` instance with shared
-`db_permits` and `MAINTENANCE_PERMIT` gates. Direct-SQLite access
-remains for two consumers that cannot reasonably go through HTTP — one
-write-path and one read-path:
+## Module ownership
 
-- `cortex sessions watch` (write-path) — a host-side systemd daemon that
-  streams local AI transcript files into SQLite. Going through HTTP
-  would mean uploading every JSONL chunk over loopback for no value, so
-  this writer keeps direct `service.add_ai_file` access against the
-  same DB file the container reads.
-- `cortex mcp` stdio (read/query-path only) — spawned by AI clients
-  (Claude Desktop, Codex) that don't speak HTTP-MCP. The stdio process
-  opens the same DB path read-only via `RuntimeCore::load_query_only`,
-  so it never participates in the write path.
+| Area | Implementation |
+| --- | --- |
+| Process entry / runtime | `src/main.rs`, `src/runtime.rs`, `src/runtime/` |
+| Shared service | `src/app.rs`, `src/app/`; `CortexService`, validation, query and maintenance limits |
+| SQLite | `src/db.rs`, `src/db/`; pool, 62 sequential migrations, FTS5, evidence, projections, retention |
+| Syslog | `src/receiver.rs`, `src/receiver/`, `src/ingest.rs` |
+| Host collection | `src/agent.rs`, `src/agent/`, `src/heartbeat_agent.rs` |
+| Forwarded ingest | `src/ai_transcript_ingest*`, `src/agent_command_ingest.rs`, `src/agent_file_tail_ingest.rs`, `src/shell_history_ingest.rs`, `src/syslog_forward_ingest*` |
+| Transcript scanning | `src/scanner.rs`, `src/scanner/`, `src/ai_watch*`, `src/cli/sessions_watch.rs` |
+| Managed file sources | `src/filetail.rs`, `src/filetail/` and agent file-tail forwarding |
+| OTLP | `src/otlp.rs`, `src/otlp/`, `src/db/otlp_metrics*`, `src/db/otlp_traces*` |
+| Inventory / graph | `src/inventory*`, `src/db/graph*`, `src/runtime/inventory_refresh*`, `src/runtime/graph_refresh.rs` |
+| Agent Observatory | `src/agent_observatory*`, `src/app/agent_observatory*`, `src/db/agent_observatory*`, `src/git_observer*` |
+| Public adapters | `src/mcp*`, `src/api*`, `src/cli*`, `src/surfaces*` |
+| Browser | `web/`, static export served by `src/web_app.rs` |
+| Notifications / LLM assessment | `src/notifications*`, `src/app/llm_runner*`, `src/*assessment*` |
+| Setup and updates | `src/compose*`, `src/setup*`, `src/deploy*`, `src/doctor.rs`, `src/update.rs` |
 
-Both direct-write consumers are detected by `cortex compose doctor`
-(always-on) and optionally surfaced through `cortex db status --check-coord`.
-See [`docs/api.md`](api.md) "Local-only commands" for the per-command
-breakdown and the operational `systemd` timer recipe.
+## Sources versus transports
+
+The preferred Docker log path is the **host-local cortex agent**, reading the local Docker socket. `src/docker_ingest/` and `CORTEX_DOCKER_*` retain **legacy central pull** compatibility for explicit remote Docker Engine HTTP endpoints. They are not the default fleet collection architecture.
+
+Agents forward supported evidence over HTTP routes such as `/v1/ai-transcripts`, `/v1/agent-commands`, `/v1/shell-history`, `/v1/file-tails`, and `/v1/syslog-forward`. Do not describe a proposed WebSocket transport as implemented merely because the system streams data.
+
+Transcript source metadata is centralized in `src/scanner/providers.rs`; parsing remains provider-local. Static adapter support differs from receipt-backed observed coverage. Mutable file paths are locators, not immutable source identities. Read [ADDING_SOURCES.md](ADDING_SOURCES.md) and [agent-protocol.md](contracts/agent-protocol.md) before extending these boundaries.
+
+## Query paths and ownership
+
+HTTP MCP runs the single action-dispatch `cortex` tool. `ACTION_SPECS` in `src/mcp/actions.rs` owns action names, scopes, flags, and handlers. The REST API (96 method/path bindings) and CLI have additional/local-only surfaces; `src/surfaces/` and their adapters define those contracts. The REST denominator is guarded by `documented_rest_route_count_matches_router_registrations`; update the registry, reference, and test together.
+
+An installed CLI commonly uses HTTP settings written into the managed environment. Explicit flags and `CORTEX_USE_HTTP` select routing in `src/cli/run.rs`; local-only commands retain their own rules. Direct SQLite consumers are not automatically governed by another process's in-memory service limits. Do not assume every CLI call reaches the container.
+
+`cortex mcp` is local query-only stdio and does not start the ingestion listeners or maintenance scheduler. Local transcript index/watch paths remain available, while remote agents can forward evidence without sharing the server's filesystem or database. `cortex compose doctor` resolves and checks live Compose/listener ownership before lifecycle changes.
+
+## HTTP and trust boundaries
+
+The shared listener defaults to port 3100 and serves MCP, REST, OTLP, host ingest, health, and `/app`. Syslog uses UDP/TCP 1514. Sharing the HTTP port does not make token policies interchangeable: MCP/machine ingest, REST, and privileged REST have separate configuration. OTLP logs have a 4 MiB body cap; metrics and traces have 8 MiB caps. Verify auth behavior in the relevant route code and [SECURITY.md](SECURITY.md).
+
+Hostname/transcript content is untrusted. Persist provenance and coverage gaps, enforce schema and size limits, and acknowledge delivery only according to the applicable durable ingest contract. LLM-assisted assessments are explicit CLI operations behind the shared LLM runner; deterministic MCP investigations must not silently start one.
+
+## Runtime maintenance
+
+`RuntimeCore::spawn_maintenance_tasks` wires retention, storage enforcement, error detection, inventory work, projection refresh, session/timeline rollups, planner optimization, and managed file tails. Listener and agent streams have their own supervision/retry behavior. Check the implementation and [CONFIG.md](CONFIG.md) for each cadence rather than assuming all background work shares one interval.
+
+Inventory cache refresh and inventory graph projection are separate controls. `CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED` is opt-in, and `CORTEX_GRAPH_REFRESH_INTERVAL_SECS=0` disables scheduled graph refresh. CLI-driven rebuilds remain distinct.
+
+Retention aging, logical DB-size cleanup, and low-free-disk write blocking are separate policies. The ingest queue is not a durable spool. SQLite uses WAL; take online backups or coordinate all writers for an offline copy. See the [retention contract](contracts/retention-policy.md), [storage configuration](CONFIG.md), and current backup runbooks.
+
+## Implementation versus design history
+
+The repo contains Agent Observatory backend/storage/contract and browser implementation. Dated design and implementation plans describe intent at the time they were written; their task counts are not a statement that all planned scope is complete. Evaluate specific capabilities against source, tests, and current contracts.

@@ -1,107 +1,25 @@
----
-title: "Technology Choices -- cortex"
-created: 2026-04-04
-updated: 2026-07-30
----
+# Technology choices
 
-# Technology Choices -- cortex
+The current versions and feature selections live in [Cargo.toml](../../Cargo.toml), [Cargo.lock](../../Cargo.lock), and [web/package.json](../../web/package.json). This page explains the boundaries, not a second dependency inventory.
 
-Technology stack reference and rationale.
+## Service implementation
 
-## Language: Rust
+Rust supplies the shared library and `cortex` binary. Tokio handles asynchronous listeners, channels, cancellation, and task supervision. Its features are explicitly selected in Cargo rather than enabled with `full`; blocking database work uses the established blocking/service helpers. Memory safety is not a guarantee against overload or dropped UDP input.
 
-Rust was chosen for cortex because:
-- High-throughput syslog ingestion requires low-latency, zero-copy message handling
-- Memory safety without garbage collection prevents the pauses that would cause UDP packet loss
-- Single static binary simplifies Docker image and deployment
-- `rusqlite` with bundled SQLite avoids system library version issues
+Axum and Tower compose the HTTP surfaces. RMCP provides the MCP adapter and transport; the workspace pins `rmcp = "=3.1.0"`. The HTTP MCP service uses stateless JSON responses. Application configuration and `lab-auth` implement authentication policies; do not describe all routes as one constant-time static-token check.
 
-## Async runtime: tokio
+## Evidence storage
 
-Full-featured async runtime for concurrent UDP/TCP listeners, batch writer, and HTTP server. The `full` feature set enables:
-- `tokio::net` -- UDP/TCP socket binding
-- `tokio::sync` -- mpsc channels, semaphores
-- `tokio::signal` -- graceful shutdown
-- `tokio::time` -- batch flush intervals, idle timeouts
-- `tokio::task::spawn_blocking` -- offload synchronous SQLite calls
+Rusqlite uses bundled SQLite, with pooled connections and WAL-backed storage. FTS5 indexes support log/session text search; typed tables retain metrics, traces, heartbeats, receipts, and projections. SQLite avoids an external database service, but WAL means copying only the main file during active writes is not a backup. Use online backup or coordinate every writer.
 
-## HTTP framework: axum
+The shared `CortexService` boundary keeps query validation and limits consistent across adapters. Graph and Observatory projections derive from evidence; they must retain provenance rather than replacing the evidence store.
 
-Minimal, composable HTTP framework built on tokio and tower:
-- Native tower middleware support (CORS, tracing)
-- Type-safe state extraction
-- Composable router with method routing
-- Mounts RMCP's Tower-compatible Streamable HTTP service
+## Parsing and observability
 
-## MCP SDK: rmcp
+`syslog_loose` handles lenient syslog parsing. Serde, serde_json, TOML, and the OTLP/protobuf types handle their respective formats. Provider-local transcript parsers are described by `src/scanner/providers.rs`, including unsupported/partial evidence lanes. Chrono handles time values; structured `tracing` and configured filters support diagnostics. Typed errors and `anyhow` serve different layers of error handling.
 
-RMCP owns MCP lifecycle, Streamable HTTP framing, Host/Origin validation, tool listing, and tool calls. cortex uses stateless JSON-response mode so normal request/response calls return `Content-Type: application/json`.
+## Browser and packaging
 
-## Database: SQLite (rusqlite + r2d2)
+`web/` is the browser investigation workspace, with Next.js/React and its own pinned package manifest and tests. Rust serves its static export through `src/web_app.rs`. Platform-specific release artifacts, the npm launcher, container image, MCP bundles, and client skills are separate packaging surfaces, not proof of a universally static binary.
 
-SQLite was chosen over PostgreSQL/MySQL because:
-- Zero-dependency deployment (bundled, no external database server)
-- WAL mode enables concurrent reads during writes
-- FTS5 provides full-text search with porter stemming
-- Single-file database simplifies backup and migration
-- Sufficient throughput for homelab log volumes (thousands of messages/second)
-
-| Crate | Purpose |
-| --- | --- |
-| `rusqlite` | SQLite driver with bundled SQLite and FTS5 vtab support |
-| `r2d2` | Generic connection pooling |
-| `r2d2_sqlite` | SQLite adapter for r2d2 |
-
-## Syslog parsing: syslog_loose
-
-Lenient syslog parser that handles both RFC 3164 (BSD) and RFC 5424 (IETF) formats. The "loose" parsing is critical for homelab environments where devices send non-compliant syslog messages (UniFi CEF, ATT router logs, etc.).
-
-## Serialization: serde + serde_json + toml
-
-- `serde` -- derive macros for all data structures
-- `serde_json` -- tool argument/result payloads and JSON output formatting
-- `toml` -- config.toml parsing
-
-## Time: chrono
-
-RFC 3339 timestamp parsing and formatting. Used for:
-- Parsing syslog timestamps
-- Time range filtering in search queries
-- Correlation window calculation
-
-## Auth: subtle
-
-Constant-time byte comparison for bearer token validation. Prevents timing side-channel attacks.
-
-## Filesystem: rustix
-
-Low-level filesystem operations for free disk space measurement (`statvfs`). Used by the storage budget enforcement system.
-
-## Logging: tracing + tracing-subscriber
-
-Structured, span-based logging with environment filter support:
-- `RUST_LOG` directive parsing
-- Target-based filtering (per-module verbosity)
-- Human-readable console output with timestamps
-
-## Error handling: anyhow
-
-Flexible error type for application code. `anyhow::Result` is used throughout for:
-- Config loading errors
-- Database errors
-- Tool execution errors
-- Propagation with `?` operator
-
-## Development dependencies
-
-| Crate | Purpose |
-| --- | --- |
-| `tempfile` | Temporary directories for isolated test databases |
-| `serial_test` | Serialize tests that mutate environment variables |
-| `tower` | HTTP testing utilities for axum handler tests |
-
-## See also
-
-- [ARCH.md](ARCH.md) -- architecture overview
-- [PRE-REQS.md](PRE-REQS.md) -- tool requirements
-- [../INVENTORY.md](../INVENTORY.md) -- complete dependency listing
+See [architecture.md](../architecture.md), [RUST.md](../RUST.md), and [PUBLISH.md](../mcp/PUBLISH.md).

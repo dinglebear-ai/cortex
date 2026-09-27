@@ -57,6 +57,22 @@ fn docs_only_changes_skip_runtime_categories() {
 }
 
 #[test]
+fn agent_instructions_and_contributor_docs_enable_doc_checks() {
+    for path in [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "CONTRIBUTING.md",
+        "plugins/cortex/AGENTS.md",
+        "new-scope/GEMINI.md",
+    ] {
+        let out = classify("pull_request", &[path]);
+        assert_eq!(out["docs"], "true", "{path} must enable docs checks");
+        assert_eq!(out["rust"], "false", "{path} is not a runtime change");
+    }
+}
+
+#[test]
 fn rust_changes_enable_runtime_security_release_and_mcp_smoke() {
     let out = classify("pull_request", &["src/mcp/tools.rs"]);
     assert_eq!(out["rust"], "true");

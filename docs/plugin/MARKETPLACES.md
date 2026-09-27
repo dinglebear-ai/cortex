@@ -14,13 +14,13 @@ description: Marketplace publishing and registry package reference for cortex.
 
 # Marketplace Publishing -- cortex
 
-Registration and publishing patterns for Claude, Codex, and Gemini marketplaces.
+Repository-owned packaging surfaces and registry metadata. Public directory acceptance and external marketplace availability are not established by the presence of a manifest.
 
 ## Marketplace locations
 
 | Marketplace | Manifest | Registry entry |
 | --- | --- | --- |
-| Claude Code | `.claude-plugin/plugin.json` | `claude-homelab` marketplace |
+| Claude Code | `.claude-plugin/plugin.json` | Client/onboarding package in this repository |
 | Codex | `.codex-plugin/plugin.json` | Not currently shipped |
 | Gemini | `gemini-extension.json` | Not currently shipped |
 | MCP Registry | `server.json` | Tracked MCP Registry metadata |
@@ -29,10 +29,7 @@ Registration and publishing patterns for Claude, Codex, and Gemini marketplaces.
 
 ### Claude Code
 
-```bash
-/plugin marketplace add jmagar/claude-homelab
-/plugin install cortex @jmagar-claude-homelab
-```
+Use the current instructions in [plugins/cortex/README.md](../../plugins/cortex/README.md) and the `install-cortex` skill. Do not assume an older third-party marketplace location is still authoritative.
 
 ### Codex CLI
 
@@ -64,14 +61,17 @@ Example registry entry:
 
 ## OCI publishing
 
-cortex uses OCI (Docker) images as the primary distribution package, not PyPI or npm:
+Cortex publishes a container image alongside native release archives and the
+`@dinglebear/cortex` npm launcher. The current distribution workflows, rather
+than this example table, define actual publication triggers and platforms:
 
 | Registry | Image |
 | --- | --- |
 | GHCR | `ghcr.io/dinglebear-ai/cortex:latest` |
 | GHCR (versioned) | `ghcr.io/dinglebear-ai/cortex:vX.Y.Z` |
 
-Additionally published to crates.io for `cargo install` usage.
+The root Cargo package sets `publish = false`; crates.io is not a distribution
+path. See [PUBLISH.md](../mcp/PUBLISH.md) for release-please and packaging gates.
 
 ## See also
 

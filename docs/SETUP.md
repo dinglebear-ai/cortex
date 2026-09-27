@@ -12,7 +12,7 @@ Step-by-step instructions to get cortex running locally, in Docker, or as a Clau
 
 | Dependency | Version | Purpose |
 | --- | --- | --- |
-| Rust | 1.86+ | Compiler toolchain |
+| Rust | 1.97.1 | Pinned by `rust-toolchain.toml`; see [RUST.md](RUST.md) |
 | cargo | (bundled) | Build system and package manager |
 | Docker | 24+ | Container deployment |
 | Docker Compose | v2+ | Orchestration |
@@ -34,7 +34,7 @@ If Rust is not installed:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup default stable
+rustup show active-toolchain  # from the checkout; honors rust-toolchain.toml
 ```
 
 ## 3. Build
@@ -47,7 +47,7 @@ just release        # Release build (optimized)
 Or directly:
 
 ```bash
-cargo build --release
+cargo build --release --locked
 ```
 
 ## 4. Configure environment

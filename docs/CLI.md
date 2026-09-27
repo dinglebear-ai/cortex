@@ -7,8 +7,9 @@ updated: 2026-07-30
 # Direct CLI Reference -- cortex
 
 The `cortex` binary includes direct query and deployment-lifecycle commands for
-humans and shell scripts. Query commands read the configured SQLite database and
-call the same shared `SyslogService` methods used by the MCP tool. Compose
+humans and shell scripts. Query commands route through REST when HTTP mode is selected, or read the
+configured SQLite database in local mode. Both use shared `CortexService`
+behavior; flags and `CORTEX_USE_HTTP` determine routing in `src/cli/run.rs`. Compose
 lifecycle commands inspect Docker/Compose directly and do not load the SQLite
 query runtime.
 
@@ -137,7 +138,7 @@ cortex ingest docker sources [--json]
 ## Output
 
 All commands print compact human-readable output by default. Add `--json` to
-print the exact serialized `SyslogService` response shape. MCP uses the same
+print the exact serialized `CortexService` response shape. MCP uses the same
 shape for matching actions; REST parity applies only to commands that also have
 REST endpoints.
 
@@ -1306,7 +1307,7 @@ cortex`), not a project-wide `docker compose down`.
 
 The direct CLI and MCP tool share the same business layer. Transport adapters
 own argument parsing and rendering; shared defaults, limits, validation, audit
-identity, and safety policy belong in `SyslogService` or service-owned request
+identity, and safety policy belong in `CortexService` or service-owned request
 models.
 
 | CLI command | MCP action |

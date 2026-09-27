@@ -59,7 +59,12 @@ def classify(event: str, paths: list[str]) -> dict[str, bool]:
             "tests/ci_changed_paths.rs",
         },
     )
-    docs = any_match(paths, lambda p: starts(p, "docs/") or p == "README.md")
+    docs = any_match(
+        paths,
+        lambda p: starts(p, "docs/")
+        or p in {"README.md", "CONTRIBUTING.md"}
+        or Path(p).name in {"AGENTS.md", "CLAUDE.md", "GEMINI.md"},
+    )
     web = any_match(paths, lambda p: starts(p, "web/"))
     docker = web or any_match(
         paths,

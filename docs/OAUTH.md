@@ -25,7 +25,7 @@ Client (browser/Claude)  │  cortex HTTP :3100             │
                          │                                    │
                          │  RMCP tool dispatch                │
                          │    scope check (cortex:read)       │
-                         │    → SyslogService / SQLite        │
+                         │    → CortexService / SQLite        │
                          └────────────────────────────────────┘
 
 OAuth discovery endpoints (mounted when AUTH_MODE=oauth):

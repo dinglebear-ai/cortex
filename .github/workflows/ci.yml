@@ -82,6 +82,17 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: python3 "$CORTEX_CHANGED_PATHS" --event "$EVENT_NAME" --output "$GITHUB_OUTPUT" --write-changed-files changed-files.txt
 
+  agent-instructions:
+    name: Agent Instruction Authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check canonical agent instructions
+        run: bash scripts/check-agent-memory-symlinks.sh
+      - name: Test instruction authority guard
+        run: bash scripts/test-agent-memory-symlinks.sh
+
   version-sync:
     name: Version Sync
     runs-on: ubuntu-24.04
@@ -98,9 +109,6 @@ jobs:
       # with Cargo.toml, and plugin manifests must carry no top-level version.
       - name: Check version sync
         run: cargo xtask check-version-sync
-
-      - name: Check agent memory symlinks
-        run: bash scripts/check-agent-memory-symlinks.sh
 
       - name: Check Rust module sizes
         run: bash scripts/check-rust-module-size.sh --limit 500
@@ -426,6 +434,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - agent-instructions
       - version-sync
       - identity
       - fmt
@@ -451,6 +460,7 @@ jobs:
             esac
           }
           require_success_or_skipped changes "${{ needs.changes.result }}"
+          test "${{ needs.agent-instructions.result }}" = success || { echo "::error::Agent instruction authority must pass" >&2; exit 1; }
           require_success_or_skipped version-sync "${{ needs.version-sync.result }}"
           require_success_or_skipped identity "${{ needs.identity.result }}"
           require_success_or_skipped fmt "${{ needs.fmt.result }}"
