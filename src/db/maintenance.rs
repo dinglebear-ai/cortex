@@ -667,7 +667,7 @@ const DEFAULT_FTS_MERGE_PAGES: i64 = 500;
 /// Logical DB-size pressure can delete err+ rows only outside the configured
 /// recent, per-source error floor. Low free disk independently blocks writes;
 /// it does not initiate deletion. If both limits are breached, deletion is
-/// attributable to the DB-size policy. See CLAUDE.md "Retention".
+/// attributable to the DB-size policy. See AGENTS.md "Retention".
 pub fn purge_old_logs(pool: &DbPool, retention_days: u32, fts_merge_pages: u32) -> Result<usize> {
     if retention_days == 0 {
         return Ok(0);

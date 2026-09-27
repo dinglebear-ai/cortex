@@ -232,7 +232,14 @@ fn classify_paths(paths: &[&str]) -> Categories {
         );
     let hooks = any_file(paths, &["lefthook.yml"])
         || any_path(paths, &["xtask/src/pre_push", "xtask/src/main"]);
-    let docs = any_path(paths, &["docs/"]) || any_file(paths, &["README.md"]);
+    let docs = any_path(paths, &["docs/"])
+        || any_file(paths, &["README.md", "CONTRIBUTING.md"])
+        || paths.iter().any(|path| {
+            matches!(
+                path.rsplit('/').next(),
+                Some("AGENTS.md" | "CLAUDE.md" | "GEMINI.md")
+            )
+        });
 
     Categories {
         docs,
@@ -248,6 +255,16 @@ fn classify_paths(paths: &[&str]) -> Categories {
 fn command_plan(paths: &[String], categories: &Categories, full: bool) -> Vec<PlanStep> {
     let mut plan = Vec::new();
 
+    if full || categories.docs {
+        plan.push(PlanStep {
+            name: "agent-instructions",
+            command: "bash scripts/check-agent-memory-symlinks.sh",
+        });
+        plan.push(PlanStep {
+            name: "agent-instruction-tests",
+            command: "bash scripts/test-agent-memory-symlinks.sh",
+        });
+    }
     if full || categories.release {
         plan.push(PlanStep {
             name: "version-sync",

@@ -14,8 +14,21 @@ fn plan_for(paths: &[&str], full: bool) -> Vec<&'static str> {
 }
 
 #[test]
-fn docs_only_push_has_no_local_gate() {
-    assert!(plan_for(&["docs/SETUP.md"], false).is_empty());
+fn docs_only_push_runs_lightweight_instruction_gates() {
+    for path in [
+        "docs/SETUP.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "CONTRIBUTING.md",
+        "plugins/cortex/AGENTS.md",
+    ] {
+        assert_eq!(
+            plan_for(&[path], false),
+            vec!["agent-instructions", "agent-instruction-tests"],
+            "{path} should validate instructions without a full Rust build"
+        );
+    }
 }
 
 #[test]

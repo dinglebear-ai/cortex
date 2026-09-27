@@ -1,154 +1,27 @@
----
-title: "Development Workflow -- cortex"
-created: "2026-07-30"
-updated: "2026-07-30"
----
+# MCP development workflow
 
-# Development Workflow -- cortex
+Read the root [AGENTS.md](../../AGENTS.md), [CONTRIBUTING.md](../../CONTRIBUTING.md), and the scoped [MCP instructions](AGENTS.md). They define checkout safety, the pinned toolchain, tests, and publication policy.
 
-Day-to-day development guide for the cortex server.
+## Local iteration
 
-## Quick start
+Build with `cargo build --locked`. Before `just dev` or `cargo run -- serve mcp`, configure a writable database path and the required REST token as described in [SETUP.md](../SETUP.md). Merely copying `.env.example` does not prove the process has loaded valid credentials. Keep a development server separate from the installed deployment.
 
-```bash
-git clone https://github.com/dinglebear-ai/cortex.git
-cd cortex
-cp .env.example .env
-chmod 600 .env
+Use `just --list` for recipes. `just test` runs cargo-nextest; `just test-doc` runs doctests separately. `just validate-plugin` validates packaging and skills. Live profile requirements and permitted targets are described in [LIVE_QUALIFICATION.md](../LIVE_QUALIFICATION.md).
 
-just dev          # Start dev server (cargo run)
-```
+## Change an MCP action
 
-## Project structure
+Start in `src/mcp/actions.rs::ACTION_SPECS`: action identity, scope, cost, input metadata, flags, and handler dispatch belong to that registry and its supporting modules. Inspect a comparable current handler rather than copying an old handwritten switch. Shared behavior belongs in `CortexService` under `src/app/`; persistence belongs under `src/db/`.
 
-```
-cortex/
-  src/
-    main.rs              # Entry point, task wiring, graceful shutdown
-    config.rs            # Config: config.toml + env var overlay
-    db.rs                # SQLite pool, FTS5, schema, retention, storage budget
-    syslog.rs            # UDP/TCP listeners, RFC 3164/5424 parsing, batch writer
-    mcp.rs               # Axum HTTP, RMCP adapter, auth, health
-  tests/                 # Live integration tests
-  scripts/               # Smoke tests, backups, plugin checks
-  hooks/                 # Claude Code hooks (sync-env and related session checks)
-  skills/cortex/         # Skill definition (SKILL.md)
-  .claude-plugin/        # Claude Code plugin manifest
-  .codex-plugin/         # Codex CLI plugin manifest
-  gemini-extension.json  # Gemini CLI manifest
-  docker-compose.yml     # Container deployment
-  Dockerfile             # Container build
-  config.toml            # Local dev config (not in Docker image)
-  .env.example           # Environment variable template
-  Justfile               # Task runner recipes
-```
+Preserve the public `cortex` tool name and existing wire contracts. Add the handler and relevant CLI/REST projections through their registries, with sidecar tests for authorization, invalid input, bounds, redaction, and failure behavior. Deterministic MCP investigation must not silently invoke a CLI-only LLM assessment.
 
-## Development cycle
+Update the corresponding [TOOLS.md](TOOLS.md), [SCHEMA.md](SCHEMA.md), [TESTS.md](TESTS.md), [INVENTORY.md](../INVENTORY.md), and affected skill references. Keep registry coverage tests green. Do not reintroduce separate action-name/scope lists or hand-edited help inventories. Plugin manifests remain unversioned.
 
-1. **Edit source code** -- modify tool schemas in `src/mcp/schemas.rs`, handlers in `src/mcp/tools.rs`, database queries in `src/db.rs`, and syslog parsing in `src/syslog/`.
-2. **Run dev server** -- `just dev` compiles and runs the binary.
-3. **Test interactively** -- call tools via curl:
-   ```bash
-   # Health (unauthenticated)
-   curl http://localhost:3100/health
+## Source and package locations
 
-   # Tool call
-   curl -s -X POST http://localhost:3100/mcp \
-     -H "Content-Type: application/json" \
-     -H "Accept: application/json, text/event-stream" \
-     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"cortex","arguments":{"action":"tail","n":10}}}'
-   ```
-4. **Run checks**:
-   ```bash
-   just lint && just test
-   ```
-5. **Commit** with conventional prefix:
-   ```bash
-   git commit -m "feat(tools): add search filter by facility"
-   ```
+Syslog parsing lives in `src/receiver/`, not `src/syslog/`. The source-build Dockerfile is `config/Dockerfile`. Skills live in `plugins/cortex/skills/`; primary guidance is `using-cortex`. The current tracked plugin manifest is `.claude-plugin/plugin.json`; no Codex/Gemini manifest or Claude lifecycle-hook directory is shipped. See [repository structure](../repo/REPO.md).
 
-## Adding a new MCP action
+## Diagnostics
 
-1. **Register the action** -- add an `ActionSpec` row to `src/mcp/actions.rs::ACTION_SPECS`. The schema enum and scope checks are derived from this table.
-2. **Add adapter entry** -- add a match arm in `tool_cortex()`.
-3. **Implement handler** -- write an async function that calls `SyslogService`.
-4. **Add database query** -- implement the query function in `src/db.rs` with parameterized SQL.
-5. **Add sidecar unit tests** -- place tests in the relevant `src/<module>_tests.rs` file and keep the source module limited to the `#[cfg(test)] #[path = "..._tests.rs"] mod tests;` hook.
-6. **Update cortex help** -- add the action to the help text in `tool_cortex_help()`.
-7. **Update public docs** -- refresh `docs/mcp/TOOLS.md`, `docs/mcp/SCHEMA.md`, `docs/mcp/TESTS.md`, and relevant skill docs.
-8. **Update plugin manifests** -- keep the public tool name as `cortex`.
+Use scoped `RUST_LOG` filters and bounded requests to inspect the behavior under test. Do not print credentials or raw private evidence. Use [CONNECT.md](CONNECT.md), [MCPORTER.md](MCPORTER.md), and the canonical live harness for authenticated MCP calls; a unauthenticated example is not a substitute for the configured policy.
 
-## Debugging
-
-### Log levels
-
-Set `RUST_LOG` in `.env` or environment:
-
-| Level | Use case |
-| --- | --- |
-| `trace` | Full syslog parse output, SQL queries, batch details |
-| `debug` | Request/response details, batch flush, queue depth |
-| `info` | Startup, tool calls, retention purge, storage enforcement (default) |
-| `warn` | Backpressure, oversized messages, connection limits |
-| `error` | Failures, DB errors, channel closed |
-
-Targeted filtering:
-
-```bash
-RUST_LOG=cortex=debug,tower_http=info cargo run
-```
-
-### mcporter testing
-
-```bash
-mcporter list cortex --config config/mcporter.json
-mcporter call --config config/mcporter.json cortex.cortex action=stats
-mcporter call --config config/mcporter.json cortex.cortex action=tail n=10
-```
-
-### MCP Inspector
-
-```bash
-npx @modelcontextprotocol/inspector
-```
-
-Connect to `http://localhost:3100/mcp` with your bearer token.
-
-## Code style
-
-| Tool | Command | Purpose |
-| --- | --- | --- |
-| clippy | `just lint` | Lint with `-D warnings` |
-| rustfmt | `just fmt` | Auto-format |
-| cargo check | `just check` | Type check without building |
-| cargo test | `just test` | Run test suite |
-
-## Justfile recipes
-
-| Recipe | Description |
-| --- | --- |
-| `just dev` | Start dev server (`cargo run`) |
-| `just build` | Debug build |
-| `just release` | Release build |
-| `just check` | `cargo check` |
-| `just lint` | `cargo clippy -- -D warnings` |
-| `just fmt` | `cargo fmt` |
-| `just test` | `cargo test` |
-| `just up` | `docker compose up -d` |
-| `just down` | `docker compose down` |
-| `just restart` | `docker compose restart` |
-| `just logs` | `docker compose logs -f` |
-| `just health` | curl health endpoint |
-| `just test-live` | Run live smoke tests |
-| `just docker-build` | Build Docker image |
-| `just setup` | Copy .env.example to .env |
-| `just gen-token` | Generate bearer token |
-| `just check-contract` | Validate plugin manifests |
-| `just clean` | `cargo clean` |
-| `just publish` | Bump version, tag, push |
-
-## See also
-
-- [CONNECT.md](CONNECT.md) -- client connection methods
-- [PATTERNS.md](PATTERNS.md) -- code patterns
-- [TESTS.md](TESTS.md) -- testing guide
+Run formatting, Clippy, the applicable tests, and documentation/packaging checks before publishing. A local unit test, a remote CI pass, and a live deployment verification are distinct results.

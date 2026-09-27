@@ -1,83 +1,29 @@
----
-title: "Coding Rules -- cortex"
-created: "2026-07-30"
-updated: "2026-07-30"
----
+# Coding and Git rules
 
-# Coding Rules -- cortex
-
-Standards and conventions enforced across the repository.
+[AGENTS.md](../../AGENTS.md) is canonical. This page summarizes the contributor-facing rules; it does not override scoped instructions or explicit task authorization.
 
 ## Git workflow
 
-- `main` branch: production-ready code
-- Feature branches for new features and bug fixes
-- Pull requests required before merge
-- Conventional commit prefixes required
+Use feature branches and pull requests by default. Treat `main` as production-ready; direct integration requires explicit authorization. Inspect and preserve pre-existing changes. Do not silently clean, reset, force-push, or include unrelated work. Even when all dirty changes are authorized for inclusion, inspect them for secrets and accidental runtime artifacts.
 
-## Commit conventions
+Use Conventional Commits, for example `fix(db): handle checkpoint timeout` or `docs(repo): refresh contributor instructions`. `feat` denotes a feature and a breaking-change marker identifies an incompatible change; release-please computes the release from the configured commit history.
 
-```
-<type>(<scope>): <description>
-```
+## Version policy
 
-| Type | Purpose |
-| --- | --- |
-| `feat` | New feature (minor bump) |
-| `feat!` | Breaking change (major bump) |
-| `fix` | Bug fix (patch bump) |
-| `docs` | Documentation (patch bump) |
-| `refactor` | Code refactoring (patch bump) |
-| `test` | Test changes (patch bump) |
-| `chore` | Maintenance (patch bump) |
+Normal feature branch pushes do **not** bump versions. Release-please manages release PRs after green main CI. `Cargo.toml` is the canonical version and `release/components.toml` lists every synchronized carrier. Run `cargo xtask check-version-sync`; release changes additionally require `cargo xtask check-release-versions`. Plugin manifests are intentionally unversioned.
 
-Examples:
-```
-feat(tools): add search filter by facility
-fix(db): handle WAL checkpoint timeout
-docs(readme): update tool parameter table
-refactor(syslog): extract CEF parser to function
-```
+`cargo xtask bump-version` and `just publish` are explicit manual escape hatches, not routine contribution steps. The root package has `publish = false`; no crates.io publishing workflow exists. See [RELEASING.md](../../RELEASING.md) and [RELEASE.md](../RELEASE.md).
 
-## Version bumping
+## Source style and checks
 
-Every feature branch push must bump the version in all version-bearing files:
-- `Cargo.toml`
-- `.claude-plugin/plugin.json`
-- `.codex-plugin/plugin.json`
-- `gemini-extension.json`
-- `server.json`
-- `CHANGELOG.md`
+Use sibling Rust modules and sidecar unit tests. Keep shared behavior in `CortexService`, parameterize SQL, run blocking DB operations through the existing helpers, use structured `tracing`, and preserve authorization, bounds, redaction, retry/cancellation, and provenance. `cargo fmt --all -- --check` and `cargo clippy --all-targets --locked -- -D warnings` must pass for applicable Rust changes.
 
-All files must have the same version. Never bump only one file.
-
-## Rust code style
-
-- `cargo clippy -- -D warnings` must pass (zero warnings)
-- `cargo fmt` must not produce changes
-- `set -euo pipefail` in all bash scripts
-- Quote all shell variables: `"$var"`
-- Use `anyhow::Result` for error handling
-- Use `tracing` macros for logging (not `println!`)
-- Parameterize all SQL queries (no string interpolation)
-- Use `Arc<DbPool>` for shared database access
-- Run blocking database operations via `tokio::task::spawn_blocking`
+Bash scripts use `set -euo pipefail` and quote path/variable expansions. Do not bypass Lefthook: pre-commit is staged-file scoped and pre-push delegates to `cargo xtask pre-push`. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the test matrix.
 
 ## Never commit
 
-- `.env` files (gitignored)
-- Credentials or API keys
-- SQLite database files (`data/`)
-- Build artifacts (`target/`)
-- Temporary/debug files
+Credentials, private keys, `.env` secrets, production databases, raw transcripts, local logs, and generated build output must remain outside source control. `Cargo.lock` is tracked for reproducibility. Dependency and lockfile updates must be intentional; do not opportunistically update pinned SDKs during unrelated work.
 
-## Dependency management
+## Documentation
 
-- `Cargo.lock` is tracked (binary crate -- reproducible builds)
-- Pin major versions in `Cargo.toml` (e.g., `tokio = { version = "1", ... }`)
-
-
-## See also
-
-- [../mcp/PUBLISH.md](../mcp/PUBLISH.md) -- version bumping and release workflow
-- [RECIPES.md](RECIPES.md) -- Justfile recipes for lint, fmt, test
+Edit `AGENTS.md`, not independent Claude/Gemini copies. Update current docs with behavior changes; retain historical plans as history. Run the symlink validator and regression suite. See [DOCUMENTATION.md](DOCUMENTATION.md) for ownership and validation.
