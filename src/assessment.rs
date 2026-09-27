@@ -17,8 +17,11 @@ const GEMINI_AUTH_FILES: &[&str] = &[
 ];
 
 pub(crate) const SKILL_NAME: &str = "frustration-assessment";
-pub(crate) const SKILL_MD: &str =
-    include_str!("../plugins/cortex/skills/frustration-assessment/SKILL.md");
+pub(crate) const SKILL_MD: &str = concat!(
+    include_str!("../plugins/cortex/skills/frustration-assessment/SKILL.md"),
+    "\n",
+    include_str!("../plugins/cortex/skills/frustration-assessment/references/workflow.md"),
+);
 
 pub(crate) const ASSESSMENT_SYSTEM_PROMPT: &str = concat!(
     "Use the frustration-assessment skill to assess the supplied bounded ",
@@ -28,6 +31,8 @@ pub(crate) const ASSESSMENT_SYSTEM_PROMPT: &str = concat!(
     "You must also follow these instructions directly if native skill activation ",
     "is unavailable:\n\n",
     include_str!("../plugins/cortex/skills/frustration-assessment/SKILL.md"),
+    "\n",
+    include_str!("../plugins/cortex/skills/frustration-assessment/references/workflow.md"),
 );
 
 #[derive(Debug, Clone, PartialEq, Eq)]
