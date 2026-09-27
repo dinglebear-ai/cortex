@@ -1,7 +1,7 @@
 interface:
-  display_name: "Cortex"
+  display_name: "Using Cortex"
   short_description: "Query and analyze homelab syslog data"
-  default_prompt: "Use $cortex to search recent homelab logs for errors and summarize the important findings."
+  default_prompt: "Use $using-cortex to search recent homelab logs for errors and summarize the important findings."
 dependencies:
   tools:
     - type: "mcp"

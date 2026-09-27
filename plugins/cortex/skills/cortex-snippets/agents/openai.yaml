@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cortex Snippets"
+  short_description: "Run reusable Cortex investigations in Labby Code Mode"
+  default_prompt: "Use $cortex-snippets to select and run a Cortex investigation snippet."
