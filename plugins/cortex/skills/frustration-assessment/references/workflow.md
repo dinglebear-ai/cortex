@@ -125,4 +125,4 @@ Markdown. One H1 title (`# Frustration Assessment — <incident_id>`), then the 
 
 The executive summary must preserve the same uncertainty level as the body. If section 7 says **Trend evidence unavailable**, the executive summary must not say "isolated", "systemic", "not systemic", "no systemic failure", or equivalent recurrence language.
 
-See `references/assessment-template.md` for a filled example.
+See `assessment-template.md` in this directory for a filled example.
