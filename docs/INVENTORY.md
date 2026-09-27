@@ -1,7 +1,7 @@
 ---
 title: "Component Inventory -- cortex"
 created: 2026-04-04
-updated: 2026-07-30
+updated: 2026-09-27
 ---
 
 # Component Inventory -- cortex

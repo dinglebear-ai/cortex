@@ -1,7 +1,7 @@
 ---
 title: "OAuth Authentication"
 created: 2026-05-08
-updated: 2026-07-30
+updated: 2026-09-27
 ---
 
 # OAuth Authentication

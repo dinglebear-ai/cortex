@@ -1,7 +1,7 @@
 ---
 title: "Direct CLI Reference -- cortex"
 created: 2026-05-07
-updated: 2026-07-30
+updated: 2026-09-27
 ---
 
 # Direct CLI Reference -- cortex

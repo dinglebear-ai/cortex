@@ -1,7 +1,7 @@
 ---
 title: "Plugin Manifest Reference -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: 2026-09-27
 ---
 
 <!--
