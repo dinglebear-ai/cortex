@@ -19,12 +19,14 @@ Before first use, discover `cortex::cortex` with `codemode.search()` and inspect
 ```js
 async (input) => {
   const since = input.since ?? "24h";
-  const [stats, hosts, errors] = await codemode.batch([
+  const batch = await codemode.batch([
     () => callTool("cortex::cortex", { action: "stats" }),
     () => callTool("cortex::cortex", { action: "hosts" }),
     () => callTool("cortex::cortex", { action: "errors", since })
   ]);
-  return { ok: true, snippet: "cortex-report", window: { since }, stats, hosts, errors,
+  return { ok: batch.all_ok, snippet: "cortex-report", window: { since },
+    results: batch.ok.map(({ i, value }) => ({ source: ["stats", "hosts", "errors"][i], preview: JSON.stringify(value).slice(0, 1500) })),
+    failures: batch.failed.map(({ i, error }) => ({ source: ["stats", "hosts", "errors"][i], error: String(error).slice(0, 500) })),
     guidance: "Use exact timestamps and source coverage; correlate only concrete error spikes." };
 }
 ```

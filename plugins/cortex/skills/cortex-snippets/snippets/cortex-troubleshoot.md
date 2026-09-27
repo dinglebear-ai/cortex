@@ -13,11 +13,13 @@ Before first use, discover `cortex::cortex` with `codemode.search()` and inspect
 
 ```js
 async (input) => {
-  const [status, compose] = await codemode.batch([
+  const batch = await codemode.batch([
     () => callTool("cortex::cortex", { action: "status" }),
     () => callTool("cortex::cortex", { action: "compose_doctor" })
   ]);
-  return { ok: true, snippet: "cortex-troubleshoot", status, compose,
+  return { ok: batch.all_ok, snippet: "cortex-troubleshoot",
+    results: batch.ok.map(({ i, value }) => ({ source: ["status", "compose_doctor"][i], preview: JSON.stringify(value).slice(0, 1800) })),
+    failures: batch.failed.map(({ i, error }) => ({ source: ["status", "compose_doctor"][i], error: String(error).slice(0, 500) })),
     guidance: "Choose a targeted connection, ingest, or service test from observed failures." };
 }
 ```

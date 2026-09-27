@@ -5,7 +5,7 @@ description: Use when installing, running, or adapting reusable Labby Code Mode 
 
 # Cortex Snippets
 
-The bundled Markdown files are Labby Code Mode snippets for repeated Cortex investigations. They call the live `cortex::cortex` upstream. A snippet is an evidence collector, not a complete assessment or proof that a service is healthy. The legacy specialized Cortex skills remain available during migration.
+The bundled Markdown files are Labby Code Mode snippets for repeated Cortex investigations. Large evidence bundles return bounded previews and key names; fetch full records with the direct Cortex tool for a supported follow-up. They call the live `cortex::cortex` upstream. A snippet is an evidence collector, not a complete assessment or proof that a service is healthy. The legacy specialized Cortex skills remain available during migration.
 
 ## Workflow
 

@@ -20,6 +20,6 @@ Before first use, discover `cortex::cortex` with `codemode.search()` and inspect
 async (input) => {
   const params = { action: "unaddressed_errors", limit: input.limit ?? 20 };
   const evidence = await callTool("cortex::cortex", params);
-  return { ok: true, snippet: "cortex-incidents", request: params, evidence, guidance: 'Prioritize recent active signatures. Acknowledgement changes server state and requires a separate authorized action.' };
+  return { ok: true, snippet: "cortex-incidents", request: params, evidence_keys: Object.keys(evidence), evidence_preview: JSON.stringify(evidence, (key, value) => { if (/message|text|content|stdout|stderr|transcript|command|token|secret|authorization/i.test(key)) return "[omitted]"; if (typeof value === "string") return value.slice(0, 250); if (Array.isArray(value)) return value.slice(0, 3); return value; }).slice(0, 4000), guidance: 'Prioritize recent active signatures. Acknowledgement changes server state and requires a separate authorized action.' };
 }
 ```
