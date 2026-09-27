@@ -1,3 +1,9 @@
+---
+title: "Publishing and distribution"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # Publishing and distribution
 
 [RELEASING.md](../../RELEASING.md) and [RELEASE.md](../RELEASE.md) define the release workflow and gates. `release/components.toml` is the machine-readable version-carrier inventory; `Cargo.toml` is the canonical package version.

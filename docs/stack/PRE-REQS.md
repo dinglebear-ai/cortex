@@ -1,3 +1,9 @@
+---
+title: "Development and runtime prerequisites"
+created: 2026-04-04
+updated: 2026-09-27
+---
+
 # Development and runtime prerequisites
 
 The checked-in manifests define the supported toolchain. Use [RUST.md](../RUST.md) and [CONTRIBUTING.md](../../CONTRIBUTING.md), not an older template's minimum versions.

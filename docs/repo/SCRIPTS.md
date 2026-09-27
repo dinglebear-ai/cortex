@@ -1,3 +1,9 @@
+---
+title: "Repository scripts"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # Repository scripts
 
 Scripts support the binary-owned setup/runtime and repository validation. They are not a second deployment engine. The plugin ships no Claude Code lifecycle hooks.

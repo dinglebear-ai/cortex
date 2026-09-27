@@ -1,3 +1,9 @@
+---
+title: "Deployment guide"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # Deployment guide
 
 Use [SETUP.md](../SETUP.md) for the full setup sequence and the root [README.md](../../README.md) for supported native/npm installation. This guide separates a development process, an installed server, and a query-only client.

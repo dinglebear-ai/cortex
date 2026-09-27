@@ -1,3 +1,9 @@
+---
+title: "Adding an ingestion source"
+created: 2026-09-27
+updated: 2026-09-27
+---
+
 # Adding an ingestion source
 
 Cortex has several ingestion families, not one universal plug-in trait. Choose the existing boundary for the evidence being added; a network transport is not a source-format provider. [Architecture](architecture.md) maps the families to current modules.

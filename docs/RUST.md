@@ -1,3 +1,9 @@
+---
+title: "Rust build setup"
+created: 2026-05-15
+updated: 2026-09-27
+---
+
 # Rust build setup
 
 The checked-in files are authoritative: [`rust-toolchain.toml`](../rust-toolchain.toml), [`Cargo.toml`](../Cargo.toml), [`Cargo.lock`](../Cargo.lock), and [`.cargo/config.toml`](../.cargo/config.toml). This repository must not inherit a different SDK or toolchain policy from an old template guide.

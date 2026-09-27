@@ -23,6 +23,7 @@ cargo deny check
 cargo xtask check-version-sync
 bash scripts/check-agent-memory-symlinks.sh
 bash scripts/test-agent-memory-symlinks.sh
+python3 scripts/test-repository-contract.py
 bash scripts/check-public-identity.sh
 git diff --check
 ```

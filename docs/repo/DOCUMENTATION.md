@@ -1,3 +1,9 @@
+---
+title: "Documentation maintenance contract"
+created: 2026-09-27
+updated: 2026-09-27
+---
+
 # Documentation maintenance contract
 
 ## Authority and scope
@@ -23,6 +29,14 @@ Filename and precedence references, reviewed 2026-09-27: [Codex custom instructi
 
 The validator rejects publishable local instruction files, malformed local aliases, and overrides missing a shared-instruction reference. Its fixtures include accidentally force-staged private overrides. Keep the private files ignored even when a task authorizes committing all pre-existing dirty changes.
 
+## Shared repository contract
+
+Maintained documentation under `docs/` keeps YAML frontmatter with `title`, `created`, and `updated`; preserve the original creation date and update the review date when revising a guide. Instruction files and indexes have the exceptions defined by the pinned shared contract.
+
+The pinned fleet validator still assumes `CLAUDE.md` is canonical. `scripts/check-repository-contract.py` runs that unchanged implementation, replaces only its `symlink-convention` finding family with the stricter Cortex instruction-authority validator, and preserves every other finding. The required `Repository Contract` job runs the adapter and its regression tests; it does not disable branch protection or bypass frontmatter, dependency, lint, privacy, or configuration checks.
+
+Run `python3 scripts/test-repository-contract.py` for hermetic adapter regressions. For full validation, pass the workflow-pinned shared validator to `python3 scripts/check-repository-contract.py --repo . --implementation PATH_TO_PINNED_FLEET_CONTRACT --profile rust`. The immutable upstream revision is declared in `.github/workflows/repository-contract.yml`. The adapter can be retired when the shared validator natively supports AGENTS-canonical ownership.
+
 ## Change ownership
 
 | Behavior | Implementation authority | Documentation to review |
@@ -36,6 +50,8 @@ The validator rejects publishable local instruction files, malformed local alias
 | Plugin skills | `plugins/cortex/`, setup code, validation scripts | plugin docs and runtime assessment include paths |
 | Version and release | `release/components.toml`, release-please config and workflows | `RELEASING.md`, `docs/RELEASE.md`, MCP publish/CI docs |
 | CI/hooks | `.github/workflows/`, `lefthook.yml`, `xtask/src/pre_push.rs` | contributor guide and testing/release docs |
+
+The npm package README is an intentional byte-identical mirror of the root README. After changing the root file, run `node packages/cortex-rmcp/scripts/sync-readme.js` and `npm run check --prefix packages/cortex-rmcp`; commit the synchronized package copy. Do not replace this distribution contract with an independently edited README.
 
 Avoid copying long inventories into every guide. Link to a canonical reference or registry and retain tests for any intentionally repeated count. Command examples must name existing commands, correct paths, explicit prerequisites, and the appropriate read-only or mutating behavior.
 

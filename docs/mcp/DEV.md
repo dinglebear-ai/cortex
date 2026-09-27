@@ -1,3 +1,9 @@
+---
+title: "MCP development workflow"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # MCP development workflow
 
 Read the root [AGENTS.md](../../AGENTS.md), [CONTRIBUTING.md](../../CONTRIBUTING.md), and the scoped [MCP instructions](AGENTS.md). They define checkout safety, the pinned toolchain, tests, and publication policy.

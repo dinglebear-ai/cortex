@@ -1,3 +1,9 @@
+---
+title: "MCP implementation patterns"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # MCP implementation patterns
 
 Use the current code as the implementation reference and [AGENTS.md](../../AGENTS.md) for invariants. Examples copied from earlier versions can omit authorization or dispatch metadata.

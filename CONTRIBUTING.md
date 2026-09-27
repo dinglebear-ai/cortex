@@ -26,6 +26,7 @@ cargo xtask check-version-sync
 just validate-plugin
 bash scripts/check-agent-memory-symlinks.sh
 bash scripts/test-agent-memory-symlinks.sh
+python3 scripts/test-repository-contract.py
 git diff --check
 ```
 

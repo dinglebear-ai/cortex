@@ -1,3 +1,9 @@
+---
+title: "Coding and Git rules"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # Coding and Git rules
 
 [AGENTS.md](../../AGENTS.md) is canonical. This page summarizes the contributor-facing rules; it does not override scoped instructions or explicit task authorization.

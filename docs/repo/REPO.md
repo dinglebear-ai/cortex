@@ -1,3 +1,9 @@
+---
+title: "Repository structure"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # Repository structure
 
 See [AGENTS.md](../../AGENTS.md) for the current module ownership map and [architecture.md](../architecture.md) for data flow. This map lists stable areas rather than pretending to enumerate every source file.

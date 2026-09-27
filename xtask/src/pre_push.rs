@@ -264,6 +264,10 @@ fn command_plan(paths: &[String], categories: &Categories, full: bool) -> Vec<Pl
             name: "agent-instruction-tests",
             command: "bash scripts/test-agent-memory-symlinks.sh",
         });
+        plan.push(PlanStep {
+            name: "repository-contract-tests",
+            command: "python3 scripts/test-repository-contract.py",
+        });
     }
     if full || categories.release {
         plan.push(PlanStep {

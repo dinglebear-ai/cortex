@@ -1,3 +1,9 @@
+---
+title: "CI/CD workflows"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # CI/CD workflows
 
 The executable source is [`.github/workflows/`](../../.github/workflows). Do not copy illustrative YAML into this page and present it as the running configuration.

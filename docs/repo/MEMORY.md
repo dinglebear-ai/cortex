@@ -1,3 +1,9 @@
+---
+title: "Persistent project knowledge"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # Persistent project knowledge
 
 This is a workflow reference, not an agent-specific memory database. Repository instructions live in [AGENTS.md](../../AGENTS.md); `CLAUDE.md` and `GEMINI.md` are compatibility symlinks to that file. Do not create competing instruction or personal-memory copies here.

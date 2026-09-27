@@ -1,3 +1,9 @@
+---
+title: "Technology choices"
+created: 2026-04-04
+updated: 2026-09-27
+---
+
 # Technology choices
 
 The current versions and feature selections live in [Cargo.toml](../../Cargo.toml), [Cargo.lock](../../Cargo.lock), and [web/package.json](../../web/package.json). This page explains the boundaries, not a second dependency inventory.

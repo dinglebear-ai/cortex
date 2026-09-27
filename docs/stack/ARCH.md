@@ -1,3 +1,9 @@
+---
+title: "Architecture overview"
+created: 2026-04-04
+updated: 2026-09-27
+---
+
 # Architecture overview
 
 The maintained architecture is [docs/architecture.md](../architecture.md). The root [AGENTS.md](../../AGENTS.md) maps source ownership and contribution invariants. Keep detailed module and data-flow documentation there rather than maintaining a second syslog-only diagram here.

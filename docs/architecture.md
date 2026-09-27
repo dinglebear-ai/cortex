@@ -1,3 +1,9 @@
+---
+title: "Cortex architecture"
+created: 2026-05-18
+updated: 2026-09-27
+---
+
 # Cortex architecture
 
 Cortex combines a Rust service, host-local collection agents, a query CLI/MCP surface, deployment tooling, and a browser investigation workspace. It stores canonical evidence in SQLite and builds derived search, inventory, graph, and Agent Observatory views. See [AGENTS.md](../AGENTS.md) for contributor instructions.

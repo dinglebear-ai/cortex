@@ -25,7 +25,11 @@ fn docs_only_push_runs_lightweight_instruction_gates() {
     ] {
         assert_eq!(
             plan_for(&[path], false),
-            vec!["agent-instructions", "agent-instruction-tests"],
+            vec![
+                "agent-instructions",
+                "agent-instruction-tests",
+                "repository-contract-tests"
+            ],
             "{path} should validate instructions without a full Rust build"
         );
     }

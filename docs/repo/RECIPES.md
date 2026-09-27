@@ -1,3 +1,9 @@
+---
+title: "Justfile recipes"
+created: 2026-07-30
+updated: 2026-09-27
+---
+
 # Justfile recipes
 
 Run `just --list` for the current catalog. The root `Justfile` is executable authority; this page groups commonly used recipes without copying their entire implementations.
