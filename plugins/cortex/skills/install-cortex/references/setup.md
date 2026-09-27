@@ -1,5 +1,7 @@
 # Cortex setup
 
+Load when installing or repairing a Cortex server or client, especially for auth, Compose, or persistence decisions.
+
 ## Install
 
 ```sh

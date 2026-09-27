@@ -1,6 +1,6 @@
 ---
 name: logs
-description: Tail or follow cortex service logs from Docker Compose. Use when the user asks for cortex service logs, startup logs, crash logs, plugin deployment logs, Docker logs, or follow mode. This is for the service's stdout/stderr, not client syslog entries.
+description: Use when tailing or following cortex service logs from Docker Compose. Use when the user asks for cortex service logs, startup logs, crash logs, plugin deployment logs, Docker logs, or follow mode. This is for the service's stdout/stderr, not client syslog entries.
 ---
 
 # Cortex Service Logs

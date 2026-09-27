@@ -76,7 +76,10 @@ fn web_changes_enable_web_docker_and_release_without_rust_tests() {
 
 #[test]
 fn plugin_skill_changes_enable_skill_and_release_gates() {
-    let out = classify("pull_request", &["plugins/cortex/skills/cortex/SKILL.md"]);
+    let out = classify(
+        "pull_request",
+        &["plugins/cortex/skills/using-cortex/SKILL.md"],
+    );
     assert_eq!(out["skills"], "true");
     assert_eq!(out["release"], "true");
     assert_eq!(out["rust"], "false");
