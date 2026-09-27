@@ -4,7 +4,7 @@ description: Assess one transcript frustration incident through Labby Code Mode 
 tags: [cortex, readonly]
 inputs:
   incident_id:
-    type: integer
+    type: string
     required: true
 tools:
   - cortex::cortex
