@@ -1,7 +1,7 @@
 ---
 title: "Transport Methods Reference -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: 2026-09-27
 ---
 
 # Transport Methods Reference -- cortex
@@ -164,10 +164,11 @@ cortex correlate events --reference-time 2026-01-01T12:00:00Z --window-minutes 1
 cortex stats --json
 ```
 
-These commands load `RuntimeCore::load_query_only()` and call the shared
-`SyslogService` methods directly. They do not use `/mcp`, stdin/stdout MCP
-framing, or bearer auth. See [../CLI.md](../CLI.md) for the full command
-reference.
+These commands do not use MCP framing. With HTTP mode selected they call the
+REST API and use its bearer credential; in local mode they load the query-only
+runtime and call shared `CortexService` methods against the configured SQLite
+database. Flags and `CORTEX_USE_HTTP` determine the route; do not assume an
+installed CLI always opens a local database. See [../CLI.md](../CLI.md).
 
 ## HTTP-to-stdio bridge mode
 

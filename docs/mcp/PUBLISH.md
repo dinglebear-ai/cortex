@@ -1,133 +1,43 @@
 ---
-title: "Publishing Strategy -- cortex"
-created: "2026-07-30"
-updated: "2026-07-30"
+title: "Publishing and distribution"
+created: 2026-07-30
+updated: 2026-09-27
 ---
 
-# Publishing Strategy -- cortex
+# Publishing and distribution
 
-Versioning and release workflow.
+[RELEASING.md](../../RELEASING.md) and [RELEASE.md](../RELEASE.md) define the release workflow and gates. `release/components.toml` is the machine-readable version-carrier inventory; `Cargo.toml` is the canonical package version.
 
-## Versioning
+## Normal release path
 
-Semantic versioning (MAJOR.MINOR.PATCH). Bump type from commit prefix:
+Use Conventional Commits on feature work. Do not bump versions on every feature branch push. Release-please opens/updates the release PR after successful main CI. Its fixup runs `cargo xtask sync-version` and validates `cargo xtask check-release-versions` so all declared carriers and the changelog agree.
 
-| Prefix | Bump | Example |
-| --- | --- | --- |
-| `feat!:` / `BREAKING CHANGE` | Major | `0.3.1` -> `1.0.0` |
-| `feat:` / `feat(scope):` | Minor | `0.3.1` -> `0.4.0` |
-| `fix:`, `docs:`, `chore:`, etc. | Patch | `0.3.1` -> `0.3.2` |
+Plugin manifests are intentionally unversioned. The `json_no_version` invariant rejects a top-level plugin version. Add any new version-bearing file to `release/components.toml` and the appropriate release-please configuration rather than maintaining a private list.
 
-## Version sync
+`just publish [major|minor|patch]` is a manual escape hatch that bumps, commits, tags, and pushes. It requires explicit release intent and clean `main`; it is not the routine contribution workflow.
 
-All version-bearing files must match. Update together:
+## Distribution surfaces
 
-The version-bearing files are declared in `release/components.toml` and bumped
-together by `cargo xtask bump-version patch|minor|major`:
-
-| File | Field |
+| Surface | Source / gate |
 | --- | --- |
-| `Cargo.toml` | `version = "X.Y.Z"` in `[package]` (canonical source) |
-| `Cargo.lock` | the `cortex` package entry |
-| `server.json` | `"version": "X.Y.Z"` plus the `cortex:vX.Y.Z` image tag |
-| `mcpb/manifest.json` | `"version": "X.Y.Z"` |
-| `docker-compose.prod.yml` | `${CORTEX_VERSION:-X.Y.Z}` default image tag |
-| `CHANGELOG.md` | New entry under `## [X.Y.Z]` |
+| Native release archives | `.github/workflows/release.yml`; inspect its build targets for supported platforms |
+| npm launcher `@dinglebear/cortex` | `packages/cortex-rmcp/` and the gated npm job in `release.yml` |
+| GHCR image | `.github/workflows/docker-publish.yml`; published release or explicit dispatch |
+| MCP Registry | `server.json` and `.github/workflows/mcp-registry.yml` |
+| MCP bundles | `mcpb/manifest.json` and `scripts/build-mcpb.sh` |
+| Onboarding/skills | `plugins/cortex/` and plugin/skill validation |
 
-Plugin manifests such as `.claude-plugin/plugin.json` are intentionally
-unversioned. `cargo xtask check-version-sync` (via the manifest's
-`json_no_version` row) is the guardrail that prevents top-level plugin manifest
-`version` keys from coming back.
+The root Cargo package sets `publish = false`: **crates.io is not a distribution path**. Do not use `cargo install cortex` as an installation example. Use the repository installer or supported release/npm distribution described in [README.md](../../README.md). A source install uses an explicit local checkout (`cargo install --path . --locked`).
 
-## Publish workflow
-
-```bash
-just publish [major|minor|patch]
-```
-
-Steps executed:
-
-1. Verify on `main` branch with clean working tree
-2. Pull latest from origin
-3. `cargo xtask bump-version <level>` — reads the current version from
-   `Cargo.toml`, computes the next, and rewrites every file in
-   `release/components.toml` (including `Cargo.lock` and a `CHANGELOG.md` entry)
-4. `cargo xtask check-release-versions` — confirm sync + changelog
-5. Commit: `release: vX.Y.Z`
-6. Tag: `vX.Y.Z`
-7. Push to origin with tags (triggers CI/CD publish workflows)
-
-## Package registries
-
-| Registry | Method | Trigger |
-| --- | --- | --- |
-| crates.io | `cargo publish` via GitHub Actions | `v*` tag push |
-| GHCR | Docker image build and push | `v*` tag push |
-| MCP Registry | `server.json` under `ai.dinglebear/cortex` namespace | manual update |
-| MCPB (Linux) | `dist/cortex-X.Y.Z-linux.mcpb` | `just build-mcpb` |
-| MCPB (Windows) | `dist/cortex-X.Y.Z-windows.mcpb` | `bash scripts/build-mcpb.sh --target windows` |
-
-## server.json
-
-MCP Registry metadata at repo root:
-
-```json
-{
-  "name": "ai.dinglebear/cortex",
-  "title": "Cortex",
-  "description": "Syslog receiver and MCP server for homelab log intelligence.",
-  "version": "X.Y.Z",
-  "packages": [
-    {
-      "registryType": "oci",
-      "identifier": "ghcr.io/dinglebear-ai/cortex:vX.Y.Z"
-    }
-  ]
-}
-```
-
-## MCPB artifact
-
-Run before publishing a release:
+## Bundle builds
 
 ```bash
 just build-mcpb
 bash scripts/build-mcpb.sh --target windows
-npx --yes @anthropic-ai/mcpb info dist/cortex-X.Y.Z-linux.mcpb
-npx --yes @anthropic-ai/mcpb info dist/cortex-X.Y.Z-windows.mcpb
 ```
 
-The unsigned MCPBs are target-specific bundles for local stdio clients. Signing is a
-separate distribution step once signing keys are available.
+These create platform-specific bundles for local stdio clients. Follow the script's prerequisite checks; the Windows cross-build requires its Rust target and matching cross-linker. Signing is a separate distribution concern, not implied by successful packaging.
 
-### Windows cross-compile prerequisites
+## Verify publication
 
-`--target windows` builds `x86_64-pc-windows-gnu` from a Linux host and requires two
-things that are not installed by default. `scripts/build-mcpb.sh` checks both and fails
-fast with install instructions if either is missing:
-
-- The `x86_64-pc-windows-gnu` rustup target: `rustup target add x86_64-pc-windows-gnu`
-- A mingw-w64 linker (`x86_64-w64-mingw32-gcc`) on `PATH`:
-  - Debian/Ubuntu: `sudo apt install gcc-mingw-w64-x86-64`
-  - Fedora: `sudo dnf install mingw64-gcc`
-  - Arch: `sudo pacman -S mingw-w64-gcc`
-
-## Verification
-
-After publishing, verify:
-
-```bash
-# crates.io
-cargo install cortex --version X.Y.Z
-
-# Docker
-docker pull ghcr.io/dinglebear-ai/cortex:vX.Y.Z
-
-# GitHub Release
-gh release view vX.Y.Z
-```
-
-## See also
-
-- [CICD.md](CICD.md) -- publish workflows triggered by tags
-- [DEPLOY.md](DEPLOY.md) -- installation methods
+Check the actual release/tag, workflow results, attached assets and checksums, container identity, npm version, and registry entry for the same release. Do not equate a Git push with a successful release or a deployed fleet upgrade. Remote deployment and service restarts remain separate, explicitly authorized operations.

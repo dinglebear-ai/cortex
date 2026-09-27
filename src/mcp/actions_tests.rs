@@ -3,8 +3,11 @@ use super::*;
 #[test]
 fn documented_action_count_matches_registry() {
     assert_eq!(ACTION_SPECS.len(), 60);
-    let claude = include_str!("../../CLAUDE.md");
-    assert!(claude.contains("authoritative registry of all 60 MCP actions"));
+    let agents = include_str!("../../AGENTS.md");
+    assert!(agents.contains(&format!(
+        "authoritative registry of all {} MCP actions",
+        ACTION_SPECS.len()
+    )));
 }
 
 // PR 4 of GH #94 / GH #105: LLM skill/abuse/hook assessment is CLI-only. See

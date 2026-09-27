@@ -918,7 +918,11 @@ The code-owned registries and runtime schemas are authoritative for command name
 
 | Document | Purpose |
 | --- | --- |
+| [AGENTS.md](AGENTS.md) | Canonical cross-agent instructions; Claude/Gemini aliases are symlinks |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Checkout, validation, and contribution workflow |
 | [docs/README.md](docs/README.md) | Documentation index and authority map |
+| [docs/ADDING_SOURCES.md](docs/ADDING_SOURCES.md) | Source/provider extension and coverage semantics |
+| [docs/repo/DOCUMENTATION.md](docs/repo/DOCUMENTATION.md) | Documentation ownership and drift prevention |
 | [docs/SETUP.md](docs/SETUP.md) | Installation and deployment walkthrough |
 | [docs/CONFIG.md](docs/CONFIG.md) | Complete configuration reference |
 | [docs/CLI.md](docs/CLI.md) | CLI reference |
@@ -932,7 +936,7 @@ The code-owned registries and runtime schemas are authoritative for command name
 | [docs/RELEASE.md](docs/RELEASE.md) | Release and verification gates |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
-Design plans, runbooks, and session logs under `docs/plans`, `docs/runbooks`, and `docs/sessions` are valuable engineering history, but they are not the source of truth for the current public interface.
+Dated design plans and session logs preserve engineering history, not current public-interface authority. Runbooks are operational guidance unless explicitly marked historical; verify them against the current source and configuration.
 
 ## Current boundaries
 

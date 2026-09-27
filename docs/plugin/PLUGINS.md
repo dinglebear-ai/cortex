@@ -1,7 +1,7 @@
 ---
 title: "Plugin Manifest Reference -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: 2026-09-27
 ---
 
 <!--
@@ -47,17 +47,17 @@ The current manifest declares:
 | `userConfig.syslog_port` / `syslog_host_port` / `mcp_port` | Container port mapping controls |
 | `userConfig.data_dir` | Host data directory for the Compose deployment |
 | `userConfig.auth_mode` and OAuth fields | Optional OAuth/JWT configuration |
-| `userConfig.docker_ingest_*` | Optional docker-socket-proxy log ingestion |
+| `userConfig.docker_ingest_*` | Legacy central pull compatibility settings; prefer the host-local agent |
 
 `plugins/cortex/mcp.json` interpolates these values with `${user_config.*}`
 placeholders. Keep docs and validation scripts aligned with that syntax.
 
 ## Version synchronization
 
-Use `just publish [major|minor|patch]` for releases. That flow runs
-`cargo xtask bump-version`, which bumps every file declared in
-`release/components.toml` (`Cargo.toml`, `Cargo.lock`, `server.json`,
-`mcpb/manifest.json`, `docker-compose.prod.yml`, and `CHANGELOG.md`). Keep
+Normal releases use release-please; feature branches do not hand-bump versions.
+`release/components.toml` declares all synchronized carriers, and the release PR
+fixup uses `cargo xtask sync-version`. `just publish` is an explicit manual
+escape hatch. Keep
 `.claude-plugin/plugin.json` and any future Claude/Codex/Gemini plugin
 manifests free of a top-level `version` key; CI runs
 `cargo xtask check-version-sync` (the manifest's `json_no_version` row) to

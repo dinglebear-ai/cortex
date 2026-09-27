@@ -1,215 +1,64 @@
 ---
-title: "Deployment Guide -- cortex"
-created: "2026-07-30"
-updated: "2026-07-30"
+title: "Deployment guide"
+created: 2026-07-30
+updated: 2026-09-27
 ---
 
-# Deployment Guide -- cortex
+# Deployment guide
 
-Deployment patterns for cortex. Choose the method that fits your environment.
+Use [SETUP.md](../SETUP.md) for the full setup sequence and the root [README.md](../../README.md) for supported native/npm installation. This guide separates a development process, an installed server, and a query-only client.
 
-## Local development
+## Local source development
+
+Build with the checked-in Rust toolchain and a locked dependency graph:
 
 ```bash
-cargo run -- serve mcp
+cargo build --locked
 ```
 
-Or via Justfile:
+Before starting `cargo run -- serve mcp`, configure a writable `CORTEX_DB_PATH` and the required `CORTEX_API_TOKEN`. The MCP bind defaults to loopback; a non-loopback listener must satisfy the configured auth policy. The default database path is container-oriented, so do not assume a fresh host can write `/data/cortex.db`. Follow the environment setup in [SETUP.md](../SETUP.md).
+
+The root package has `publish = false`, so `cargo install cortex` is not the supported installation path. An intentional source installation uses `cargo install --path . --locked`.
+
+## Client versus server
+
+`cortex serve mcp` starts the server, ingest listeners, and maintenance. `cortex mcp` is a local query-only stdio process: it reads the configured SQLite database and does not start a second receiver or HTTP service. A client-only host should connect to its authoritative server instead of accidentally creating another ingestion/database owner.
+
+## Managed installation
+
+The installer and `cortex setup` own the managed `~/.cortex` layout: runtime environment, Compose assets, persistent data, and the selected server profile. Start with read-only diagnostics:
 
 ```bash
-just dev
-```
-
-The server reads `config.toml` in the working directory. Syslog listens on `0.0.0.0:1514` and MCP on `0.0.0.0:3100`.
-
-## Cargo install
-
-```bash
-cargo install cortex
-cortex serve mcp
-```
-
-The binary reads `config.toml` from the current directory and accepts env var overrides.
-
-The installed binary is `cortex`. Use `cortex mcp` for local MCP clients that require stdio. That mode is query-only: it reads `CORTEX_DB_PATH`, exposes the MCP tools over stdin/stdout, and does not start syslog listeners, HTTP routes, retention purge, or storage-budget cleanup. Keep `cortex serve mcp` running somewhere for ingestion.
-
-## One-line installer
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.sh | sh
-```
-
-The installer installs the `cortex` binary to `~/.local/bin/cortex`, then runs
-`cortex setup`. Setup owns the shared Docker-only runtime layout:
-
-| Path | Purpose |
-| --- | --- |
-| `~/.cortex/.env` | Runtime environment and generated token |
-| `~/.cortex/compose/docker-compose.yml` | Installed Compose bundle using the published image |
-| `~/.cortex/data/` | Default SQLite data bind mount |
-
-Useful setup commands:
-
-```bash
-cortex setup          # first run or normal repair
-cortex setup check    # inspect prerequisites and files only
-cortex setup repair   # rewrite managed assets and restart Compose
-cortex setup deploy preflight       # operator-facing preflight
-cortex setup deploy local           # operator-facing local deploy/reconcile
-cortex setup deploy local --dry-run # preflight without Docker mutation
-cortex setup deploy remote host-a --dry-run # SSH preflight for a remote Compose host
-cortex setup deploy remote host-a           # SSH deploy/reconcile on a remote host
-set -a && source deploy/hosts.env && set +a
-scripts/check-deploy-hosts.sh
-cortex setup deploy remote --home /mnt/cache/appdata/cortex "$NAS_HOST"
-```
-
-`cortex setup` also disables and removes stale user-level
-`cortex.service` units/drop-ins from older releases. The supported
-automated deployment path is Docker Compose only.
-
-### Remote CLI Deploy
-
-`cortex setup deploy remote <host>` writes/replaces `.env`, the managed Compose
-YAML, and `config/Dockerfile` under the selected remote home, then runs Docker
-Compose there. The default remote home is `~/.cortex`; pass `--home PATH` for
-hosts whose runtime lives elsewhere. After the server profile exists, the normal
-update workflow is:
-
-```bash
+cortex setup check
+cortex compose doctor
+cortex compose status --json
 cortex update --dry-run
-cortex update
 ```
 
-`cortex setup deploy remote --home /mnt/cache/appdata/cortex "$NAS_HOST"` remains the
-low-level primitive and a useful escape hatch. A successful low-level remote
-deploy records the server profile so later updates do not repeat host/home
-details; otherwise configure it with
-`cortex update config server --host HOST --home PATH`.
+`cortex setup repair`, non-dry-run deployment/update, and Compose lifecycle operations mutate the installation. Confirm the target and obtain explicit operational authorization first. Preserve existing credentials; a documentation audit is not authorization to restart the server.
 
-Client-agent updates preserve the existing remote heartbeat-agent env and fail
-if the saved token cannot be read or preserved. Use
-`cortex setup deploy agent --heartbeat-token-file PATH` for first-time client
-bootstrap or token repair, then return to `cortex update clients`.
+For deployment-specific options and host layouts, use [SETUP.md](../SETUP.md), [deploy/README.md](../../deploy/README.md), and the command's help. Run the relevant preflight/dry-run before a remote deployment. Client-agent credential preservation and first-time bootstrap are separate from server publication.
 
-Use `--dry-run` first to verify SSH and Docker prerequisites. Non-dry-run remote
-deploy preserves existing remote env values from `<home>/.env` or the legacy
-`<home>/compose/.env` path, but it intentionally drops `CORTEX_VERSION` so the
-release-managed Compose template owns the image tag. After migration, the legacy
-compose-local env file is archived as `<home>/compose/.env.legacy`; `<home>/.env`
-is the canonical runtime env.
+## Containers
 
-Deploy mutations remain CLI-only. MCP exposes only redacted read-only Compose
-diagnostics.
-
-## Docker
-
-The Docker image is daemon-focused: it runs `cortex serve mcp` for syslog ingest and HTTP MCP. Direct stdio is intended for host-installed binaries where the MCP client can launch `cortex mcp` and read the SQLite DB path directly.
-
-### Build
-
-Multi-stage Dockerfile: Rust 1.86 builder compiles the release binary, Debian bookworm-slim runtime copies only the binary.
+The source-build definition is [`config/Dockerfile`](../../config/Dockerfile), selected by [`docker-compose.yml`](../../docker-compose.yml). It uses a Rust 1.97.1 builder and a Debian bookworm-slim runtime, with the binary plus required runtime tools and backup helper. The runtime runs as UID/GID 1000 and uses `CMD ["cortex", "serve", "mcp"]`; there is no separate shell entrypoint to maintain.
 
 ```bash
 just docker-build
-# or: docker build -t cortex .
+# Equivalent source build:
+docker build -f config/Dockerfile -t cortex .
 ```
 
-### Compose
+[`docker-compose.prod.yml`](../../docker-compose.prod.yml) uses the release image. Use the checked-in or installed Compose definition rather than a copied YAML fragment from an old guide. Verify persistent bind paths/ownership, token configuration, published interfaces, and resource limits for the selected project. `config.toml` is not copied into the image; defaults and configured environment apply.
 
-```yaml
-services:
-  cortex:
-    build: .
-    container_name: cortex
-    restart: unless-stopped
-    user: "${CORTEX_UID:-1000}:${CORTEX_GID:-1000}"
-    env_file:
-      - path: ~/.claude-homelab/.env
-        required: false
-    ports:
-      - "${CORTEX_RECEIVER_PORT:-1514}:1514/udp"
-      - "${CORTEX_RECEIVER_PORT:-1514}:1514/tcp"
-      - "${CORTEX_PORT:-3100}:3100/tcp"
-    volumes:
-      - ${CORTEX_DATA_VOLUME:-cortex-data}:/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:3100/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: ${CORTEX_MEMORY_LIMIT:-2G}
-          cpus: '${CORTEX_CPU_LIMIT:-1.0}'
-```
+The current Docker log path is the host-local cortex agent. The legacy central pull path is compatibility-only for explicit remote Docker Engine HTTP endpoints; see [architecture.md](../architecture.md).
 
-```bash
-just up         # docker compose up -d
-just down       # docker compose down
-just restart    # docker compose restart
-just logs       # docker compose logs -f
-```
+## Ports and trust
 
-The installed `cortex` binary also provides guarded lifecycle diagnostics and mutations:
+Syslog defaults to UDP/TCP 1514. HTTP defaults to TCP 3100 and hosts MCP, REST, OTLP, agent ingest, health, and `/app`. These surfaces do not all use the same credential. Review [SECURITY.md](../SECURITY.md), [OAUTH.md](../OAUTH.md), and [CONFIG.md](../CONFIG.md) before remote exposure.
 
-```bash
-cortex compose doctor
-cortex compose status --json
-cortex compose pull
-cortex compose up
-cortex compose restart
-cortex compose logs --tail 50
-```
+MCP uses stateless JSON responses on `POST /mcp`, not a persistent SSE endpoint. A reverse proxy must preserve the intended authentication and Host/Origin policy; do not weaken it or blindly reuse a historical proxy configuration.
 
-MCP exposes only redacted read-only Compose diagnostics (`compose_status`, `compose_doctor`). Lifecycle mutations remain CLI-only: ask the assistant to run `cortex compose ...` locally rather than invoking MCP actions.
+## Verification
 
-### Container conventions
-
-| Concern | Pattern |
-| --- | --- |
-| Base image | `rust:1.86-slim-bookworm` (builder) + `debian:bookworm-slim` (runtime) |
-| User | Non-root, UID 1000 (`cortex`) |
-| Health check | `curl -sf http://localhost:3100/health` every 30s |
-| Data | Named volume mounted at `/data` |
-| Network | External Docker network (`${DOCKER_NETWORK:-cortex}`) |
-| Signals | Graceful shutdown on SIGTERM/SIGINT (tokio signal handler) |
-| Config | No `config.toml` in image -- defaults + env vars only |
-
-### Entrypoint
-
-The entrypoint is minimal -- it delegates directly to the binary:
-
-```bash
-#!/bin/bash
-set -euo pipefail
-exec "$@"
-```
-
-All configuration is handled by the Rust binary's config loading (defaults + env vars).
-
-## Port assignment
-
-| Service | Default Port | Env Var | Protocol |
-| --- | --- | --- | --- |
-| Syslog receiver | 1514 | `CORTEX_RECEIVER_PORT` | UDP + TCP |
-| MCP HTTP server | 3100 | `CORTEX_PORT` | TCP |
-
-Port 1514 is used instead of the standard syslog port 514 to avoid needing root or `CAP_NET_BIND_SERVICE`. Use iptables PREROUTING to redirect 514 to 1514 for devices that cannot be reconfigured.
-
-## SWAG reverse proxy
-
-Use `/config/nginx/proxy-confs/cortex.subdomain.conf` on the SWAG host, or an
-equivalent nginx vhost, to expose MCP over HTTPS at `https://cortex.example.invalid/mcp`.
-
-The MCP endpoint uses RMCP Streamable HTTP in stateless JSON-response mode.
-Clients use `POST /mcp`; `GET` and `DELETE` on `/mcp` are not supported after
-auth succeeds.
-
-## See also
-
-- [ENV.md](ENV.md) -- environment variables
-- [LOGS.md](LOGS.md) -- logging configuration
-- [CONNECT.md](CONNECT.md) -- client connection methods
+Check health and ownership, then the relevant bounded ingest/query evidence. A built or pulled image is not proof of correct deployment. Use [LIVE_QUALIFICATION.md](../LIVE_QUALIFICATION.md) for isolated profiles and separately authorized fleet checks. Production reset, restore, and release are distinct operations.
