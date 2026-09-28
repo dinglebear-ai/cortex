@@ -53,6 +53,7 @@ fn build_graph_session_correlation(
         session_start,
         session_end,
         used_graph: inputs.used_graph,
+        session_entity_keys: inputs.session_entity_keys,
         discovered_hosts: inputs.discovered_hosts,
         discovered_entities: inputs.discovered_entities,
         logs,
@@ -77,6 +78,7 @@ impl CortexService {
         let params = db::ListAiSessionsParams {
             ai_project: req.project,
             ai_tool: req.tool,
+            ai_session_id: req.session_id,
             host: req.host,
             since: from,
             until: to,

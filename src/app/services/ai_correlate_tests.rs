@@ -59,6 +59,7 @@ fn row_source_kind_parses_metadata() {
 fn build_graph_session_correlation_classifies_lanes_and_filters_heartbeats() {
     let inputs = db::SessionGraphInputs {
         bounds: Some(("2026-01-01T00:00:00Z".into(), "2026-01-01T00:10:00Z".into())),
+        session_entity_keys: vec!["cortex:claude:s1".into()],
         discovered_hosts: vec!["devhost".into()],
         discovered_entities: vec!["devhost".into(), "cortex".into()],
         used_graph: true,

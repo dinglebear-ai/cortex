@@ -65,6 +65,7 @@ pub struct DockerCheckpoint {
 pub struct ListAiSessionsParams {
     pub ai_project: Option<String>,
     pub ai_tool: Option<String>,
+    pub ai_session_id: Option<String>,
     pub host: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
@@ -281,6 +282,7 @@ pub struct AiRelatedWindow {
 #[derive(Debug, Clone, Default)]
 pub struct SessionGraphInputs {
     pub bounds: Option<(String, String)>,
+    pub session_entity_keys: Vec<String>,
     pub discovered_hosts: Vec<String>,
     pub discovered_entities: Vec<String>,
     pub used_graph: bool,

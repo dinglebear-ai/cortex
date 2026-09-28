@@ -72,6 +72,7 @@ pub(super) enum ActionHandler {
     ListApps,
     ListSessions,
     SearchSessions,
+    SessionInvestigate,
     EvidenceScope,
     SearchAbuse,
     AbuseIncidents,
@@ -380,6 +381,17 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         "Full-text search over AI transcript sessions",
         Cheap,
         SearchSessions
+    ),
+    action_spec!(
+        "session_investigate",
+        Read,
+        "Build a bounded evidence bundle rooted at one AI session",
+        Expensive,
+        SessionInvestigate,
+        exact: {
+            allowed: &["session_id", "tool", "project", "host", "limit", "window_minutes", "severity_min"],
+            required: &["session_id"]
+        }
     ),
     action_spec!(
         "evidence_scope",

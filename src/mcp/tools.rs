@@ -24,8 +24,9 @@ use crate::app::{
     ListAiToolsRequest, ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest,
     ListMcpEventsRequest, ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest,
     LlmInvocationsRequest, NotificationsRecentRequest, PatternsRequest, ProjectContextRequest,
-    SearchLogsRequest, SearchSessionsRequest, SilentHostsRequest, TailLogsRequest, TimelineRequest,
-    TopicCorrelateRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
+    SearchLogsRequest, SearchSessionsRequest, SessionInvestigateRequest, SilentHostsRequest,
+    TailLogsRequest, TimelineRequest, TopicCorrelateRequest, UnaddressedErrorsRequest,
+    UsageBlocksRequest,
 };
 
 use crate::artifact_evidence::ArtifactEvidenceInput;
@@ -96,6 +97,7 @@ async fn dispatch_cortex_action(
         H::ListApps => tool_list_apps(state, args).await,
         H::ListSessions => tool_list_sessions(state, args).await,
         H::SearchSessions => tool_search_sessions(state, args).await,
+        H::SessionInvestigate => tool_session_investigate(state, args).await,
         H::EvidenceScope => tool_evidence_scope(state, args).await,
         H::SearchAbuse => tool_search_abuse(state, args).await,
         H::AbuseIncidents => tool_abuse_incidents(state, args).await,
@@ -259,6 +261,12 @@ async fn tool_list_sessions(state: &AppState, args: Value) -> anyhow::Result<Val
 async fn tool_search_sessions(state: &AppState, args: Value) -> anyhow::Result<Value> {
     let req: SearchSessionsRequest = action_payload(args, "search_sessions")?;
     let response = state.service.search_sessions(req).await?;
+    Ok(serde_json::to_value(response)?)
+}
+
+async fn tool_session_investigate(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    let req: SessionInvestigateRequest = action_payload(args, "session_investigate")?;
+    let response = state.service.session_investigate(req).await?;
     Ok(serde_json::to_value(response)?)
 }
 

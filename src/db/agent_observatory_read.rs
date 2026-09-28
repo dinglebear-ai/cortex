@@ -2,7 +2,7 @@
 
 use super::DbPool;
 use anyhow::{Context, Result};
-use rusqlite::{Row, params_from_iter, types::Value};
+use rusqlite::{OptionalExtension, Row, params_from_iter, types::Value};
 #[path = "agent_observatory_read_cursor.rs"]
 mod cursor;
 use cursor::{bounded_limit, int_cursor, push_filter, text_cursor};
@@ -71,6 +71,74 @@ pub fn list_observatory_repositories(
         })?
         .collect::<rusqlite::Result<_>>()
         .context("list observatory repositories")
+}
+
+pub fn resolve_observatory_repository(
+    pool: &DbPool,
+    repository_id: i64,
+) -> Result<Option<ObservatoryRepositoryRow>> {
+    let conn = pool.get()?;
+    conn.query_row(
+        "SELECT r.id,r.repository_key,r.hostname,r.primary_path,r.display_name,r.first_seen_at,r.last_seen_at,r.removed_at,(SELECT COUNT(*) FROM repository_worktrees w WHERE w.repository_id=r.id),(SELECT COUNT(*) FROM agent_runs a JOIN agent_run_worktrees rw ON rw.run_id=a.id JOIN repository_worktrees w ON w.id=rw.worktree_id WHERE w.repository_id=r.id AND a.status IN ('starting','active','waiting','idle')) FROM repositories r WHERE r.id=?1",
+        [repository_id],
+        |r| {
+            Ok(ObservatoryRepositoryRow {
+                id: r.get(0)?,
+                key: r.get(1)?,
+                hostname: r.get(2)?,
+                primary_path: r.get(3)?,
+                name: r.get(4)?,
+                first_seen_at: r.get(5)?,
+                last_seen_at: r.get(6)?,
+                removed_at: r.get(7)?,
+                worktree_count: r.get(8)?,
+                active_run_count: r.get(9)?,
+            })
+        },
+    )
+    .optional()
+    .context("resolve observatory repository")
+}
+
+pub fn resolve_observatory_worktree(
+    pool: &DbPool,
+    worktree_id: i64,
+) -> Result<Option<ObservatoryWorktreeRow>> {
+    let conn = pool.get()?;
+    conn.query_row(
+        "SELECT id,worktree_key,repository_id,hostname,path,branch_ref,branch_name,head_sha,upstream_ref,detached,bare,locked,lock_reason,prunable,prune_reason,dirty,staged_count,unstaged_count,untracked_count,ahead,behind,first_seen_at,last_seen_at,removed_at FROM repository_worktrees WHERE id=?1",
+        [worktree_id],
+        |r| {
+            Ok(ObservatoryWorktreeRow {
+                id: r.get(0)?,
+                key: r.get(1)?,
+                repository_id: r.get(2)?,
+                hostname: r.get(3)?,
+                path: r.get(4)?,
+                branch_ref: r.get(5)?,
+                branch: r.get(6)?,
+                head_sha: r.get(7)?,
+                upstream_ref: r.get(8)?,
+                detached: r.get(9)?,
+                bare: r.get(10)?,
+                locked: r.get(11)?,
+                lock_reason: r.get(12)?,
+                prunable: r.get(13)?,
+                prune_reason: r.get(14)?,
+                dirty: r.get(15)?,
+                staged: r.get(16)?,
+                unstaged: r.get(17)?,
+                untracked: r.get(18)?,
+                ahead: r.get(19)?,
+                behind: r.get(20)?,
+                first_seen_at: r.get(21)?,
+                last_seen_at: r.get(22)?,
+                removed_at: r.get(23)?,
+            })
+        },
+    )
+    .optional()
+    .context("resolve observatory worktree")
 }
 
 /// Historical and follow-safe evidence projection for one branch/worktree.
@@ -233,7 +301,7 @@ pub fn list_observatory_runs(
 ) -> Result<Vec<ObservatoryRunRow>> {
     let conn = pool.get()?;
     let mut values = Vec::new();
-    let mut sql="SELECT DISTINCT a.id,a.run_key,a.native_session_id,a.tool,a.provider_tool,a.hostname,a.status,a.status_reason,a.status_observed_at,a.started_at,a.last_activity_at,a.ended_at,a.transcript_path,a.primary_worktree_id,a.primary_branch,a.start_head_sha,a.current_head_sha,a.event_count,a.error_count,a.freshness_json FROM agent_runs a WHERE 1=1".to_string();
+    let mut sql="SELECT DISTINCT a.id,a.run_key,a.native_session_id,a.tool,a.provider_tool,a.hostname,a.parent_run_id,a.previous_run_id,a.status,a.status_reason,a.status_observed_at,a.started_at,a.last_activity_at,a.ended_at,a.transcript_path,a.primary_worktree_id,a.primary_branch,a.start_head_sha,a.current_head_sha,a.event_count,a.error_count,a.freshness_json FROM agent_runs a WHERE 1=1".to_string();
     push_filter(&mut sql, &mut values, "a.id <= ?", high_water);
     if let Some(id) = q.worktree_id {
         push_filter(
@@ -304,6 +372,54 @@ pub fn list_observatory_runs(
         .collect::<rusqlite::Result<_>>()
         .context("list observatory runs")
 }
+pub fn resolve_observatory_run_row(
+    pool: &DbPool,
+    run_id: i64,
+) -> Result<Option<ObservatoryRunRow>> {
+    pool.get()?
+        .query_row(
+            "SELECT a.id,a.run_key,a.native_session_id,a.tool,a.provider_tool,a.hostname,a.parent_run_id,a.previous_run_id,a.status,a.status_reason,a.status_observed_at,a.started_at,a.last_activity_at,a.ended_at,a.transcript_path,a.primary_worktree_id,a.primary_branch,a.start_head_sha,a.current_head_sha,a.event_count,a.error_count,a.freshness_json FROM agent_runs a WHERE a.id=?1",
+            [run_id],
+            run_row,
+        )
+        .optional()
+        .context("resolve observatory run row")
+}
+
+pub fn list_observatory_run_actors(
+    pool: &DbPool,
+    run_id: i64,
+    limit: usize,
+) -> Result<Vec<ObservatoryActorRow>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT id,actor_key,run_id,native_actor_id,actor_type,display_name,started_at,last_activity_at,ended_at,metadata_json
+         FROM agent_run_actors
+         WHERE run_id=?1
+         ORDER BY COALESCE(last_activity_at,started_at,'') DESC,id DESC
+         LIMIT ?2",
+    )?;
+    stmt.query_map(
+        rusqlite::params![run_id, (bounded_limit(limit, 200) + 1) as i64],
+        |r| {
+            Ok(ObservatoryActorRow {
+                id: r.get(0)?,
+                actor_key: r.get(1)?,
+                run_id: r.get(2)?,
+                native_actor_id: r.get(3)?,
+                actor_type: r.get(4)?,
+                display_name: r.get(5)?,
+                started_at: r.get(6)?,
+                last_activity_at: r.get(7)?,
+                ended_at: r.get(8)?,
+                metadata_json: r.get(9)?,
+            })
+        },
+    )?
+    .collect::<rusqlite::Result<_>>()
+    .context("list observatory run actors")
+}
+
 fn run_row(r: &Row<'_>) -> rusqlite::Result<ObservatoryRunRow> {
     Ok(ObservatoryRunRow {
         id: r.get(0)?,
@@ -312,20 +428,22 @@ fn run_row(r: &Row<'_>) -> rusqlite::Result<ObservatoryRunRow> {
         tool: r.get(3)?,
         provider_tool: r.get(4)?,
         hostname: r.get(5)?,
-        status: r.get(6)?,
-        status_reason: r.get(7)?,
-        status_observed_at: r.get(8)?,
-        started_at: r.get(9)?,
-        last_activity_at: r.get(10)?,
-        ended_at: r.get(11)?,
-        transcript_path: r.get(12)?,
-        primary_worktree_id: r.get(13)?,
-        primary_branch: r.get(14)?,
-        start_head_sha: r.get(15)?,
-        current_head_sha: r.get(16)?,
-        event_count: r.get(17)?,
-        error_count: r.get(18)?,
-        freshness_json: r.get(19)?,
+        parent_run_id: r.get(6)?,
+        previous_run_id: r.get(7)?,
+        status: r.get(8)?,
+        status_reason: r.get(9)?,
+        status_observed_at: r.get(10)?,
+        started_at: r.get(11)?,
+        last_activity_at: r.get(12)?,
+        ended_at: r.get(13)?,
+        transcript_path: r.get(14)?,
+        primary_worktree_id: r.get(15)?,
+        primary_branch: r.get(16)?,
+        start_head_sha: r.get(17)?,
+        current_head_sha: r.get(18)?,
+        event_count: r.get(19)?,
+        error_count: r.get(20)?,
+        freshness_json: r.get(21)?,
     })
 }
 

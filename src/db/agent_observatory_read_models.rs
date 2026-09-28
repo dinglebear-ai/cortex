@@ -132,6 +132,10 @@ pub struct ObservatoryRunRow {
     pub tool: String,
     pub provider_tool: Option<String>,
     pub hostname: String,
+    #[serde(serialize_with = "serialize_optional_id")]
+    pub parent_run_id: Option<i64>,
+    #[serde(serialize_with = "serialize_optional_id")]
+    pub previous_run_id: Option<i64>,
     pub status: String,
     pub status_reason: String,
     pub status_observed_at: String,
@@ -148,6 +152,22 @@ pub struct ObservatoryRunRow {
     pub error_count: i64,
     pub freshness_json: String,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservatoryActorRow {
+    #[serde(serialize_with = "serialize_id")]
+    pub id: i64,
+    pub actor_key: String,
+    #[serde(serialize_with = "serialize_id")]
+    pub run_id: i64,
+    pub native_actor_id: String,
+    pub actor_type: Option<String>,
+    pub display_name: Option<String>,
+    pub started_at: Option<String>,
+    pub last_activity_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub metadata_json: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryEventRow {
     #[serde(serialize_with = "serialize_id")]

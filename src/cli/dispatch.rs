@@ -149,6 +149,7 @@ impl SessionsArgs {
         ListSessionsRequest {
             project: self.project,
             tool: self.tool,
+            session_id: None,
             host: self.host,
             since: self.since,
             until: self.until,
