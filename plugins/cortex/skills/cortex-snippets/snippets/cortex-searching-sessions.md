@@ -21,6 +21,7 @@ tools:
 # Search AI session history
 
 Replacement for the Cortex `searching-sessions` skill's evidence collection. Start with the last hour; widen `since` deliberately for older work. Quote hyphenated FTS5 terms. Report project, host, session and timestamp; inspect source transcript before claiming prior work was completed.
+For an identified session, call the direct Cortex `session_investigate` action with its `session_id` and known `tool`, `project`, and `host`. Inspect partial-result flags; transcript-derived references remain claims, not verified completion.
 Before first use, discover `cortex::cortex` with `codemode.search()` and inspect its live schema with `codemode.describe("cortex.cortex")`; adapt fields if the server contract changed.
 
 ```js

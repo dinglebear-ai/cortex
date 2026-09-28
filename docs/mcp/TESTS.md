@@ -38,6 +38,15 @@ Tests are colocated with source code in `#[cfg(test)]` modules:
 | `src/mcp.rs` + `src/mcp/` | Health endpoint, auth middleware (valid/invalid/missing token, no-auth mode), RMCP tool dispatch, timestamp validation, MCP lifecycle |
 | `src/main.rs` | Background interval timing |
 
+### Session investigation regression coverage
+
+`session_investigate` has SQLite-backed service tests for exact, missing, and
+ambiguous session identity; database regressions verify filtering before limits.
+Payload tests count serialized UTF-8 bytes and verify explicit truncation while
+preserving identity. Transcript references remain unverified claims. Snippet
+contracts execute the checked-in JavaScript with bounded mock evidence; those
+checks do not claim a production deployment or a successful saved-snippet run.
+
 ### Running specific tests
 
 ```bash

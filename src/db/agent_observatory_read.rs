@@ -299,10 +299,54 @@ pub fn list_observatory_runs(
     limit: usize,
     high_water: i64,
 ) -> Result<Vec<ObservatoryRunRow>> {
+    list_observatory_runs_filtered(pool, q, cursor, limit, high_water, None)
+}
+
+/// Match native session identity before pagination, not via a fuzzy search page.
+pub fn list_observatory_session_runs(
+    pool: &DbPool,
+    session_id: &str,
+    tool: &str,
+    host: &str,
+    limit: usize,
+) -> Result<Vec<ObservatoryRunRow>> {
+    list_observatory_runs_filtered(
+        pool,
+        &AgentRunQuery::default(),
+        None,
+        limit,
+        i64::MAX,
+        Some((session_id, tool, host)),
+    )
+}
+
+fn list_observatory_runs_filtered(
+    pool: &DbPool,
+    q: &AgentRunQuery,
+    cursor: Option<(&str, i64)>,
+    limit: usize,
+    high_water: i64,
+    identity: Option<(&str, &str, &str)>,
+) -> Result<Vec<ObservatoryRunRow>> {
     let conn = pool.get()?;
     let mut values = Vec::new();
     let mut sql="SELECT DISTINCT a.id,a.run_key,a.native_session_id,a.tool,a.provider_tool,a.hostname,a.parent_run_id,a.previous_run_id,a.status,a.status_reason,a.status_observed_at,a.started_at,a.last_activity_at,a.ended_at,a.transcript_path,a.primary_worktree_id,a.primary_branch,a.start_head_sha,a.current_head_sha,a.event_count,a.error_count,a.freshness_json FROM agent_runs a WHERE 1=1".to_string();
     push_filter(&mut sql, &mut values, "a.id <= ?", high_water);
+    if let Some((session_id, tool, host)) = identity {
+        push_filter(
+            &mut sql,
+            &mut values,
+            "a.native_session_id = ?",
+            session_id.to_string(),
+        );
+        push_filter(
+            &mut sql,
+            &mut values,
+            "lower(a.tool) = lower(?)",
+            tool.to_string(),
+        );
+        push_filter(&mut sql, &mut values, "a.hostname = ?", host.to_string());
+    }
     if let Some(id) = q.worktree_id {
         push_filter(
             &mut sql,

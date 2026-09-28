@@ -5,8 +5,10 @@ use super::*;
 pub(super) async fn related_sessions_for_investigation(
     service: &CortexService,
     session: &AiSessionEntry,
-) -> ServiceResult<Vec<AiSessionEntry>> {
-    Ok(service
+    requested_limit: u32,
+) -> ServiceResult<(Vec<AiSessionEntry>, bool)> {
+    let limit = requested_limit.clamp(1, 20);
+    let mut sessions = service
         .list_sessions(ListSessionsRequest {
             project: Some(session.project.clone()),
             tool: None,
@@ -14,14 +16,16 @@ pub(super) async fn related_sessions_for_investigation(
             host: None,
             since: Some(session.first_seen.clone()),
             until: Some(session.last_seen.clone()),
-            limit: Some(50),
+            // One possible self row plus one lookahead row.
+            limit: Some(limit + 2),
+            offset: None,
         })
         .await?
-        .sessions
-        .into_iter()
-        .filter(|candidate| candidate.session_key != session.session_key)
-        .take(20)
-        .collect())
+        .sessions;
+    sessions.retain(|candidate| candidate.session_key != session.session_key);
+    let truncated = sessions.len() > limit as usize;
+    sessions.truncate(limit as usize);
+    Ok((sessions, truncated))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -168,6 +172,7 @@ pub(super) fn summarize_session_source_evidence(
     summaries
 }
 
+#[cfg(test)]
 pub(super) fn timestamp_inclusive_between(value: &str, start: &str, end: &str) -> bool {
     let Ok(value) = chrono::DateTime::parse_from_rfc3339(value) else {
         return false;
@@ -183,7 +188,9 @@ pub(super) fn timestamp_inclusive_between(value: &str, start: &str, end: &str) -
 
 pub(super) fn extract_session_external_references(
     events: &[models::RenderedSessionEvent],
-) -> Vec<models::SessionExternalReference> {
+    requested_limit: usize,
+) -> (Vec<models::SessionExternalReference>, bool) {
+    let limit = requested_limit.clamp(1, 200);
     let mut references = std::collections::BTreeSet::new();
     for event in events {
         for raw in event.text.split_whitespace() {
@@ -197,9 +204,14 @@ pub(super) fn extract_session_external_references(
                 continue;
             }
             let kind = if token.starts_with("http://") || token.starts_with("https://") {
-                if token.contains("github.com/") && token.contains("/pull/") {
+                let url = reqwest::Url::parse(token).ok();
+                let github = url
+                    .as_ref()
+                    .is_some_and(|url| url.host_str() == Some("github.com"));
+                let path = url.as_ref().map(|url| url.path()).unwrap_or_default();
+                if github && path.split('/').nth(3) == Some("pull") {
                     models::SessionExternalReferenceKind::GithubPullRequest
-                } else if token.contains("github.com/") && token.contains("/issues/") {
+                } else if github && path.split('/').nth(3) == Some("issues") {
                     models::SessionExternalReferenceKind::GithubIssue
                 } else {
                     models::SessionExternalReferenceKind::Url
@@ -223,9 +235,12 @@ pub(super) fn extract_session_external_references(
                 trust_level: "claimed".to_string(),
                 verified: false,
             });
+            if references.len() > limit {
+                return (references.into_iter().take(limit).collect(), true);
+            }
         }
     }
-    references.into_iter().collect()
+    (references.into_iter().collect(), false)
 }
 
 pub(super) fn looks_like_linear_identifier(token: &str) -> bool {
@@ -244,4 +259,18 @@ pub(super) fn looks_like_commit_sha(token: &str) -> bool {
     (7..=40).contains(&token.len())
         && token.chars().all(|ch| ch.is_ascii_hexdigit())
         && token.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+pub(super) fn merge_session_artifacts(
+    left: models::ListArtifactEvidenceResponse,
+    right: models::ListArtifactEvidenceResponse,
+    limit: usize,
+) -> (Vec<models::ArtifactEvidenceEntry>, bool) {
+    let mut by_id = BTreeMap::new();
+    let upstream_truncated = left.truncated || right.truncated;
+    for event in left.events.into_iter().chain(right.events) {
+        by_id.insert(event.cortex_log_id, event);
+    }
+    let truncated = upstream_truncated || by_id.len() > limit;
+    (by_id.into_values().take(limit).collect(), truncated)
 }

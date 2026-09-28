@@ -45,6 +45,7 @@ selects one of the actions below. The mechanically generated current count is in
 | `apps` | `cortex:read` | cheap | Distinct application names with counts |
 | `sessions` | `cortex:read` | cheap | AI transcript session inventory |
 | `search_sessions` | `cortex:read` | cheap | FTS5 search over AI transcript sessions |
+| `session_investigate` | `cortex:read` | expensive | Bounded deterministic evidence for an exact session ID; optional tool/project/host disambiguation |
 | `evidence_scope` | `cortex:read` | moderate | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | `cortex:read` | moderate | Abuse-term hits with same-session context |
 | `abuse_incidents` | `cortex:read` | moderate | Grouped abuse incident candidates |

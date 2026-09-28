@@ -363,3 +363,37 @@ fn run_reads_expose_lineage_and_bounded_actors() {
     );
     assert_eq!(actors[0].native_actor_id, "subagent-b");
 }
+
+#[test]
+fn session_run_lookup_filters_exact_identity_before_its_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(
+        dir.path().join("exact-session.db"),
+    ))
+    .unwrap();
+    let conn = pool.get().unwrap();
+    for id in 0..100 {
+        conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES(?1,?2,'codex','host','active','2026-09-21T11:00:00Z','2026-09-21T11:00:00Z','2026-09-21T11:00:00Z')",
+            rusqlite::params![format!("new-{id}"), format!("session-target-{id}")]).unwrap();
+    }
+    for (key, tool, host) in [
+        ("exact", "Codex", "host"),
+        ("other-host", "codex", "other"),
+        ("other-tool", "claude", "host"),
+    ] {
+        conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES(?1,'session-target',?2,?3,'active','2026-09-21T10:00:00Z','2026-09-21T10:00:00Z','2026-09-21T10:00:00Z')",
+            rusqlite::params![key, tool, host]).unwrap();
+    }
+    drop(conn);
+    let runs = list_observatory_session_runs(&pool, "session-target", "codex", "host", 1).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].run_key, "exact");
+    pool.get().unwrap().execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('second-exact','session-target','codex','host','active','2026-09-21T10:00:00Z','2026-09-21T10:00:00Z','2026-09-21T10:00:00Z')", []).unwrap();
+    assert_eq!(
+        list_observatory_session_runs(&pool, "session-target", "codex", "host", 1)
+            .unwrap()
+            .len(),
+        2,
+        "retain a sentinel to detect ambiguity"
+    );
+}

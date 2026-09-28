@@ -23,6 +23,7 @@ cortex exposes one MCP tool named `cortex`. The required
 | `fleet_state` | Fleet-wide heartbeat snapshot with pressure flags and summary counts |
 | `correlate_state` | Correlate logs with heartbeat window summaries around a reference time |
 | `sessions` | AI transcript sessions by project |
+| `session_investigate` | Bounded evidence for an exact AI session |
 | `search_sessions` | Ranked grouped session search |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | Abuse hits in AI transcripts with same-session context |
@@ -181,6 +182,28 @@ Search AI transcript rows with FTS5 and return grouped session results ranked by
 Required arguments: `action = "search_sessions"`, `query`
 
 Optional arguments: `project`, `tool`, `from`, `to`, `limit`.
+
+## cortex session_investigate
+
+Build a read-only, deterministic evidence bundle for one AI session. Required
+arguments: `action = "session_investigate"`, `session_id`. Optional arguments:
+`tool`, `project`, `host`, `limit` (default 100, clamped to 1–200),
+`window_minutes`, and `severity_min`. Supply the host/tool/project tuple when a
+native session ID is ambiguous; ambiguity is an error, not an arbitrary match.
+
+The response pairs `metadata` with `result`: a rendered transcript page,
+correlated logs and graph evidence, skill/MCP/hook events, artifact references,
+Agent Observatory lineage, actors, repository/worktree and commit attribution,
+notifications, retention lineage, related sessions, and external references.
+The request has a 30-second wall-time budget and the combined JSON envelope is
+limited to 65,536 bytes. Section flags and
+`partial_reasons` disclose row limits and payload-driven reductions; missing or
+partial evidence never establishes absence. Related sessions are capped at 20.
+Transcript-derived URLs, issue identifiers, and commit strings remain
+`trust_level = "claimed"`, `verified = false`; they are not proof of completed
+work. Query the underlying evidence surface to continue a truncated section.
+This MCP action is distinct from CLI `cortex sessions investigate`, which
+continues to select abuse-incident investigation.
 
 ## cortex evidence_scope
 

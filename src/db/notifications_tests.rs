@@ -459,4 +459,44 @@ mod notifications_db_tests {
         assert_eq!(AttemptCount::NONE.tier(), 0);
         assert_eq!(AttemptCount::NONE.consumed(), 1);
     }
+
+    #[test]
+    fn session_firings_filter_host_and_window_before_limit() {
+        let conn = in_memory_conn();
+        for _ in 0..600 {
+            conn.execute("INSERT INTO notification_firings(outbox_id,rule_id,severity,hostname,fired_at) VALUES(1,'rule','err','other','2026-09-21T00:05:00Z')", []).unwrap();
+            conn.execute("INSERT INTO notification_firings(outbox_id,rule_id,severity,hostname,fired_at) VALUES(1,'rule','err','host','2026-09-22T00:05:00Z')", []).unwrap();
+        }
+        for timestamp in [
+            "2026-09-21T00:00:00Z",
+            "2026-09-21T01:10:00+01:00",
+            "2026-09-21T00:05:00Z",
+        ] {
+            conn.execute("INSERT INTO notification_firings(outbox_id,rule_id,severity,hostname,fired_at) VALUES(1,'rule','err','host',?1)", [timestamp]).unwrap();
+        }
+        let rows = crate::db::notifications::firings_in_window(
+            &conn,
+            "host",
+            "2026-09-21T00:00:00Z",
+            "2026-09-21T00:10:00Z",
+            1,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2, "one row plus truncation sentinel");
+        assert_eq!(rows[0].fired_at, "2026-09-21T01:10:00+01:00");
+        assert!(rows.iter().all(|row| row.hostname == "host"));
+        let rows = crate::db::notifications::firings_in_window(
+            &conn,
+            "host",
+            "2026-09-21T00:00:00Z",
+            "2026-09-21T00:10:00Z",
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            rows.len(),
+            3,
+            "inclusive endpoints and offset normalization"
+        );
+    }
 }

@@ -182,6 +182,7 @@ pub fn upsert_agent_run_commit(
     Ok(relation)
 }
 
+#[cfg(test)]
 pub fn list_agent_run_commits(pool: &DbPool, run_id: i64) -> Result<Vec<AgentRunCommitRow>> {
     if run_id <= 0 {
         bail!("run_id must be positive");
@@ -198,9 +199,17 @@ pub fn list_agent_run_commits(pool: &DbPool, run_id: i64) -> Result<Vec<AgentRun
 pub fn list_agent_run_attributed_commits(
     pool: &DbPool,
     run_id: i64,
+    limit: usize,
 ) -> Result<Vec<AgentRunAttributedCommit>> {
-    let relations = list_agent_run_commits(pool, run_id)?;
+    if run_id <= 0 {
+        bail!("run_id must be positive");
+    }
     let connection = pool.get().context("acquire database connection")?;
+    // Fetch a sentinel in SQL so attribution cannot load an unbounded run history.
+    let relations = connection.prepare(&format!(
+        "SELECT {ROW_COLUMNS} FROM agent_run_commits WHERE run_id = ?1 ORDER BY first_seen_at, id LIMIT ?2"
+    ))?.query_map(params![run_id, limit.clamp(1, 200) as i64 + 1], row)?
+      .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut statement = connection.prepare(
         "SELECT id, repository_id, sha, parent_shas_json, author_name, author_email_hash,
                 authored_at, committed_at, subject, changed_files, insertions, deletions,

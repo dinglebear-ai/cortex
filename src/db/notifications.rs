@@ -363,6 +363,38 @@ pub fn firings_any_dedup_check(
     )
 }
 
+/// Session-scoped notification evidence; filter before LIMIT and retain a sentinel.
+pub fn firings_in_window(
+    conn: &rusqlite::Connection,
+    host: &str,
+    since: &str,
+    until: &str,
+    limit: usize,
+) -> rusqlite::Result<Vec<FiringRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, outbox_id, rule_id, hostname, fired_at, status_code
+         FROM notification_firings
+         WHERE hostname = ?1
+           AND julianday(fired_at) >= julianday(?2)
+           AND julianday(fired_at) <= julianday(?3)
+         ORDER BY julianday(fired_at) DESC, id DESC LIMIT ?4",
+    )?;
+    stmt.query_map(
+        params![host, since, until, limit.clamp(1, 200) as i64 + 1],
+        |row| {
+            Ok(FiringRow {
+                id: row.get(0)?,
+                outbox_id: row.get(1)?,
+                rule_id: row.get(2)?,
+                hostname: row.get(3)?,
+                fired_at: row.get(4)?,
+                status_code: row.get(5)?,
+            })
+        },
+    )?
+    .collect()
+}
+
 /// Fetch recent firings for a given rule_id (optional) since a given time.
 pub fn firings_recent(
     conn: &rusqlite::Connection,

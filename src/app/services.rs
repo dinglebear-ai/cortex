@@ -126,6 +126,8 @@ mod mcp_events;
 mod mcp_incidents;
 mod rag;
 mod session_investigation;
+mod session_investigation_bounds;
+mod session_investigation_observatory;
 mod session_investigation_support;
 mod session_pages;
 mod skill_assessment;

@@ -23,6 +23,7 @@ A single MCP tool, `mcp__cortex__cortex`, dispatches on a required `action` argu
 | `correlate_state` | Correlate logs with heartbeat summaries around a reference time |
 | `sessions` | AI transcript sessions by project |
 | `search_sessions` | Ranked grouped session search |
+| `session_investigate` | Bounded session evidence; pass exact session_id and optional tool/project/host, inspect partial_reasons, and treat transcript references as unverified |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | Abuse hits in AI transcripts with same-session context |
 | `abuse_incidents` | Groups abuse hits into scored incident candidates |
