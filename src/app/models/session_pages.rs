@@ -41,8 +41,8 @@ pub struct RenderedSessionEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedSessionPageResponse {
-    pub contract_version: &'static str,
-    pub delivery: &'static str,
+    pub contract_version: String,
+    pub delivery: String,
     pub events: Vec<RenderedSessionEvent>,
     pub next_cursor: String,
     pub high_watermark: i64,

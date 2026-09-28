@@ -227,7 +227,11 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "session_id": {
                     "type": "string",
-                    "description": "Exact AI session id filter for transcript correlation and skill/MCP/hook event or incident actions."
+                    "description": "Exact AI session id. Required with project, tool, and host for action=session_page; also filters transcript correlation and skill/MCP/hook events."
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "For action=session_page: next_cursor returned by the previous MCP page."
                 },
                 "branch": {"type":"string","maxLength":512,"description":"For action=evidence_scope: exact Git branch projected by Agent Observatory."},
                 "worktree": {"type":"string","maxLength":4096,"description":"For action=evidence_scope: exact absolute worktree path projected by Agent Observatory."},

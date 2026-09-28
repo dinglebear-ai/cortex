@@ -1,7 +1,7 @@
 ---
 title: "Tool Schema Documentation -- cortex"
 created: "2026-07-30"
-updated: "2026-08-04"
+updated: "2026-09-27"
 ---
 
 # Tool Schema Documentation -- cortex
@@ -44,6 +44,7 @@ selects one of the actions below. The mechanically generated current count is in
 | `status` | `cortex:read` | cheap | Lightweight health and runtime status |
 | `apps` | `cortex:read` | cheap | Distinct application names with counts |
 | `sessions` | `cortex:read` | cheap | AI transcript session inventory |
+| `session_page` | `cortex:read` | moderate | Bounded rendered transcript page for an exact project/tool/session/host identity; pass `next_cursor` to continue |
 | `search_sessions` | `cortex:read` | cheap | FTS5 search over AI transcript sessions |
 | `evidence_scope` | `cortex:read` | moderate | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | `cortex:read` | moderate | Abuse-term hits with same-session context |
@@ -162,7 +163,7 @@ per-action object branches are generated from `ACTION_SPECS` under `oneOf`:
 ```
 
 Root properties remain available because MCP clients receive one schema for the
-`cortex` super-tool. `project_context` and `list_ai_projects` now have exact
+`cortex` super-tool. `project_context`, `list_ai_projects`, and `session_page` have exact
 machine-enforced field sets generated from the action registry. Unmigrated
 actions use an explicit fallback branch that excludes those exact action names.
 Runtime request structs still use `deny_unknown_fields` as the final validation
@@ -175,15 +176,16 @@ boundary.
 | `query` | `search`, `search_sessions`, `correlate`, `similar_incidents` |
 | `hostname` | `search`, `filter`, `tail`, `correlate`, `host_state`, `ai_correlate`, `apps`, `sessions`, `timeline`, `patterns`, `context`, `similar_incidents`, `incident_context` |
 | `host_id` | Authoritative heartbeat identity for `host_state` |
-| `host` | Optional host_id-or-hostname filter for `correlate_state` |
+| `host` | Required exact hostname for `session_page`; optional host_id-or-hostname filter for `correlate_state` |
 | `reference_time` | Required window center for `correlate_state`; for `correlate`, required unless `query` is given (then derived from an AI-session search) |
 | `source_ip` | `search`, `filter`, `tail`, `correlate`, `ai_correlate` |
 | `source_kind` | `filter` only; aliases Docker, file-tail, command-history, shell-history, transcript, and AI-tool rows |
-| `project` | `filter`, `sessions`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools` |
-| `tool` | `filter`, `sessions`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_projects` |
+| `project` | `filter`, `sessions`, `session_page`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools` |
+| `tool` | `filter`, `sessions`, `session_page`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_projects` |
 | `branch`, `worktree` | `evidence_scope`; at least one is required by service validation |
 | `kinds`, `include_payload`, `after_id` | `evidence_scope` filtering and durable pagination |
-| `session_id` | `filter`, `ai_correlate` |
+| `session_id` | `session_page`, `filter`, `ai_correlate` |
+| `cursor` | `session_page` continuation token returned by the previous MCP page |
 | `ai_query` | AI transcript anchor FTS5 query for `ai_correlate` |
 | `log_query` | Related non-AI log FTS5 query for `ai_correlate` |
 | `severity` | Exact severity filter for `search` and `filter` |

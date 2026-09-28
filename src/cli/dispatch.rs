@@ -429,7 +429,7 @@ pub(crate) use super::dispatch_sessions::{
     run_ai_skill_investigate, run_ai_skills, run_ai_skills_backfill, run_ai_smoke_watch,
     run_ai_tools, run_assess_abuse, run_assess_hooks, run_assess_mcp, run_assess_skill,
     run_mcp_events, run_mcp_events_backfill, run_mcp_incidents, run_mcp_investigate,
-    run_sessions_watch, run_sessions_watch_status,
+    run_session_page, run_sessions_watch, run_sessions_watch_status,
 };
 
 #[cfg(test)]

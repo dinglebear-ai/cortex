@@ -74,6 +74,14 @@ fn exact_action_contracts_are_generated_from_the_action_registry() {
         );
     }
 
+    let session_page = exact_branch("session_page");
+    assert_eq!(
+        session_page["required"],
+        serde_json::json!(["action", "project", "tool", "session_id", "host"])
+    );
+    assert_eq!(session_page["additionalProperties"], false);
+    assert!(session_page["properties"].get("cursor").is_some());
+
     let fallback = branches
         .iter()
         .find(|branch| branch["properties"]["action"]["enum"].is_array())

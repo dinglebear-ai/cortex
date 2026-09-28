@@ -7,6 +7,7 @@ pub const CLI_CHILDREN: &[(&str, &[&str])] = &[
         "sessions",
         &[
             "search",
+            "page",
             "abuse",
             "correlate",
             "blocks",
