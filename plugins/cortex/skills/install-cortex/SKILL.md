@@ -1,6 +1,6 @@
 ---
 name: install-cortex
-description: Install or repair Cortex. Use when provisioning its server, configuring a client-only host, choosing syslog/MCP/REST auth or Google OAuth, enabling durable Compose, selecting Codex app-server LLM support, or verifying agent connectivity.
+description: Use when installing or repairing Cortex; provisioning its server, configuring a client-only host, choosing syslog/MCP/REST auth or Google OAuth, enabling durable Compose, selecting Codex app-server LLM support, or verifying agent connectivity.
 ---
 
 # Install Cortex
@@ -14,7 +14,7 @@ Configure one server or a client-only connection; let Cortex own setup.
 - OAuth requires public URL/Google credentials/admin email. Ask explicitly before retaining `CORTEX_TOKEN` with `CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH=false`.
 - Existing proxy/Tailscale/Compose edits require current official docs, verified backup/checksum, exact changes, and explicit approval.
 
-## Flow
+## Workflow
 
 1. Follow [setup](references/setup.md): acquire/run canonical `install.sh` and let `cortex setup repair` own config.
 2. Server: configure tokens/storage; keep HTTP loopback unless needed; restrict syslog with `CORTEX_ALLOWED_SOURCE_CIDRS` and network controls.

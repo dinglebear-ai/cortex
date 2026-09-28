@@ -1812,8 +1812,8 @@ async fn public_action_references_cover_schema_registry() {
         ("docs/mcp/TOOLS.md", include_str!("../../docs/mcp/TOOLS.md")),
         ("docs/mcp/TESTS.md", include_str!("../../docs/mcp/TESTS.md")),
         (
-            "plugins/cortex/skills/cortex/SKILL.md",
-            include_str!("../../plugins/cortex/skills/cortex/SKILL.md"),
+            "plugins/cortex/skills/using-cortex/references/operations.md",
+            include_str!("../../plugins/cortex/skills/using-cortex/references/operations.md"),
         ),
     ] {
         for action in &super::actions::action_names() {

@@ -78,7 +78,10 @@ data/
 
 .worktrees
 
-# Personal local cheatsheet (never commit)
+# Machine-local agent instructions (never commit)
+AGENTS.override.md
+CLAUDE.local.md
+# Legacy misspelling, retained only to prevent accidental publication
 CLAUDE.md.local
 /logs/
 backups/

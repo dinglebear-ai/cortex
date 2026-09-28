@@ -1,9 +1,8 @@
----
-name: cortex
-description: This skill should be used when the user asks to "search logs", "check errors", "tail logs", "show recent logs", "find log entries", "correlate events", "list hosts", "log stats", "syslog", "check homelab logs", or mentions system logs, syslog, log analysis, or log intelligence across homelab hosts.
----
+# Cortex action details
 
-# Cortex Skill
+Load when a complex Cortex action needs examples, time-window syntax, or response interpretation beyond the live `action=help` reference.
+
+# Using Cortex
 
 Rust-based syslog receiver and MCP server for homelab log intelligence. Receives RFC 3164/5424 syslog from all homelab hosts, stores in SQLite with FTS5 full-text search, and exposes one MCP tool with action dispatch for AI-driven log analysis.
 

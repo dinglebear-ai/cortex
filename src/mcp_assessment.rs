@@ -17,8 +17,11 @@
 #[cfg(test)]
 pub(crate) const MCP_ASSESSMENT_SKILL_NAME: &str = "mcp-friction-assessment";
 #[cfg(test)]
-pub(crate) const MCP_ASSESSMENT_SKILL_MD: &str =
-    include_str!("../plugins/cortex/skills/mcp-friction-assessment/SKILL.md");
+pub(crate) const MCP_ASSESSMENT_SKILL_MD: &str = concat!(
+    include_str!("../plugins/cortex/skills/mcp-friction-assessment/SKILL.md"),
+    "\n",
+    include_str!("../plugins/cortex/skills/mcp-friction-assessment/references/workflow.md"),
+);
 
 pub(crate) const MCP_ASSESSMENT_SYSTEM_PROMPT: &str = concat!(
     "Use the mcp-friction-assessment skill to assess the supplied bounded ",
@@ -28,6 +31,8 @@ pub(crate) const MCP_ASSESSMENT_SYSTEM_PROMPT: &str = concat!(
     "You must also follow these instructions directly if native skill activation ",
     "is unavailable:\n\n",
     include_str!("../plugins/cortex/skills/mcp-friction-assessment/SKILL.md"),
+    "\n",
+    include_str!("../plugins/cortex/skills/mcp-friction-assessment/references/workflow.md"),
 );
 
 /// `evidence_json` must be the serialized `McpIncidentEvidence` (see

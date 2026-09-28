@@ -9,17 +9,20 @@ if [ "$#" -gt 0 ]; then
   files=("$@")
   fixture_mode=true
 else
-  mapfile -t files < <(
-    git ls-files -z \
-      | while IFS= read -r -d '' file; do
-          case "$file" in
-            AGENTS.md|GEMINI.md|.beads|.beads/*|scripts/check-private-identifiers.sh)
-              continue
-              ;;
-          esac
-          printf '%s\n' "$file"
-        done
-  )
+  # Use a NUL-delimited loop rather than Bash 4-only mapfile. Scan the
+  # canonical instruction files; their symlink aliases add no new content.
+  files=()
+  while IFS= read -r -d '' file; do
+    case "$file" in
+      .beads|.beads/*|scripts/check-private-identifiers.sh) continue ;;
+      CLAUDE.md|*/CLAUDE.md|GEMINI.md|*/GEMINI.md)
+        if [ -L "$file" ] && [ "$(readlink "$file")" = "AGENTS.md" ]; then
+          continue
+        fi
+        ;;
+    esac
+    files+=("$file")
+  done < <(git ls-files -z)
   fixture_mode=false
 fi
 

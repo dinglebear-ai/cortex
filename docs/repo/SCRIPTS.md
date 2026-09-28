@@ -1,53 +1,41 @@
 ---
-title: "Scripts Reference -- cortex"
-created: "2026-07-30"
-updated: "2026-07-30"
+title: "Repository scripts"
+created: 2026-07-30
+updated: 2026-09-27
 ---
 
-# Scripts Reference -- cortex
+# Repository scripts
 
-Scripts used for maintenance, setup, and testing. The plugin ships no Claude
-Code lifecycle hooks; `plugin-setup.sh` is invoked manually.
+Scripts support the binary-owned setup/runtime and repository validation. They are not a second deployment engine. The plugin ships no Claude Code lifecycle hooks.
 
-## Maintenance scripts (`scripts/`)
+## Validation
 
-| Script | Purpose | Usage |
-| --- | --- | --- |
-| `smoke-test.sh` | Compatibility wrapper for the canonical live smoke profile | `bash scripts/smoke-test.sh` |
-| `backup.sh` | WAL-safe SQLite backup using PRAGMA wal_checkpoint + .backup | `bash scripts/backup.sh` |
-| `reset-db.sh` | Backup first, then destructive DB reset (stop server first) | `bash scripts/reset-db.sh` |
+| Script | Responsibility |
+| --- | --- |
+| `scripts/check-agent-memory-symlinks.sh` | Require regular canonical `AGENTS.md` files and relative Claude/Gemini aliases |
+| `scripts/test-agent-memory-symlinks.sh` | Isolated regression fixtures for the instruction-authority contract |
+| `scripts/check-rust-module-size.sh` | Rust module-size policy and reviewed exceptions |
+| `scripts/check-public-identity.sh` | Public naming/distribution identity invariants |
+| `scripts/check-private-identifiers.sh` | Private identifier guard |
+| `scripts/block-env-commits.sh` | Staged credential-pattern guard |
+| `scripts/validate-marketplace.sh` | Plugin manifest/packaging constraints, including no lifecycle hooks |
+| `scripts/check-agent-observatory-contracts.sh` | Agent Observatory contract checks |
+| `scripts/ci/` | Path classification and CI helper logic |
 
+Run Bash entrypoints with `bash scripts/<name>.sh`; individual Python helpers may be invoked by their wrapper. `lefthook.yml`, `Justfile`, and `xtask/src/pre_push.rs` determine which checks run for a change.
 
+## Runtime and maintenance
 
+`plugin-setup.sh` maps plugin options and delegates to `cortex setup pluginhook`. `prepare-compose-dirs.sh` prepares Compose bind directories. `check-runtime-current.sh` compares runtime/container identity. Deployment/template helpers operate only on their explicit configuration and targets.
 
+`backup.sh` uses SQLite online backup; `restore-backup.sh` and `reset-db.sh` affect persistent state and require coordinated writers and explicit operator intent. Read each helper's options and the applicable runbook first. Never run a reset to test a documentation change.
 
-## Hook scripts
+## Tests and packaging
 
-| Script | Purpose | Trigger |
-| --- | --- | --- |
-| `scripts/plugin-setup.sh` | Adapter that maps `CLAUDE_PLUGIN_OPTION_*` and delegates to `cortex setup pluginhook` | Manual setup / repair (no Claude Code hooks) |
-| `scripts/block-env-commits.sh` | Blocks env credential commits when installed as a pre-commit hook | Git pre-commit |
+`scripts/smoke-test.sh` and `tests/test_live.sh` are compatibility entrypoints for the canonical `tests/live/run-profile.sh` runner. The profiles own isolated services and evidence ledgers; production fleet/provider checks require separate grants. Numerous `scripts/test-*` fixtures validate backup, restore, environment, provisioning, and packaging behavior without treating a shell success marker as live fleet evidence.
 
+`scripts/build-mcpb.sh` creates target-specific bundles and validates prerequisites. Release and container scripts remain governed by the release workflows; a local script run does not prove publication.
 
-## Test scripts (`tests/`)
+Bash scripts should use `#!/usr/bin/env bash`, `set -euo pipefail`, quoted paths, bounded operations, and nonzero failure exits. Keep temporary cleanup scoped to a directory created by the test itself.
 
-| Script | Purpose | Usage |
-| --- | --- | --- |
-| `test_live.sh` | Extended live integration tests | `just test-live` |
-| `mcporter/test-tools.sh` | mcporter-based tool tests | `bash tests/mcporter/test-tools.sh` |
-
-## Script conventions
-
-All bash scripts follow these patterns:
-- `#!/bin/bash` shebang
-- `set -euo pipefail` strict mode
-- Quoted variables: `"$var"`
-- Non-zero exit code on failure
-- Human-readable output with PASS/FAIL indicators
-- JSON output where appropriate (piped through `jq`)
-
-## See also
-
-- [RECIPES.md](RECIPES.md) -- Justfile recipes that invoke these scripts
-- [../mcp/TESTS.md](../mcp/TESTS.md) -- testing guide
-- [../mcp/MCPORTER.md](../mcp/MCPORTER.md) -- mcporter smoke testing
+See [RECIPES.md](RECIPES.md), [DOCUMENTATION.md](DOCUMENTATION.md), and [LIVE_QUALIFICATION.md](../LIVE_QUALIFICATION.md).

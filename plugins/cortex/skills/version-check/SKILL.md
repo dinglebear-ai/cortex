@@ -1,6 +1,6 @@
 ---
 name: version-check
-description: Check whether the running cortex Docker container matches the local Compose image. Use when the user asks whether cortex is current, stale, deployed, updated, running the latest plugin image, or needs a restart/recreate after an upgrade. Supports an optional --pull mode for Docker image comparison.
+description: Use when checking whether the running cortex Docker container matches the local Compose image. Use when the user asks whether cortex is current, stale, deployed, updated, running the latest plugin image, or needs a restart/recreate after an upgrade. Supports an optional --pull mode for Docker image comparison.
 ---
 
 # Cortex Version Check

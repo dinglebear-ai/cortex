@@ -1,60 +1,30 @@
 ---
-title: "Justfile Recipes -- cortex"
-created: "2026-07-30"
-updated: "2026-07-30"
+title: "Justfile recipes"
+created: 2026-07-30
+updated: 2026-09-27
 ---
 
-# Justfile Recipes -- cortex
+# Justfile recipes
 
-Run `just --list` to see all available recipes.
+Run `just --list` for the current catalog. The root `Justfile` is executable authority; this page groups commonly used recipes without copying their entire implementations.
 
-## Development
+| Area | Recipes |
+| --- | --- |
+| Development | `just dev`, `build`, `release`, `check`, `lint`, `fmt` |
+| Hermetic tests | `just test` (cargo-nextest), `just test-doc` (doctests) |
+| Coverage | `just coverage`, `just coverage-html` (cargo-llvm-cov + nextest) |
+| Plugin validation | `just validate-plugin`; `validate-skills` is its alias |
+| Container build | `just docker-build`, using `config/Dockerfile` |
+| Compose lifecycle | `just up`, `down`, `restart`, `logs` |
+| Diagnostics | `just health`, `runtime-current`; use guarded `cortex compose doctor` for installed ownership |
+| Live qualification | `just test-live` / `live-smoke`, plus named `live-*` profiles |
+| Bundle packaging | `just build-mcpb`, `build-mcpb-windows` |
+| Setup helpers | `just setup`, `gen-token`, `install`, `link-bin` |
 
-| Recipe | Command | Description |
-| --- | --- | --- |
-| `just dev` | `cargo run` | Start dev server |
-| `just build` | `cargo build` | Debug build |
-| `just release` | `cargo build --release` | Release build |
-| `just check` | `cargo check` | Type check without building |
-| `just lint` | `cargo clippy -- -D warnings` | Lint with zero-warning policy |
-| `just fmt` | `cargo fmt` | Auto-format code |
-| `just test` | `cargo test` | Run test suite |
-| `just clean` | `cargo clean` | Remove build artifacts |
+Bare recipe names in the table are invoked with `just`. `just test` unsets selected ambient auth variables before nextest; coverage also removes an ambient DB-path override. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the complete local gates.
 
-## Docker
+`just dev` starts a service and needs writable storage and valid configuration. Compose lifecycle commands mutate the resolved project; a recipe is not permission to restart a production deployment. Live profiles require their documented prerequisites and, for fleet/provider targets, explicit grants. See [LIVE_QUALIFICATION.md](../LIVE_QUALIFICATION.md).
 
-| Recipe | Command | Description |
-| --- | --- | --- |
-| `just docker-build` | `docker build -t cortex .` | Build Docker image |
-| `just up` | `docker compose up -d` | Start containers |
-| `just down` | `docker compose down` | Stop containers |
-| `just restart` | `docker compose restart` | Restart containers |
-| `just logs` | `docker compose logs -f` | Tail container logs |
+## Release commands
 
-## Testing
-
-| Recipe | Command | Description |
-| --- | --- | --- |
-| `just health` | `curl -sf http://localhost:3100/health \| jq .` | Health check |
-| `just test-live` | `bash tests/live/run-profile.sh smoke` | Run the fail-closed live smoke profile |
-
-## Setup and security
-
-| Recipe | Command | Description |
-| --- | --- | --- |
-| `just setup` | `cp -n .env.example .env` | Initialize .env file |
-| `just gen-token` | `openssl rand -hex 32` | Generate bearer token |
-| `just validate-skills` | Check SKILL.md exists | Verify skill files |
-
-## Publishing
-
-| Recipe | Command | Description |
-| --- | --- | --- |
-| `just publish [bump]` | Bump, tag, push | Release with major/minor/patch bump |
-
-The `publish` recipe:
-1. Verifies clean `main` branch
-2. Bumps version in Cargo.toml and all plugin manifests
-3. Commits as `release: vX.Y.Z`
-4. Tags `vX.Y.Z`
-5. Pushes to origin (triggers CI/CD publish workflows)
+Normal releases use release-please, not a version bump on every feature push. `cargo xtask` owns synchronization of files declared in `release/components.toml`. `just publish [major|minor|patch]` is an explicit manual escape hatch that commits, tags, and pushes from clean `main`; it does not add versions to intentionally unversioned plugin manifests. See [RELEASING.md](../../RELEASING.md).

@@ -1,7 +1,7 @@
 ---
 title: "OAuth Authentication"
 created: 2026-05-08
-updated: 2026-07-30
+updated: 2026-09-27
 ---
 
 # OAuth Authentication
@@ -25,7 +25,7 @@ Client (browser/Claude)  │  cortex HTTP :3100             │
                          │                                    │
                          │  RMCP tool dispatch                │
                          │    scope check (cortex:read)       │
-                         │    → SyslogService / SQLite        │
+                         │    → CortexService / SQLite        │
                          └────────────────────────────────────┘
 
 OAuth discovery endpoints (mounted when AUTH_MODE=oauth):
