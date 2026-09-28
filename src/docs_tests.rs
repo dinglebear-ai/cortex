@@ -16,6 +16,13 @@ const CURRENT_DOCKER_DOCS: &[(&str, &str)] = &[
 ];
 
 #[test]
+fn repository_agent_guide_stays_below_eight_thousand_characters() {
+    let guide = include_str!("../AGENTS.md");
+    let characters = guide.chars().count();
+    assert!(characters < 8_000, "AGENTS.md has {characters} characters");
+}
+
+#[test]
 fn current_docker_ingest_docs_prefer_agent_path_over_socket_proxy() {
     for (path, text) in CURRENT_DOCKER_DOCS {
         assert!(
