@@ -15,7 +15,8 @@ use super::super::parse_common::{
 use super::super::parse_logs::parse_sessions;
 use super::super::{
     CliCommand, SessionsAbuseArgs, SessionsBlocksArgs, SessionsCommand, SessionsContextArgs,
-    SessionsCorrelateArgs, SessionsListArgs, SessionsOutputDetail, SessionsSearchArgs,
+    SessionsCorrelateArgs, SessionsListArgs, SessionsOutputDetail, SessionsPageArgs,
+    SessionsSearchArgs,
 };
 use mcp_events::parse_sessions_mcp_events;
 use mcp_incidents::{parse_sessions_mcp_incidents, parse_sessions_mcp_investigate};
@@ -45,6 +46,7 @@ pub(crate) fn parse_sessions_command(args: &[String]) -> Result<CliCommand> {
     match subcommand {
         "" => parse_sessions(rest),
         "search" => parse_sessions_search(rest),
+        "page" => parse_sessions_page(rest),
         "abuse" => parse_sessions_abuse(rest),
         "correlate" => parse_sessions_correlate(rest),
         "blocks" => parse_sessions_blocks(rest),
@@ -87,6 +89,32 @@ pub(crate) fn parse_sessions_command(args: &[String]) -> Result<CliCommand> {
             super::suggest::unknown_command("sessions subcommand", subcommand, catalog)
         ),
     }
+}
+
+pub(crate) fn parse_sessions_page(args: &[String]) -> Result<CliCommand> {
+    let mut parsed = SessionsPageArgs::default();
+    let mut flags = FlagCursor::new(args);
+    while let Some(arg) = flags.next() {
+        match arg.as_str() {
+            "--project" => parsed.project = flags.value("--project")?,
+            "--tool" => parsed.tool = flags.value("--tool")?,
+            "--session-id" => parsed.session_id = flags.value("--session-id")?,
+            "--host" => parsed.host = flags.value("--host")?,
+            "--cursor" => parsed.cursor = Some(flags.value("--cursor")?),
+            "--limit" => parsed.limit = Some(parse_u32_flag("--limit", flags.value("--limit")?)?),
+            "--json" => parsed.json = true,
+            _ if arg.starts_with('-') => bail!("unknown sessions page option: {arg}"),
+            _ => bail!("unexpected sessions page argument: {arg}"),
+        }
+    }
+    if parsed.project.is_empty()
+        || parsed.tool.is_empty()
+        || parsed.session_id.is_empty()
+        || parsed.host.is_empty()
+    {
+        bail!("sessions page requires --project, --tool, --session-id, and --host");
+    }
+    Ok(CliCommand::Sessions(SessionsCommand::Page(parsed)))
 }
 
 pub(crate) fn parse_sessions_search(args: &[String]) -> Result<CliCommand> {

@@ -24,9 +24,9 @@ use crate::app::{
     ListAiToolsRequest, ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest,
     ListMcpEventsRequest, ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest,
     LlmInvocationsRequest, NotificationsRecentRequest, PatternsRequest, ProjectContextRequest,
-    SearchLogsRequest, SearchSessionsRequest, SessionInvestigateRequest, SilentHostsRequest,
-    TailLogsRequest, TimelineRequest, TopicCorrelateRequest, UnaddressedErrorsRequest,
-    UsageBlocksRequest,
+    RenderedSessionPageRequest, SearchLogsRequest, SearchSessionsRequest,
+    SessionInvestigateRequest, SilentHostsRequest, TailLogsRequest, TimelineRequest,
+    TopicCorrelateRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
 };
 
 use crate::artifact_evidence::ArtifactEvidenceInput;
@@ -96,6 +96,7 @@ async fn dispatch_cortex_action(
         H::GetStatus => status::tool_get_status(state, args).await,
         H::ListApps => tool_list_apps(state, args).await,
         H::ListSessions => tool_list_sessions(state, args).await,
+        H::RenderedSessionPage => tool_rendered_session_page(state, args).await,
         H::SearchSessions => tool_search_sessions(state, args).await,
         H::SessionInvestigate => tool_session_investigate(state, args).await,
         H::EvidenceScope => tool_evidence_scope(state, args).await,
@@ -256,6 +257,13 @@ async fn tool_list_sessions(state: &AppState, args: Value) -> anyhow::Result<Val
     let response = state.service.list_sessions(req).await?;
     tracing::debug!(session_count = response.count, "list_sessions completed");
     Ok(serde_json::to_value(response)?)
+}
+
+async fn tool_rendered_session_page(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    let req: RenderedSessionPageRequest = action_payload(args, "session_page")?;
+    Ok(serde_json::to_value(
+        state.service.rendered_session_page(req).await?,
+    )?)
 }
 
 async fn tool_search_sessions(state: &AppState, args: Value) -> anyhow::Result<Value> {

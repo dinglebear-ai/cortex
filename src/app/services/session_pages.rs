@@ -63,8 +63,8 @@ impl CortexService {
         }
         let high_watermark = events.last().map_or(after_id, |event| event.position);
         let mut response = RenderedSessionPageResponse {
-            contract_version: "1.0.0",
-            delivery: "polling",
+            contract_version: "1.0.0".into(),
+            delivery: "polling".into(),
             events,
             next_cursor: encode_cursor(high_watermark),
             high_watermark,

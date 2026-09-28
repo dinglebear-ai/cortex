@@ -102,6 +102,7 @@ pub(crate) async fn run(mode: CliMode, command: CliCommand) -> Result<()> {
         CliCommand::Sessions(command) => match command {
             super::SessionsCommand::List(args) => dispatch::run_sessions(&mode, args).await,
             super::SessionsCommand::Search(args) => dispatch::run_ai_search(&mode, args).await,
+            super::SessionsCommand::Page(args) => dispatch::run_session_page(&mode, args).await,
             super::SessionsCommand::Abuse(args) => dispatch::run_ai_abuse(&mode, args).await,
             super::SessionsCommand::Correlate(args) => {
                 dispatch::run_ai_correlate(&mode, args).await
