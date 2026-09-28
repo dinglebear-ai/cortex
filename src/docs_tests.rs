@@ -16,10 +16,10 @@ const CURRENT_DOCKER_DOCS: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn repository_agent_guide_stays_below_eight_thousand_characters() {
+fn repository_agent_guide_stays_within_7500_characters() {
     let guide = include_str!("../AGENTS.md");
     let characters = guide.chars().count();
-    assert!(characters < 8_000, "AGENTS.md has {characters} characters");
+    assert!(characters <= 7_500, "AGENTS.md has {characters} characters");
 }
 
 #[test]
