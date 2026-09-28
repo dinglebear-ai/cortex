@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bound skill assessment and session-search snippet output, scope session search to one hour by default, and use observed inventory for host topology when graph entities are missing. Add executable snippet contract checks; graph dependency questions still use the direct Cortex tool.
 - Rename the primary skill to `using-cortex` and add `cortex-snippets` with eleven validated Labby Code Mode source snippets. Keep specialized skills available during migration; service-log following and image identity checks still require host-local commands.
 
 ## 0.1.0 - 2026-09-18

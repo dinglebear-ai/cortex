@@ -22,7 +22,7 @@ async (input) => {
   return { ok: true, snippet: "cortex-skill-improvement-assessment", request: params,
     evidence_keys: Object.keys(evidence),
     evidence_preview: JSON.stringify(evidence, (key, value) => {
-      if (/message|text|content|stdout|stderr|transcript|command|token|secret|authorization/i.test(key)) return "[omitted]";
+      if (/message|text|content|stdout|stderr|transcript|command|token|secret|authorization|metadata/i.test(key)) return "[omitted]";
       if (typeof value === "string") return value.slice(0, 250);
       if (Array.isArray(value)) return value.slice(0, 3);
       return value;
