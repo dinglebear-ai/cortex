@@ -17,6 +17,88 @@ pub(super) fn receipt_key(
     }
 }
 
+fn prior_fingerprint_matches(
+    tx: &rusqlite::Transaction<'_>,
+    envelope: &EvidenceEnvelope,
+    previous: Option<&str>,
+    stored_locator: Option<&str>,
+    receipt_key: &str,
+) -> anyhow::Result<bool> {
+    match previous {
+        Some(hash) if hash.starts_with("evidence-v2:sha256:") => {
+            v2_fingerprint_matches(envelope, stored_locator, hash)
+        }
+        Some(hash) if hash.starts_with("evidence-v3:sha256:") => {
+            transient_v3_fingerprint_matches(envelope, hash)
+        }
+        Some(hash) if hash.starts_with("sha256:") => {
+            old_fingerprint_matches(tx, receipt_key, envelope, hash)
+        }
+        None => legacy_receipt_matches(tx, receipt_key, envelope),
+        _ => Ok(false),
+    }
+}
+
+pub(super) fn accept_codex_project_reclassification(
+    tx: &rusqlite::Transaction<'_>,
+    envelope: &EvidenceEnvelope,
+    previous: Option<&str>,
+    stored_locator: Option<&str>,
+    receipt_key: &str,
+    context: &ForwardedEventContext,
+) -> anyhow::Result<bool> {
+    if envelope.source.provider != "codex" {
+        return Ok(false);
+    }
+    let Some(incoming_project) = envelope.ai_project.as_deref() else {
+        return Ok(false);
+    };
+    let stored_project: Option<String> = tx.query_row(
+        "SELECT ai_project FROM logs WHERE id = ?1",
+        [context.log_id],
+        |row| row.get(0),
+    )?;
+    let Some(stored_project) = stored_project else {
+        return Ok(false);
+    };
+    if stored_project == incoming_project {
+        return Ok(false);
+    }
+
+    // A deleted Codex app worktree can no longer supply its .git pointer.
+    // Re-scanning the same source line then hashes the raw worktree path
+    // instead of the durable project root. Require the previous receipt to
+    // prove every other evidence field before accepting this metadata drift.
+    let mut original = envelope.clone();
+    original.ai_project = Some(stored_project);
+    let mut matched = false;
+    for clear_events in [false, true] {
+        if clear_events {
+            original.mcp_events.clear();
+            original.hook_events.clear();
+        }
+        matched = prior_fingerprint_matches(tx, &original, previous, stored_locator, receipt_key)?;
+        if matched {
+            break;
+        }
+    }
+    if !matched {
+        return Ok(false);
+    }
+
+    insert_forwarded_events_in_tx(tx, envelope, context)?;
+    let fingerprint =
+        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+    tx.execute(
+        "UPDATE ai_transcript_forward_receipts
+         SET request_fingerprint = ?2 WHERE source_record_id = ?1",
+        rusqlite::params![receipt_key, fingerprint],
+    )?;
+    // Keep the original canonical project; it was resolved while the
+    // worktree existed and is more useful than the now-deleted local path.
+    Ok(true)
+}
+
 pub(super) fn upgrade_codex_message_role(
     tx: &rusqlite::Transaction<'_>,
     envelope: &EvidenceEnvelope,
@@ -40,19 +122,7 @@ pub(super) fn upgrade_codex_message_role(
             old.mcp_events.clear();
             old.hook_events.clear();
         }
-        matched = match previous {
-            Some(hash) if hash.starts_with("evidence-v2:sha256:") => {
-                v2_fingerprint_matches(&old, stored_locator, hash)?
-            }
-            Some(hash) if hash.starts_with("evidence-v3:sha256:") => {
-                transient_v3_fingerprint_matches(&old, hash)?
-            }
-            Some(hash) if hash.starts_with("sha256:") => {
-                old_fingerprint_matches(tx, receipt_key, &old, hash)?
-            }
-            None => legacy_receipt_matches(tx, receipt_key, &old)?,
-            _ => false,
-        };
+        matched = prior_fingerprint_matches(tx, &old, previous, stored_locator, receipt_key)?;
         if matched {
             break;
         }
