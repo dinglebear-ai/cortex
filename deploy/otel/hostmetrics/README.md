@@ -1,6 +1,6 @@
 # Tootie host metrics to Cortex
 
-This Compose project runs the official OpenTelemetry Collector as a separate producer. It reads tootie's CPU, memory, and load once per minute and sends OTLP/HTTP metrics to Cortex. It does not modify the Cortex server stack or instrument other application containers. Docker logs and host heartbeats continue through the existing Cortex agent.
+This Compose project runs the official OpenTelemetry Collector as a separate producer. It reads tootie's CPU, memory, and load once per minute and sends OTLP/HTTP metrics to Cortex. CPU and memory utilization gauges are enabled for direct trends alongside the default cumulative usage metrics. It does not modify the Cortex server stack or instrument other application containers. Docker logs and host heartbeats continue through the existing Cortex agent.
 
 The image is pinned to the OpenTelemetry Collector 0.161.0 multi-platform digest. The [host metrics receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/receiver/hostmetricsreceiver/README.md) reads the mounted host `/proc` and `/sys`; the container shares the host PID and network namespaces so those metrics describe tootie. The [OTLP HTTP exporter](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/otlphttpexporter/README.md) sends protobuf to `127.0.0.1:3100/v1/metrics` and appends the signal path automatically.
 
