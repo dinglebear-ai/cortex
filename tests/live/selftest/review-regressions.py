@@ -11,6 +11,7 @@ import subprocess
 import sqlite3
 import tempfile
 import unittest
+import urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 def load(relative):
@@ -20,6 +21,21 @@ def load(relative):
     return module
 
 class ReviewRegressions(unittest.TestCase):
+    def test_metrics_rest_sweep_uses_valid_queries_and_response_contracts(self):
+        module = load('tests/live/phases/surfaces/rest_sweep.py')
+        module.RESOURCES.update(repository_id='1', run_key='run')
+        metrics_path = module.expanded_path('/api/host-metrics')
+        params = urllib.parse.parse_qs(metrics_path.partition('?')[2])
+        self.assertEqual(params['hostname'], ['cortex-live'])
+        self.assertEqual(params['metric_name'], ['system.cpu.utilization'])
+        self.assertEqual(module.expanded_path('/api/metric-hosts'), '/api/metric-hosts')
+        self.assertEqual(module.CONTRACTS['GET /api/host-metrics'][1],
+                         {'points', 'next_cursor', 'truncated', 'queried_at'})
+        self.assertEqual(module.CONTRACTS['GET /api/metric-hosts'][1], {'hosts', 'queried_at'})
+        self.assertFalse(module.semantic_postconditions(
+            'GET', '/api/host-metrics', {'points': {}, 'truncated': False, 'queried_at': 'now'},
+            'cortex-live', 'signature', '1', 'run')[0])
+
     def test_restore_failed_copy_preserves_database_and_wal(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory); backup = root / 'backups'; data = root / 'data'
