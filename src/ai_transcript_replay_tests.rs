@@ -82,6 +82,70 @@ async fn codex_role_correction_replays_without_changing_message_evidence() {
 }
 
 #[tokio::test]
+async fn codex_project_normalization_change_preserves_canonical_project() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut original = sample_record();
+    original["envelope"]["source"]["provider"] = json!("codex");
+    original["envelope"]["event_kind"] = json!("status");
+    let old_project = original["envelope"]["ai_project"].clone();
+    let original_locator = original["envelope"]["source"]["locator"].clone();
+    let v3 = transient_receipt_v3_fingerprint(&original);
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(
+                json!({"records": [original.clone()]}).to_string()
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = ?1",
+        [&v3],
+    )
+    .unwrap();
+    let mut replay = original;
+    replay["envelope"]["ai_project"] = json!("project:sha256:deleted-worktree-path");
+    replay["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
+    let body = json!({"records": [replay.clone()]}).to_string();
+    for _ in 0..2 {
+        assert_eq!(
+            app.clone()
+                .oneshot(transcript_request(body.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let (project, log_count, fingerprint): (String, i64, String) = conn
+        .query_row(
+            "SELECT l.ai_project, (SELECT COUNT(*) FROM logs), r.request_fingerprint
+             FROM ai_transcript_forward_receipts r JOIN logs l ON l.id = r.log_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(project, old_project.as_str().unwrap());
+    assert_eq!(log_count, 1);
+    let mut canonical_replay = replay.clone();
+    canonical_replay["envelope"]["source"]["locator"] = original_locator;
+    assert_eq!(fingerprint, receipt_v2_fingerprint(&canonical_replay));
+
+    replay["envelope"]["message"] = json!("different transcript evidence");
+    assert_eq!(
+        app.oneshot(transcript_request(json!({"records": [replay]}).to_string()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
 async fn archived_transcript_replay_accepts_changed_locator_and_preserves_v2_receipt() {
     let (app, dir) = test_app(Some("secret"));
     let original = sample_record();
