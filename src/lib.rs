@@ -36,6 +36,7 @@ pub(crate) use filetail as file_tail;
 pub mod heartbeat;
 pub mod heartbeat_agent;
 pub(crate) mod hostname;
+pub mod http_trace;
 pub mod inventory;
 pub(crate) mod llm_backend;
 pub mod logging;
