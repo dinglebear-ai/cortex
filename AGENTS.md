@@ -65,7 +65,7 @@ Installed Compose ownership is resolved by `cortex compose doctor` and `cortex c
 
 ## Packaging and documentation
 
-The onboarding/skills package is `plugins/cortex/`; its [scoped instructions](plugins/cortex/AGENTS.md) cover package changes. Entry skills are `install-cortex`, `using-cortex`, and `cortex-snippets`. The eleven specialized workflows are Labby snippets under `cortex-snippets/snippets/`. Embedded assessment prompts under `src/prompts/` must retain both the entrypoint and referenced workflow. The binary owns setup; plugin scripts are adapters, and no Claude lifecycle hooks ship. Run `just validate-plugin` for package changes.
+The onboarding package is `plugins/cortex/`; read its [scoped instructions](plugins/cortex/AGENTS.md). Entry skills are `install-cortex`, `using-cortex`, and `cortex-snippets`. Eleven workflows live in `cortex-snippets/snippets/`. Runtime prompts in `src/prompts/` retain their entrypoint and workflow. The binary owns setup; plugin scripts are adapters, and no Claude lifecycle hooks ship. Run `just validate-plugin` for package changes.
 
 Release-please manages version PRs; `release/components.toml` defines synchronized carriers. Plugin manifests are unversioned and the root Cargo package is not published to crates.io. See [RELEASING.md](RELEASING.md).
 
