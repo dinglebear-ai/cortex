@@ -4,6 +4,10 @@ use super::structured_events::{ForwardedEventContext, insert_forwarded_events_in
 use super::*;
 use sha2::{Digest, Sha256};
 
+#[path = "legacy_receipt_replay.rs"]
+mod replay;
+use replay::{receipt_key, upgrade_codex_message_role};
+
 #[derive(Debug)]
 pub(super) struct IdempotencyConflict;
 
@@ -71,17 +75,6 @@ fn transient_v3_fingerprint_matches(
     previous: &str,
 ) -> anyhow::Result<bool> {
     Ok(previous == transient_v3_fingerprint(envelope)?)
-}
-
-fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: bool) -> String {
-    if shared_bearer {
-        source_record_id.to_owned()
-    } else {
-        format!(
-            "principal:sha256:{:x}",
-            Sha256::digest(format!("{forwarder_identity}\0{source_record_id}").as_bytes())
-        )
-    }
 }
 
 /// Reconstruct mutable display/location metadata from the stored row, then
@@ -363,6 +356,20 @@ fn insert_envelopes_with_identity(
                          SET request_fingerprint = ?2 WHERE source_record_id = ?1",
                         rusqlite::params![stored_receipt_key, upgraded_fingerprint],
                     )?;
+                    receipts.push(AiTranscriptReceipt {
+                        source_record_id: envelope.source_record_id,
+                        disposition: ReceiptDisposition::Duplicate,
+                    });
+                    continue;
+                }
+                if upgrade_codex_message_role(
+                    &tx,
+                    &envelope,
+                    previous_fingerprint.as_deref(),
+                    stored_locator.as_deref(),
+                    &stored_receipt_key,
+                    &existing_context,
+                )? {
                     receipts.push(AiTranscriptReceipt {
                         source_record_id: envelope.source_record_id,
                         disposition: ReceiptDisposition::Duplicate,

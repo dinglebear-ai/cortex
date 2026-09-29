@@ -28,6 +28,60 @@ fn transient_receipt_v3_fingerprint(record: &serde_json::Value) -> String {
 }
 
 #[tokio::test]
+async fn codex_role_correction_replays_without_changing_message_evidence() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut original = sample_record();
+    original["envelope"]["source"]["provider"] = json!("codex");
+    original["envelope"]["event_kind"] = json!("unknown");
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(
+                json!({"records": [original.clone()]}).to_string()
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
+    let mut corrected = original;
+    corrected["envelope"]["event_kind"] = json!("assistant");
+    corrected["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
+    corrected["envelope"]["source"]["title"] = json!("updated display title");
+    let body = json!({"records": [corrected.clone()]}).to_string();
+    for _ in 0..2 {
+        assert_eq!(
+            app.clone()
+                .oneshot(transcript_request(body.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let (count, kind): (i64, String) = conn
+        .query_row(
+            "SELECT COUNT(*), json_extract(MAX(metadata_json), '$.event_kind') FROM logs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((count, kind.as_str()), (1, "assistant"));
+
+    corrected["envelope"]["message"] = json!("changed transcript evidence");
+    assert_eq!(
+        app.oneshot(transcript_request(
+            json!({"records": [corrected]}).to_string()
+        ))
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
 async fn archived_transcript_replay_accepts_changed_locator_and_preserves_v2_receipt() {
     let (app, dir) = test_app(Some("secret"));
     let original = sample_record();
