@@ -164,6 +164,104 @@ fn forwarded_evidence_capabilities_follow_the_provider_registry() {
     assert_eq!(explicit.hook_events, EvidenceCoverage::NotObserved);
 }
 
+#[test]
+fn forwarded_structured_evidence_omits_payloads_and_preserves_event_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = AiTranscriptForwardConfig::new(
+        "http://localhost:3100".to_string(),
+        None,
+        dir.path().join("checkpoint"),
+    );
+    let mut record = transcript_record(
+        &config,
+        &dir.path().join("session.jsonl"),
+        scanner::SourceKind::ClaudeProject,
+        TranscriptRecordDetails {
+            revision: "line:1".to_string(),
+            timestamp: Some("2026-09-29T00:00:00Z".to_string()),
+            ai_project: None,
+            ai_session_id: Some("session-1".to_string()),
+            event_kind: Some("tool".to_string()),
+            message: "tool call".to_string(),
+            title: None,
+            title_provenance: None,
+            diagnostics: Vec::new(),
+        },
+    );
+    let raw = serde_json::json!({
+        "message": {
+            "content": [{"type":"tool_use", "id":"call-1", "name":"mcp__labby__search", "input":{"token":"sk-private-value"}}],
+            "attachment": {"type":"hook_failure", "hookEvent":"PreToolUse", "hookName":"policy-check", "command":"echo sk-private-value", "exitCode":1, "stderr":"sk-private-value"}
+        }
+    }).to_string();
+    attach_structured_events(&mut record, scanner::SourceKind::ClaudeProject, &raw);
+    assert_eq!(record.envelope.mcp_events.len(), 1);
+    assert_eq!(record.envelope.hook_events.len(), 1);
+    assert_eq!(
+        record.envelope.mcp_events[0].tool_name,
+        "mcp__labby__search"
+    );
+    assert_eq!(record.envelope.hook_events[0].status, "failed");
+    let encoded = serde_json::to_string(&record).unwrap();
+    assert!(!encoded.contains("sk-private-value"));
+    assert!(!encoded.contains("call-1"));
+    assert!(!encoded.contains("echo"));
+}
+
+#[tokio::test]
+async fn structured_evidence_batches_stay_within_receiver_body_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig::new(server.uri(), None, dir.path().join("checkpoint"));
+    let client = reqwest::Client::new();
+    let records = (0..MAX_BATCH_RECORDS)
+        .map(|index| {
+            let mut record = transcript_record(
+                &config,
+                &dir.path().join("session.jsonl"),
+                scanner::SourceKind::CodexSession,
+                TranscriptRecordDetails {
+                    revision: format!("line:{index}"),
+                    timestamp: Some("2026-09-29T00:00:00Z".to_string()),
+                    ai_project: None,
+                    ai_session_id: Some("session-1".to_string()),
+                    event_kind: Some("tool".to_string()),
+                    message: "tool call".to_string(),
+                    title: None,
+                    title_provenance: None,
+                    diagnostics: Vec::new(),
+                },
+            );
+            record.envelope.mcp_events = (0..MAX_STRUCTURED_EVENTS_PER_RECORD)
+                .map(|event_index| ForwardedMcpEvent {
+                    call_id: format!("sha256:{}", "a".repeat(64)),
+                    tool_name: format!("mcp__server__{}", "x".repeat(235)),
+                    event_kind: "call".to_string(),
+                    status: Some(format!("{index}-{event_index}")),
+                    is_error: None,
+                })
+                .collect();
+            record
+        })
+        .collect();
+    assert_eq!(
+        send_records(&config, &client, records).await.unwrap(),
+        MAX_BATCH_RECORDS
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests.len() > 1);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.body.len() <= MAX_FORWARD_BODY_BYTES)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn collect_files_never_follows_symlinked_transcript() {
