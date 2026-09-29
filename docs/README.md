@@ -18,6 +18,7 @@ Start with the [project overview](../README.md), canonical [AGENTS.md](../AGENTS
 | [RUST.md](RUST.md) | Pinned toolchain, workspace, SDK, build/test setup |
 | [RELEASE.md](RELEASE.md), [RELEASING.md](../RELEASING.md) | Release-please policy and release gates |
 | [LIVE_QUALIFICATION.md](LIVE_QUALIFICATION.md) | Isolated live profiles versus explicitly granted fleet checks |
+| [Host metrics producer](../deploy/otel/hostmetrics/README.md) | Separate OpenTelemetry Collector that sends real host metrics to Cortex |
 | [CHECKLIST.md](CHECKLIST.md) | Supplemental pre-release review |
 | [repo/DOCUMENTATION.md](repo/DOCUMENTATION.md) | Documentation authority, maintenance, validation |
 
