@@ -429,6 +429,8 @@ fn safe_timestamp(value: &str) -> Result<Option<String>, &'static str> {
 
 #[path = "ai_transcript_ingest/legacy_receipt.rs"]
 mod legacy_receipt;
+#[path = "ai_transcript_ingest/structured_events.rs"]
+mod structured_events;
 use legacy_receipt::*;
 
 async fn ingest_handler(
