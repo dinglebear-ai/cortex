@@ -13,7 +13,7 @@ truth for hermetic and live release gates.
 
 - [ ] All version carriers in `release/components.toml` agree with `Cargo.toml`
 - [ ] Plugin manifests are unversioned:
-      `.claude-plugin/plugin.json` and `plugins/**/plugin.json`
+      `plugins/install-cortex/.claude-plugin/plugin.json` and `plugins/**/plugin.json`
 - [ ] `CHANGELOG.md` has an entry for the new version
 - [ ] README version badge is correct
 

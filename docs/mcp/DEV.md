@@ -24,7 +24,7 @@ Update the corresponding [TOOLS.md](TOOLS.md), [SCHEMA.md](SCHEMA.md), [TESTS.md
 
 ## Source and package locations
 
-Syslog parsing lives in `src/receiver/`, not `src/syslog/`. The source-build Dockerfile is `config/Dockerfile`. Skills live in `plugins/cortex/skills/`; primary guidance is `using-cortex`. The current tracked plugin manifest is `.claude-plugin/plugin.json`; no Codex/Gemini manifest or Claude lifecycle-hook directory is shipped. See [repository structure](../repo/REPO.md).
+Syslog parsing lives in `src/receiver/`, not `src/syslog/`. The source-build Dockerfile is `config/Dockerfile`. Skills live in `plugins/cortex/skills/`; primary guidance is `using-cortex`. The current tracked plugin manifest is `plugins/install-cortex/.claude-plugin/plugin.json`; no Codex/Gemini manifest or Claude lifecycle-hook directory is shipped. See [repository structure](../repo/REPO.md).
 
 ## Diagnostics
 

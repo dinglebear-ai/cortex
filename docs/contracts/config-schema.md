@@ -8,7 +8,7 @@ updated: 2026-07-30
 
 ## 1. Purpose & status
 
-Contract derived from `src/config.rs` (the source-of-truth `Config`/`ConfigSchema` types and their `load` / `validate_*` functions). It also consolidates plugin-exposed knobs from `.claude-plugin/plugin.json::userConfig` and pins the operator-visible TOML schema currently scattered across `docs/CONFIG.md` and `docs/SETUP.md`.
+Contract derived from `src/config.rs` (the source-of-truth `Config`/`ConfigSchema` types and their `load` / `validate_*` functions). It also consolidates plugin-exposed knobs from `plugins/install-cortex/.claude-plugin/plugin.json::userConfig` and pins the operator-visible TOML schema currently scattered across `docs/CONFIG.md` and `docs/SETUP.md`.
 
 This document is normative for every config knob the V1 server respects. Any change to a TOML key name, env var, default, or validation rule MUST be made in `src/config.rs` first; this contract is then re-derived. Specs that add new config blocks (`docs/superpowers/specs/2026-05-16-agent-mode-design.md`, `…-api-pollers-design.md`, `…-digest-notifications-design.md`, `…-probe-registry-design.md`, `…-rag-incidents-design.md`) are pinned in §5 as **planned** rows — none of these blocks are honored by the V1 loader yet. Unknown top-level keys in `config.toml` are silently ignored (the `Config` struct uses `#[serde(default)]` without `deny_unknown_fields`), so operators can include planned blocks for forward compatibility without causing startup errors. They are listed here so operators can write forward-compatible configs.
 
@@ -339,7 +339,7 @@ The `cortex mcp` (stdio) entrypoint **bypasses** invariant (1) only, via `Config
 - `src/setup/` — code that writes `~/.cortex/.env` and `~/.cortex/config.toml` during `cortex setup`.
 - `~/.cortex/.env` — operator-editable env file written by setup; loader rules in §2.
 - `~/.cortex/config.toml` — operator-editable TOML file (overlaid before env).
-- `.claude-plugin/plugin.json::userConfig` — plugin-managed subset that maps to env vars at setup time. The `plugin.json` column in §4 names the userConfig field that drives each row.
+- `plugins/install-cortex/.claude-plugin/plugin.json::userConfig` — plugin-managed subset that maps to env vars at setup time. The `plugin.json` column in §4 names the userConfig field that drives each row.
 - `docker-compose.yml` — references `CORTEX_UID`, `CORTEX_GID`, `CORTEX_FILE_TAIL_GROUP`, `CORTEX_RECEIVER_HOST_PORT`, `CORTEX_RECEIVER_PORT`, `CORTEX_PORT`, `CORTEX_DATA_VOLUME`, `CORTEX_BACKUP_DIR`, `CORTEX_VERSION`, `DOCKER_NETWORK` — these are **compose-level** vars, not server config; they shape the container, not the process inside it.
 - `docs/CONFIG.md` — narrative operator guide; should link **here** for the canonical table.
 - `docs/SETUP.md` — first-run procedure; references the secret files in `docs/contracts/data-layout.md`.

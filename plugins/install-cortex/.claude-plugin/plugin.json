@@ -1,6 +1,6 @@
 {
-  "name": "cortex",
-  "description": "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.",
+  "name": "install-cortex",
+  "description": "Install, configure, and verify Cortex with the guided installer skill and MCP connection.",
   "author": {
     "name": "jmagar"
   },
@@ -12,27 +12,27 @@
     "logging",
     "homelab"
   ],
-  "mcpServers": "./plugins/cortex/mcp.json",
-  "skills": "./plugins/cortex/skills",
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills",
   "userConfig": {
     "is_server": {
       "type": "boolean",
       "title": "Run as server",
-      "description": "True on the ONE machine in your fleet that should ingest and store logs — it runs the syslog receiver (UDP+TCP), the SQLite store, and the MCP HTTP server. False on every other machine that just needs to query logs from Claude Code; those instances skip all local server setup and act as MCP clients only.",
+      "description": "True on the ONE machine in your fleet that should ingest and store logs \u2014 it runs the syslog receiver (UDP+TCP), the SQLite store, and the MCP HTTP server. False on every other machine that just needs to query logs from Claude Code; those instances skip all local server setup and act as MCP clients only.",
       "required": true,
       "default": true
     },
     "server_url": {
       "type": "string",
       "title": "Server URL",
-      "description": "Base URL the MCP client in this Claude Code session connects to (always used — both modes). Server mode: keep the default http://localhost:3100 so the local MCP client talks to the local server. Client mode: set to the remote server, e.g. http://devhost:3100, http://syslog.lan:3100, or https://syslog.example.com if fronted by a reverse proxy. Must include the scheme and (if non-default) port; do NOT include a trailing /mcp path — the plugin appends it.",
+      "description": "Base URL the MCP client in this Claude Code session connects to (always used \u2014 both modes). Server mode: keep the default http://localhost:3100 so the local MCP client talks to the local server. Client mode: set to the remote server, e.g. http://devhost:3100, http://syslog.lan:3100, or https://syslog.example.com if fronted by a reverse proxy. Must include the scheme and (if non-default) port; do NOT include a trailing /mcp path \u2014 the plugin appends it.",
       "required": true,
       "default": "http://localhost:3100"
     },
     "api_token": {
       "type": "string",
       "title": "API token",
-      "description": "Bearer token for MCP HTTP authentication, sent on every request as `Authorization: Bearer <token>`. Server mode: pick any value — that becomes the secret the server enforces (generate one with `openssl rand -hex 32`, or use `just gen-token`). Client mode: paste the token your server admin configured. The same token must match on both sides; mismatched tokens return 401.",
+      "description": "Bearer token for MCP HTTP authentication, sent on every request as `Authorization: Bearer <token>`. Server mode: pick any value \u2014 that becomes the secret the server enforces (generate one with `openssl rand -hex 32`, or use `just gen-token`). Client mode: paste the token your server admin configured. The same token must match on both sides; mismatched tokens return 401.",
       "sensitive": true,
       "required": false
     },
@@ -114,20 +114,20 @@
     "max_db_size_mb": {
       "type": "number",
       "title": "Max database size (MB)",
-      "description": "Soft cap on logical SQLite DB size. When exceeded, oldest logs (ordered by received_at) are deleted in batches until the recovery target is met; if cleanup can't free enough space, NEW WRITES are blocked until storage recovers. 0 disables this guard entirely (logs grow until disk fills or retention purges them). Default 8192 MB (8 GB) is sized for a homelab ingesting from a handful of hosts plus Docker stdout — bump much higher (50000+) if you have lots of free disk and want long retention, lower if storage is tight. Server mode only.",
+      "description": "Soft cap on logical SQLite DB size. When exceeded, oldest logs (ordered by received_at) are deleted in batches until the recovery target is met; if cleanup can't free enough space, NEW WRITES are blocked until storage recovers. 0 disables this guard entirely (logs grow until disk fills or retention purges them). Default 8192 MB (8 GB) is sized for a homelab ingesting from a handful of hosts plus Docker stdout \u2014 bump much higher (50000+) if you have lots of free disk and want long retention, lower if storage is tight. Server mode only.",
       "default": 8192,
       "min": 0
     },
     "data_dir": {
       "type": "directory",
       "title": "Data directory",
-      "description": "Directory holding the SQLite database file (cortex.db plus its WAL/SHM sidecars in WAL mode). Defaults to the plugin's persistent data directory ($CLAUDE_PLUGIN_DATA), which survives plugin upgrades. Override only if you need the DB on a different volume — e.g. a larger or faster disk. The directory must exist and be writable by the user running the service. Server mode only.",
+      "description": "Directory holding the SQLite database file (cortex.db plus its WAL/SHM sidecars in WAL mode). Defaults to the plugin's persistent data directory ($CLAUDE_PLUGIN_DATA), which survives plugin upgrades. Override only if you need the DB on a different volume \u2014 e.g. a larger or faster disk. The directory must exist and be writable by the user running the service. Server mode only.",
       "default": "${CLAUDE_PLUGIN_DATA}"
     },
     "retention_days": {
       "type": "number",
       "title": "Log retention (days)",
-      "description": "Age-based purge: log entries older than this are PERMANENTLY DELETED hourly with no recovery path — back up first with `scripts/backup.sh` if you need archival. 0 disables age-based purging entirely (storage guards from max_db_size_mb still apply). Default 90 days balances forensic value against DB size for a typical homelab. Server mode only.",
+      "description": "Age-based purge: log entries older than this are PERMANENTLY DELETED hourly with no recovery path \u2014 back up first with `scripts/backup.sh` if you need archival. 0 disables age-based purging entirely (storage guards from max_db_size_mb still apply). Default 90 days balances forensic value against DB size for a typical homelab. Server mode only.",
       "default": 90,
       "min": 0
     },
@@ -148,14 +148,14 @@
     "docker_ingest_enabled": {
       "type": "boolean",
       "title": "Enable Docker log ingestion",
-      "description": "Pull container stdout/stderr from remote Docker socket proxies in addition to syslog. When true, each fleet_host is treated as a docker-socket-proxy endpoint at http://<host>:2375 and continuously polled for container logs. Logs land in the DB tagged hostname=<host>, app_name=<container>, source_ip=docker://<host>/<container>/<stream>. Each fleet host MUST be running docker-socket-proxy (or equivalent) on port 2375 with at least containers/logs read access — exposing the raw Docker socket is unsafe. Server mode only.",
+      "description": "Pull container stdout/stderr from remote Docker socket proxies in addition to syslog. When true, each fleet_host is treated as a docker-socket-proxy endpoint at http://<host>:2375 and continuously polled for container logs. Logs land in the DB tagged hostname=<host>, app_name=<container>, source_ip=docker://<host>/<container>/<stream>. Each fleet host MUST be running docker-socket-proxy (or equivalent) on port 2375 with at least containers/logs read access \u2014 exposing the raw Docker socket is unsafe. Server mode only.",
       "required": true,
       "default": false
     },
     "fleet_hosts": {
       "type": "string",
       "title": "Fleet hosts",
-      "description": "Hostnames for hosts in your fleet. Used for Docker ingest: when docker_ingest_enabled is true, each entry becomes the docker-socket-proxy URL http://<host>:2375. Entries must be reachable by name — resolvable DNS or an /etc/hosts entry, not just an SSH config alias. Add one entry per host, e.g. devhost, edgehost, nashost. Leave empty if you don't use Docker ingest.",
+      "description": "Hostnames for hosts in your fleet. Used for Docker ingest: when docker_ingest_enabled is true, each entry becomes the docker-socket-proxy URL http://<host>:2375. Entries must be reachable by name \u2014 resolvable DNS or an /etc/hosts entry, not just an SSH config alias. Add one entry per host, e.g. devhost, edgehost, nashost. Leave empty if you don't use Docker ingest.",
       "required": true,
       "multiple": true
     }
