@@ -1,4 +1,0 @@
-interface:
-  display_name: "Cortex Service Logs"
-  short_description: "Tail cortex service logs"
-  default_prompt: "Use $logs to tail or follow cortex service logs."
