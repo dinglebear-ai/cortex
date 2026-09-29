@@ -43,6 +43,8 @@ QUERY = {
     "/api/get": {"id": "1"},
     "/api/context": {"log_id": "1", "before": "1", "after": "1"},
     "/api/host-state": {"host": "cortex-live"},
+    "/api/host-metrics": {"hostname": "cortex-live", "metric_name": "system.cpu.utilization", "minutes": "5", "limit": "5"},
+    "/api/metric-hosts": {},
     "/api/correlate": {"reference_time": "2026-08-27T00:00:00Z", "limit": "5"},
     "/api/correlate-state": {"reference_time": "2026-08-27T00:00:00Z", "limit": "5"},
     "/api/graph/entity": {"entity_type": "host", "key": "cortex-live"},
@@ -177,7 +179,9 @@ CONTRACTS = {
     "GET /api/graph/evidence": ("object", "dst_entity evidence metadata missing_source_reason relationship source_log_summary src_entity"),
     "GET /api/graph/explain": ("object", "candidates chains evidence metadata missing_evidence narrative next_queries open_questions resolved_entity"),
     "GET /api/host-state": ("object", "flags host_id hostname latest samples total_samples truncated"),
+    "GET /api/host-metrics": ("object", "points next_cursor truncated queried_at"),
     "GET /api/hosts": ("object", "hosts"),
+    "GET /api/metric-hosts": ("object", "hosts queried_at"),
     "GET /api/incident-context": ("object", "ai_sessions by_app by_severity error_logs error_logs_truncated total_logs window_from window_to"),
     "GET /api/ingest-rate": ("object", "buckets now write_blocked"),
     "GET /api/notifications/recent": ("array", ""),
@@ -289,6 +293,13 @@ def semantic_postconditions(method: str, path: str, parsed: object, fixture_host
     if route == "GET /api/host-state":
         checks.append(("host_id:fixture", parsed.get("host_id") == fixture_host))
         checks.append(("latest:object", isinstance(parsed.get("latest"), dict)))
+    elif route == "GET /api/host-metrics":
+        checks.append(("points:array", isinstance(parsed.get("points"), list)))
+        checks.append(("truncated:boolean", isinstance(parsed.get("truncated"), bool)))
+        checks.append(("queried_at:string", isinstance(parsed.get("queried_at"), str)))
+    elif route == "GET /api/metric-hosts":
+        checks.append(("hosts:array", isinstance(parsed.get("hosts"), list)))
+        checks.append(("queried_at:string", isinstance(parsed.get("queried_at"), str)))
     elif route in {"GET /api/graph/entity", "GET /api/graph/around", "GET /api/graph/explain"}:
         checks.append(("resolved_entity:object", isinstance(parsed.get("resolved_entity"), dict)))
     elif route.startswith("GET /api/v1/graph/"):
@@ -425,6 +436,7 @@ def main() -> int:
                        "/api/v1/graph/entity", "/api/v1/graph/around", "/api/v1/graph/explain"):
         QUERY[graph_path]["key"] = fixture_host
     QUERY["/api/host-state"]["host"] = fixture_host
+    QUERY["/api/host-metrics"]["hostname"] = fixture_host
     POST["/api/errors/ack"]["signature_hash"] = fixture_signature
     POST["/api/errors/unack"]["signature_hash"] = fixture_signature
     # Create route prerequisites through the live API so ID-bearing cases use
