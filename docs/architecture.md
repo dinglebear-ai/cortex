@@ -1,7 +1,7 @@
 ---
 title: "Cortex architecture"
 created: 2026-05-18
-updated: 2026-09-27
+updated: 2026-09-29
 ---
 
 # Cortex architecture
@@ -56,6 +56,8 @@ The diagram groups source families; they do not all use the same table, queue, o
 The preferred Docker log path is the **host-local cortex agent**, reading the local Docker socket. `src/docker_ingest/` and `CORTEX_DOCKER_*` retain **legacy central pull** compatibility for explicit remote Docker Engine HTTP endpoints. They are not the default fleet collection architecture.
 
 Agents forward supported evidence over HTTP routes such as `/v1/ai-transcripts`, `/v1/agent-commands`, `/v1/shell-history`, `/v1/file-tails`, and `/v1/syslog-forward`. Do not describe a proposed WebSocket transport as implemented merely because the system streams data.
+
+For Claude and Codex transcript JSONL, the host agent extracts bounded tool-call identity and outcome fields before scrubbing the display message. Claude runtime hook attachments also contribute bounded event names and outcomes. The `/v1/ai-transcripts` receiver commits those normalized event rows with the canonical log and receipt in one transaction. Older agents may still forward only display text, so an empty normalized event table cannot by itself establish that no tool or hook activity occurred. The forwarding coverage remains partial where the source format cannot expose nested calls or runtime hooks.
 
 Transcript source metadata is centralized in `src/scanner/providers.rs`; parsing remains provider-local. Static adapter support differs from receipt-backed observed coverage. Mutable file paths are locators, not immutable source identities. Read [ADDING_SOURCES.md](ADDING_SOURCES.md) and [agent-protocol.md](contracts/agent-protocol.md) before extending these boundaries.
 

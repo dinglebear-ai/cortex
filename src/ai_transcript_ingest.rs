@@ -47,6 +47,7 @@ pub const AI_TRANSCRIPT_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 /// bounds per-request DB work regardless of how small individual records are.
 pub const MAX_RECORDS_PER_BATCH: usize = 2_000;
 pub const EVIDENCE_ENVELOPE_VERSION: u16 = 1;
+pub const MAX_STRUCTURED_EVENTS_PER_RECORD: usize = 32;
 const MAX_TEXT_CHARS: usize = 16 * 1024;
 const MAX_TIMESTAMP_CHARS: usize = 128;
 const MAX_IDENTIFIER_CHARS: usize = 512;
@@ -126,6 +127,32 @@ pub struct EvidenceEnvelope {
     pub capabilities: EvidenceCapabilityCoverage,
     #[serde(default)]
     pub diagnostics: Vec<EvidenceDiagnostic>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_events: Vec<ForwardedMcpEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hook_events: Vec<ForwardedHookEvent>,
+}
+
+/// Safe event identity and outcome only. Arguments, output, commands, and
+/// filesystem paths never cross the agent/server boundary in this lane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ForwardedMcpEvent {
+    pub call_id: String,
+    pub tool_name: String,
+    pub event_kind: String,
+    pub status: Option<String>,
+    pub is_error: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ForwardedHookEvent {
+    pub hook_event: String,
+    pub hook_name: Option<String>,
+    pub status: String,
+    pub exit_code: Option<i64>,
+    pub duration_ms: Option<i64>,
 }
 
 /// One versioned AI evidence envelope forwarded by an agent. The nesting is
@@ -302,6 +329,45 @@ fn scrub_envelope(mut envelope: EvidenceEnvelope) -> Result<EvidenceEnvelope, &'
     }
     if envelope.source.provider.is_empty() || envelope.hostname.is_empty() {
         return Err("missing_evidence_identity");
+    }
+    if envelope.mcp_events.len() > MAX_STRUCTURED_EVENTS_PER_RECORD
+        || envelope.hook_events.len() > MAX_STRUCTURED_EVENTS_PER_RECORD
+    {
+        return Err("too_many_structured_events");
+    }
+    if !envelope.mcp_events.is_empty()
+        && !matches!(envelope.source.provider.as_str(), "claude" | "codex")
+        || !envelope.hook_events.is_empty() && envelope.source.provider != "claude"
+    {
+        return Err("unsupported_provider_event_lane");
+    }
+    for event in &mut envelope.mcp_events {
+        if !is_sha256_id(&event.call_id)
+            || !matches!(event.event_kind.as_str(), "call" | "result")
+            || event.event_kind == "call" && event.tool_name.is_empty()
+        {
+            return Err("invalid_forwarded_mcp_event");
+        }
+        event.tool_name = safe_identifier(&event.tool_name);
+        if event.event_kind == "call" && event.tool_name.trim().is_empty() {
+            return Err("invalid_forwarded_mcp_event");
+        }
+        event.status = event.status.as_deref().map(safe_identifier);
+    }
+    for event in &mut envelope.hook_events {
+        if event.hook_event.is_empty()
+            || !matches!(
+                event.status.as_str(),
+                "success" | "failed" | "blocked" | "error" | "unknown"
+            )
+        {
+            return Err("invalid_forwarded_hook_event");
+        }
+        event.hook_event = safe_identifier(&event.hook_event);
+        if event.hook_event.trim().is_empty() {
+            return Err("invalid_forwarded_hook_event");
+        }
+        event.hook_name = event.hook_name.as_deref().map(safe_identifier);
     }
 
     envelope.hostname = safe_identifier(&envelope.hostname);

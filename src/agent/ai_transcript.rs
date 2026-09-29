@@ -34,7 +34,8 @@ use crate::ai_project::normalize_local_ai_project_path;
 use crate::ai_transcript_ingest::{
     AI_TRANSCRIPT_BODY_LIMIT_BYTES, AiTranscriptIngestRequest, AiTranscriptIngestResponse,
     AiTranscriptRecord, EVIDENCE_ENVELOPE_VERSION, EvidenceCapabilityCoverage, EvidenceCoverage,
-    EvidenceDiagnostic, EvidenceEnvelope, EvidenceSource,
+    EvidenceDiagnostic, EvidenceEnvelope, EvidenceSource, ForwardedHookEvent, ForwardedMcpEvent,
+    MAX_STRUCTURED_EVENTS_PER_RECORD,
 };
 use crate::scanner;
 
@@ -385,7 +386,7 @@ async fn scan_and_forward(
                             .as_ref()
                             .map(|metadata| metadata.provenance.clone())
                     });
-                    records.push(transcript_record(
+                    let mut record = transcript_record(
                         config,
                         path,
                         source_kind,
@@ -400,7 +401,9 @@ async fn scan_and_forward(
                             title_provenance,
                             diagnostics: Vec::new(),
                         },
-                    ));
+                    );
+                    attach_structured_events(&mut record, source_kind, line);
+                    records.push(record);
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -509,6 +512,42 @@ async fn send_records(
         expected_receipts.len() == sent,
         "ai transcript forward constructed duplicate source-record identities"
     );
+    let empty_request_bytes = serde_json::to_vec(&AiTranscriptIngestRequest {
+        records: Vec::new(),
+    })?
+    .len();
+    let mut batch = Vec::new();
+    let mut batch_bytes = empty_request_bytes;
+    for record in records {
+        let record_bytes = serde_json::to_vec(&record)?.len();
+        anyhow::ensure!(
+            empty_request_bytes + record_bytes <= MAX_FORWARD_BODY_BYTES,
+            "one ai transcript evidence record exceeded bounded request budget"
+        );
+        let separator_bytes = usize::from(!batch.is_empty());
+        if batch_bytes + separator_bytes + record_bytes > MAX_FORWARD_BODY_BYTES {
+            send_record_batch(config, client, std::mem::take(&mut batch)).await?;
+            batch_bytes = empty_request_bytes;
+        }
+        batch_bytes += usize::from(!batch.is_empty()) + record_bytes;
+        batch.push(record);
+    }
+    if !batch.is_empty() {
+        send_record_batch(config, client, batch).await?;
+    }
+    Ok(sent)
+}
+
+async fn send_record_batch(
+    config: &AiTranscriptForwardConfig,
+    client: &reqwest::Client,
+    records: Vec<AiTranscriptRecord>,
+) -> Result<()> {
+    let sent = records.len();
+    let expected_receipts: HashSet<String> = records
+        .iter()
+        .map(|record| record.envelope.source_record_id.clone())
+        .collect();
     let payload = serde_json::to_vec(&AiTranscriptIngestRequest { records })?;
     anyhow::ensure!(
         payload.len() <= MAX_FORWARD_BODY_BYTES,
@@ -561,7 +600,7 @@ async fn send_records(
     // Only advance after the server supplied an exact receipt for every
     // submitted source-record ID. A lost/malformed response leaves the local
     // cursor untouched; a retry is deduplicated by the server receipt table.
-    Ok(sent)
+    Ok(())
 }
 
 #[path = "ai_transcript_skill_recovery.rs"]

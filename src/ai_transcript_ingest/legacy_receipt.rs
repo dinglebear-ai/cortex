@@ -297,7 +297,8 @@ fn insert_envelopes_with_identity(
         )?;
         let already_accepted = tx
             .query_row(
-                "SELECT r.request_fingerprint, l.ai_transcript_path
+                "SELECT r.request_fingerprint, l.ai_transcript_path, l.id, l.ai_tool,
+                        l.ai_project, l.ai_session_id, l.hostname, l.timestamp
                  FROM ai_transcript_forward_receipts r
                  JOIN logs l ON l.id = r.log_id
                  WHERE r.source_record_id = ?1",
@@ -306,12 +307,67 @@ fn insert_envelopes_with_identity(
                     Ok((
                         row.get::<_, Option<String>>(0)?,
                         row.get::<_, Option<String>>(1)?,
+                        ForwardedEventContext {
+                            log_id: row.get(2)?,
+                            ai_tool: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                            ai_project: row.get(4)?,
+                            ai_session_id: row.get(5)?,
+                            hostname: row.get(6)?,
+                            timestamp: row.get(7)?,
+                        },
                     ))
                 },
             )
             .optional()?;
-        if let Some((previous_fingerprint, stored_locator)) = already_accepted {
+        if let Some((previous_fingerprint, stored_locator, existing_context)) = already_accepted {
             if previous_fingerprint.as_deref() != Some(request_fingerprint.as_str()) {
+                // A previous agent could only forward display text. An exact
+                // replay of that base envelope may add structured events
+                // once, using the original log row and receipt transaction.
+                // A second, different enrichment still conflicts.
+                let mut base_envelope = envelope.clone();
+                base_envelope.mcp_events.clear();
+                base_envelope.hook_events.clear();
+                let upgrades_base = (!envelope.mcp_events.is_empty()
+                    || !envelope.hook_events.is_empty())
+                    && match previous_fingerprint.as_deref() {
+                        Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
+                            transient_v3_fingerprint_matches(&base_envelope, previous)?
+                        }
+                        Some(previous) if previous.starts_with("evidence-v2:sha256:") => {
+                            v2_fingerprint_matches(
+                                &base_envelope,
+                                stored_locator.as_deref(),
+                                previous,
+                            )?
+                        }
+                        Some(previous) if previous.starts_with("sha256:") => {
+                            old_fingerprint_matches(
+                                &tx,
+                                &stored_receipt_key,
+                                &base_envelope,
+                                previous,
+                            )?
+                        }
+                        None => legacy_receipt_matches(&tx, &stored_receipt_key, &base_envelope)?,
+                        _ => false,
+                    };
+                if upgrades_base {
+                    insert_forwarded_events_in_tx(&tx, &envelope, &existing_context)?;
+                    let upgraded_fingerprint =
+                        canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                            .ok_or(IdempotencyConflict)?;
+                    tx.execute(
+                        "UPDATE ai_transcript_forward_receipts
+                         SET request_fingerprint = ?2 WHERE source_record_id = ?1",
+                        rusqlite::params![stored_receipt_key, upgraded_fingerprint],
+                    )?;
+                    receipts.push(AiTranscriptReceipt {
+                        source_record_id: envelope.source_record_id,
+                        disposition: ReceiptDisposition::Duplicate,
+                    });
+                    continue;
+                }
                 // Compatibility fingerprints are validated against the
                 // canonical row before any rebinding. Persist v2 so a rollback
                 // still recognizes the durable receipt format; locator-move
@@ -399,6 +455,15 @@ fn insert_envelopes_with_identity(
             .collect::<Vec<_>>();
             db::insert_skill_events_in_tx(&tx, &events)?;
         }
+        let context = ForwardedEventContext {
+            log_id,
+            ai_tool: entry.ai_tool.clone().unwrap_or_default(),
+            ai_project: entry.ai_project.clone(),
+            ai_session_id: entry.ai_session_id.clone(),
+            hostname: entry.hostname.clone(),
+            timestamp: entry.timestamp.clone(),
+        };
+        insert_forwarded_events_in_tx(&tx, &envelope, &context)?;
         tx.execute(
             "INSERT INTO ai_transcript_forward_receipts
                 (source_record_id, envelope_version, log_id, provider,
@@ -427,4 +492,92 @@ fn insert_envelopes_with_identity(
         crate::db::agent_observatory::notify_projection_work();
     }
     Ok(receipts)
+}
+
+struct ForwardedEventContext {
+    log_id: i64,
+    ai_tool: String,
+    ai_project: Option<String>,
+    ai_session_id: Option<String>,
+    hostname: String,
+    timestamp: String,
+}
+
+fn insert_forwarded_events_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    envelope: &EvidenceEnvelope,
+    context: &ForwardedEventContext,
+) -> anyhow::Result<()> {
+    let mcp_events = envelope
+        .mcp_events
+        .iter()
+        .map(|forwarded| {
+            let (mcp_server, mcp_tool) =
+                crate::scanner::mcp_events::classify_tool_name(&forwarded.tool_name);
+            db::McpEventInsert {
+                log_id: context.log_id,
+                ai_tool: context.ai_tool.clone(),
+                ai_project: context.ai_project.clone(),
+                ai_session_id: context.ai_session_id.clone(),
+                hostname: context.hostname.clone(),
+                timestamp: context.timestamp.clone(),
+                event: crate::scanner::mcp_events::ExtractedMcpEvent {
+                    call_id: forwarded.call_id.clone(),
+                    tool_name: forwarded.tool_name.clone(),
+                    mcp_server,
+                    mcp_tool,
+                    event_kind: if forwarded.event_kind == "call" {
+                        crate::scanner::mcp_events::McpEventKind::Call
+                    } else {
+                        crate::scanner::mcp_events::McpEventKind::Result
+                    },
+                    turn_id: None,
+                    status: forwarded.status.clone(),
+                    is_error: forwarded.is_error,
+                    arguments_json: None,
+                    output_preview: None,
+                    error_text: None,
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    db::insert_mcp_events_in_tx(tx, &mcp_events)?;
+    let hook_events = envelope
+        .hook_events
+        .iter()
+        .map(|forwarded| {
+            let status = match forwarded.status.as_str() {
+                "success" => crate::scanner::hook_events::HookStatus::Success,
+                "failed" => crate::scanner::hook_events::HookStatus::Failed,
+                "blocked" => crate::scanner::hook_events::HookStatus::Blocked,
+                "error" => crate::scanner::hook_events::HookStatus::Error,
+                _ => crate::scanner::hook_events::HookStatus::Unknown,
+            };
+            db::HookEventInsert {
+                log_id: Some(context.log_id),
+                ai_tool: context.ai_tool.clone(),
+                ai_project: context.ai_project.clone(),
+                ai_session_id: context.ai_session_id.clone(),
+                hostname: context.hostname.clone(),
+                timestamp: context.timestamp.clone(),
+                event: crate::scanner::hook_events::ExtractedHookEvent {
+                    hook_event: forwarded.hook_event.clone(),
+                    hook_name: forwarded.hook_name.clone(),
+                    hook_source: None,
+                    hook_command: None,
+                    status,
+                    exit_code: forwarded.exit_code,
+                    duration_ms: forwarded.duration_ms,
+                    stdout_preview: None,
+                    stderr_preview: None,
+                    persisted_output_path: None,
+                    trusted_hash: None,
+                    evidence_kind: crate::scanner::hook_events::HookEvidenceKind::RuntimeTranscript,
+                    metadata_json: None,
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    db::insert_hook_events_in_tx(tx, &hook_events)?;
+    Ok(())
 }
