@@ -55,13 +55,18 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
-    if !agent_invocation {
+    let trace_provider = if agent_invocation {
+        None
+    } else if matches!(&mode, Mode::ServeMcp) {
+        logging::init_server(mode.default_log_filter())?
+    } else {
         logging::init(mode.default_log_filter());
-    }
+        None
+    };
 
     info!("cortex v{}", env!("CARGO_PKG_VERSION"));
 
-    match mode {
+    let result = match mode {
         Mode::ServeMcp => serve_mcp().await,
         Mode::StdioMcp => serve_stdio_mcp().await,
         Mode::Cli(invocation) => run_cli(*invocation).await,
@@ -74,7 +79,13 @@ async fn run() -> Result<()> {
         }
         Mode::Help => unreachable!("handled before logging initialization"),
         Mode::Version => unreachable!("handled before logging initialization"),
+    };
+    if let Some(provider) = trace_provider
+        && let Err(error) = provider.shutdown()
+    {
+        tracing::warn!(error = %error, "Cortex trace exporter shutdown failed");
     }
+    result
 }
 
 async fn serve_stdio_mcp() -> Result<()> {
@@ -623,8 +634,6 @@ async fn serve_mcp() -> Result<()> {
              proxy (e.g. SWAG) and set CORTEX_PUBLIC_URL=https://..."
         );
     }
-    app = app.merge(runtime.otlp_router());
-    info!("OTLP receiver mounted at /v1/logs, /v1/metrics, and /v1/traces");
     app = app.merge(runtime.heartbeat_router());
     info!("Heartbeat receiver mounted at /v1/heartbeats");
     app = app.merge(runtime.agent_command_router());
@@ -648,7 +657,15 @@ async fn serve_mcp() -> Result<()> {
              Set CORTEX_TOKEN to require Bearer auth."
         );
     }
-    app = app.layer(tower_http::trace::TraceLayer::new_for_http());
+    app = app.layer(
+        tower_http::trace::TraceLayer::new_for_http()
+            .make_span_with(cortex::http_trace::request_span)
+            .on_response(cortex::http_trace::response_span),
+    );
+    // The trace exporter posts to /v1/traces on this server. Keep the OTLP
+    // receiver outside the traced router to prevent self-export loops.
+    app = app.merge(runtime.otlp_router());
+    info!("OTLP receiver mounted at /v1/logs, /v1/metrics, and /v1/traces");
 
     let mcp_bind = runtime.config.mcp.bind_addr();
     let listener = tokio::net::TcpListener::bind(&mcp_bind).await?;
