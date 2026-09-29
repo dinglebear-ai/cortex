@@ -66,6 +66,8 @@ pub(super) const API_SURFACE_SPECS: &[SurfaceSpec] = &[
     api!("/api/tail", Search, Canonical, Read),
     api!("/api/errors", Analysis, RetainedProtocolCompatibility, Read),
     api!("/api/hosts", Hosts, Canonical, Read),
+    api!("/api/host-metrics", Hosts, Canonical, Read),
+    api!("/api/metric-hosts", Hosts, Canonical, Read),
     api!(
         "/api/correlate",
         Correlate,

@@ -111,6 +111,7 @@ mod hook_assessment;
 mod hook_backfill;
 mod hook_events;
 mod hook_incidents;
+mod host_metrics;
 mod imports;
 mod incidents;
 mod investigation;

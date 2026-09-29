@@ -24,7 +24,7 @@ updated: 2026-07-30
 
 ## Endpoint matrix
 
-96 method/path bindings total. Scope is `read` (mounted via `axum::routing::get`,
+98 method/path bindings total. Scope is `read` (mounted via `axum::routing::get`,
 hits read-side `db_permits`) or `admin`. Database maintenance and integrity
 checks share one process-wide maintenance gate; concurrent attempts receive a
 busy response. Admin mutations are audited before the service call.
@@ -45,6 +45,8 @@ to them by default.
 | GET | `/api/tail` | read | query: `hostname?`, `source_ip?`, `app_name?`, `severity_min?`, `n?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` (tail order) | 200, 400, 401, 503, 500 | Y | `severity_min` honoured per RFC severity ordering. |
 | GET | `/api/errors` | read | query: `from?`, `to?`, `group_by?` (`app_name` only) | `GetErrorsResponse { summary: [ErrorSummaryEntry] }` | 200, 400, 401, 503, 500 | Y | Counts by host (and optional secondary key). |
 | GET | `/api/hosts` | read | (none) | `ListHostsResponse { hosts: [HostEntry] }` | 200, 401, 503, 500 | Y | Inventory of seen hostnames. |
+| GET | `/api/host-metrics` | read | query: `hostname` and `metric_name` (REQUIRED), `service_name?`, `minutes?` (1–1440), `limit?` (1–500), `before_time_unix_nano?` and `before_id?` (together) | `ListHostMetricsResponse { points, next_cursor?, truncated, queried_at }` | 200, 400, 401, 503, 500 | Y | Recent OTLP points for one host and metric, newest source timestamp first. Each point carries value, attributes, source timestamp, and received time. Use `next_cursor` for the next page. |
+| GET | `/api/metric-hosts` | read | — | `ListMetricHostsResponse { hosts, queried_at }` | 200, 401, 503, 500 | Y | Up to 100 hosts with memory utilization samples in the past 24 hours, ordered by latest source timestamp. |
 | GET | `/api/correlate` | read | query: `reference_time` (REQUIRED, RFC 3339), `window_minutes?` (u32), `severity_min?`, `hostname?`, `source_ip?`, `query?`, `limit?` (u32) | `CorrelateEventsResponse { reference_time, window_minutes, window_from, window_to, severity_min, total_events, truncated, hosts_count, hosts: [CorrelatedHost] }` | 200, 400, 401, 503, 500 | Y | **Distinct from `/api/sessions/correlate`** — see disambiguation below. |
 | GET | `/api/stats` | read | (none) | `DbStats { total_logs, total_hosts, oldest_log?, newest_log?, logical_db_size_mb, physical_db_size_mb, free_disk_mb?, max_db_size_mb, min_free_disk_mb, write_blocked, phantom_fts_rows? }` | 200, 401, 503, 500 | Y | Hot path; no PRAGMA per request. `phantom_fts_rows` is `null` by default — its `COUNT(*) FROM logs_fts` scan is skipped to stay fast on large DBs; computed only via the opt-in diagnostic path. |
 | GET | `/api/version` | read | (none) | `VersionInfo { version, git_sha?, schema_version }` | 200, 401 | Y | **Cached at startup** — never touches SQLite per request (eng-review #A3). Returns 404 if older server lacks the route (see Versioning policy). |
@@ -152,7 +154,7 @@ compatibility routes.
 
 Inventory clients start at `/api/graph/entities`, follow `next_cursor` to exhaustion, then page `/api/graph/relationships` with the returned `snapshot_cursor`. A 409 means the projection changed between pages: discard that bootstrap and restart. After both inventories complete, poll `/api/graph/changes` with `snapshot_cursor`, applying events in sequence and storing each `next_cursor`. A 410 means the retained journal no longer covers the cursor: discard the local copy and bootstrap again. Change upserts reflect the latest committed projection; an object removed before its event is read becomes a tombstone. Responses report projection status, source watermark, completion time, degradation, and truncation. The journal retains at most seven days or 200,000 events, whichever is less; consumers should poll about once per minute and recover from expiry. This is a read-only surface under the same bearer authorization and heavy-read admission as other graph queries. Inventory exposes canonical `(entity_type, canonical_key)` identities, not aliases or raw logs/session content. Host, app, and service-instance names must not be merged by display label; resolve aliases with `/api/graph/entity`. Relationship keys are projection-scoped; apply tombstones and upserts when rebuilding changes endpoint IDs.
 
-**Total: 96 method/path bindings** (current surface registry, including syslog,
+**Total: 98 method/path bindings** (current surface registry, including syslog,
 surface-parity, AI, graph, compose, notification, error-ack, and DB routes;
 includes the 3 hook routes above, added alongside the `ai_hook_events`
 subsystem).
