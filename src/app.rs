@@ -189,6 +189,8 @@ pub use models::{
     ListArtifactEvidenceResponse,
     ListHookEventsRequest,
     ListHookEventsResponse,
+    ListHostMetricsRequest,
+    ListHostMetricsResponse,
     ListHostsResponse,
     ListMcpEventsRequest,
     ListMcpEventsResponse,

@@ -63,7 +63,7 @@ Transcript source metadata is centralized in `src/scanner/providers.rs`; parsing
 
 ## Query paths and ownership
 
-HTTP MCP runs the single action-dispatch `cortex` tool. `ACTION_SPECS` in `src/mcp/actions.rs` owns action names, scopes, flags, and handlers. The REST API (96 method/path bindings) and CLI have additional/local-only surfaces; `src/surfaces/` and their adapters define those contracts. The REST denominator is guarded by `documented_rest_route_count_matches_router_registrations`; update the registry, reference, and test together.
+HTTP MCP runs the single action-dispatch `cortex` tool. `ACTION_SPECS` in `src/mcp/actions.rs` owns action names, scopes, flags, and handlers. The REST API (98 method/path bindings) and CLI have additional/local-only surfaces; `src/surfaces/` and their adapters define those contracts. The REST denominator is guarded by `documented_rest_route_count_matches_router_registrations`; update the registry, reference, and test together.
 
 An installed CLI commonly uses HTTP settings written into the managed environment. Explicit flags and `CORTEX_USE_HTTP` select routing in `src/cli/run.rs`; local-only commands retain their own rules. Direct SQLite consumers are not automatically governed by another process's in-memory service limits. Do not assume every CLI call reaches the container.
 
