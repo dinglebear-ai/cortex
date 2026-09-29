@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 #[path = "legacy_receipt_replay.rs"]
 mod replay;
-use replay::{receipt_key, upgrade_codex_message_role};
+use replay::{accept_codex_project_reclassification, receipt_key, upgrade_codex_message_role};
 
 #[derive(Debug)]
 pub(super) struct IdempotencyConflict;
@@ -363,6 +363,20 @@ fn insert_envelopes_with_identity(
                     continue;
                 }
                 if upgrade_codex_message_role(
+                    &tx,
+                    &envelope,
+                    previous_fingerprint.as_deref(),
+                    stored_locator.as_deref(),
+                    &stored_receipt_key,
+                    &existing_context,
+                )? {
+                    receipts.push(AiTranscriptReceipt {
+                        source_record_id: envelope.source_record_id,
+                        disposition: ReceiptDisposition::Duplicate,
+                    });
+                    continue;
+                }
+                if accept_codex_project_reclassification(
                     &tx,
                     &envelope,
                     previous_fingerprint.as_deref(),
