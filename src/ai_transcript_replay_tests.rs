@@ -233,6 +233,54 @@ async fn codex_reparse_accepts_only_equivalent_message_and_metadata() {
 }
 
 #[tokio::test]
+async fn codex_reparse_accepts_joint_role_and_project_drift() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut original = sample_record();
+    original["envelope"]["source"]["provider"] = json!("codex");
+    original["envelope"]["event_kind"] = json!("unknown");
+    original["envelope"]["message"] = json!("one two three");
+    let old_project = original["envelope"]["ai_project"].clone();
+    let v3 = transient_receipt_v3_fingerprint(&original);
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(
+                json!({"records": [original.clone()]}).to_string()
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = ?1",
+        [&v3],
+    )
+    .unwrap();
+    let mut replay = original;
+    replay["envelope"]["event_kind"] = json!("user");
+    replay["envelope"]["ai_project"] = json!("project:sha256:deleted-worktree-path");
+    replay["envelope"]["message"] = json!("one\ntwo three");
+    assert_eq!(
+        app.oneshot(transcript_request(json!({"records": [replay]}).to_string()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let (project, message, kind): (String, String, String) = conn
+        .query_row(
+            "SELECT ai_project, message, json_extract(metadata_json, '$.event_kind') FROM logs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(project, old_project.as_str().unwrap());
+    assert_eq!(message, "one two three");
+    assert_eq!(kind, "user");
+}
+
+#[tokio::test]
 async fn archived_transcript_replay_accepts_changed_locator_and_preserves_v2_receipt() {
     let (app, dir) = test_app(Some("secret"));
     let original = sample_record();

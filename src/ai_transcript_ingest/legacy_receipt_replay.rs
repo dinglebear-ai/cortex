@@ -116,10 +116,9 @@ pub(super) fn accept_codex_whitespace_reparse(
             [context.log_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-    if stored_message == envelope.message
-        || !stored_message
-            .split_whitespace()
-            .eq(envelope.message.split_whitespace())
+    if !stored_message
+        .split_whitespace()
+        .eq(envelope.message.split_whitespace())
     {
         return Ok(false);
     }
@@ -144,8 +143,8 @@ pub(super) fn accept_codex_whitespace_reparse(
         return Ok(false);
     }
 
-    // The same Codex source revision was previously parsed with different
-    // whitespace and possibly an unknown speaker. A deleted app worktree may also
+    // The same Codex source revision may have a historical message format
+    // and an unknown speaker. A deleted app worktree may also
     // change its derived project hash. Reconstruct the old envelope and
     // require its exact receipt fingerprint before changing any canonical row.
     let mut original = envelope.clone();
