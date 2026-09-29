@@ -99,6 +99,91 @@ pub(super) fn accept_codex_project_reclassification(
     Ok(true)
 }
 
+pub(super) fn accept_codex_whitespace_reparse(
+    tx: &rusqlite::Transaction<'_>,
+    envelope: &EvidenceEnvelope,
+    previous: Option<&str>,
+    stored_locator: Option<&str>,
+    receipt_key: &str,
+    context: &ForwardedEventContext,
+) -> anyhow::Result<bool> {
+    if envelope.source.provider != "codex" {
+        return Ok(false);
+    }
+    let (stored_message, stored_project, metadata_json): (String, Option<String>, Option<String>) =
+        tx.query_row(
+            "SELECT message, ai_project, metadata_json FROM logs WHERE id = ?1",
+            [context.log_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    if stored_message == envelope.message
+        || !stored_message
+            .split_whitespace()
+            .eq(envelope.message.split_whitespace())
+    {
+        return Ok(false);
+    }
+    let Some(stored_project) = stored_project else {
+        return Ok(false);
+    };
+    if envelope.ai_project.is_none() {
+        return Ok(false);
+    }
+    let Some(metadata_json) = metadata_json else {
+        return Ok(false);
+    };
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_json)?;
+    let stored_kind = metadata
+        .get("event_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let incoming_kind = envelope.event_kind.as_deref().unwrap_or("unknown");
+    if stored_kind != incoming_kind
+        && !(stored_kind == "unknown" && matches!(incoming_kind, "user" | "assistant"))
+    {
+        return Ok(false);
+    }
+
+    // The same Codex source revision was previously parsed with different
+    // whitespace and possibly an unknown speaker. A deleted app worktree may also
+    // change its derived project hash. Reconstruct the old envelope and
+    // require its exact receipt fingerprint before changing any canonical row.
+    let mut original = envelope.clone();
+    original.message = stored_message;
+    original.ai_project = Some(stored_project);
+    original.event_kind = Some(stored_kind.to_string());
+    let mut matched = false;
+    for clear_events in [false, true] {
+        if clear_events {
+            original.mcp_events.clear();
+            original.hook_events.clear();
+        }
+        matched = prior_fingerprint_matches(tx, &original, previous, stored_locator, receipt_key)?;
+        if matched {
+            break;
+        }
+    }
+    if !matched {
+        return Ok(false);
+    }
+
+    insert_forwarded_events_in_tx(tx, envelope, context)?;
+    let fingerprint =
+        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+    tx.execute(
+        "UPDATE ai_transcript_forward_receipts
+         SET request_fingerprint = ?2 WHERE source_record_id = ?1",
+        rusqlite::params![receipt_key, fingerprint],
+    )?;
+    tx.execute(
+        "UPDATE logs SET message = ?2,
+                         metadata_json = json_set(metadata_json, '$.event_kind', ?3)
+         WHERE id = ?1",
+        rusqlite::params![context.log_id, envelope.message, incoming_kind],
+    )?;
+    Ok(true)
+}
+
 pub(super) fn upgrade_codex_message_role(
     tx: &rusqlite::Transaction<'_>,
     envelope: &EvidenceEnvelope,

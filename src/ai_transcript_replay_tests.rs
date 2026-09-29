@@ -111,14 +111,15 @@ async fn codex_project_normalization_change_preserves_canonical_project() {
     replay["envelope"]["ai_project"] = json!("project:sha256:deleted-worktree-path");
     replay["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
     let body = json!({"records": [replay.clone()]}).to_string();
-    for _ in 0..2 {
+    for iteration in 0..2 {
         assert_eq!(
             app.clone()
                 .oneshot(transcript_request(body.clone()))
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::OK
+            StatusCode::OK,
+            "replay iteration {iteration}"
         );
     }
     let (project, log_count, fingerprint): (String, i64, String) = conn
@@ -136,6 +137,92 @@ async fn codex_project_normalization_change_preserves_canonical_project() {
     assert_eq!(fingerprint, receipt_v2_fingerprint(&canonical_replay));
 
     replay["envelope"]["message"] = json!("different transcript evidence");
+    assert_eq!(
+        app.oneshot(transcript_request(json!({"records": [replay]}).to_string()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn codex_reparse_accepts_only_equivalent_message_and_metadata() {
+    use sha2::Digest;
+    let (app, dir) = test_app(Some("secret"));
+    let mut original = sample_record();
+    original["envelope"]["source"]["provider"] = json!("codex");
+    original["envelope"]["event_kind"] = json!("unknown");
+    original["envelope"]["message"] = json!("one two three");
+    let old_project = original["envelope"]["ai_project"].clone();
+    let old_locator = original["envelope"]["source"]["locator"].clone();
+    let mut historical_envelope = scrub_envelope(
+        serde_json::from_value::<EvidenceEnvelope>(original["envelope"].clone()).unwrap(),
+    )
+    .unwrap();
+    historical_envelope.message = "one\ntwo three".to_string();
+    historical_envelope.source.title = None;
+    historical_envelope.source.title_provenance = None;
+    historical_envelope.source.locator.clear();
+    let v3 = format!(
+        "evidence-v3:sha256:{:x}",
+        sha2::Sha256::digest(serde_json::to_vec(&historical_envelope).unwrap())
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(
+                json!({"records": [original.clone()]}).to_string()
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = ?1",
+        [&v3],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE logs SET message = 'one' || char(10) || 'two three'",
+        [],
+    )
+    .unwrap();
+
+    let mut replay = original;
+    replay["envelope"]["event_kind"] = json!("user");
+    replay["envelope"]["ai_project"] = json!("project:sha256:deleted-worktree-path");
+    replay["envelope"]["message"] = json!("one two three");
+    replay["envelope"]["source"]["locator"] = json!(format!("sha256:{}", "f".repeat(64)));
+    let body = json!({"records": [replay.clone()]}).to_string();
+    for _ in 0..2 {
+        assert_eq!(
+            app.clone()
+                .oneshot(transcript_request(body.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let (project, message, kind, fingerprint): (String, String, String, String) = conn
+        .query_row(
+            "SELECT l.ai_project, l.message, json_extract(l.metadata_json, '$.event_kind'),
+                    r.request_fingerprint
+             FROM ai_transcript_forward_receipts r JOIN logs l ON l.id = r.log_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(project, old_project.as_str().unwrap());
+    assert_eq!(message, "one two three");
+    assert_eq!(kind, "user");
+    let mut canonical_replay = replay.clone();
+    canonical_replay["envelope"]["source"]["locator"] = old_locator;
+    assert_eq!(fingerprint, receipt_v2_fingerprint(&canonical_replay));
+
+    replay["envelope"]["message"] = json!("one two changed");
     assert_eq!(
         app.oneshot(transcript_request(json!({"records": [replay]}).to_string()))
             .await
