@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Split the guided installer skill and MCP connection into the separate `install-cortex` plugin; this plugin now contains usage skills only.
+
 - Rename the primary skill to `using-cortex` and add `cortex-snippets` with eleven validated Labby Code Mode source snippets. Keep specialized skills available during migration; service-log following and image identity checks still require host-local commands.
 
 ## 0.1.0 - 2026-09-18

@@ -44,5 +44,6 @@ version_files = [
   { kind = "regex_version", path = "docker-compose.prod.yml", pattern = 'CORTEX_VERSION:-(\d+\.\d+\.\d+)' },
   { kind = "changelog_heading", path = "CHANGELOG.md" },
   # Plugin manifests are versioned by the marketplace, never inline.
-  { kind = "json_no_version", path = ".claude-plugin/plugin.json" },
+  { kind = "json_no_version", path = "plugins/cortex/.claude-plugin/plugin.json" },
+  { kind = "json_no_version", path = "plugins/install-cortex/.claude-plugin/plugin.json" },
 ]

@@ -120,41 +120,7 @@ gen-token:
 
 # Validate plugin manifests, MCP config, and skill frontmatter
 validate-plugin:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    python3 - <<'PY'
-    import json
-    from pathlib import Path
-
-    plugin = json.loads(Path(".claude-plugin/plugin.json").read_text())
-    if "version" in plugin:
-        raise SystemExit("FORBIDDEN: .claude-plugin/plugin.json version")
-    for key in ["mcpServers", "skills"]:
-        value = plugin.get(key)
-        if not value:
-            raise SystemExit(f"MISSING: .claude-plugin/plugin.json {key}")
-        path = Path(value)
-        if not path.exists():
-            raise SystemExit(f"MISSING: {path}")
-
-    mcp_path = Path(plugin["mcpServers"])
-    mcp = json.loads(mcp_path.read_text())
-    if "cortex" not in mcp.get("mcpServers", {}):
-        raise SystemExit(f"MISSING: cortex server in {mcp_path}")
-
-    if "hooks" in plugin:
-        raise SystemExit("FORBIDDEN: .claude-plugin/plugin.json hooks")
-    PY
-    found=0
-    for dir in plugins/cortex/skills/*; do
-      [[ -d "$dir" ]] || continue
-      found=1
-      test -f "$dir/SKILL.md" || { echo "MISSING: $dir/SKILL.md"; exit 1; }
-      grep -q '^name:' "$dir/SKILL.md" || { echo "MISSING name: $dir/SKILL.md"; exit 1; }
-      grep -q '^description:' "$dir/SKILL.md" || { echo "MISSING description: $dir/SKILL.md"; exit 1; }
-    done
-    [[ "$found" -eq 1 ]] || { echo "MISSING: plugins/cortex/skills/*"; exit 1; }
-    echo "OK"
+    bash scripts/validate-marketplace.sh
 
 validate-skills: validate-plugin
 

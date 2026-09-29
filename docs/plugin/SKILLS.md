@@ -13,7 +13,7 @@ Description: Skill definitions and validation guidance for the cortex plugin.
 
 # Cortex skills
 
-The package lives in `plugins/cortex/skills/`. Read its scoped [AGENTS.md](../../plugins/cortex/AGENTS.md) before changing onboarding or runtime instructions. The directory contents and validation scripts, not an old copied tree, define what ships.
+The usage package lives in `plugins/cortex/skills/`; the installer skill lives in `plugins/install-cortex/skills/`. Read its scoped [AGENTS.md](../../plugins/cortex/AGENTS.md) before changing onboarding or runtime instructions. The directory contents and validation scripts, not an old copied tree, define what ships.
 
 ## Entry skills
 
