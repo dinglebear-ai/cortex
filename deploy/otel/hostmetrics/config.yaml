@@ -27,7 +27,7 @@ processors:
         value: homelab
         action: upsert
       - key: host.name
-        value: tootie
+        value: ${env:CORTEX_OTLP_HOST_NAME}
         action: upsert
   batch:
     timeout: 10s
