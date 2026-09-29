@@ -40,14 +40,14 @@ async fn host_metrics_returns_recent_source_and_receipt_times_with_auth() {
             "INSERT INTO otel_metric_points
              (point_key,metric_name,instrument_kind,time_unix_nano,hostname,service_name,
               value_json,received_at)
-             VALUES ('api-host-metric','system.cpu.utilization','gauge',?1,'tootie',
+             VALUES ('api-host-metric','system.cpu.utilization','gauge',?1,'host-a',
                      'cortex-hostmetrics','{\"type\":\"double\",\"value\":0.4}',
                      '2026-09-29T14:00:00Z')",
             [time],
         )
         .unwrap();
     let app = test_router(state);
-    let path = "/api/host-metrics?hostname=tootie&metric_name=system.cpu.utilization&minutes=5";
+    let path = "/api/host-metrics?hostname=host-a&metric_name=system.cpu.utilization&minutes=5";
     let response = app
         .clone()
         .oneshot(
@@ -62,7 +62,7 @@ async fn host_metrics_returns_recent_source_and_receipt_times_with_auth() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = to_bytes(response.into_body(), 1024 * 64).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["points"][0]["hostname"], "tootie");
+    assert_eq!(json["points"][0]["hostname"], "host-a");
     assert_eq!(json["points"][0]["service_name"], "cortex-hostmetrics");
     assert_eq!(json["points"][0]["value"]["value"], 0.4);
     assert_eq!(json["points"][0]["time_unix_nano"], time);
@@ -73,7 +73,7 @@ async fn host_metrics_returns_recent_source_and_receipt_times_with_auth() {
             "INSERT INTO otel_metric_points
              (point_key,metric_name,instrument_kind,time_unix_nano,hostname,service_name,
               value_json,received_at)
-             VALUES ('api-host-memory','system.memory.utilization','gauge',?1,'tootie',
+             VALUES ('api-host-memory','system.memory.utilization','gauge',?1,'host-a',
                      'cortex-hostmetrics','{\"type\":\"double\",\"value\":0.5}',
                      '2026-09-29T14:00:00Z')",
             [time],
@@ -93,7 +93,7 @@ async fn host_metrics_returns_recent_source_and_receipt_times_with_auth() {
     assert_eq!(inventory.status(), axum::http::StatusCode::OK);
     let body = to_bytes(inventory.into_body(), 1024 * 64).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["hosts"][0]["hostname"], "tootie");
+    assert_eq!(json["hosts"][0]["hostname"], "host-a");
     let unauthenticated = app
         .oneshot(
             Request::builder()

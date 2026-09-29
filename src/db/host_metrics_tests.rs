@@ -10,21 +10,21 @@ fn filters_and_paginates_unlinked_host_metrics() {
     for (id, host, service, metric, timestamp) in [
         (
             1,
-            "tootie",
+            "host-a",
             "cortex-hostmetrics",
             "system.cpu.utilization",
             100,
         ),
         (
             2,
-            "tootie",
+            "host-a",
             "cortex-hostmetrics",
             "system.cpu.utilization",
             200,
         ),
         (
             3,
-            "tootie",
+            "host-a",
             "cortex-hostmetrics",
             "system.cpu.utilization",
             300,
@@ -36,10 +36,10 @@ fn filters_and_paginates_unlinked_host_metrics() {
             "system.cpu.utilization",
             400,
         ),
-        (5, "tootie", "other-service", "system.cpu.utilization", 500),
+        (5, "host-a", "other-service", "system.cpu.utilization", 500),
         (
             6,
-            "tootie",
+            "host-a",
             "cortex-hostmetrics",
             "system.memory.utilization",
             600,
@@ -58,7 +58,7 @@ fn filters_and_paginates_unlinked_host_metrics() {
     drop(conn);
 
     let mut params = HostMetricParams {
-        hostname: "tootie".into(),
+        hostname: "host-a".into(),
         service_name: Some("cortex-hostmetrics".into()),
         metric_name: "system.cpu.utilization".into(),
         since_unix_nano: 100,
@@ -86,6 +86,6 @@ fn filters_and_paginates_unlinked_host_metrics() {
 
     let metric_hosts = list_metric_hosts(&pool, 500).unwrap();
     assert_eq!(metric_hosts.len(), 1);
-    assert_eq!(metric_hosts[0].hostname, "tootie");
+    assert_eq!(metric_hosts[0].hostname, "host-a");
     assert_eq!(metric_hosts[0].latest_time_unix_nano, 600);
 }
