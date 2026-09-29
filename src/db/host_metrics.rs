@@ -55,7 +55,7 @@ pub fn list_metric_hosts(pool: &DbPool, since_unix_nano: i64) -> Result<Vec<Metr
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT hostname, service_name, MAX(time_unix_nano) FROM otel_metric_points \
-         WHERE metric_name='system.memory.utilization' AND time_unix_nano>=?1 \
+         WHERE metric_name='system.memory.utilization' AND hostname!='' AND time_unix_nano>=?1 \
          GROUP BY hostname, service_name ORDER BY MAX(time_unix_nano) DESC LIMIT 100",
     )?;
     Ok(stmt

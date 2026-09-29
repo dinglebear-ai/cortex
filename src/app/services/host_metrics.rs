@@ -55,13 +55,19 @@ impl CortexService {
         let since_unix_nano = (now - Duration::minutes(i64::from(minutes)))
             .timestamp_nanos_opt()
             .ok_or_else(|| ServiceError::InvalidInput("time window is out of range".into()))?;
+        let limit = req.limit.unwrap_or(120);
+        if !(1..=500).contains(&limit) {
+            return Err(ServiceError::InvalidInput(
+                "limit must be between 1 and 500".into(),
+            ));
+        }
         let params = HostMetricParams {
             hostname,
             service_name,
             metric_name,
             since_unix_nano,
             before,
-            limit: req.limit.unwrap_or(120).clamp(1, 500) as usize,
+            limit: limit as usize,
         };
         let page = self
             .run_heavy_db("list_host_metrics", move |pool| {

@@ -94,6 +94,18 @@ async fn host_metrics_returns_recent_source_and_receipt_times_with_auth() {
     let body = to_bytes(inventory.into_body(), 1024 * 64).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["hosts"][0]["hostname"], "host-a");
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/host-metrics?hostname=host-a&metric_name=system.cpu.utilization&limit=0")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), axum::http::StatusCode::BAD_REQUEST);
     let unauthenticated = app
         .oneshot(
             Request::builder()
