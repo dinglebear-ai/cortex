@@ -1375,6 +1375,7 @@ fn sample_args_for_action(action: &str) -> Option<serde_json::Value> {
             json!({"action": action, "reference_time": "2026-01-01T00:00:00Z"})
         }
         "search_sessions" => json!({"action": action, "query": "schema"}),
+        "session_investigate" => json!({"action": action, "session_id": "schema-session"}),
         "evidence_scope" => json!({"action": action, "branch": "codex/schema-test"}),
         "ai_correlate" => json!({"action": action, "project": "/tmp/project"}),
         "topic_correlate" => json!({"action": action, "topic": "schema-test"}),
@@ -1484,6 +1485,7 @@ fn typed_unknown_field_samples() -> Vec<serde_json::Value> {
         "apps",
         "sessions",
         "search_sessions",
+        "session_investigate",
         "abuse",
         "abuse_incidents",
         "abuse_investigate",
@@ -1606,6 +1608,35 @@ async fn schema_actions_are_dispatchable() {
         )
         .unwrap();
     }
+    db::insert_logs_batch(
+        &h.pool,
+        &[db::LogBatchEntry {
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            hostname: "schema-session-host".to_string(),
+            facility: Some("agent".to_string()),
+            severity: "info".to_string(),
+            app_name: Some("codex".to_string()),
+            process_id: None,
+            message: "schema session transcript".to_string(),
+            raw: "schema session transcript".to_string(),
+            source_ip: "agent-command://schema-session-host/codex/schema-session".to_string(),
+            docker_checkpoint: None,
+            ai_tool: Some("codex".to_string()),
+            ai_project: Some("/schema/project".to_string()),
+            ai_session_id: Some("schema-session".to_string()),
+            ai_transcript_path: Some("/schema/transcript.jsonl".to_string()),
+            metadata_json: Some(
+                r#"{"source_kind":"agent-command","agent_command":{"cwd":"/schema/project"}}"#
+                    .to_string(),
+            ),
+            http_status: None,
+            auth_outcome: None,
+            dns_blocked: None,
+            event_action: Some("command".to_string()),
+            parse_error: None,
+        }],
+    )
+    .unwrap();
     {
         let _guard = db::graph::GRAPH_TEST_LOCK.lock();
         db::graph::refresh_graph_projection(&h.pool).unwrap();
@@ -1952,4 +1983,54 @@ async fn help_action_dispatch_returns_the_tool_reference() {
     assert!(reference.starts_with("# cortex Tool Reference"));
     assert!(reference.contains("## cortex search\n"));
     assert!(reference.contains("## cortex ack_error\n"));
+}
+
+#[tokio::test]
+async fn session_investigate_rejects_unsupported_window_minutes() {
+    let harness = TestHarness::new();
+    let error = execute_tool(
+        &harness.state,
+        "cortex",
+        json!({
+            "action": "session_investigate", "session_id": "s", "window_minutes": 5
+        }),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown field `window_minutes`"));
+}
+
+#[tokio::test]
+async fn session_investigate_dispatch_preserves_selected_identity_and_bounded_metadata() {
+    let harness = TestHarness::new();
+    let conn = harness.pool.get().unwrap();
+    for host in ["selected", "other"] {
+        conn.execute("INSERT INTO logs(timestamp,hostname,severity,message,raw,source_ip,ai_tool,ai_project,ai_session_id) VALUES('2026-09-21T00:00:00Z',?1,'info','user message','','fixture','codex','p','shared')", [host]).unwrap();
+    }
+    drop(conn);
+    let response = execute_tool(&harness.state, "cortex", json!({
+        "action": "session_investigate", "session_id": "shared", "host": "selected", "project": "p", "tool": "codex"
+    }), None).await.unwrap();
+    assert_eq!(response["result"]["session"]["hostname"], "selected");
+    assert!(
+        response["result"]["correlation"]["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|log| log["entry"]["hostname"] == "selected")
+    );
+    assert_eq!(response["metadata"]["auth_state"], "unknown");
+    assert!(
+        response["metadata"]["budget_used"]["payload_bytes"]
+            .as_u64()
+            .unwrap()
+            <= 65_536
+    );
+    assert_eq!(
+        response["metadata"]["budget_used"]["payload_bytes"]
+            .as_u64()
+            .unwrap() as usize,
+        serde_json::to_vec(&response).unwrap().len()
+    );
 }

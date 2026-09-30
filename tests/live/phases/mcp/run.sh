@@ -214,6 +214,7 @@ mcp_phase_run() {
         artifact_evidence_record) jq -e '.result.structuredContent.inserted==true and .result.structuredContent.event.eventId=="mcp-live-event" and .result.structuredContent.event.artifactId=="mcp-live-artifact"' "$output" >/dev/null || result=fail ;;
         artifact_evidence) jq -e 'any(.result.structuredContent.events[]?;.eventId=="mcp-live-event" and .artifactId=="mcp-live-artifact")' "$output" >/dev/null || result=fail ;;
         search_sessions) jq -e --arg s "$MCP_LIVE_SESSION" 'any(.result.structuredContent.sessions[]?;.session_id==$s and .event_count>0)' "$output" >/dev/null || result=fail ;;
+        session_investigate) jq -e --arg s "$MCP_LIVE_SESSION" '.result.structuredContent.result.session.session_id==$s and (.result.structuredContent.result.transcript|length)>0 and .result.structuredContent.metadata.budget_used.payload_bytes<=65536' "$output" >/dev/null || result=fail ;;
         sessions) jq -e --arg s "$MCP_LIVE_SESSION" 'any(.result.structuredContent.sessions[]?;.session_id==$s and .event_count>0)' "$output" >/dev/null || result=fail ;;
         correlate) jq -e --arg h "$MCP_LIVE_ERROR_HOST" '.result.structuredContent.total_events>0 and any(.result.structuredContent.hosts[]?;.hostname==$h and (.events|length)>0)' "$output" >/dev/null || result=fail ;;
         correlate_state) jq -e --arg h "$MCP_LIVE_TOPIC_HOST" 'any(.result.structuredContent.hosts[]?;.hostname==$h and .heartbeat_summary!=null and (.logs|length)>0)' "$output" >/dev/null || result=fail ;;

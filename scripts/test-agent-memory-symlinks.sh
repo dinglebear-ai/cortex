@@ -3,6 +3,11 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 checker="$script_dir/check-agent-memory-symlinks.sh"
+# Hooks export repository-local Git variables. A fixture's `git -C ... init`
+# must select its own directory rather than reinitialize the live repository.
+while IFS= read -r variable; do
+  unset "$variable"
+done < <(git rev-parse --local-env-vars)
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 git -C "$fixture" init -q
@@ -97,5 +102,22 @@ git -C "$fixture" add -f AGENTS.override.md
 expect_fail "force-staged private override"
 git -C "$fixture" rm --cached -q AGENTS.override.md
 expect_pass "private override removed from index"
+
+if [[ "${CORTEX_INSTRUCTION_FIXTURE_CHILD:-}" != "1" ]]; then
+  hook_fixture="$fixture/hook-environment"
+  mkdir "$hook_fixture"
+  git -C "$hook_fixture" init -q
+  printf 'Preserve the hook repository index\n' > "$hook_fixture/sentinel"
+  git -C "$hook_fixture" add sentinel
+  cp "$hook_fixture/.git/config" "$fixture/config-before"
+  cp "$hook_fixture/.git/index" "$fixture/index-before"
+  env CORTEX_INSTRUCTION_FIXTURE_CHILD=1 \
+    GIT_DIR="$hook_fixture/.git" GIT_WORK_TREE="$hook_fixture" \
+    GIT_INDEX_FILE="$hook_fixture/.git/index" \
+    bash "$script_dir/test-agent-memory-symlinks.sh"
+  cmp "$fixture/config-before" "$hook_fixture/.git/config"
+  cmp "$fixture/index-before" "$hook_fixture/.git/index"
+  checks=$((checks + 1))
+fi
 
 printf "[agent-memory-test] OK — %s regression cases\n" "$checks"

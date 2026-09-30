@@ -1,7 +1,7 @@
 ---
 title: "MCP Tools Reference -- cortex"
 created: "2026-07-30"
-updated: "2026-08-04"
+updated: 2026-09-30
 ---
 
 # MCP Tools Reference -- cortex
@@ -24,6 +24,7 @@ cortex exposes one MCP tool named `cortex`. The required
 | `correlate_state` | Correlate logs with heartbeat window summaries around a reference time |
 | `sessions` | AI transcript sessions by project |
 | `search_sessions` | Ranked grouped session search |
+| `session_investigate` | Bounded evidence bundle rooted at one AI session |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | Abuse hits in AI transcripts with same-session context |
 | `abuse_incidents` | Groups abuse hits into scored incident candidates |
@@ -181,6 +182,21 @@ Search AI transcript rows with FTS5 and return grouped session results ranked by
 Required arguments: `action = "search_sessions"`, `query`
 
 Optional arguments: `project`, `tool`, `from`, `to`, `limit`.
+
+## cortex session_investigate
+
+Build an evidence bundle for one exact AI session. Required arguments:
+`action = "session_investigate"`, `session_id`. Optional arguments: `tool`,
+`project`, `host`, `limit` (1–200), and `severity_min`. Provide identity qualifiers
+when a native session ID is shared by several transcripts.
+
+The response contains `metadata` and `result`, including rendered transcript,
+scoped graph correlation, Observatory lineage, tools/skills/hooks, artifacts,
+notifications, incidents, and retained deletion lineage. Each section reports
+truncation; `partial_reasons` records omitted evidence. The complete JSON envelope
+is capped at 64 KiB and wall time at two seconds; exhausted wall time returns a
+retryable busy error. Transcript references are passive claims with
+`verified = false`.
 
 ## cortex evidence_scope
 

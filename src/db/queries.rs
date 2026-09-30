@@ -37,6 +37,10 @@ use super::models::{
 use super::pool::DbPool;
 use super::queries_service_instances;
 
+#[path = "queries_session_graph.rs"]
+mod session_graph;
+pub use session_graph::{SessionGraphScope, correlate_session_graph_scoped};
+
 const SEARCH_FTS_CANDIDATE_CAP: usize = 10_000;
 const SIMILAR_INCIDENT_FTS_CANDIDATE_CAP: usize = 5_000;
 /// Cap on the FTS match-set materialization in the fast (index-led) search
@@ -584,7 +588,7 @@ pub fn list_ai_sessions(
     params: &ListAiSessionsParams,
 ) -> Result<Vec<AiSessionEntry>> {
     let time_filtered = params.since.is_some() || params.until.is_some();
-    if !time_filtered && ai_session_rollup_is_populated(pool)? {
+    if !time_filtered && params.ai_session_id.is_none() && ai_session_rollup_is_populated(pool)? {
         return list_ai_sessions_from_rollup(pool, params);
     }
     list_ai_sessions_live(pool, params)
@@ -833,6 +837,11 @@ pub fn list_ai_sessions_live(
         bindings.push(rusqlite::types::Value::Text(tool.clone()));
         idx += 1;
     }
+    if let Some(session_id) = &params.ai_session_id {
+        sql.push_str(&format!(" AND ai_session_id = ?{idx}"));
+        bindings.push(rusqlite::types::Value::Text(session_id.clone()));
+        idx += 1;
+    }
     if let Some(hostname) = &params.host {
         sql.push_str(&format!(" AND hostname = ?{idx}"));
         bindings.push(rusqlite::types::Value::Text(hostname.clone()));
@@ -928,6 +937,11 @@ fn list_ai_sessions_from_rollup(
     if let Some(tool) = &params.ai_tool {
         sql.push_str(&format!(" AND ai_tool = ?{idx}"));
         bindings.push(rusqlite::types::Value::Text(tool.clone()));
+        idx += 1;
+    }
+    if let Some(session_id) = &params.ai_session_id {
+        sql.push_str(&format!(" AND ai_session_id = ?{idx}"));
+        bindings.push(rusqlite::types::Value::Text(session_id.clone()));
         idx += 1;
     }
     if let Some(hostname) = &params.host {
@@ -2163,10 +2177,12 @@ pub fn correlate_session_graph(
 
     Ok(SessionGraphInputs {
         bounds: Some((start, end)),
+        session_entity_keys: session_keys,
         discovered_hosts,
         discovered_entities,
         used_graph,
         logs,
+        source_fields_truncated: false,
     })
 }
 

@@ -1,7 +1,7 @@
 ---
 title: "Testing Guide -- cortex"
 created: "2026-07-30"
-updated: 2026-09-27
+updated: 2026-09-30
 ---
 
 # Testing Guide -- cortex
@@ -77,7 +77,7 @@ the repo-local debug binary at `target/debug/cortex`, so repo-local builds do
 not require an installed shell binary.
 
 Action registry covered by live/script references: `search`, `filter`, `tail`, `errors`,
-`hosts`, `map`, `host_state`, `fleet_state`, `correlate_state`, `topic_correlate`, `sessions`, `search_sessions`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`,
+`hosts`, `map`, `host_state`, `fleet_state`, `correlate_state`, `topic_correlate`, `sessions`, `search_sessions`, `session_investigate`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`,
 `list_ai_tools`, `list_ai_projects`, `correlate`, `stats`, `status`, `apps`,
 `source_ips`, `timeline`, `patterns`, `context`, `get`, `ingest_rate`,
 `silent_hosts`, `clock_skew`, `anomalies`, `compare`, `compose_status`,
@@ -195,7 +195,7 @@ curl -s -X POST http://localhost:3100/mcp \
 ## Testing checklist
 
 - [ ] **All actions return expected shape** -- cortex search, cortex tail, cortex errors, cortex hosts, cortex host_state, cortex sessions, cortex correlate, cortex stats, cortex status, cortex help
-- [ ] **AI session analytics and scoped lifecycle evidence return expected shape and seeded rows** -- cortex search_sessions, cortex evidence_scope, cortex abuse, cortex sessions_correlate, cortex usage_blocks, cortex project_context, cortex list_ai_tools, cortex list_ai_projects
+- [ ] **AI session analytics and scoped lifecycle evidence return expected shape and seeded rows** -- cortex search_sessions, cortex session_investigate, cortex evidence_scope, cortex abuse, cortex sessions_correlate, cortex usage_blocks, cortex project_context, cortex list_ai_tools, cortex list_ai_projects
 - [ ] **Auth: valid token** -- 200 with correct Bearer token
 - [ ] **Auth: invalid token** -- 401 Unauthorized
 - [ ] **Auth: no token when required** -- 401 Unauthorized

@@ -359,10 +359,21 @@ fn configure_shell_command(command: &mut Command, step: &str) {
     command.arg("-c").arg(step);
 }
 
+fn remove_repository_git_environment(root: &Path, command: &mut Command) -> Result<()> {
+    // Git hooks export repository-local variables. Validation creates temporary
+    // repositories, so inheriting these can redirect fixture writes into this
+    // checkout even when the fixture uses `git -C`.
+    for key in git_output(root, &["rev-parse", "--local-env-vars"])?.lines() {
+        command.env_remove(key);
+    }
+    Ok(())
+}
+
 fn run_command(root: &Path, step: &PlanStep) -> Result<()> {
     println!("\n==> {}\n{}", step.name, step.command);
     let mut command = Command::new("bash");
     configure_shell_command(&mut command, step.command);
+    remove_repository_git_environment(root, &mut command)?;
     command.current_dir(root);
     for (key, _) in std::env::vars() {
         if key.starts_with("CARGO_PROFILE_") {

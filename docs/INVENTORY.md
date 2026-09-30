@@ -1,7 +1,7 @@
 ---
 title: "Component Inventory -- cortex"
 created: 2026-04-04
-updated: 2026-09-27
+updated: 2026-09-30
 ---
 
 # Component Inventory -- cortex
@@ -86,6 +86,7 @@ that registry by `src/mcp/schemas.rs::tool_definitions()`.
 | `status` | Lightweight runtime status: DB health, queue/backpressure state, listener/writer counters, OTLP counters | no |
 | `sessions` | AI transcript sessions grouped by project/tool/session/host | no |
 | `search_sessions` | Ranked grouped session search | no |
+| `session_investigate` | Bounded evidence bundle rooted at one AI session | no |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree | no |
 | `abuse` | Abuse-term detector with same-session context | no |
 | `abuse_incidents` | Groups abuse hits into scored incident candidates | no |

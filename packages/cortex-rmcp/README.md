@@ -494,7 +494,7 @@ The current scope split is:
 | Discovery and health | `hosts`, `apps`, `source_ips`, `status`, `stats`, `ingest_rate`, `silent_hosts`, `clock_skew` |
 | Analytics and correlation | `timeline`, `patterns`, `anomalies`, `compare`, `correlate`, `topic_correlate`, `similar_incidents`, `recurring_error_comparison`, `incident_context` |
 | Fleet and topology | `map`, `host_state`, `fleet_state`, `correlate_state`, `graph`, `compose_status`, `compose_doctor` |
-| AI sessions and scoped evidence | `sessions`, `search_sessions`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools`, `list_ai_projects` |
+| AI sessions and scoped evidence | `sessions`, `search_sessions`, `session_investigate`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools`, `list_ai_projects` |
 | AI operational events | `skill_events`, `skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`, `mcp_investigate`, `hook_events`, `hook_incidents`, `hook_investigate` |
 | Errors and administration | `unaddressed_errors`, `ack_error`, `unack_error`, `notifications_recent`, `notifications_test`, `file_tails`, `llm_invocations`, `artifact_evidence_record` |
 | Reference | `help` |
