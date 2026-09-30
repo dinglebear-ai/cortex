@@ -186,6 +186,7 @@ mcp_phase_run() {
       graph) args="$(jq -cn --arg h "$MCP_LIVE_HOST" '{action:"graph",mode:"entity",entity_type:"host",key:$h}')" ;;
       notifications_test) args="$(jq -cn --arg b "mcp-notify-$LIVE_RUN_ID" '{action:"notifications_test",body:$b}')" ;;
       sessions) args="$(jq -cn --arg since "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" '{action:"sessions",since:$since,limit:100}')" ;;
+      session_page) args="$(jq -c --arg s "$MCP_LIVE_SESSION" '([.result.structuredContent.sessions[]? | select(.session_id==$s)] | first) | {action:"session_page",project,tool,session_id,host:.hostname,limit:1}' "$dir/action-sessions.json")" ;;
       correlate) args="$(jq -cn --arg q "\"mcp-error-${LIVE_RUN_ID#cortex-e2e-}\"" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{action:"correlate",query:$q,reference_time:$t,window_minutes:10,severity_min:"warning"}')" ;;
       correlate_state) args="$(jq -cn --arg h "$MCP_LIVE_TOPIC_HOST" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{action:"correlate_state",host:$h,reference_time:$t,window_minutes:10}')" ;;
       topic_correlate) args="$(jq -cn --arg topic "$MCP_LIVE_TOPIC_HOST" --arg since "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" '{action:"topic_correlate",topic:$topic,since:$since,limit:100}')" ;;
@@ -216,6 +217,7 @@ mcp_phase_run() {
         search_sessions) jq -e --arg s "$MCP_LIVE_SESSION" 'any(.result.structuredContent.sessions[]?;.session_id==$s and .event_count>0)' "$output" >/dev/null || result=fail ;;
         session_investigate) jq -e --arg s "$MCP_LIVE_SESSION" '.result.structuredContent.result.session.session_id==$s and (.result.structuredContent.result.transcript|length)>0 and .result.structuredContent.metadata.budget_used.payload_bytes<=65536' "$output" >/dev/null || result=fail ;;
         sessions) jq -e --arg s "$MCP_LIVE_SESSION" 'any(.result.structuredContent.sessions[]?;.session_id==$s and .event_count>0)' "$output" >/dev/null || result=fail ;;
+        session_page) jq -e '.result.structuredContent.contract_version=="1.0.0" and (.result.structuredContent.events|length)==1 and .result.structuredContent.has_more==true and (.result.structuredContent.next_cursor|length)>0' "$output" >/dev/null || result=fail ;;
         correlate) jq -e --arg h "$MCP_LIVE_ERROR_HOST" '.result.structuredContent.total_events>0 and any(.result.structuredContent.hosts[]?;.hostname==$h and (.events|length)>0)' "$output" >/dev/null || result=fail ;;
         correlate_state) jq -e --arg h "$MCP_LIVE_TOPIC_HOST" 'any(.result.structuredContent.hosts[]?;.hostname==$h and .heartbeat_summary!=null and (.logs|length)>0)' "$output" >/dev/null || result=fail ;;
         topic_correlate) jq -e --arg h "$MCP_LIVE_TOPIC_HOST" 'any(.result.structuredContent.resolved_entities[]?;.key==$h) and (.result.structuredContent.timeline|length)>0 and any(.result.structuredContent.heartbeat_summaries[]?;.hostname==$h)' "$output" >/dev/null || result=fail ;;
