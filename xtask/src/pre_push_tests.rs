@@ -14,7 +14,7 @@ fn plan_for(paths: &[&str], full: bool) -> Vec<&'static str> {
 }
 
 #[test]
-fn docs_only_push_runs_lightweight_instruction_gates() {
+fn docs_only_push_runs_instruction_and_generator_gates() {
     for path in [
         "docs/SETUP.md",
         "AGENTS.md",
@@ -22,15 +22,20 @@ fn docs_only_push_runs_lightweight_instruction_gates() {
         "GEMINI.md",
         "CONTRIBUTING.md",
         "plugins/cortex/AGENTS.md",
+        "contracts/rendered-session-page.schema.json",
+        "packages/cortex-rmcp/README.md",
+        "Justfile",
+        "LICENSE",
     ] {
         assert_eq!(
             plan_for(&[path], false),
             vec![
                 "agent-instructions",
                 "agent-instruction-tests",
-                "repository-contract-tests"
+                "repository-contract-tests",
+                "generated-docs"
             ],
-            "{path} should validate instructions without a full Rust build"
+            "{path} should validate instructions and generated docs without the full Rust suite"
         );
     }
 }
@@ -40,6 +45,7 @@ fn rust_change_runs_clippy_without_full_tests() {
     let plan = plan_for(&["src/web_app.rs"], false);
     assert!(plan.contains(&"version-sync"));
     assert!(plan.contains(&"module-size"));
+    assert!(plan.contains(&"generated-docs"));
     assert!(plan.contains(&"clippy"));
     assert!(!plan.contains(&"full-tests"));
 }
