@@ -86,7 +86,7 @@ def classify(event: str, paths: list[str]) -> dict[str, bool]:
     )
     mcp = any_match(
         paths,
-        lambda p: starts(p, "src/mcp/", "docs/mcp/", "docs/reference/mcp/")
+        lambda p: starts(p, "src/mcp/", "docs/reference/mcp/")
         or p in {"tests/test_live.sh", "config/mcporter.json"},
     )
     release = rust or web or skills or any_match(

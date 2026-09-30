@@ -1804,13 +1804,22 @@ async fn public_action_references_cover_schema_registry() {
     }
 
     for (path, content) in [
-        ("docs/INVENTORY.md", include_str!("../../docs/INVENTORY.md")),
         (
-            "docs/mcp/SCHEMA.md",
-            include_str!("../../docs/mcp/SCHEMA.md"),
+            "docs/reference/inventory.md",
+            include_str!("../../docs/reference/inventory.md"),
         ),
-        ("docs/mcp/TOOLS.md", include_str!("../../docs/mcp/TOOLS.md")),
-        ("docs/mcp/TESTS.md", include_str!("../../docs/mcp/TESTS.md")),
+        (
+            "docs/reference/mcp/schema.md",
+            include_str!("../../docs/reference/mcp/schema.md"),
+        ),
+        (
+            "docs/reference/mcp/tools.md",
+            include_str!("../../docs/reference/mcp/tools.md"),
+        ),
+        (
+            "docs/reference/mcp/tests.md",
+            include_str!("../../docs/reference/mcp/tests.md"),
+        ),
         (
             "plugins/cortex/skills/using-cortex/references/operations.md",
             include_str!("../../plugins/cortex/skills/using-cortex/references/operations.md"),

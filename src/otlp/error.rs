@@ -1,7 +1,7 @@
 //! Client-visible error codes for the OTLP/HTTP surface.
 //!
 //! The strings in [`OtlpError::code`] are contract, not log text:
-//! `docs/contracts/http-endpoints.md` §13 publishes them and exporters branch
+//! `docs/reference/contracts/http-endpoints.md` §13 publishes them and exporters branch
 //! on them. Collecting them in one enum is what keeps that table checkable and
 //! stops a second, subtly different literal from being introduced at a new
 //! return site.
@@ -56,7 +56,7 @@ const RETRY_AFTER_SECONDS: &str = "1";
 
 impl OtlpError {
     /// The stable `error` string. Changing one of these is a wire-contract
-    /// change; update `docs/contracts/http-endpoints.md` in the same patch.
+    /// change; update `docs/reference/contracts/http-endpoints.md` in the same patch.
     pub(super) const fn code(self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",

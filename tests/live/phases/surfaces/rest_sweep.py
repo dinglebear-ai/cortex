@@ -230,7 +230,7 @@ CONTRACTS = {
     # array — the handler returns the service tuple directly — so it has no
     # top-level keys for this table to require and its shape is asserted by the
     # semantic postcondition below instead. This is the shipped response, not
-    # the object that docs/contracts/agent-observatory.openapi.json describes.
+    # the object that docs/reference/contracts/agent-observatory.openapi.json describes.
     "GET /api/agent-observatory/runs/{run_key}/telemetry": ("array", ""),
     "GET /api/agent-observatory/worktrees": ("object", "as_of pagination stream_cursor worktrees"),
     "GET /api/agent-runs": ("object", "as_of pagination runs stream_cursor"),

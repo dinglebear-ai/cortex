@@ -84,7 +84,7 @@ if rg -n --text \
   status=1
 fi
 
-if rg -n --text --ignore-case --word-regexp -- 'nashost' docs/mcp/DEPLOY.md deploy/README.md; then
+if rg -n --text --ignore-case --word-regexp -- 'nashost' docs/reference/mcp/deploy.md deploy/README.md; then
   echo '[private-identifiers] FAIL - literal synthetic host found in executable deployment guidance' >&2
   status=1
 fi

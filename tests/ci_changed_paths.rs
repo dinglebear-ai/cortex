@@ -46,7 +46,7 @@ fn classify(event: &str, files: &[&str]) -> HashMap<String, String> {
 
 #[test]
 fn docs_only_changes_skip_runtime_categories() {
-    let out = classify("pull_request", &["docs/SETUP.md", "README.md"]);
+    let out = classify("pull_request", &["docs/guides/setup.md", "README.md"]);
     assert_eq!(out["docs"], "true");
     assert_eq!(out["rust"], "false");
     assert_eq!(out["web"], "false");
@@ -54,6 +54,19 @@ fn docs_only_changes_skip_runtime_categories() {
     assert_eq!(out["release"], "false");
     assert_eq!(out["mcp"], "false");
     assert_eq!(out["security"], "false");
+}
+
+#[test]
+fn organized_mcp_docs_enable_docs_and_mcp_routing() {
+    for path in [
+        "docs/reference/mcp/tools.md",
+        "docs/reference/mcp/README.md",
+    ] {
+        let out = classify("pull_request", &[path]);
+        assert_eq!(out["docs"], "true", "{path}");
+        assert_eq!(out["mcp"], "true", "{path}");
+        assert_eq!(out["rust"], "false", "{path}");
+    }
 }
 
 #[test]

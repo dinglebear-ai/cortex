@@ -1,7 +1,7 @@
 //! Enrichment framework — parser dispatch on the writer hot path.
 //!
-//! Spec: docs/superpowers/specs/2026-05-16-enrichment-framework-design.md
-//! Contract: docs/contracts/parser-trait.rs
+//! Spec: docs/history/superpowers/specs/2026-05/2026-05-16-enrichment-framework-design.md
+//! Contract: docs/reference/contracts/parser-trait.rs
 //!
 //! Architecture:
 //!   LogBatchEntry → AI scrub (existing) → dispatcher → parser → merge into entry

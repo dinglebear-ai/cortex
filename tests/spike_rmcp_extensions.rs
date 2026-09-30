@@ -1,5 +1,5 @@
 // Regression test: verifies rmcp 1.6 axum-extension propagation (cortex-brt0.10).
-// See docs/internal/rmcp-auth-spike.md for the investigation that confirmed Pattern (a).
+// See docs/history/internal/rmcp-auth-spike.md for the investigation that confirmed Pattern (a).
 //
 // Proves that axum request extensions set by middleware ARE propagated into
 // rmcp 1.6's `RequestContext.extensions` for tool handlers, when using
@@ -17,7 +17,7 @@
 // This works in BOTH `stateful_mode(true)` and `stateful_mode(false)`. The
 // current cortex deployment uses stateful_mode(false); no flip required.
 //
-// See `docs/internal/rmcp-auth-spike.md` for full write-up.
+// See `docs/history/internal/rmcp-auth-spike.md` for full write-up.
 
 use std::sync::{Arc, Mutex};
 

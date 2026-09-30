@@ -2,7 +2,7 @@
 //! the default transport for the CLI since v0.26 (`CORTEX_USE_HTTP=true`).
 //!
 //! REST routes mirroring the MCP action surface one-for-one (see
-//! `docs/api.md` for the endpoint matrix). Every route requires the
+//! `docs/reference/api.md` for the endpoint matrix). Every route requires the
 //! `CORTEX_API_TOKEN` bearer; route mounting fails at startup when the token
 //! is absent, so the surface is never silently open.
 //!
@@ -2538,7 +2538,7 @@ fn cors_layer(port: u16, loopback_bind: bool, allowed_origins: &[String]) -> Cor
 // `CortexService::db_permits` independently. `db_status` is read-side and
 // bypasses MAINTENANCE_PERMIT entirely. The integrity routes single-flight on
 // it inside the service and answer contention with 503 `{"error": "db
-// maintenance already in progress"}` (see docs/api.md).
+// maintenance already in progress"}` (see docs/reference/api.md).
 
 /// `GET /api/db/status` — cached PRAGMA snapshot (read).
 async fn db_status(State(state): State<ApiState>) -> impl IntoResponse {

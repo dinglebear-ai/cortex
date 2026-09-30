@@ -763,11 +763,11 @@ async fn heartbeat_returns_busy_when_pool_contention_outlasts_the_retry_budget()
         "exhausted pool contention must surface as retryable, got body {value}"
     );
     // The literal the heartbeat contract specifies for a backpressured write
-    // path (docs/contracts/heartbeat-telemetry.md), not a generic "busy".
+    // path (docs/reference/contracts/heartbeat-telemetry.md), not a generic "busy".
     assert_eq!(value["error"], "storage_unavailable");
     // A 503 with no `Retry-After` leaves the agent to invent a delay. Every
     // other transient-write-path 503 cortex emits names the same one-second
-    // floor; this one must too. See docs/contracts/heartbeat-telemetry.md §10.
+    // floor; this one must too. See docs/reference/contracts/heartbeat-telemetry.md §10.
     assert_eq!(
         headers.get(axum::http::header::RETRY_AFTER),
         Some(&axum::http::HeaderValue::from_static("1")),

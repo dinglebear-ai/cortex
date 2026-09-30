@@ -16,8 +16,8 @@ use super::*;
 fn documented_rest_route_count_matches_router_registrations() {
     let binding_count = crate::surfaces::api_bindings().count();
     assert_eq!(binding_count, 98, "update the documented API denominator");
-    assert!(include_str!("../docs/api.md").contains("98 method/path bindings total"));
-    assert!(include_str!("../docs/architecture.md").contains("(98 method/path bindings)"));
+    assert!(include_str!("../docs/reference/api.md").contains("98 method/path bindings total"));
+    assert!(include_str!("../docs/architecture/overview.md").contains("(98 method/path bindings)"));
 }
 
 /// Build the router for a test, layering a `MockConnectInfo` so handlers

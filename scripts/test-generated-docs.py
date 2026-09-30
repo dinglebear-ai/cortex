@@ -32,7 +32,7 @@ class SchemaTests(unittest.TestCase):
         (self.root / "contracts").mkdir()
         self.source = self.root / "contracts/one.schema.json"
         self.source.write_bytes(b'{"type": "object"}\n')
-        self.target = self.root / "docs/contracts/generated/one.schema.json"
+        self.target = self.root / "docs/reference/contracts/generated/one.schema.json"
 
     def test_check_missing_snapshot_does_not_create_it(self):
         self.assertFalse(generator.sync_schemas(self.root, True))
@@ -201,10 +201,12 @@ class EntryPointTests(unittest.TestCase):
         with patch.object(generator, "sync_schemas", return_value=True), patch.object(generator.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run:
             self.assertEqual(generator.generate(ROOT, True), 1)
         calls = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertIn("--check", calls[0])
         self.assertIn("--check", calls[1])
         self.assertTrue(calls[2][-1].endswith("check-integration-contracts.py"))
+        self.assertTrue(calls[3][1].endswith("documentation.py"))
+        self.assertIn("--check", calls[3])
 
     def test_generator_inputs_and_outputs_route_to_documentation_ci(self):
         for path in ("contracts/new.schema.json", "tests/TEST_COVERAGE.md", "LICENSE", "Justfile",

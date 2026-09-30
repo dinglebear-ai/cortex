@@ -19,7 +19,7 @@ not-authorized outcomes fail mandatory isolated profiles. Diagnostic retries do
 not replace a first failure. A green run also requires cleanup state `CLEAN` and
 zero unaccounted contract entries.
 
-Stable commands and cadence are documented in [Live qualification](../docs/LIVE_QUALIFICATION.md).
+Stable commands and cadence are documented in [Live qualification](../docs/development/live-qualification.md).
 The complete safety, artifact, troubleshooting, and recovery contract is in
 [the harness README](live/README.md).
 

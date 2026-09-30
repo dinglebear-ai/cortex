@@ -10,7 +10,7 @@ use thiserror::Error;
 /// the docker-event parser only to `DockerEvent`).
 ///
 /// **Casing convention:** kebab-case on the wire, per
-/// `docs/contracts/source-kinds.md`. Locked so the same string appears in
+/// `docs/reference/contracts/source-kinds.md`. Locked so the same string appears in
 /// `metadata_json.source_kind`, in spec B's dispatch matrix, in
 /// `agent-protocol.md`, and in the URI scheme used by `log-row-shape.md` §4
 /// (`syslog-udp://`, `docker-stream://`, etc.).

@@ -41,7 +41,7 @@ while IFS= read -r path; do
     scripts/check-public-identity.sh)
       continue
       ;;
-    .beads/*|docs/plans/*|docs/runbooks/*|docs/sessions/*|docs/superpowers/*|CHANGELOG.md)
+    .beads/*|docs/history/plans/*|docs/guides/runbooks/*|docs/history/sessions/*|docs/history/superpowers/*|CHANGELOG.md)
       # Archival issue data and historical docs intentionally preserve old names.
       continue
       ;;

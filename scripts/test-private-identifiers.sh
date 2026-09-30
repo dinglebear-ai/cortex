@@ -30,13 +30,13 @@ expect_fail mixed-allowlist.txt "https://aurora.too""tie.tv/r/ routes through to
 
 # Exercise Git enumeration too, not only the explicit-path fixture mode.
 repo_fixture="$fixture_dir/repo"
-mkdir -p "$repo_fixture/scripts" "$repo_fixture/docs/mcp" "$repo_fixture/deploy"
+mkdir -p "$repo_fixture/scripts" "$repo_fixture/docs/reference/mcp" "$repo_fixture/deploy"
 cp "$scanner" "$repo_fixture/scripts/check-private-identifiers.sh"
 : > "$repo_fixture/config.toml"
 : > "$repo_fixture/docker-compose.yml"
 mkdir "$repo_fixture/config"
 : > "$repo_fixture/config/Dockerfile"
-: > "$repo_fixture/docs/mcp/DEPLOY.md"
+: > "$repo_fixture/docs/reference/mcp/deploy.md"
 : > "$repo_fixture/deploy/README.md"
 printf "# Shared instructions\n" > "$repo_fixture/AGENTS.md"
 ln -s AGENTS.md "$repo_fixture/CLAUDE.md"

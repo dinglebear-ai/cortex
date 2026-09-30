@@ -1,7 +1,7 @@
 //! Dispatcher — picks a parser per (source_kind, app_name, container_name)
 //! and merges its output onto the entry.
 //!
-//! Spec: docs/superpowers/specs/2026-05-16-enrichment-framework-design.md §4
+//! Spec: docs/history/superpowers/specs/2026-05/2026-05-16-enrichment-framework-design.md §4
 //!
 //! # Performance note: single metadata_json parse
 //! `metadata_json` is parsed exactly once per `dispatch()` call at the top of

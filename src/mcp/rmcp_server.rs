@@ -611,7 +611,7 @@ fn require_auth_context<'a>(
                     // ordering is broken at startup.
                     tracing::error!(
                         "rmcp HTTP Parts extension absent — middleware ordering may be broken; \
-                         see docs/internal/rmcp-auth-spike.md"
+                         see docs/history/internal/rmcp-auth-spike.md"
                     );
                     ErrorData::invalid_request("forbidden: missing http context", None)
                 })?;

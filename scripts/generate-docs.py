@@ -19,7 +19,7 @@ def sync_schemas(root: Path, check: bool) -> bool:
     sources = sorted((root / "contracts").glob("*.schema.json"))
     if not sources:
         raise ValueError("no canonical contracts/*.schema.json found")
-    destination = root / "docs/contracts/generated"
+    destination = root / "docs/reference/contracts/generated"
     names = {source.name for source in sources}
     orphans = sorted(path.name for path in destination.glob("*.schema.json") if path.name not in names)
     if orphans:
@@ -53,6 +53,7 @@ def generate(root: Path, check: bool) -> int:
         ["node", str(root / "packages/cortex-rmcp/scripts/sync-readme.js"), *flag],
         [sys.executable, str(root / "tests/live/generate-docs.py"), *flag],
         [sys.executable, str(root / "scripts/check-integration-contracts.py")],
+        [sys.executable, str(root / "scripts/documentation.py"), *flag],
     ]
     for command in commands:
         result = subprocess.run(command, cwd=root, check=False)

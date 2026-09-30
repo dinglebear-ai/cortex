@@ -13,7 +13,7 @@ just --list
 lefthook install
 ```
 
-The Cargo workspace contains the `cortex` library/binary and `xtask`; build output is `.cache/cargo`. See [Rust setup](docs/RUST.md) for toolchain, linker, and test-runner requirements. Do not copy production credentials or databases into test fixtures.
+The Cargo workspace contains the `cortex` library/binary and `xtask`; build output is `.cache/cargo`. See [Rust setup](docs/development/rust.md) for toolchain, linker, and test-runner requirements. Do not copy production credentials or databases into test fixtures.
 
 ## Validate a change
 
@@ -47,13 +47,13 @@ pnpm --dir web build
 
 ## Change the right layer
 
-Implement shared behavior in `src/app/` and storage behavior in `src/db/`. MCP action metadata comes from `src/mcp/actions.rs`; public surface discovery comes from `src/surfaces/`. Add sidecar tests for validation, authorization, bounds, privacy, failures, and replay where relevant. For a new ingest format, start with [Adding sources](docs/ADDING_SOURCES.md), not a second scanner or transport-specific provider table.
+Implement shared behavior in `src/app/` and storage behavior in `src/db/`. MCP action metadata comes from `src/mcp/actions.rs`; public surface discovery comes from `src/surfaces/`. Add sidecar tests for validation, authorization, bounds, privacy, failures, and replay where relevant. For a new ingest format, start with [Adding sources](docs/development/adding-sources.md), not a second scanner or transport-specific provider table.
 
-Update the matching current docs in the same change. Preserve dated design/history documents as history rather than silently rewriting their original claims. [Documentation maintenance](docs/repo/DOCUMENTATION.md) maps behavior to its authoritative files and distinguishes generated snapshots from maintained guides. Edit generator inputs rather than generated output, run `just docs-generate`, and commit the regenerated schemas, package mirrors, and live-inventory block together with the source changes. `just docs-check` is read-only for tracked files; a second generation pass must produce no further diff. The Rust and docs-only CI paths both enforce this gate.
+Update the matching current docs in the same change. Preserve dated design/history documents as history rather than silently rewriting their original claims. [Documentation maintenance](docs/development/repo/documentation.md) maps behavior to its authoritative files and distinguishes generated snapshots from maintained guides. Edit generator inputs rather than generated output, run `just docs-generate`, and commit the regenerated schemas, package mirrors, and live-inventory block together with the source changes. `just docs-check` is read-only for tracked files; a second generation pass must produce no further diff. The Rust and docs-only CI paths both enforce this gate.
 
 ## Live work is separate
 
-Hermetic tests do not validate an installed fleet. The isolated live profiles and explicit fleet grants are described in [LIVE_QUALIFICATION.md](docs/LIVE_QUALIFICATION.md). Do not run production reset, inventory mutation, deployment, or release commands merely because a smoke-test recipe exists.
+Hermetic tests do not validate an installed fleet. The isolated live profiles and explicit fleet grants are described in [live-qualification.md](docs/development/live-qualification.md). Do not run production reset, inventory mutation, deployment, or release commands merely because a smoke-test recipe exists.
 
 ## Publish the work
 

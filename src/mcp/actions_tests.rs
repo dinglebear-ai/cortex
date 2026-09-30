@@ -5,7 +5,7 @@ fn agent_guide_points_to_the_canonical_action_registry() {
     let agents = include_str!("../../AGENTS.md");
     assert!(agents.contains("[src/mcp/actions.rs](src/mcp/actions.rs)"));
     assert!(agents.contains("`ACTION_SPECS`"));
-    assert!(agents.contains("(docs/mcp/TOOLS.md)"));
+    assert!(agents.contains("(docs/reference/mcp/tools.md)"));
 }
 
 // PR 4 of GH #94 / GH #105: LLM skill/abuse/hook assessment is CLI-only. See

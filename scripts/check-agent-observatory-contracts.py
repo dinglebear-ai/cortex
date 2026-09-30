@@ -11,7 +11,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACTS = ROOT / "docs/contracts"
+CONTRACTS = ROOT / "docs/reference/contracts"
 SCHEMA_PATH = CONTRACTS / "agent-observatory.schema.json"
 OPENAPI_PATH = CONTRACTS / "agent-observatory.openapi.json"
 FIXTURE_PATH = CONTRACTS / "fixtures/agent-observatory-golden.json"

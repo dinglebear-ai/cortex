@@ -39,7 +39,7 @@ pub use routes::router;
 /// and the OAuth router. When `None`, only static-bearer auth is active —
 /// middleware still validates the token but no OAuth flow is wired.
 /// AuthContext flows per-request via axum extension propagation
-/// (see `docs/internal/rmcp-auth-spike.md`); no session-keyed map on
+/// (see `docs/history/internal/rmcp-auth-spike.md`); no session-keyed map on
 /// `AppState`.
 #[derive(Clone)]
 pub enum AuthPolicy {
