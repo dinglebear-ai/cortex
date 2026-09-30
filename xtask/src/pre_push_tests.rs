@@ -16,7 +16,7 @@ fn plan_for(paths: &[&str], full: bool) -> Vec<&'static str> {
 #[test]
 fn docs_only_push_runs_instruction_and_generator_gates() {
     for path in [
-        "docs/SETUP.md",
+        "docs/guides/setup.md",
         "AGENTS.md",
         "CLAUDE.md",
         "GEMINI.md",

@@ -1,18 +1,30 @@
 const CURRENT_DOCKER_DOCS: &[(&str, &str)] = &[
     ("AGENTS.md", include_str!("../AGENTS.md")),
     ("README.md", include_str!("../README.md")),
-    ("docs/CONFIG.md", include_str!("../docs/CONFIG.md")),
-    ("docs/SETUP.md", include_str!("../docs/SETUP.md")),
     (
-        "docs/architecture.md",
-        include_str!("../docs/architecture.md"),
+        "docs/reference/config.md",
+        include_str!("../docs/reference/config.md"),
     ),
     (
-        "docs/runbooks/deploy.md",
-        include_str!("../docs/runbooks/deploy.md"),
+        "docs/guides/setup.md",
+        include_str!("../docs/guides/setup.md"),
     ),
-    ("docs/mcp/ENV.md", include_str!("../docs/mcp/ENV.md")),
-    ("docs/SECURITY.md", include_str!("../docs/SECURITY.md")),
+    (
+        "docs/architecture/overview.md",
+        include_str!("../docs/architecture/overview.md"),
+    ),
+    (
+        "docs/guides/runbooks/deploy.md",
+        include_str!("../docs/guides/runbooks/deploy.md"),
+    ),
+    (
+        "docs/reference/mcp/env.md",
+        include_str!("../docs/reference/mcp/env.md"),
+    ),
+    (
+        "docs/guides/security.md",
+        include_str!("../docs/guides/security.md"),
+    ),
 ];
 
 #[test]
@@ -75,10 +87,10 @@ fn coverage_tooling_is_documented_and_scripted() {
         "Justfile should expose a coverage recipe using cargo-llvm-cov + nextest"
     );
 
-    let mcp_tests = include_str!("../docs/mcp/TESTS.md");
+    let mcp_tests = include_str!("../docs/reference/mcp/tests.md");
     assert!(
         mcp_tests.contains("just coverage") && mcp_tests.contains("cargo llvm-cov"),
-        "docs/mcp/TESTS.md should document the coverage workflow"
+        "docs/reference/mcp/tests.md should document the coverage workflow"
     );
 }
 
@@ -129,7 +141,7 @@ fn live_smoke_keeps_deterministic_admin_rest_coverage() {
 
 #[test]
 fn macos_heartbeat_agent_contract_has_exact_commands_and_security_boundaries() {
-    let setup = include_str!("../docs/SETUP.md");
+    let setup = include_str!("../docs/guides/setup.md");
     for command in [
         "cortex setup heartbeatagent install",
         "cortex setup heartbeatagent check",
@@ -165,14 +177,14 @@ fn macos_heartbeat_agent_contract_has_exact_commands_and_security_boundaries() {
 
 #[test]
 fn macos_heartbeat_agent_short_docs_link_to_authoritative_contract() {
-    let setup = include_str!("../docs/SETUP.md");
+    let setup = include_str!("../docs/guides/setup.md");
     let readme = include_str!("../README.md");
-    let cli = include_str!("../docs/CLI.md");
+    let cli = include_str!("../docs/reference/cli.md");
     let env = include_str!("../.env.example");
 
     assert_eq!(setup.matches("## 10. macOS heartbeat agent").count(), 1);
-    assert!(readme.contains("docs/SETUP.md#10-macos-heartbeat-agent"));
-    assert!(cli.contains("SETUP.md#10-macos-heartbeat-agent"));
+    assert!(readme.contains("docs/guides/setup.md#10-macos-heartbeat-agent"));
+    assert!(cli.contains("../guides/setup.md#10-macos-heartbeat-agent"));
     assert!(env.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=false"));
     assert!(env.contains("CORTEX_AGENT_AUTO_UPDATE=false"));
 }

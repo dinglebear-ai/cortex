@@ -1,4 +1,4 @@
-import type { FreshnessLane } from "../../../docs/contracts/agent-observatory-types"
+import type { FreshnessLane } from "../../../docs/reference/contracts/agent-observatory-types"
 
 export const disconnectedFreshnessLane = (): FreshnessLane => ({
   state: "not_observed",

@@ -25,13 +25,14 @@ if result.returncode not in (0, 1):
     raise SystemExit(result.returncode)
 
 doc_paths = {
-    "docs/contracts/agent-observatory.md",
-    "docs/plans/2026-07-31-agent-observatory-implementation.md",
-    "docs/plans/agent-observatory/01a-transcript-forward-env-rename.md",
-    "docs/plans/agent-observatory/06-production-hardening-and-docs.md",
-    "docs/plans/agent-observatory/proof/PROOF.md",
-    "docs/research/2026-07-31-agent-observatory.md",
-    "docs/specs/agent-observatory.md",
+    "docs/guides/setup.md",
+    "docs/reference/contracts/agent-observatory.md",
+    "docs/history/plans/2026-07-31-agent-observatory-implementation.md",
+    "docs/history/plans/agent-observatory/01a-transcript-forward-env-rename.md",
+    "docs/history/plans/agent-observatory/06-production-hardening-and-docs.md",
+    "docs/history/plans/agent-observatory/proof/proof.md",
+    "docs/history/research/2026-07-31-agent-observatory.md",
+    "docs/architecture/specs/agent-observatory.md",
 }
 
 def allowed(path: str, line: str) -> bool:
@@ -42,7 +43,12 @@ def allowed(path: str, line: str) -> bool:
             r'pub const AI_TRANSCRIPT_FORWARD_LEGACY_ENV: &str = "' + legacy + r'";',
             line.strip(),
         ) is not None
+    if path == "src/setup/heartbeat_agent_env.rs":
+        # The parser recognizes the exact old key only to migrate it. Do not
+        # permit executable assignments or unrelated references in this file.
+        return line.strip() == '"' + legacy + '",'
     if path in {
+        "src/docs_tests.rs",
         "src/agent_deploy_tests.rs",
         "src/heartbeat_agent_tests.rs",
         "src/setup/doctor_tests.rs",
@@ -89,7 +95,7 @@ if violations:
 
 required = {
     "src/heartbeat_agent.rs": new,
-    "docs/contracts/agent-observatory.md": new,
+    "docs/reference/contracts/agent-observatory.md": new,
 }
 for path, token in required.items():
     text = open(path, encoding="utf-8").read()

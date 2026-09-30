@@ -1,5 +1,5 @@
 [docs]
 frontmatter-exclude = [
-  "docs/internal/**",
-  "docs/reviews/**",
+  "docs/history/internal/**",
+  "docs/history/reviews/**",
 ]

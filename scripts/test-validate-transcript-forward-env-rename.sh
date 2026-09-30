@@ -7,17 +7,40 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 git -C "$tmp" init -q
-mkdir -p "$tmp/scripts" "$tmp/src" "$tmp/docs/contracts"
+mkdir -p "$tmp/scripts" "$tmp/src" "$tmp/docs/reference/contracts"
 cp "$validator" "$tmp/scripts/validate-transcript-forward-env-rename.sh"
 cat > "$tmp/src/heartbeat_agent.rs" <<'EOF'
 pub const AI_TRANSCRIPT_FORWARD_ENV: &str = "CORTEX_AGENT_AI_TRANSCRIPT_FORWARD";
 pub const AI_TRANSCRIPT_FORWARD_LEGACY_ENV: &str = "CORTEX_AGENT_AI_TRANSCRIPTS";
 EOF
-cat > "$tmp/docs/contracts/agent-observatory.md" <<'EOF'
+cat > "$tmp/docs/reference/contracts/agent-observatory.md" <<'EOF'
 Current: `CORTEX_AGENT_AI_TRANSCRIPT_FORWARD`; deprecated compatibility alias: `CORTEX_AGENT_AI_TRANSCRIPTS`.
+EOF
+mkdir -p "$tmp/docs/guides" "$tmp/src/setup"
+cat > "$tmp/docs/guides/setup.md" <<'EOF'
+Current: `CORTEX_AGENT_AI_TRANSCRIPT_FORWARD`; deprecated compatibility alias: `CORTEX_AGENT_AI_TRANSCRIPTS`.
+EOF
+cat > "$tmp/src/setup/heartbeat_agent_env.rs" <<'EOF'
+    "CORTEX_AGENT_AI_TRANSCRIPTS",
+EOF
+cat > "$tmp/src/docs_tests.rs" <<'EOF'
+    "CORTEX_AGENT_AI_TRANSCRIPTS",
 EOF
 git -C "$tmp" add .
 (cd "$tmp" && bash scripts/validate-transcript-forward-env-rename.sh)
+
+cat > "$tmp/src/setup/heartbeat_agent_env.rs" <<'EOF'
+let unexpected = "CORTEX_AGENT_AI_TRANSCRIPTS";
+EOF
+git -C "$tmp" add src/setup/heartbeat_agent_env.rs
+if (cd "$tmp" && bash scripts/validate-transcript-forward-env-rename.sh >/dev/null 2>&1); then
+    echo "validator accepted a non-migration expression in the parser allowlist" >&2
+    exit 1
+fi
+cat > "$tmp/src/setup/heartbeat_agent_env.rs" <<'EOF'
+    "CORTEX_AGENT_AI_TRANSCRIPTS",
+EOF
+git -C "$tmp" add src/setup/heartbeat_agent_env.rs
 
 cat > "$tmp/systemd-unit" <<'EOF'
 Environment=CORTEX_AGENT_AI_TRANSCRIPTS=true
@@ -44,13 +67,13 @@ cat > "$tmp/src/heartbeat_agent.rs" <<'EOF'
 pub const AI_TRANSCRIPT_FORWARD_ENV: &str = "CORTEX_AGENT_AI_TRANSCRIPT_FORWARD";
 pub const AI_TRANSCRIPT_FORWARD_LEGACY_ENV: &str = "CORTEX_AGENT_AI_TRANSCRIPTS";
 EOF
-cat > "$tmp/docs/contracts/agent-observatory.md" <<'EOF'
+cat > "$tmp/docs/reference/contracts/agent-observatory.md" <<'EOF'
 This configured example must fail:
 ```ini
 CORTEX_AGENT_AI_TRANSCRIPTS=true
 ```
 EOF
-git -C "$tmp" add src/heartbeat_agent.rs docs/contracts/agent-observatory.md
+git -C "$tmp" add src/heartbeat_agent.rs docs/reference/contracts/agent-observatory.md
 if (cd "$tmp" && bash scripts/validate-transcript-forward-env-rename.sh >/dev/null 2>&1); then
     echo "validator accepted executable legacy config in an allowlisted doc" >&2
     exit 1

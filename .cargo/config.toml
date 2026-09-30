@@ -5,7 +5,7 @@
 # ~/.cargo/config.toml. This file only adds workspace-local settings that the
 # global config cannot provide.
 #
-# See docs/RUST.md for expected global config and system tool requirements.
+# See docs/development/rust.md for expected global config and system tool requirements.
 # See https://github.com/jmagar/rmcp-template/blob/main/docs/RUST.md for the
 # canonical family reference.
 # =============================================================================
@@ -20,5 +20,5 @@ xtask = "run --quiet --package xtask --"
 [build]
 # Non-standard target directory keeps Cargo artifacts out of the repo root so
 # Docker COPY instructions and bind mounts don't require an exclude for ./target.
-# See docs/RUST.md §Repo-specific overrides.
+# See docs/development/rust.md §Repo-specific overrides.
 target-dir = ".cache/cargo"

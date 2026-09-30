@@ -33,7 +33,7 @@
     ".next/types/**/*.ts",
     "**/*.ts",
     "**/*.tsx",
-    "../docs/contracts/agent-observatory-types.ts",
+    "../docs/reference/contracts/agent-observatory-types.ts",
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [

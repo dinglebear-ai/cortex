@@ -876,8 +876,8 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
     }
 
     // Migration 13: enrichment-framework columns + partial indexes.
-    // Spec: docs/superpowers/specs/2026-05-16-enrichment-framework-design.md §5
-    // Contract: docs/contracts/db-additions.sql Epic B section
+    // Spec: docs/history/superpowers/specs/2026-05/2026-05-16-enrichment-framework-design.md §5
+    // Contract: docs/reference/contracts/db-additions.sql Epic B section
     if !migration_applied(&conn, 13)? {
         apply_migration_13(&conn)?;
         tracing::info!("Migration 13: added enrichment columns + partial indexes");
@@ -909,7 +909,7 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
     }
 
     // Migration 15: first-class heartbeat telemetry storage.
-    // Contract: docs/contracts/heartbeat-telemetry.md
+    // Contract: docs/reference/contracts/heartbeat-telemetry.md
     if !migration_applied(&conn, 15)? {
         apply_migration_15_heartbeat(&conn)?;
         tracing::info!("Migration 15: created heartbeat telemetry tables and indexes");

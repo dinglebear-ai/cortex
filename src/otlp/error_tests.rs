@@ -111,7 +111,7 @@ fn only_unconfigured_signals_are_non_retryable_503s() {
     );
 }
 
-/// Six 503s is the number `docs/contracts/http-endpoints.md` section 13
+/// Six 503s is the number `docs/reference/contracts/http-endpoints.md` section 13
 /// tabulates; a seventh must land in that table too.
 #[test]
 fn the_surface_has_exactly_six_service_unavailable_codes() {

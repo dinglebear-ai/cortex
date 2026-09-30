@@ -579,7 +579,7 @@ async fn heartbeat_handler(
         // server. `acquire_write_conn` already logged the exhaustion.
         //
         // `storage_unavailable` is the literal specified by
-        // docs/contracts/heartbeat-telemetry.md section 10 ("503 |
+        // docs/reference/contracts/heartbeat-telemetry.md section 10 ("503 |
         // storage_unavailable | DB write path unavailable or backpressured").
         // It was documented but never emitted by any code path until now.
         //

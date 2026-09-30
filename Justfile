@@ -118,6 +118,7 @@ docs-generate:
 # Read-only drift checks plus hermetic generator regressions.
 docs-check:
     env -u CORTEX_API_TOKEN -u NO_AUTH python3 scripts/test-generated-docs.py
+    env -u CORTEX_API_TOKEN -u NO_AUTH python3 scripts/test-documentation.py
     python3 scripts/generate-docs.py --check
 
 setup:

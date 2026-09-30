@@ -152,7 +152,7 @@ assert_json "http: db status"            http db status --json
 assert_json "http: db integrity (quick background)" http db integrity --json --quick --background
 assert_json "http: db checkpoint"        http db checkpoint passive --json
 # `vacuum --pages 1` keeps wall-clock low; full VACUUM may exceed 10-min
-# HTTP timeout on large DBs (see docs/rollout.md Notes).
+# HTTP timeout on large DBs (see docs/history/plans/http-cli-rollout.md Notes).
 assert_json "http: db vacuum (pages=1)"  http db vacuum --json --pages 1
 if [[ "${CORTEX_SMOKE_RUN_LONG:-false}" == "true" ]]; then
   assert_json "http: db backup"          http db backup --json

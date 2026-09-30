@@ -87,7 +87,7 @@ For parameter-level details and response shapes, use the live action reference:
 mcp__cortex__cortex(action="help")
 ```
 
-When working from the repository instead of a live server, use `docs/mcp/TOOLS.md`, `docs/mcp/SCHEMA.md`, and `docs/mcp/CORRELATION.md` as the canonical references. Keep this skill focused on when to use the tool, safe invocation patterns, and common workflows rather than duplicating every action schema.
+When working from the repository instead of a live server, use `docs/reference/mcp/tools.md`, `docs/reference/mcp/schema.md`, and `docs/reference/mcp/correlation.md` as the canonical references. Keep this skill focused on when to use the tool, safe invocation patterns, and common workflows rather than duplicating every action schema.
 
 FTS5 reminders for `search` and other query-bearing actions:
 - `AND`, `OR`, `NOT` are uppercase boolean operators.

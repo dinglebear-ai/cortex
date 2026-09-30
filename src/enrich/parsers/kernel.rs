@@ -1,5 +1,5 @@
 //! Linux kernel parser — OOM kills, link state, MAC collisions.
-//! Spec: docs/superpowers/specs/2026-05-16-enrichment-framework-design.md §7.1
+//! Spec: docs/history/superpowers/specs/2026-05/2026-05-16-enrichment-framework-design.md §7.1
 
 use std::sync::LazyLock;
 

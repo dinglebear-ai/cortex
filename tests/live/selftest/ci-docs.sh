@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 env -u CORTEX_API_TOKEN -u NO_AUTH python3 "$root/scripts/test-generated-docs.py"
+env -u CORTEX_API_TOKEN -u NO_AUTH python3 "$root/scripts/test-documentation.py"
 python3 "$root/scripts/generate-docs.py" --check
 python3 - "$root" <<'PY'
 import json, pathlib, re, sys

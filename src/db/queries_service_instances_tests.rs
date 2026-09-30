@@ -249,7 +249,7 @@ fn mixed_case_hostname_does_not_match_canonical_instance_key() {
     // and the log predicates compare with SQLite's default BINARY
     // collation, so a mixed-case syslog hostname ("Nashost") never matches
     // the canonical instance key ("nashost/plex"). Documented in
-    // docs/contracts/investigation-graph.md; hostname case normalization
+    // docs/reference/contracts/investigation-graph.md; hostname case normalization
     // at ingest is tracked separately.
     let rows = search_logs_for_service_instances(
         &pool,

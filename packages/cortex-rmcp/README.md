@@ -499,7 +499,7 @@ The current scope split is:
 | Errors and administration | `unaddressed_errors`, `ack_error`, `unack_error`, `notifications_recent`, `notifications_test`, `file_tails`, `llm_invocations`, `artifact_evidence_record` |
 | Reference | `help` |
 
-The runtime schema contains per-action flags, defaults, examples, relative cost metadata, and validation. See [docs/mcp/SCHEMA.md](docs/mcp/SCHEMA.md) for the parameter reference.
+The runtime schema contains per-action flags, defaults, examples, relative cost metadata, and validation. See [docs/reference/mcp/schema.md](docs/reference/mcp/schema.md) for the parameter reference.
 
 #### MCP prompts
 
@@ -518,7 +518,7 @@ Cortex ships twelve reusable infrastructure prompts:
 - `infra.syslog-forwarding-gap`
 - `infra.after-deploy-check`
 
-See [docs/mcp/PROMPTS.md](docs/mcp/PROMPTS.md) for arguments and output expectations.
+See [docs/reference/mcp/prompts.md](docs/reference/mcp/prompts.md) for arguments and output expectations.
 
 #### MCP resources and UI
 
@@ -540,7 +540,7 @@ The versioned investigation API lives under `/api/v1/*` and provides Ask Cortex 
 
 REST requires `CORTEX_API_TOKEN`. Privileged maintenance and file-tail workflows can also require `CORTEX_API_ADMIN_TOKEN`.
 
-See [docs/api.md](docs/api.md) for the route and response reference.
+See [docs/reference/api.md](docs/reference/api.md) for the route and response reference.
 
 ### Browser investigation workspace
 
@@ -569,7 +569,7 @@ The twelve skills are `cortex`, `frustration-assessment`, `hook-friction-assessm
 
 The plugin registers **no Claude Code lifecycle hooks** — there is no `hooks` key and no `hooks.json`. Setup is explicit: run `cortex setup pluginhook` (or the `plugins/cortex/scripts/plugin-setup.sh` adapter) after installing, upgrading, or reconfiguring. `just validate-plugin` and `scripts/validate-marketplace.sh` assert the `hooks` key stays absent, and `cargo xtask check-version-sync` asserts the manifest carries no top-level `version`.
 
-See [docs/plugin/HOOKS.md](docs/plugin/HOOKS.md) for the setup lifecycle and [docs/plugin/PLUGINS.md](docs/plugin/PLUGINS.md) for the manifest reference.
+See [docs/development/plugins/hooks.md](docs/development/plugins/hooks.md) for the setup lifecycle and [docs/development/plugins/plugins.md](docs/development/plugins/plugins.md) for the manifest reference.
 
 ### Health endpoints
 
@@ -590,7 +590,7 @@ cortex setup heartbeatagent check
 Set `CORTEX_HEARTBEAT_TARGET` and an ingest credential first.
 `CORTEX_API_TOKEN` is query-only and cannot authenticate agent ingest. See the
 authoritative [macOS heartbeat-agent operator
-contract](docs/SETUP.md#10-macos-heartbeat-agent) for capabilities, paths,
+contract](docs/guides/setup.md#10-macos-heartbeat-agent) for capabilities, paths,
 login semantics, migration, recovery, removal, and delivery proof.
 
 Cortex loads configuration in this order, with later layers winning:
@@ -648,7 +648,7 @@ Useful environment variables include:
 | `CORTEX_LLM_ENABLED` | Global local-assessment kill switch |
 | `RUST_LOG` | Tracing filter |
 
-See [docs/CONFIG.md](docs/CONFIG.md) for the complete reference and validation rules.
+See [docs/reference/config.md](docs/reference/config.md) for the complete reference and validation rules.
 
 ## Authentication and trust boundaries
 
@@ -683,7 +683,7 @@ Cortex intentionally separates transport credentials and capabilities.
 - Docker endpoints and SSH keys are treated as privileged infrastructure access.
 - Container examples mount a dedicated least-privilege SSH directory rather than a user's complete `~/.ssh`.
 
-Read [docs/SECURITY.md](docs/SECURITY.md), [docs/GUARDRAILS.md](docs/GUARDRAILS.md), and [docs/OAUTH.md](docs/OAUTH.md) before exposing Cortex beyond loopback or a trusted gateway.
+Read [docs/guides/security.md](docs/guides/security.md), [docs/guides/guardrails.md](docs/guides/guardrails.md), and [docs/guides/oauth.md](docs/guides/oauth.md) before exposing Cortex beyond loopback or a trusted gateway.
 
 ## Storage and maintenance
 
@@ -895,7 +895,7 @@ just validate-plugin
 cargo xtask pre-push
 ```
 
-`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
+`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](docs/development/live-qualification.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
 
 CI gates include:
 
@@ -910,7 +910,7 @@ CI gates include:
 - Coverage generation
 - Repository module-size policy
 
-See [tests/TEST_COVERAGE.md](tests/TEST_COVERAGE.md) and [docs/RELEASE.md](docs/RELEASE.md) for the split between hermetic CI and live-fleet verification.
+See [tests/TEST_COVERAGE.md](tests/TEST_COVERAGE.md) and [docs/development/release.md](docs/development/release.md) for the split between hermetic CI and live-fleet verification.
 
 ## Documentation
 
@@ -921,19 +921,19 @@ The code-owned registries and runtime schemas are authoritative for command name
 | [AGENTS.md](AGENTS.md) | Canonical cross-agent instructions; Claude/Gemini aliases are symlinks |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Checkout, validation, and contribution workflow |
 | [docs/README.md](docs/README.md) | Documentation index and authority map |
-| [docs/ADDING_SOURCES.md](docs/ADDING_SOURCES.md) | Source/provider extension and coverage semantics |
-| [docs/repo/DOCUMENTATION.md](docs/repo/DOCUMENTATION.md) | Documentation ownership and drift prevention |
-| [docs/SETUP.md](docs/SETUP.md) | Installation and deployment walkthrough |
-| [docs/CONFIG.md](docs/CONFIG.md) | Complete configuration reference |
-| [docs/CLI.md](docs/CLI.md) | CLI reference |
-| [docs/api.md](docs/api.md) | REST API reference |
-| [docs/architecture.md](docs/architecture.md) | Runtime and data-flow architecture |
-| [docs/mcp/SCHEMA.md](docs/mcp/SCHEMA.md) | MCP action and parameter schema |
-| [docs/mcp/PROMPTS.md](docs/mcp/PROMPTS.md) | Prompt catalog |
-| [docs/SECURITY.md](docs/SECURITY.md) | Consolidated trust model |
-| [docs/OAUTH.md](docs/OAUTH.md) | OAuth configuration |
-| [docs/INVENTORY.md](docs/INVENTORY.md) | Component and surface inventory |
-| [docs/RELEASE.md](docs/RELEASE.md) | Release and verification gates |
+| [docs/development/adding-sources.md](docs/development/adding-sources.md) | Source/provider extension and coverage semantics |
+| [docs/development/repo/documentation.md](docs/development/repo/documentation.md) | Documentation ownership and drift prevention |
+| [docs/guides/setup.md](docs/guides/setup.md) | Installation and deployment walkthrough |
+| [docs/reference/config.md](docs/reference/config.md) | Complete configuration reference |
+| [docs/reference/cli.md](docs/reference/cli.md) | CLI reference |
+| [docs/reference/api.md](docs/reference/api.md) | REST API reference |
+| [docs/architecture/overview.md](docs/architecture/overview.md) | Runtime and data-flow architecture |
+| [docs/reference/mcp/schema.md](docs/reference/mcp/schema.md) | MCP action and parameter schema |
+| [docs/reference/mcp/prompts.md](docs/reference/mcp/prompts.md) | Prompt catalog |
+| [docs/guides/security.md](docs/guides/security.md) | Consolidated trust model |
+| [docs/guides/oauth.md](docs/guides/oauth.md) | OAuth configuration |
+| [docs/reference/inventory.md](docs/reference/inventory.md) | Component and surface inventory |
+| [docs/development/release.md](docs/development/release.md) | Release and verification gates |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 Dated design plans and session logs preserve engineering history, not current public-interface authority. Runbooks are operational guidance unless explicitly marked historical; verify them against the current source and configuration.
