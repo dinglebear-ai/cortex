@@ -94,6 +94,19 @@ class ReviewRegressions(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not match'):
                 module.validate(root)
 
+    def test_upgrade_matrix_requires_the_previous_release(self):
+        module = load('tests/live/phases/upgrade/validate.py')
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory); dest = root / 'tests/live/contracts/releases'; dest.mkdir(parents=True)
+            for name in ['Cargo.toml', 'CHANGELOG.md']:
+                (root / name).write_text((ROOT / name).read_text())
+            matrix = json.loads((ROOT / 'tests/live/contracts/releases/compatibility.json').read_text())
+            # An immutable but older image is still not the immediate predecessor.
+            matrix['supported']['n_minus_1'] = matrix['supported']['oldest_scheduled'].copy()
+            (dest / 'compatibility.json').write_text(json.dumps(matrix))
+            with self.assertRaisesRegex(ValueError, 'previous release'):
+                module.validate(root)
+
     def test_deployment_retry_uses_successful_revision_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory); tools = root / 'bin'; tools.mkdir()
