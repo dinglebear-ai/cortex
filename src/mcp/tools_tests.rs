@@ -1400,6 +1400,9 @@ fn sample_args_for_action(action: &str) -> Option<serde_json::Value> {
             json!({"action": action, "reference_time": "2026-01-01T00:00:00Z"})
         }
         "search_sessions" => json!({"action": action, "query": "schema"}),
+        "session_page" => {
+            json!({"action": action, "project": "/schema/project", "tool": "codex", "session_id": "schema-session", "host": "schema-session-host"})
+        }
         "session_investigate" => json!({"action": action, "session_id": "schema-session"}),
         "evidence_scope" => json!({"action": action, "branch": "codex/schema-test"}),
         "ai_correlate" => json!({"action": action, "project": "/tmp/project"}),
@@ -1509,6 +1512,7 @@ fn typed_unknown_field_samples() -> Vec<serde_json::Value> {
         "correlate_state",
         "apps",
         "sessions",
+        "session_page",
         "search_sessions",
         "session_investigate",
         "abuse",
