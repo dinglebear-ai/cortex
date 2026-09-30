@@ -2,6 +2,7 @@
 pub(crate) enum SessionsCommand {
     List(super::SessionsArgs),
     Search(SessionsSearchArgs),
+    Page(SessionsPageArgs),
     Abuse(SessionsAbuseArgs),
     Correlate(SessionsCorrelateArgs),
     Blocks(SessionsBlocksArgs),
@@ -43,6 +44,17 @@ pub(crate) enum SessionsCommand {
     /// dispatch function (`dispatch::run_assess_mcp`) so the two entry
     /// points never drift on behavior, only on discoverability.
     McpAssess(super::assess::AssessMcpArgs),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SessionsPageArgs {
+    pub project: String,
+    pub tool: String,
+    pub session_id: String,
+    pub host: String,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

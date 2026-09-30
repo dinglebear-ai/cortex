@@ -1,7 +1,7 @@
 ---
 title: "cortex REST API"
 created: 2026-05-18
-updated: 2026-07-30
+updated: 2026-09-27
 ---
 
 # cortex REST API
@@ -88,7 +88,7 @@ compatibility routes.
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/sessions` | read | query: `project?`, `tool?`, `host?`, `since?`, `until?`, `limit?`, `offset?` | `ListSessionsResponse { count, sessions: [AiSessionEntry], rollup_as_of? }` | 200, 400, 401, 503, 500 | Y | Bounded pages of indexed AI transcript metadata; up to 1,000 sessions per response and offset capped at 10,000. No transcript text is returned. |
-| GET | `/api/sessions/rendered` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`, `limit?` | `RenderedSessionPageResponse` (`delivery=polling`, semantic events, durable next cursor, high-water mark, truncation and retry metadata) | 200, 400, 401, 503, 500 | Y | Keyset pagination by persisted `logs.id`, ascending. Maximum 200 events and 256 KiB per page; oversized event text is UTF-8-safely truncated with a parse warning. Schema: `contracts/rendered-session-page.schema.json`. Clients may hand its committed cursor to the native session stream. |
+| GET | `/api/sessions/rendered` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`, `limit?` | `RenderedSessionPageResponse` (`delivery=polling`, semantic events, durable next cursor, high-water mark, truncation and retry metadata) | 200, 400, 401, 503, 500 | Y | Shared `CortexService` paging used by MCP `session_page` and CLI `sessions page`. REST signs the continuation cursor for its authenticated principal. Keyset pagination by persisted `logs.id`, ascending; maximum 200 events and 256 KiB per page. Schema: `contracts/rendered-session-page.schema.json`. Clients may hand its committed cursor to the native session stream. |
 | GET | `/api/sessions/search` | read | query: `query` (REQUIRED), `project?`, `tool?`, `from?`, `to?`, `limit?` (u32) | `SearchSessionsResponse { total_candidates, candidate_rows, candidate_cap, candidate_window_truncated, truncated, sessions: [SearchedSessionEntry], limit_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `limit` clamped at **100** — see Response size caps. |
 | GET | `/api/sessions/abuse` | read | query: `project?`, `tool?`, `from?`, `to?`, `limit?`, `before?` (u32), `after?` (u32), **`terms?`** (repeated key: `?terms=foo&terms=bar`) | `AbuseSearchResponse { terms, candidate_rows, candidate_cap, candidate_window_truncated, truncated, matches: [AbuseMatch], limit_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `limit` clamped at **500**. Decoded via `serde_qs::axum::QsQuery`, so `Vec<String>` is supported through repeated `terms=` keys (the CLI's `HttpClient` serializes the shared request type the same way). |
 | GET | `/api/sessions/correlate` | read | query: `project?`, `tool?`, `session_id?`, `ai_query?`, `log_query?`, `hostname?`, `source_ip?`, `app_name?`, `from?`, `to?`, `window_minutes?` (u32), `severity_min?`, `limit?` (u32), `events_per_anchor?` (u32) | `AiCorrelateResponse { window_minutes, severity_min, total_anchors, anchor_rows, anchor_limit, anchors_truncated, related_limit_per_anchor, total_related_events, anchors: [AiCorrelationAnchor], events_per_anchor_clamped_to? }` | 200, 400, 401, 503, 500 | Y | `events_per_anchor` clamped at **50** — see Response size caps. Correlates AI transcript anchors against system logs. |

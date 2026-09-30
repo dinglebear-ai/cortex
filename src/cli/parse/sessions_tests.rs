@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn session_page_requires_exact_identity_and_accepts_cursor() {
+    let err = parse_sessions_page(&strings(&["--session-id", "s"]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("requires --project, --tool, --session-id, and --host"));
+
+    let command = parse_sessions_command(&strings(&[
+        "page",
+        "--project",
+        "/repo",
+        "--tool",
+        "codex",
+        "--session-id",
+        "s",
+        "--host",
+        "mac",
+        "--cursor",
+        "cortex-session-v1:7",
+        "--limit",
+        "5",
+        "--json",
+    ]))
+    .unwrap();
+    let crate::cli::CliCommand::Sessions(crate::cli::SessionsCommand::Page(args)) = command else {
+        panic!("expected session page command");
+    };
+    assert_eq!(args.cursor.as_deref(), Some("cortex-session-v1:7"));
+    assert_eq!(args.limit, Some(5));
+    assert!(args.json);
+}
+
+#[test]
 fn sessions_add_accepts_a_positional_file() {
     let command = parse_sessions_command(&["add".into(), "/tmp/session.jsonl".into()]);
     assert!(

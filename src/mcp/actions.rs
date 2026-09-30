@@ -71,6 +71,7 @@ pub(super) enum ActionHandler {
     GetStatus,
     ListApps,
     ListSessions,
+    RenderedSessionPage,
     SearchSessions,
     SessionInvestigate,
     EvidenceScope,
@@ -374,6 +375,17 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         "List AI transcript sessions",
         Cheap,
         ListSessions
+    ),
+    action_spec!(
+        "session_page",
+        Read,
+        "Read a bounded rendered AI transcript page",
+        Moderate,
+        RenderedSessionPage,
+        exact: {
+            allowed: &["project", "tool", "session_id", "host", "cursor", "limit"],
+            required: &["project", "tool", "session_id", "host"]
+        }
     ),
     action_spec!(
         "search_sessions",

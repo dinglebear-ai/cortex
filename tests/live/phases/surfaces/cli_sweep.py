@@ -172,6 +172,7 @@ ARGS = {
     "state host": ["--json"], "state fleet": ["--json"], "state clockskew": ["--json", "--limit", "5"],
     "stats summary": ["--json"], "stats ingestrate": ["--json"], "timeline": ["--json", "--since", "1h"],
     "sessions": ["--json", "--limit", "2"], "sessions search": ["\"cortex-live\"", "--json", "--limit", "2"],
+    "sessions page": ["--project", "/", "--tool", "codex", "--session-id", "mcp-live-session", "--host", "cortex-live", "--json", "--limit", "1"],
     "sessions abuse": ["--json", "--limit", "2"], "sessions correlate": ["--json", "--ai-query", "\"cortex-live\"", "--limit", "2"],
     "sessions blocks": ["--json", "--limit", "2"], "sessions context": ["cortex-live", "--json", "--limit", "2"],
     "sessions tools": ["--json"], "sessions projects": ["--json"], "sessions checkpoints": ["--json", "--limit", "2"],

@@ -85,6 +85,7 @@ that registry by `src/mcp/schemas.rs::tool_definitions()`.
 | `stats` | Database statistics: total logs, hosts, time range, DB size, free disk, write-block status | no |
 | `status` | Lightweight runtime status: DB health, queue/backpressure state, listener/writer counters, OTLP counters | no |
 | `sessions` | AI transcript sessions grouped by project/tool/session/host | no |
+| `session_page` | Bounded rendered transcript page by exact session identity | no |
 | `search_sessions` | Ranked grouped session search | no |
 | `session_investigate` | Bounded evidence bundle rooted at one AI session | no |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree | no |

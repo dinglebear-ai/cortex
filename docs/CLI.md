@@ -267,6 +267,16 @@ Flags:
 | `--limit N` | Maximum returned rows |
 | `--json` | Print JSON response |
 
+### `cortex sessions page`
+
+Read the next rendered page of one transcript using the exact identity from `cortex sessions --json`:
+
+```bash
+cortex sessions page --project PATH --tool TOOL --session-id ID --host HOST --json
+```
+
+Pass the returned `next_cursor` with `--cursor` while `has_more` is true. `--limit` caps the requested page at 200 events. Local and HTTP CLI modes call the same service contract; HTTP cursors are signed for the authenticated request.
+
 ### `cortex sessions search`
 
 Ranked grouped session search across AI transcript rows.
