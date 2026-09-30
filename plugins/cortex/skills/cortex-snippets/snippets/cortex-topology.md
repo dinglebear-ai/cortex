@@ -22,17 +22,17 @@ Before first use, discover `cortex::cortex` with `codemode.search()` and inspect
 ```js
 async (input) => {
   const since = input.since ?? "1h";
-  const requests = [{ action: "hosts" }, { action: "apps", host: input.host, since, limit: 20 }];
+  const host = input.host.trim().replace(/\.+$/, "").toLowerCase();
+  const requests = [{ action: "hosts" }, { action: "apps", host, since, limit: 20 }];
   const batch = await codemode.batch(requests.map(params => () => callTool("cortex::cortex", params)));
   const hosts = batch.ok.find(item => item.i === 0)?.value.hosts ?? [];
   const appResult = batch.ok.find(item => item.i === 1)?.value;
-  const host = input.host.trim().toLowerCase();
-  const node = hosts.find(item => item.hostname?.toLowerCase() === host);
+  const node = hosts.find(item => item.hostname?.trim().replace(/\.+$/, "").toLowerCase() === host);
   return { ok: batch.all_ok && Boolean(node), snippet: "cortex-topology", source: "log_activity",
     host: node && { hostname: node.hostname, last_seen: node.last_seen, log_count: node.log_count }, since,
     apps: (appResult?.apps ?? []).slice(0, 20).map(item => ({ name: item.app_name, log_count: item.log_count, last_seen: item.last_seen })),
     total_apps: appResult?.total,
-    failures: batch.failed.map(item => ({ source: ["hosts", "apps"][item.i], error: String(item.error).slice(0, 200) })),
+    failures: batch.failed.map(item => ({ source: ["hosts", "apps"][item.i], error: "Upstream call failed; inspect the recorded tool failure." })),
     coverage: "Recent log activity only; neither running-service status nor graph-backed dependencies are proven." };
 }
 ```
