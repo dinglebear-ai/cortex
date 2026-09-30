@@ -36,9 +36,23 @@ env:
 
 jobs:
   cortex-linux:
-    name: build cortex (linux)
-    runs-on: ubuntu-24.04
+    name: build cortex (linux/${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            archive: cortex-linux-x86_64.tar.gz
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            archive: cortex-linux-aarch64.tar.gz
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -56,15 +70,20 @@ jobs:
         run: |
           set -euo pipefail
           cd .cache/cargo/release
-          tar -czf cortex-linux-x86_64.tar.gz cortex
-          sha256sum cortex-linux-x86_64.tar.gz > cortex-linux-x86_64.tar.gz.sha256
+          tar -czf "${{ matrix.archive }}" cortex
+          sha256sum "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+
+      - name: Attest exact Linux candidate archive
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: .cache/cargo/release/${{ matrix.archive }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cortex-linux-x86_64
+          name: cortex-linux-${{ matrix.arch }}
           path: |
-            .cache/cargo/release/cortex-linux-x86_64.tar.gz
-            .cache/cargo/release/cortex-linux-x86_64.tar.gz.sha256
+            .cache/cargo/release/${{ matrix.archive }}
+            .cache/cargo/release/${{ matrix.archive }}.sha256
           if-no-files-found: error
 
   cortex-windows:
@@ -285,6 +304,8 @@ jobs:
           files: |
             dist/cortex-linux-x86_64.tar.gz
             dist/cortex-linux-x86_64.tar.gz.sha256
+            dist/cortex-linux-aarch64.tar.gz
+            dist/cortex-linux-aarch64.tar.gz.sha256
             dist/cortex-windows-x86_64.zip
             dist/cortex-windows-x86_64.zip.sha256
             dist/cortex-windows-x86_64.exe
