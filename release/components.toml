@@ -40,6 +40,9 @@ version_files = [
   { kind = "regex_version", path = "server.json", pattern = '@dinglebear/cortex@(\d+\.\d+\.\d+)' },
   { kind = "regex_version", path = "server.json", pattern = '"placeholder": "v(\d+\.\d+\.\d+)"' },
   { kind = "json_version", path = "mcpb/manifest.json", json_pointer = "/version" },
+  # Upgrade qualification follows the same candidate as the release artifacts.
+  # Predecessor image digests remain explicit, independently verified pins.
+  { kind = "json_version", path = "tests/live/contracts/releases/compatibility.json", json_pointer = "/candidate" },
   # docker-compose.prod.yml default image tag: ${CORTEX_VERSION:-X.Y.Z}
   { kind = "regex_version", path = "docker-compose.prod.yml", pattern = 'CORTEX_VERSION:-(\d+\.\d+\.\d+)' },
   { kind = "changelog_heading", path = "CHANGELOG.md" },
