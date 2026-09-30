@@ -47,6 +47,7 @@ impl CortexService {
                 since: None,
                 until: None,
                 limit: Some(20),
+                offset: None,
             })
             .await?
             .sessions;

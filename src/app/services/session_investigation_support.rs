@@ -15,6 +15,7 @@ pub(super) async fn related_sessions_for_investigation(
             since: Some(session.first_seen.clone()),
             until: Some(session.last_seen.clone()),
             limit: Some(22),
+            offset: None,
         })
         .await?
         .sessions

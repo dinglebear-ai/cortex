@@ -1,7 +1,7 @@
 ---
 title: "Release Checklist"
 created: 2026-06-07
-updated: 2026-07-30
+updated: 2026-09-27
 ---
 
 # Release Checklist
@@ -15,12 +15,15 @@ intent.
 Run from the repo root:
 
 ```bash
-cargo fmt -- --check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+env -u CORTEX_API_TOKEN -u NO_AUTH cargo nextest run --locked
+cargo test --doc --locked
+cargo clippy --all-targets --locked -- -D warnings
 cargo deny check
 cargo xtask check-version-sync
 bash scripts/check-agent-memory-symlinks.sh
+bash scripts/test-agent-memory-symlinks.sh
+python3 scripts/test-repository-contract.py
 bash scripts/check-public-identity.sh
 git diff --check
 ```
@@ -40,8 +43,9 @@ the nested harness lockfiles `tests/live/surface-exporter/Cargo.lock` and
 `mcpb/manifest.json`, `docker-compose.prod.yml` (`${CORTEX_VERSION:-X.Y.Z}`),
 and `CHANGELOG.md`. Plugin manifests are intentionally unversioned —
 `check-version-sync` rejects a top-level `version` key in
-`.claude-plugin/plugin.json`. Bump everything at once with
-`cargo xtask bump-version patch|minor|major`.
+`plugins/install-cortex/.claude-plugin/plugin.json`. Release-please manages normal release PRs; its
+fixup runs `cargo xtask sync-version`. `cargo xtask bump-version` is a manual
+escape hatch, not a feature-branch requirement.
 
 ## Live Gates
 
@@ -83,7 +87,7 @@ only when the target `fleet_hosts` list is correct and reachable.
 
 ## Commit Policy
 
-Every feature branch push bumps the version according to the repo policy in
-`CLAUDE.md`. Patch bumps are appropriate for fixes, docs, CI, test, and policy
-work. `CHANGELOG.md` must describe the operator-visible behavior, not just the
-file list.
+Normal feature branches do not hand-bump versions. Follow [AGENTS.md](../AGENTS.md)
+and [RELEASING.md](../RELEASING.md): use Conventional Commits and let release-please
+prepare the version/changelog PR after green main CI. A release changelog should
+describe operator-visible behavior, not just the file list.

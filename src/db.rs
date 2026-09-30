@@ -9,6 +9,7 @@ pub mod entity_resolution;
 pub(crate) mod error_signatures;
 pub mod graph;
 pub(crate) mod graph_confidence;
+pub mod graph_discovery;
 pub mod graph_findings;
 pub mod graph_inventory;
 mod graph_resolver_projection;
@@ -18,6 +19,7 @@ mod hook_incident_evidence;
 mod hook_incidents;
 mod ingest;
 pub(crate) use ingest::{TRANSIENT_SQLITE_RETRY_DELAYS_MS, is_transient_sqlite_lock};
+mod host_metrics;
 mod ingest_health;
 pub(crate) mod llm_invocations;
 mod maintenance;
@@ -81,6 +83,10 @@ pub use hook_incident_evidence::{
 };
 pub use hook_incidents::{
     AiHookIncidentParams, HookIncident, HookSignalCounts, search_ai_hook_incidents,
+};
+pub use host_metrics::{
+    HostMetricParams, HostMetricPoint, HostMetricsPage, MetricCursor, MetricHost,
+    list_host_metrics, list_metric_hosts,
 };
 pub use ingest::insert_logs_batch;
 pub(crate) use ingest::{insert_logs_batch_borrowed, insert_logs_batch_in_tx};

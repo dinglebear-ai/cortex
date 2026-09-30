@@ -1,0 +1,53 @@
+receivers:
+  host_metrics:
+    collection_interval: 60s
+    root_path: /hostfs
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+      load: {}
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 192
+    spike_limit_mib: 64
+  resource:
+    attributes:
+      - key: service.name
+        value: cortex-hostmetrics
+        action: upsert
+      - key: service.namespace
+        value: homelab
+        action: upsert
+      - key: host.name
+        value: ${env:CORTEX_OTLP_HOST_NAME}
+        action: upsert
+  batch:
+    timeout: 10s
+    send_batch_size: 256
+
+exporters:
+  otlp_http/cortex:
+    endpoint: http://127.0.0.1:3100
+    compression: none
+    headers:
+      Authorization: ${env:CORTEX_OTLP_AUTH_HEADER}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 5m
+
+service:
+  pipelines:
+    metrics:
+      receivers: [host_metrics]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp_http/cortex]

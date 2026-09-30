@@ -17,8 +17,11 @@
 #[cfg(test)]
 pub(crate) const SKILL_ASSESSMENT_SKILL_NAME: &str = "skill-improvement-assessment";
 #[cfg(test)]
-pub(crate) const SKILL_ASSESSMENT_SKILL_MD: &str =
-    include_str!("../plugins/cortex/skills/skill-improvement-assessment/SKILL.md");
+pub(crate) const SKILL_ASSESSMENT_SKILL_MD: &str = concat!(
+    include_str!("prompts/skill-improvement-assessment/entrypoint.md"),
+    "\n",
+    include_str!("prompts/skill-improvement-assessment/references/workflow.md"),
+);
 
 pub(crate) const SKILL_ASSESSMENT_SYSTEM_PROMPT: &str = concat!(
     "Use the skill-improvement-assessment skill to assess the supplied bounded ",
@@ -27,7 +30,9 @@ pub(crate) const SKILL_ASSESSMENT_SYSTEM_PROMPT: &str = concat!(
     "files, create plans, or persist artifacts.\n\n",
     "You must also follow these instructions directly if native skill activation ",
     "is unavailable:\n\n",
-    include_str!("../plugins/cortex/skills/skill-improvement-assessment/SKILL.md"),
+    include_str!("prompts/skill-improvement-assessment/entrypoint.md"),
+    "\n",
+    include_str!("prompts/skill-improvement-assessment/references/workflow.md"),
 );
 
 /// `evidence_json` must be the serialized PR 3 `SkillIncidentEvidence`

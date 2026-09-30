@@ -961,7 +961,7 @@ fn graph_evidence_for_relationships(
     Ok(rows)
 }
 
-fn graph_entity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphEntityRow> {
+pub(crate) fn graph_entity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphEntityRow> {
     Ok(GraphEntityRow {
         id: row.get(0)?,
         entity_type: row.get(1)?,
@@ -975,7 +975,9 @@ fn graph_entity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphEntit
     })
 }
 
-fn graph_relationship_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphRelationshipRow> {
+pub(crate) fn graph_relationship_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<GraphRelationshipRow> {
     Ok(GraphRelationshipRow {
         id: row.get(0)?,
         relationship_key: row.get(1)?,
@@ -1374,6 +1376,7 @@ fn merge_graph_delta(
     )?;
     tx.execute("DROP TABLE IF EXISTS _graph_entity_idmap", [])?;
     tx.execute("DROP TABLE IF EXISTS _graph_rel_idmap", [])?;
+    prune_graph_change_events(&tx)?;
     tx.commit()?;
 
     Ok(GraphRebuildStats {
@@ -2975,6 +2978,66 @@ fn swap_graph_projection(
     // caller's connection, so the lock is taken second by construction.
     let _guard = graph_staging_write_lock(conn);
     let tx = conn.transaction()?;
+    // Emit the logical diff before replacing the projection. The ordinary
+    // row triggers are paused inside this transaction so unchanged rows do
+    // not flood the incremental feed during a full rebuild.
+    tx.execute(
+        "UPDATE graph_change_capture SET enabled = 0 WHERE id = 1",
+        [],
+    )?;
+    tx.execute_batch(
+        "INSERT INTO graph_change_events (object_kind, operation, item_key)
+         SELECT 'relationship', 'delete', old.relationship_key
+         FROM graph_relationships old
+         LEFT JOIN _graph_relationships_staging next ON next.relationship_key = old.relationship_key
+         WHERE next.id IS NULL;
+         INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type)
+         SELECT 'entity', 'delete', old.entity_type || char(31) || old.canonical_key, old.entity_type
+         FROM graph_entities old
+         LEFT JOIN _graph_entities_staging next
+           ON next.entity_type = old.entity_type AND next.canonical_key = old.canonical_key
+         WHERE next.id IS NULL;
+         INSERT INTO graph_change_events (object_kind, operation, item_key, entity_type, entity_id)
+         SELECT 'entity', 'upsert', next.entity_type || char(31) || next.canonical_key,
+                next.entity_type, next.id
+         FROM _graph_entities_staging next
+         LEFT JOIN graph_entities old
+           ON old.entity_type = next.entity_type AND old.canonical_key = next.canonical_key
+         WHERE old.id IS NULL OR old.id IS NOT next.id OR old.display_label IS NOT next.display_label
+            OR old.source_kind IS NOT next.source_kind OR old.source_id IS NOT next.source_id
+            OR old.trust_level IS NOT next.trust_level OR old.first_seen_at IS NOT next.first_seen_at
+            OR old.last_seen_at IS NOT next.last_seen_at;
+         INSERT INTO graph_change_events (object_kind, operation, item_key, relationship_id)
+         SELECT 'relationship', 'upsert', next.relationship_key, next.id
+         FROM _graph_relationships_staging next
+         LEFT JOIN graph_relationships old ON old.relationship_key = next.relationship_key
+         WHERE old.id IS NULL OR old.id IS NOT next.id
+            OR old.src_entity_id IS NOT next.src_entity_id OR old.dst_entity_id IS NOT next.dst_entity_id
+            OR old.relationship_type IS NOT next.relationship_type OR old.reason_code IS NOT next.reason_code
+            OR old.trust_level IS NOT next.trust_level OR old.confidence IS NOT next.confidence
+            OR old.evidence_count IS NOT next.evidence_count OR old.first_seen_at IS NOT next.first_seen_at
+            OR old.last_seen_at IS NOT next.last_seen_at
+            OR EXISTS (
+                SELECT 1 FROM _graph_evidence_staging staged_evidence
+                LEFT JOIN graph_relationship_evidence old_evidence
+                  ON old_evidence.relationship_id = old.id
+                 AND old_evidence.evidence_key = staged_evidence.evidence_key
+                WHERE staged_evidence.relationship_id = next.id
+                  AND (old_evidence.id IS NULL
+                    OR old_evidence.id IS NOT staged_evidence.id
+                    OR old_evidence.source_kind IS NOT staged_evidence.source_kind
+                    OR old_evidence.source_id IS NOT staged_evidence.source_id
+                    OR old_evidence.observed_at IS NOT staged_evidence.observed_at
+                    OR old_evidence.trust_level IS NOT staged_evidence.trust_level)
+            )
+            OR EXISTS (
+                SELECT 1 FROM graph_relationship_evidence old_evidence
+                LEFT JOIN _graph_evidence_staging staged_evidence
+                  ON staged_evidence.relationship_id = next.id
+                 AND staged_evidence.evidence_key = old_evidence.evidence_key
+                WHERE old_evidence.relationship_id = old.id AND staged_evidence.id IS NULL
+            );",
+    )?;
     tx.execute("DELETE FROM graph_relationship_evidence", [])?;
     tx.execute("DELETE FROM graph_relationships", [])?;
     tx.execute("DELETE FROM graph_entity_aliases", [])?;
@@ -3046,6 +3109,11 @@ fn swap_graph_projection(
             chunk_count
         ],
     )?;
+    tx.execute(
+        "UPDATE graph_change_capture SET enabled = 1 WHERE id = 1",
+        [],
+    )?;
+    prune_graph_change_events(&tx)?;
     tx.commit()?;
     Ok(GraphRebuildStats {
         source_row_count,
@@ -3056,6 +3124,16 @@ fn swap_graph_projection(
         runtime_ms,
         chunk_count,
     })
+}
+
+pub(crate) fn prune_graph_change_events(conn: &rusqlite::Connection) -> Result<()> {
+    conn.execute(
+        "DELETE FROM graph_change_events
+         WHERE occurred_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')
+            OR seq <= COALESCE((SELECT MAX(seq) - 200000 FROM graph_change_events), 0)",
+        [],
+    )?;
+    Ok(())
 }
 
 fn graph_source_watermark(conn: &rusqlite::Connection) -> Result<String> {

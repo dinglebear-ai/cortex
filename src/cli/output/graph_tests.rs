@@ -71,6 +71,7 @@ fn graph_relationship() -> cortex::app::GraphRelationship {
         confidence: 0.9,
         evidence_count: 1,
         evidence_ids: vec![9],
+        source_kinds: vec!["log".into()],
         first_seen_at: Some("2026-06-13T00:00:00Z".into()),
         last_seen_at: Some("2026-06-13T00:01:00Z".into()),
     }
@@ -287,6 +288,7 @@ fn graph_evidence_json_output_accepts_safe_response() {
             confidence: 0.9,
             evidence_count: 1,
             evidence_ids: vec![9],
+            source_kinds: vec!["log".into()],
             first_seen_at: None,
             last_seen_at: None,
         },

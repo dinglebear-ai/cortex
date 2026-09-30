@@ -1,7 +1,7 @@
 ---
 title: "Release Audit Checklist -- cortex"
 created: 2026-04-04
-updated: 2026-07-30
+updated: 2026-09-27
 ---
 
 # Release Audit Checklist -- cortex
@@ -11,10 +11,9 @@ truth for hermetic and live release gates.
 
 ## Version and metadata
 
-- [ ] Version-bearing files in sync: `Cargo.toml`, `Cargo.lock`,
-      `server.json`, `mcpb/manifest.json`, and `CHANGELOG.md`
+- [ ] All version carriers in `release/components.toml` agree with `Cargo.toml`
 - [ ] Plugin manifests are unversioned:
-      `.claude-plugin/plugin.json` and `plugins/**/plugin.json`
+      `plugins/install-cortex/.claude-plugin/plugin.json` and `plugins/**/plugin.json`
 - [ ] `CHANGELOG.md` has an entry for the new version
 - [ ] README version badge is correct
 
@@ -26,9 +25,9 @@ truth for hermetic and live release gates.
 
 ## Documentation
 
-- [ ] `CLAUDE.md` is current and matches repo structure
+- [ ] `AGENTS.md` is current; Claude/Gemini aliases and regression fixtures pass
 - [ ] `README.md` has up-to-date tool reference and environment variable table
-- [ ] `plugins/cortex/skills/cortex/SKILL.md` has correct frontmatter and tool descriptions
+- [ ] `plugins/cortex/skills/using-cortex/SKILL.md` has correct frontmatter and tool descriptions
 - [ ] Setup instructions work from a clean clone
 
 ## Security
@@ -39,8 +38,8 @@ truth for hermetic and live release gates.
 
 - [ ] `/health` endpoint is unauthenticated; `/mcp` requires bearer auth when `CORTEX_TOKEN` is set
 - [ ] Container runs as non-root (UID 1000)
-- [ ] No baked environment variables in Docker image
-- [ ] Bearer token comparison uses constant-time equality (`subtle::ConstantTimeEq`)
+- [ ] No baked credentials in the Docker image; non-secret defaults match config
+- [ ] MCP, REST, admin REST, OAuth, and machine-ingest policies match current auth tests
 
 ## Build and test
 
@@ -61,7 +60,7 @@ truth for hermetic and live release gates.
 - [ ] `server.json` for MCP registry is valid JSON with correct version
 - [ ] `mcpb/manifest.json` is valid JSON with matching package metadata
 - [ ] OCI image published to `ghcr.io/dinglebear-ai/cortex`
-- [ ] Crate published to crates.io (if applicable)
+- [ ] Native assets and npm launcher match the release (root Cargo crate is not published)
 - [ ] DNS verification for `ai.dinglebear/cortex`
 
 ## Marketplace (if applicable)

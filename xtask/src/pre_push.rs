@@ -232,7 +232,27 @@ fn classify_paths(paths: &[&str]) -> Categories {
         );
     let hooks = any_file(paths, &["lefthook.yml"])
         || any_path(paths, &["xtask/src/pre_push", "xtask/src/main"]);
-    let docs = any_path(paths, &["docs/"]) || any_file(paths, &["README.md"]);
+    let docs = any_path(paths, &["docs/", "contracts/", "packages/cortex-rmcp/"])
+        || any_file(
+            paths,
+            &[
+                "README.md",
+                "CONTRIBUTING.md",
+                "Justfile",
+                "tests/TEST_COVERAGE.md",
+            ],
+        )
+        || paths.iter().any(|path| {
+            !path.contains('/')
+                && (path.to_ascii_lowercase().starts_with("license")
+                    || path.to_ascii_lowercase().starts_with("licence"))
+        })
+        || paths.iter().any(|path| {
+            matches!(
+                path.rsplit('/').next(),
+                Some("AGENTS.md" | "CLAUDE.md" | "GEMINI.md")
+            )
+        });
 
     Categories {
         docs,
@@ -248,6 +268,26 @@ fn classify_paths(paths: &[&str]) -> Categories {
 fn command_plan(paths: &[String], categories: &Categories, full: bool) -> Vec<PlanStep> {
     let mut plan = Vec::new();
 
+    if full || categories.docs {
+        plan.push(PlanStep {
+            name: "agent-instructions",
+            command: "bash scripts/check-agent-memory-symlinks.sh",
+        });
+        plan.push(PlanStep {
+            name: "agent-instruction-tests",
+            command: "bash scripts/test-agent-memory-symlinks.sh",
+        });
+        plan.push(PlanStep {
+            name: "repository-contract-tests",
+            command: "python3 scripts/test-repository-contract.py",
+        });
+    }
+    if full || categories.docs || categories.rust {
+        plan.push(PlanStep {
+            name: "generated-docs",
+            command: "just docs-check",
+        });
+    }
     if full || categories.release {
         plan.push(PlanStep {
             name: "version-sync",
@@ -319,10 +359,21 @@ fn configure_shell_command(command: &mut Command, step: &str) {
     command.arg("-c").arg(step);
 }
 
+fn remove_repository_git_environment(root: &Path, command: &mut Command) -> Result<()> {
+    // Git hooks export repository-local variables. Validation creates temporary
+    // repositories, so inheriting these can redirect fixture writes into this
+    // checkout even when the fixture uses `git -C`.
+    for key in git_output(root, &["rev-parse", "--local-env-vars"])?.lines() {
+        command.env_remove(key);
+    }
+    Ok(())
+}
+
 fn run_command(root: &Path, step: &PlanStep) -> Result<()> {
     println!("\n==> {}\n{}", step.name, step.command);
     let mut command = Command::new("bash");
     configure_shell_command(&mut command, step.command);
+    remove_repository_git_environment(root, &mut command)?;
     command.current_dir(root);
     for (key, _) in std::env::vars() {
         if key.starts_with("CARGO_PROFILE_") {

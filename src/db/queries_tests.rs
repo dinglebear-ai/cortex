@@ -206,6 +206,52 @@ fn host_filters_accept_the_canonical_name_returned_by_list_hosts() {
 }
 
 #[test]
+fn host_only_search_bounds_each_host_before_merging_aliases() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            make_entry("2026-01-01T00:00:01Z", "nashost", "info", "first"),
+            make_entry(
+                "2026-01-01T00:00:02Z",
+                "nashost.example.test",
+                "info",
+                "second",
+            ),
+            make_entry("2026-01-01T00:00:03Z", "nashost", "info", "third"),
+            make_entry("2026-01-01T00:00:04Z", "other", "info", "excluded"),
+        ],
+    )
+    .unwrap();
+    let rows = search_logs(
+        &pool,
+        &SearchParams {
+            host: Some("nashost".into()),
+            limit: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.message.as_str())
+            .collect::<Vec<_>>(),
+        ["third", "second"]
+    );
+
+    let (sql, bindings) = host_only_search_sql("nashost", 2);
+    let plan = query_plan(&pool, &sql, &bindings);
+    assert!(
+        plan.contains("idx_logs_host_time"),
+        "host search must use the host/time index: {plan}"
+    );
+    assert!(
+        !plan.contains("USE TEMP B-TREE"),
+        "host search must not sort all historical rows: {plan}"
+    );
+}
+
+#[test]
 fn get_error_summary_limit_is_bound_and_min_clamped() {
     let (sql, bindings) = get_error_summary_sql(
         Some("2026-01-01T00:00:00Z"),
@@ -2013,6 +2059,7 @@ fn ai_session_queries_respect_filters() {
             since: Some("2026-01-01T00:00:00Z".into()),
             until: Some("2026-01-01T23:59:59Z".into()),
             limit: Some(10),
+            offset: None,
         },
     )
     .unwrap();
@@ -2362,6 +2409,7 @@ fn default_session_params() -> ListAiSessionsParams {
         since: None,
         until: None,
         limit: Some(100),
+        offset: None,
     }
 }
 
@@ -2399,6 +2447,40 @@ fn rollup_result_equals_live_aggregation() {
         assert_eq!(l.event_count, r.event_count, "event_count drift");
         assert_eq!(l.ai_transcript_path, r.ai_transcript_path);
     }
+}
+
+#[test]
+fn session_inventory_offset_pages_match_live_and_rollup() {
+    let (pool, _dir) = test_pool();
+    seed_ai_sessions(&pool);
+    let all = list_ai_sessions(&pool, &default_session_params()).unwrap();
+    let page = ListAiSessionsParams {
+        limit: Some(5),
+        offset: Some(5),
+        ..default_session_params()
+    };
+    let live = list_ai_sessions(&pool, &page).unwrap();
+    assert_eq!(live.len(), 5);
+    assert_eq!(
+        live.iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>(),
+        all[5..10]
+            .iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>()
+    );
+    refresh_ai_session_rollup(&pool).unwrap();
+    let rolled = list_ai_sessions(&pool, &page).unwrap();
+    assert_eq!(
+        rolled
+            .iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>(),
+        live.iter()
+            .map(|row| &row.ai_session_id)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -3429,6 +3511,7 @@ fn bench_stats_and_sessions() {
         since: None,
         until: None,
         limit: Some(100),
+        offset: None,
     };
     let mut live_rows = 0usize;
     let sessions_live_latency = bench_percentiles_ms(20, || {

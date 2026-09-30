@@ -134,6 +134,7 @@ fn apply_projection_plan(
 
     let stats = graph_counts(&tx)?;
     update_projection_meta(&tx, &stats)?;
+    graph::prune_graph_change_events(&tx)?;
     tx.commit().context("commit inventory graph projection")?;
     Ok(stats)
 }

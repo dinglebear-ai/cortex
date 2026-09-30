@@ -57,6 +57,22 @@ fn docs_only_changes_skip_runtime_categories() {
 }
 
 #[test]
+fn agent_instructions_and_contributor_docs_enable_doc_checks() {
+    for path in [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "CONTRIBUTING.md",
+        "plugins/cortex/AGENTS.md",
+        "new-scope/GEMINI.md",
+    ] {
+        let out = classify("pull_request", &[path]);
+        assert_eq!(out["docs"], "true", "{path} must enable docs checks");
+        assert_eq!(out["rust"], "false", "{path} is not a runtime change");
+    }
+}
+
+#[test]
 fn rust_changes_enable_runtime_security_release_and_mcp_smoke() {
     let out = classify("pull_request", &["src/mcp/tools.rs"]);
     assert_eq!(out["rust"], "true");
@@ -76,7 +92,10 @@ fn web_changes_enable_web_docker_and_release_without_rust_tests() {
 
 #[test]
 fn plugin_skill_changes_enable_skill_and_release_gates() {
-    let out = classify("pull_request", &["plugins/cortex/skills/cortex/SKILL.md"]);
+    let out = classify(
+        "pull_request",
+        &["plugins/cortex/skills/using-cortex/SKILL.md"],
+    );
     assert_eq!(out["skills"], "true");
     assert_eq!(out["release"], "true");
     assert_eq!(out["rust"], "false");

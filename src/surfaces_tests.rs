@@ -8,6 +8,8 @@ const CURRENT_API_ROUTES: &[&str] = &[
     "/api/tail",
     "/api/errors",
     "/api/hosts",
+    "/api/host-metrics",
+    "/api/metric-hosts",
     "/api/correlate",
     "/api/stats",
     "/api/version",

@@ -14,7 +14,7 @@ Description: Plugin setup lifecycle for the cortex plugin (no automatic Claude C
 # Plugin Setup -- cortex
 
 The cortex plugin ships **no Claude Code lifecycle hooks**. There is no
-`plugins/cortex/hooks/hooks.json`, and `.claude-plugin/plugin.json` declares no
+`plugins/cortex/hooks/hooks.json`, and `plugins/install-cortex/.claude-plugin/plugin.json` declares no
 `hooks` key. Nothing runs automatically on `SessionStart` or `ConfigChange`.
 
 Setup is explicit and operator-driven: run `cortex setup` yourself after you

@@ -59,21 +59,30 @@ echo
 
 check "jq is available" "command -v jq"
 
-PLUGIN_JSON=".claude-plugin/plugin.json"
-MCP_JSON="plugins/cortex/mcp.json"
+PLUGIN_JSON="plugins/install-cortex/.claude-plugin/plugin.json"
+USAGE_JSON="plugins/cortex/.claude-plugin/plugin.json"
+MCP_JSON="plugins/install-cortex/.mcp.json"
 SKILLS_DIR="plugins/cortex/skills"
+INSTALL_SKILLS_DIR="plugins/install-cortex/skills"
 
 check "plugin manifest exists" "test -f '${PLUGIN_JSON}'"
 check "plugin manifest is valid JSON" "jq empty '${PLUGIN_JSON}'"
-check "plugin name is cortex" "test \"\$(jq -er '.name' '${PLUGIN_JSON}')\" = 'cortex'"
+check "plugin name is cortex" "test \"\$(jq -er '.name' '${PLUGIN_JSON}')\" = 'install-cortex'"
 check "plugin manifest omits version" "jq -er 'has(\"version\") | not' '${PLUGIN_JSON}'"
 check "plugin manifest omits hooks" "jq -er 'has(\"hooks\") | not' '${PLUGIN_JSON}'"
-check "plugin points to skills directory" "test \"\$(jq -er '.skills' '${PLUGIN_JSON}')\" = './plugins/cortex/skills'"
+check "plugin points to skills directory" "test \"\$(jq -er '.skills' '${PLUGIN_JSON}')\" = './skills'"
 check "plugin declares server_url userConfig" "jq -er '.userConfig.server_url.default == \"http://localhost:3100\"' '${PLUGIN_JSON}'"
 check "plugin declares cortex_receiver_port userConfig" "jq -er '.userConfig.cortex_receiver_port.default == 1514' '${PLUGIN_JSON}'"
 check "plugin declares cortex_receiver_host_port userConfig" "jq -er '.userConfig.cortex_receiver_host_port.default == 1514' '${PLUGIN_JSON}'"
 check "plugin declares mcp_port userConfig" "jq -er '.userConfig.mcp_port.default == 3100' '${PLUGIN_JSON}'"
 check "plugin declares api_token as sensitive" "jq -er '.userConfig.api_token.sensitive == true' '${PLUGIN_JSON}'"
+
+check "usage plugin exists" "test -f '${USAGE_JSON}'"
+check "usage plugin is valid JSON" "jq empty '${USAGE_JSON}'"
+check "usage plugin is named cortex" "test \"\$(jq -er '.name' '${USAGE_JSON}')\" = 'cortex'"
+check "usage plugin has no MCP registration" "jq -er 'has(\"mcpServers\") | not' '${USAGE_JSON}'"
+check "installer skill exists" "test -f '${INSTALL_SKILLS_DIR}/install-cortex/SKILL.md'"
+check "installer skill is absent from usage plugin" "test ! -e '${SKILLS_DIR}/install-cortex'"
 
 check "MCP config exists" "test -f '${MCP_JSON}'"
 check "MCP config is valid JSON" "jq empty '${MCP_JSON}'"
@@ -87,6 +96,7 @@ check "no plugin hooks directory" "test ! -d 'plugins/cortex/hooks'"
 check "skills directory exists" "test -d '${SKILLS_DIR}'"
 
 skill_count=0
+for SKILLS_DIR in "plugins/cortex/skills" "plugins/install-cortex/skills"; do
 if [[ -d "${SKILLS_DIR}" ]]; then
   while IFS= read -r skill_file; do
     skill_count=$((skill_count + 1))
@@ -95,6 +105,7 @@ if [[ -d "${SKILLS_DIR}" ]]; then
     check "skill ${skill_dir} has description" "awk 'BEGIN {found=0} /^description:[[:space:]]*[^[:space:]]/ {found=1} END {exit found ? 0 : 1}' '${skill_file}'"
   done < <(find "${SKILLS_DIR}" -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
 fi
+done
 
 CHECKS=$((CHECKS + 1))
 printf 'Checking: at least one plugin skill exists... '

@@ -1,7 +1,7 @@
 ---
 title: "MCP Tools Reference -- cortex"
 created: "2026-07-30"
-updated: "2026-08-04"
+updated: 2026-09-30
 ---
 
 # MCP Tools Reference -- cortex

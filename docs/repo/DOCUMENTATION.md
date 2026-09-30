@@ -1,0 +1,99 @@
+---
+title: "Documentation maintenance contract"
+created: 2026-09-27
+updated: 2026-09-29
+---
+
+# Documentation maintenance contract
+
+## Authority and scope
+
+[AGENTS.md](../../AGENTS.md) is the canonical repository instruction file. In every directory with agent instructions, `AGENTS.md` must be a regular file and both `CLAUDE.md` and `GEMINI.md` must be relative symlinks whose literal target is `AGENTS.md`. Scoped instructions supplement the root; they are not independent copies of it.
+
+The validator checks Git-tracked and non-ignored untracked instruction files, including newly added directories. It deliberately ignores generated/dependency trees ignored by Git. Run:
+
+```bash
+bash scripts/check-agent-memory-symlinks.sh
+bash scripts/test-agent-memory-symlinks.sh
+```
+
+The regression suite covers reversed ownership, missing/broken/wrong links, independent copies, scoped directories, and ignored generated content. CI runs both checks.
+
+## Machine-local instructions
+
+Shared instructions must not contain a developer's hostname, checkout location, private deployment addresses, or personal tool settings. Keep those in a Git-ignored regular file named `AGENTS.override.md`. The ignored relative symlink `CLAUDE.local.md -> AGENTS.override.md` makes it the single local source of truth. Do not use the legacy spelling `CLAUDE.md.local`; preserve old notes outside automatic instruction discovery when migrating.
+
+Codex discovers at most one instruction file per directory and prefers `AGENTS.override.md` over `AGENTS.md`. Therefore begin the local override with an explicit requirement to read and follow the sibling `AGENTS.md` before any work. This is an instruction to the agent, not a claim that Codex automatically imports both files. Claude Code loads `CLAUDE.local.md` alongside `CLAUDE.md`. A clean clone needs neither private file, and ignored local files do not automatically appear in other worktrees.
+
+Filename and precedence references, reviewed 2026-09-27: [Codex custom instructions](https://developers.openai.com/codex/guides/agents-md) and [Claude Code memory](https://code.claude.com/docs/en/memory).
+
+The validator rejects publishable local instruction files, malformed local aliases, and overrides missing a shared-instruction reference. Its fixtures include accidentally force-staged private overrides. Keep the private files ignored even when a task authorizes committing all pre-existing dirty changes.
+
+## Shared repository contract
+
+Maintained documentation under `docs/` keeps YAML frontmatter with `title`, `created`, and `updated`; preserve the original creation date and update the review date when revising a guide. Instruction files and indexes have the exceptions defined by the pinned shared contract.
+
+The pinned fleet validator still assumes `CLAUDE.md` is canonical. `scripts/check-repository-contract.py` runs that unchanged implementation, replaces only its `symlink-convention` finding family with the stricter Cortex instruction-authority validator, and preserves every other finding. The required `Repository Contract` job runs the adapter and its regression tests; it does not disable branch protection or bypass frontmatter, dependency, lint, privacy, or configuration checks.
+
+Run `python3 scripts/test-repository-contract.py` for hermetic adapter regressions. For full validation, pass the workflow-pinned shared validator to `python3 scripts/check-repository-contract.py --repo . --implementation PATH_TO_PINNED_FLEET_CONTRACT --profile rust`. The immutable upstream revision is declared in `.github/workflows/repository-contract.yml`. The adapter can be retired when the shared validator natively supports AGENTS-canonical ownership.
+
+## Change ownership
+
+| Behavior | Implementation authority | Documentation to review |
+| --- | --- | --- |
+| Rust/MSRV/SDK/build | `Cargo.toml`, `rust-toolchain.toml`, `.cargo/config.toml` | `AGENTS.md`, `docs/RUST.md`, setup/prerequisites |
+| MCP action/scopes/flags | `src/mcp/actions.rs`, action flags and handler tests | `docs/mcp/TOOLS.md`, `SCHEMA.md`, `docs/INVENTORY.md`, registry coverage tests |
+| CLI/REST routes | `src/surfaces/`, `src/cli/`, `src/api/` | `docs/CLI.md`, `docs/api.md`, live surface contracts |
+| Ingest/provider coverage | `src/scanner/providers.rs`, provider adapters, `src/agent/` | `docs/ADDING_SOURCES.md`, setup and agent protocol contracts |
+| Auth and configuration | `src/config*`, auth policy/OTLP code, env overlay | `docs/CONFIG.md`, `OAUTH.md`, `SECURITY.md`, `.env.example` |
+| SQLite/retention | `src/db/`, migrations, maintenance tests | storage/retention contracts, architecture, backup runbooks |
+| Plugin skills | `plugins/cortex/`, setup code, validation scripts | plugin docs and runtime assessment include paths |
+| Version and release | `release/components.toml`, release-please config and workflows | `RELEASING.md`, `docs/RELEASE.md`, MCP publish/CI docs |
+| CI/hooks | `.github/workflows/`, `lefthook.yml`, `xtask/src/pre_push.rs` | contributor guide and testing/release docs |
+
+The npm package README is an intentional byte-identical mirror of the root README. After changing the root file, run `node packages/cortex-rmcp/scripts/sync-readme.js` and `npm run check --prefix packages/cortex-rmcp`; commit the synchronized package copy. Do not replace this distribution contract with an independently edited README.
+
+Avoid copying long inventories into every guide. Link to a canonical reference or registry and retain tests for any intentionally repeated count. Command examples must name existing commands, correct paths, explicit prerequisites, and the appropriate read-only or mutating behavior.
+
+## Generated documentation and source ownership
+
+Do not patch a generated output to make a guide look current. Change its canonical input or generator, regenerate, and commit both sides. The complete tracked-snapshot entrypoint is [scripts/generate-docs.py](../../scripts/generate-docs.py):
+
+```bash
+just docs-generate
+just docs-check
+```
+
+These commands require Python 3, Node.js, and the repository-selected Rust toolchain. They do not require pnpm, a running Cortex service, Docker, production credentials, or live fleet grants. Cargo may fetch locked dependencies and populate its build cache, but check mode must not modify tracked documentation or lockfiles.
+
+| Output | Canonical inputs | Generator / check |
+| --- | --- | --- |
+| `docs/contracts/generated/*.schema.json` | Top-level `contracts/*.schema.json`, currently base vocabulary, integration profile, and rendered session page | `scripts/generate-docs.py` discovers and byte-copies the schemas; `--check` reports missing/stale snapshots without writing. The existing integration validator also checks compatibility and redaction fixtures. |
+| `tests/TEST_COVERAGE.md`, only the `BEGIN/END GENERATED LIVE INVENTORY` block | Compiled `SurfaceContract` from `src/surfaces/` and its source registries, plus `tests/live/contracts/profiles.json` | `tests/live/generate-docs.py`; `just live-docs` and `just live-docs-check` remain supported for this block alone. |
+| `packages/cortex-rmcp/README.md` and packaged license mirrors | Root `README.md` and root license files selected by the package script | `node packages/cortex-rmcp/scripts/sync-readme.js`, now with a read-only `--check`; retain `npm run check --prefix packages/cortex-rmcp` for packaging validation. |
+
+The inventory exporter is a separate Cargo workspace with its own checked-in `tests/live/surface-exporter/Cargo.lock`. Generation uses `cargo run --locked`: a stale dependency lock is an error, not permission to resolve new versions silently. Resolve intentional dependency changes separately and review their lockfile diff.
+
+The live generator owns exactly one ordered marker pair. Missing, duplicated, or reversed markers fail rather than appending a second table or replacing surrounding prose. Frontmatter, narrative, and line endings outside the owned block are preserved. New surface kinds fail until the renderer explicitly covers them. Schema source files are validated before snapshot writes; an orphan snapshot without a canonical source fails and must be reviewed rather than silently deleted.
+
+### Maintained references are not generated snapshots
+
+`docs/CLI.md`, `docs/api.md`, `docs/mcp/TOOLS.md`, and `docs/mcp/SCHEMA.md` remain human-maintained, with Rust documentation/registry drift tests. The runtime MCP JSON schema is generated from `ACTION_SPECS`; that does not make its Markdown explanation generated. Agent Observatory planning contracts under `docs/contracts/` are maintained specifications checked by `scripts/check-agent-observatory-contracts.sh`, not outputs of the snapshot copier.
+
+The logo-pack script, deploy-template renderer, shell-completion generation, static browser export, release/version tooling, and dated evidence receipts have separate owners and purposes. They are not a license to rewrite historical documents, regenerate release history, change package versions, or run deployment commands during a documentation refresh.
+
+### Required generator validation
+
+`just docs-check` runs hermetic generator regressions and all snapshot checks. `tests/live/selftest/ci-docs.sh` runs the same checks alongside live-workflow shape checks. CI invokes it from both the Rust Tests job and the non-Rust Docs Contract job. The CI router recognizes schema inputs, packaged mirrors, root licenses, and the generated coverage document; local `cargo xtask pre-push` also runs the generator gate for docs and Rust inputs.
+
+After a correction, run generation twice and confirm the second pass produces no further diff. Run check mode and confirm that it leaves the tree unchanged. Commit regenerated snapshots with their source/generator changes; do not weaken validators to accept stale output.
+
+## Current versus historical documentation
+
+`docs/README.md` is the navigation entrypoint. Current guides describe implemented source. Contracts/specs must state whether they are implemented or proposed; the presence of a design document does not prove delivery. Dated plans, research, reports, reviews, and session notes preserve the state at their stated date. Link to them as history, not as present operational instructions. Runbooks are operational documents unless explicitly marked historical.
+
+When reviewing a change, check local Markdown links, source paths, workflow names, license claims, version policy, default auth/storage behavior, and examples against code. Leave third-party/per-file license notices intact; the repository's own license is defined by `LICENSE` and Cargo metadata. Do not replace historical incident evidence with reconstructed current behavior.
+
+## Completion evidence
+
+Documentation work is complete when the relevant source has been inspected, affected current guides agree, generated snapshots reproduce from their canonical inputs, a second generation pass is unchanged, aliases validate, applicable generator/doc/registry tests pass, and the final diff has been reviewed. Report a failed or unrun gate explicitly. A local test result, remote CI result, and live deployment verification are separate claims.

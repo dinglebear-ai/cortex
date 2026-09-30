@@ -566,7 +566,10 @@ fn classify_tool_error(error: &anyhow::Error) -> ToolErrorClass {
         Some(ServiceError::NotFound(_)) | Some(ServiceError::RowNotFound) => {
             ToolErrorClass::NotFound
         }
-        Some(ServiceError::ConstraintViolation { .. }) => ToolErrorClass::Conflict,
+        Some(ServiceError::ConstraintViolation { .. }) | Some(ServiceError::Conflict(_)) => {
+            ToolErrorClass::Conflict
+        }
+        Some(ServiceError::Gone(_)) => ToolErrorClass::NotFound,
         Some(ServiceError::Internal(_)) | None => ToolErrorClass::Internal,
     }
 }

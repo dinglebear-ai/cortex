@@ -1,72 +1,48 @@
-# Cortex Documentation
+# Cortex documentation
 
-Complete documentation for `cortex` -- a Rust syslog receiver and MCP server for homelab log intelligence.
+Start with the [project overview](../README.md), canonical [AGENTS.md](../AGENTS.md), and [contributor guide](../CONTRIBUTING.md). Cortex covers logs, telemetry, AI sessions, host inventory, and evidence-backed investigation; it is no longer only a syslog MCP server.
 
-## Directory index
+## Current guides
 
-### Authoritative current docs
-
-| File | Purpose |
+| Document | Purpose |
 | --- | --- |
-| `README.md` | This file -- documentation index |
-| `SETUP.md` | Step-by-step setup guide -- clone, build, configure, deploy, verify (at `docs/SETUP.md`) |
-| `CONFIG.md` | Configuration reference -- config.toml, env vars, storage budget |
-| `CLI.md` | Direct CLI reference -- local search, tail, errors, hosts, correlate, and stats commands |
-| `api.md` | REST API endpoint matrix (93 method/path bindings), versioning, perf, threat model, response caps, VACUUM caveats |
-| `architecture.md` | Caller → DB diagram (HTTP CLI default + direct-SQLite consumers) |
-| `rollout.md` | Manual v0.26 upgrade playbook for HTTP CLI cutover |
-| `CHECKLIST.md` | Supplemental pre-release audit checklist -- current version policy and release gates point to `RELEASE.md` |
-| `GUARDRAILS.md` | Security guardrails -- credentials, Docker, auth, input handling |
-| `INVENTORY.md` | Component inventory -- tools, env vars, surfaces, dependencies |
-| `OAUTH.md` | OAuth/JWT operator configuration and runtime model |
-| `RUST.md` | Rust toolchain and rmcp dependency intent |
-| `SECURITY.md` | Consolidated operator trust model |
-| `RELEASE.md` | Release gates: hermetic CI versus live fleet checks |
+| [SETUP.md](SETUP.md) | Install, configure, deploy, and verify |
+| [CONFIG.md](CONFIG.md) | Runtime configuration and storage controls |
+| [CLI.md](CLI.md) | CLI commands and routing |
+| [api.md](api.md) | REST endpoint contracts, authorization, response bounds |
+| [architecture.md](architecture.md) | Source families, services, storage, projections, ownership |
+| [ADDING_SOURCES.md](ADDING_SOURCES.md) | Extend source adapters without duplicating registries or confusing transport with provider |
+| [SECURITY.md](SECURITY.md), [OAUTH.md](OAUTH.md) | Trust model and OAuth/operator configuration |
+| [GUARDRAILS.md](GUARDRAILS.md), [REDACTION.md](REDACTION.md) | Safety and privacy handling |
+| [INVENTORY.md](INVENTORY.md) | Component and public surface inventory |
+| [RUST.md](RUST.md) | Pinned toolchain, workspace, SDK, build/test setup |
+| [RELEASE.md](RELEASE.md), [RELEASING.md](../RELEASING.md) | Release-please policy and release gates |
+| [LIVE_QUALIFICATION.md](LIVE_QUALIFICATION.md) | Isolated live profiles versus explicitly granted fleet checks |
+| [Host metrics producer](../deploy/otel/hostmetrics/README.md) | Separate OpenTelemetry Collector that sends real host metrics to Cortex |
+| [CHECKLIST.md](CHECKLIST.md) | Supplemental pre-release review |
+| [repo/DOCUMENTATION.md](repo/DOCUMENTATION.md) | Documentation authority, maintenance, validation |
 
-### Subdirectories
+## Areas
 
 | Directory | Scope |
 | --- | --- |
-| `contracts/` | Stable and proposed storage, API, type, and behavior contracts |
-| `design/` | Architecture and UI design documents |
-| `mcp/` | MCP server docs: auth, transport, tools, resources, testing, deployment |
-| `plugin/` | Plugin system docs: manifests, hooks, skills, commands, channels |
-| `repo/` | Repository docs: git conventions, scripts, memory, rules |
-| `research/` | Dated source and dependency research ledgers |
-| `specs/` | Normative feature specifications |
-| `stack/` | Technology stack docs: prerequisites, architecture, Rust dependencies |
-| `upstream/` | Upstream service docs (cortex is self-contained -- no external API) |
+| [mcp/](mcp/AGENTS.md) | MCP transport, auth, tools/resources, testing, distribution |
+| [plugin/](plugin/AGENTS.md) | Plugin packaging, setup adapters, skills and supported surfaces |
+| [repo/](repo/AGENTS.md) | Repository layout, Git, scripts, recipes, project knowledge |
+| [stack/](stack/AGENTS.md) | Technology and prerequisites |
+| [upstream/](upstream/AGENTS.md) | Source families and optional outbound integrations |
+| `contracts/` | Behavior/storage/API contracts and their implementation status |
+| `specs/`, `design/` | Feature specifications and design rationale; inspect status before claiming implementation |
+| `runbooks/` | Operational procedures; current unless explicitly marked historical |
 
-### Proposed Agent Observatory package
+## Agent Observatory
 
-The Agent Observatory documents are an implementation-ready proposal, not a
-claim that the feature exists in Cortex 3.11.1. Start with:
+Current implementation areas include `src/agent_observatory*`, `src/app/agent_observatory*`, `src/db/agent_observatory*`, `src/git_observer*`, `src/web_app.rs`, and `web/`. Begin with [architecture.md](architecture.md) and the [agent protocol contract](contracts/agent-protocol.md).
 
-- [Research ledger](research/2026-07-31-agent-observatory.md)
-- [Architecture](design/agent-observatory-architecture.md)
-- [Next.js and Aurora UI design](design/agent-observatory-ui.md)
-- [Normative specification](specs/agent-observatory.md)
-- [Contract](contracts/agent-observatory.md) and companion SQL/JSON/OpenAPI/type fixtures
-- [116-task TDD implementation plan](plans/2026-07-31-agent-observatory-implementation.md)
+The original [research ledger](research/2026-07-31-agent-observatory.md), [architecture design](design/agent-observatory-architecture.md), [UI design](design/agent-observatory-ui.md), [specification](specs/agent-observatory.md), [contract](contracts/agent-observatory.md), and [implementation plan](plans/2026-07-31-agent-observatory-implementation.md) preserve proposal history. Their original task lists do not prove that all planned capabilities shipped, nor should the whole feature still be described as only a proposal when source exists.
 
-### Preserved and archival directories
+## Historical material
 
-Files in these directories are useful historical context, but they are not the
-source of truth for current command names, plugin paths, auth scopes, release
-version policy, or install examples. Prefer the authoritative docs above for
-operator instructions.
+Dated files in `plans/`, `research/`, `reports/`, `reviews/`, `sessions/`, and `superpowers/` describe their recorded point in time. `rollout.md` is the historical v0.26 HTTP-CLI migration playbook, not the default installation guide. Prefer current guides and executable contracts for command names, paths, auth, defaults, and version policy.
 
-| Directory | Scope |
-| --- | --- |
-| `plans/` | Engineering plans and design docs |
-| `runbooks/` | Operational runbooks (deploy, maintenance) |
-| `sessions/` | Development session notes |
-| `superpowers/` | Superpowers plans (storage budget guardrail, etc.) |
-
-## Cross-references
-
-- [CLAUDE.md](../CLAUDE.md) -- project instructions for Claude Code sessions
-- [README.md](../README.md) -- user-facing project overview
-- [CLI.md](CLI.md) -- direct local CLI command reference
-- [SETUP.md](SETUP.md) -- host configuration guide (rsyslog, UniFi, ATT router)
-- [CHANGELOG.md](../CHANGELOG.md) -- version history
+Use `AGENTS.md` as the cross-agent instruction target; its `CLAUDE.md` and `GEMINI.md` aliases are symlinks. Keep [CHANGELOG.md](../CHANGELOG.md) as version history, not a replacement for current operator documentation.

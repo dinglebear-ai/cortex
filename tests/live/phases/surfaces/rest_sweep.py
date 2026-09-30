@@ -43,9 +43,14 @@ QUERY = {
     "/api/get": {"id": "1"},
     "/api/context": {"log_id": "1", "before": "1", "after": "1"},
     "/api/host-state": {"host": "cortex-live"},
+    "/api/host-metrics": {"hostname": "cortex-live", "metric_name": "system.cpu.utilization", "minutes": "5", "limit": "5"},
+    "/api/metric-hosts": {},
     "/api/correlate": {"reference_time": "2026-08-27T00:00:00Z", "limit": "5"},
     "/api/correlate-state": {"reference_time": "2026-08-27T00:00:00Z", "limit": "5"},
     "/api/graph/entity": {"entity_type": "host", "key": "cortex-live"},
+    "/api/graph/entities": {"limit": "5"},
+    "/api/graph/relationships": {"limit": "5"},
+    "/api/graph/changes": {"limit": "5"},
     "/api/graph/around": {"entity_type": "host", "key": "cortex-live", "depth": "1", "limit": "5"},
     "/api/graph/explain": {"entity_type": "host", "key": "cortex-live", "depth": "1", "max_chains": "5"},
     "/api/graph/evidence": {"evidence_id": "1"},
@@ -167,11 +172,16 @@ CONTRACTS = {
     "GET /api/fleet-state": ("object", "hosts summary"),
     "GET /api/get": ("object", "log"),
     "GET /api/graph/around": ("object", "candidates entities evidence metadata next_queries relationships resolved_entity"),
+    "GET /api/graph/entities": ("object", "entities metadata next_cursor snapshot_cursor"),
+    "GET /api/graph/relationships": ("object", "metadata next_cursor relationships snapshot_cursor"),
+    "GET /api/graph/changes": ("object", "changes metadata next_cursor"),
     "GET /api/graph/entity": ("object", "candidates metadata resolved_entity"),
     "GET /api/graph/evidence": ("object", "dst_entity evidence metadata missing_source_reason relationship source_log_summary src_entity"),
     "GET /api/graph/explain": ("object", "candidates chains evidence metadata missing_evidence narrative next_queries open_questions resolved_entity"),
     "GET /api/host-state": ("object", "flags host_id hostname latest samples total_samples truncated"),
+    "GET /api/host-metrics": ("object", "points next_cursor truncated queried_at"),
     "GET /api/hosts": ("object", "hosts"),
+    "GET /api/metric-hosts": ("object", "hosts queried_at"),
     "GET /api/incident-context": ("object", "ai_sessions by_app by_severity error_logs error_logs_truncated total_logs window_from window_to"),
     "GET /api/ingest-rate": ("object", "buckets now write_blocked"),
     "GET /api/notifications/recent": ("array", ""),
@@ -283,6 +293,13 @@ def semantic_postconditions(method: str, path: str, parsed: object, fixture_host
     if route == "GET /api/host-state":
         checks.append(("host_id:fixture", parsed.get("host_id") == fixture_host))
         checks.append(("latest:object", isinstance(parsed.get("latest"), dict)))
+    elif route == "GET /api/host-metrics":
+        checks.append(("points:array", isinstance(parsed.get("points"), list)))
+        checks.append(("truncated:boolean", isinstance(parsed.get("truncated"), bool)))
+        checks.append(("queried_at:string", isinstance(parsed.get("queried_at"), str)))
+    elif route == "GET /api/metric-hosts":
+        checks.append(("hosts:array", isinstance(parsed.get("hosts"), list)))
+        checks.append(("queried_at:string", isinstance(parsed.get("queried_at"), str)))
     elif route in {"GET /api/graph/entity", "GET /api/graph/around", "GET /api/graph/explain"}:
         checks.append(("resolved_entity:object", isinstance(parsed.get("resolved_entity"), dict)))
     elif route.startswith("GET /api/v1/graph/"):
@@ -407,10 +424,19 @@ def main() -> int:
         raise RuntimeError("run-owned session identity was not discoverable") from error
     QUERY["/api/sessions/rendered"] = {**session_query, "limit": "5"}
     QUERY["/api/streams/sessions"] = session_query
+    graph_status, graph_payload, _ = request(base, "GET", "/api/graph/entities?limit=1", read_token, None)
+    try:
+        graph_cursor = json.loads(graph_payload)["snapshot_cursor"] if graph_status == 200 else None
+    except (KeyError, TypeError, json.JSONDecodeError):
+        graph_cursor = None
+    if not isinstance(graph_cursor, str) or not graph_cursor:
+        raise RuntimeError(f"graph inventory change cursor was not available: status={graph_status}")
+    QUERY["/api/graph/changes"]["cursor"] = graph_cursor
     for graph_path in ("/api/graph/entity", "/api/graph/around", "/api/graph/explain",
                        "/api/v1/graph/entity", "/api/v1/graph/around", "/api/v1/graph/explain"):
         QUERY[graph_path]["key"] = fixture_host
     QUERY["/api/host-state"]["host"] = fixture_host
+    QUERY["/api/host-metrics"]["hostname"] = fixture_host
     POST["/api/errors/ack"]["signature_hash"] = fixture_signature
     POST["/api/errors/unack"]["signature_hash"] = fixture_signature
     # Create route prerequisites through the live API so ID-bearing cases use

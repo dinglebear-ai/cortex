@@ -1,5 +1,5 @@
 const CURRENT_DOCKER_DOCS: &[(&str, &str)] = &[
-    ("CLAUDE.md", include_str!("../CLAUDE.md")),
+    ("AGENTS.md", include_str!("../AGENTS.md")),
     ("README.md", include_str!("../README.md")),
     ("docs/CONFIG.md", include_str!("../docs/CONFIG.md")),
     ("docs/SETUP.md", include_str!("../docs/SETUP.md")),
@@ -14,6 +14,13 @@ const CURRENT_DOCKER_DOCS: &[(&str, &str)] = &[
     ("docs/mcp/ENV.md", include_str!("../docs/mcp/ENV.md")),
     ("docs/SECURITY.md", include_str!("../docs/SECURITY.md")),
 ];
+
+#[test]
+fn repository_agent_guide_stays_within_7500_characters() {
+    let guide = include_str!("../AGENTS.md");
+    let characters = guide.chars().count();
+    assert!(characters <= 7_500, "AGENTS.md has {characters} characters");
+}
 
 #[test]
 fn current_docker_ingest_docs_prefer_agent_path_over_socket_proxy() {

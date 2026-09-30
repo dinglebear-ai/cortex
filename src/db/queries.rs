@@ -270,6 +270,10 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
 
+    if let Some(host) = params.host.as_deref().filter(|_| host_only_search(params)) {
+        return search_logs_for_host(&conn, host, limit);
+    }
+
     // If we have a full-text query, use FTS5 join
     if let Some(ref query) = params.query {
         validate_fts_query(query)?;
@@ -305,6 +309,76 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
         let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), map_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+}
+
+/// A host-only read can use the hostname/timestamp index for each canonical
+/// hostname. The generic `IN (SELECT hosts...) ORDER BY timestamp` plan sorts
+/// every historical row for the host before applying LIMIT.
+fn host_only_search(params: &SearchParams) -> bool {
+    params.query.is_none()
+        && params.source.is_none()
+        && params.source_ip_prefix.is_none()
+        && params.source_ip_prefixes.is_none()
+        && params.severity.is_none()
+        && params.severity_in.is_none()
+        && params.app.is_none()
+        && params.facility.is_none()
+        && params.exclude_facility.is_none()
+        && params.process_id.is_none()
+        && params.since.is_none()
+        && params.until.is_none()
+        && params.received_since.is_none()
+        && params.received_until.is_none()
+        && params.ai_tool.is_none()
+        && params.ai_project.is_none()
+        && params.ai_session_id.is_none()
+        && params.event_action.is_none()
+        && !params.exclude_ai
+}
+
+fn host_only_search_sql(hostname: &str, limit: u32) -> (String, Vec<rusqlite::types::Value>) {
+    (
+        format!(
+            "SELECT {FTS_SELECT_COLS} FROM logs l INDEXED BY idx_logs_host_time \
+             WHERE l.hostname = ?1 ORDER BY l.timestamp DESC LIMIT ?2"
+        ),
+        vec![
+            rusqlite::types::Value::Text(hostname.to_string()),
+            rusqlite::types::Value::Integer(i64::from(limit)),
+        ],
+    )
+}
+
+fn search_logs_for_host(
+    conn: &rusqlite::Connection,
+    host: &str,
+    limit: u32,
+) -> Result<Vec<LogEntry>> {
+    // Mirror append_host_selector's canonical bare-name and FQDN matching.
+    let mut host_query = conn.prepare(
+        "SELECT h.hostname FROM hosts h
+         WHERE lower(rtrim(trim(h.hostname), '.')) = lower(rtrim(trim(?1), '.'))
+            OR (lower(rtrim(trim(h.hostname), '.')) LIKE lower(rtrim(trim(?1), '.')) || '.%'
+                AND EXISTS (SELECT 1 FROM hosts bare
+                    WHERE lower(rtrim(trim(bare.hostname), '.')) = lower(rtrim(trim(?1), '.'))
+                      AND instr(lower(rtrim(trim(bare.hostname), '.')), '.') = 0))",
+    )?;
+    let hostnames = host_query
+        .query_map([host], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut results = Vec::new();
+    for hostname in hostnames {
+        let (sql, bindings) = host_only_search_sql(&hostname, limit);
+        let mut statement = conn.prepare(&sql)?;
+        results.extend(
+            statement
+                .query_map(rusqlite::params_from_iter(bindings.iter()), map_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        );
+    }
+    results.sort_unstable_by(|left, right| right.timestamp.cmp(&left.timestamp));
+    results.truncate(limit as usize);
+    Ok(results)
 }
 
 /// Get the N most recent logs for a host/service
@@ -733,6 +807,7 @@ pub fn list_ai_sessions_live(
 ) -> Result<Vec<AiSessionEntry>> {
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
+    let offset = params.offset.unwrap_or(0).min(10_000);
     let mut sql = String::from(
         "WITH filtered_logs AS MATERIALIZED (
             SELECT id, ai_project, ai_tool, ai_session_id, ai_transcript_path,
@@ -816,7 +891,7 @@ pub fn list_ai_sessions_live(
           GROUP BY f.ai_project, f.ai_tool, f.ai_session_id, f.hostname,
                    t.session_title, t.session_title_provenance
           ORDER BY last_seen DESC
-          LIMIT {limit}"
+          LIMIT {limit} OFFSET {offset}"
     ));
 
     let mut stmt = conn.prepare(&sql)?;
@@ -844,6 +919,7 @@ fn list_ai_sessions_from_rollup(
 ) -> Result<Vec<AiSessionEntry>> {
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
+    let offset = params.offset.unwrap_or(0).min(10_000);
     let mut sql = String::from(
         "SELECT ai_project, ai_tool, ai_session_id, ai_transcript_path,
                 hostname, first_seen, last_seen, event_count,
@@ -878,7 +954,9 @@ fn list_ai_sessions_from_rollup(
     // (the cost that made the live aggregation slow). Adding tiebreak columns
     // would reintroduce a temp b-tree, so ties stay engine-arbitrary here just
     // as they are in the live query.
-    sql.push_str(&format!(" ORDER BY last_seen DESC LIMIT {limit}"));
+    sql.push_str(&format!(
+        " ORDER BY last_seen DESC LIMIT {limit} OFFSET {offset}"
+    ));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {

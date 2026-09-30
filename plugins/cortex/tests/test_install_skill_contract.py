@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-PLUGIN = Path(__file__).resolve().parents[1]
+PLUGIN = Path(__file__).resolve().parents[2] / "install-cortex"
 ROOT = PLUGIN.parents[1]
 SKILL = PLUGIN / "skills" / "install-cortex" / "SKILL.md"
 REF = PLUGIN / "skills" / "install-cortex" / "references" / "setup.md"
@@ -26,7 +26,7 @@ class InstallCortexContractTest(unittest.TestCase):
     def test_oauth_setup_preserves_secure_static_token_default(self):
         expected = 'CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH="${CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH:-true}"'
         insecure = 'CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH="${CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH:-false}"'
-        for script in [ROOT / "scripts" / "plugin-setup.sh", PLUGIN / "scripts" / "plugin-setup.sh"]:
+        for script in [ROOT / "scripts" / "plugin-setup.sh", ROOT / "plugins" / "cortex" / "scripts" / "plugin-setup.sh"]:
             text = script.read_text()
             self.assertIn(expected, text)
             self.assertNotIn(insecure, text)

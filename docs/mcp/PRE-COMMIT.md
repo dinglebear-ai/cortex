@@ -1,7 +1,7 @@
 ---
 title: "Pre-commit Hook Configuration -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: 2026-09-27
 ---
 
 # Pre-commit Hook Configuration -- cortex
@@ -43,6 +43,10 @@ just validate-plugin
 # Marketplace manifest assertions
 bash scripts/validate-marketplace.sh
 
+# Canonical instructions and regression fixtures
+bash scripts/check-agent-memory-symlinks.sh
+bash scripts/test-agent-memory-symlinks.sh
+
 # Version-bearing files agree
 cargo xtask check-version-sync
 
@@ -63,7 +67,9 @@ just lint        # cargo clippy -- -D warnings
 just test        # hermetic suite via cargo-nextest
 ```
 
-`cargo xtask pre-push` bundles the heavier pre-push gate. All of these are also enforced in CI.
+`cargo xtask pre-push` selects gates by changed paths; `CORTEX_FULL_PRE_PUSH=1`
+requests the full suite. Documentation changes include the lightweight instruction
+authority checks. CI also requires those checks independently of path filtering.
 
 ## See also
 

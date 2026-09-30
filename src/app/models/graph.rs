@@ -63,6 +63,76 @@ pub struct GraphExplainRequest {
     pub payload_budget: Option<u32>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphEntitiesRequest {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+    pub entity_type: Option<String>,
+    pub source_kind: Option<String>,
+    pub trust_level: Option<String>,
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphRelationshipsRequest {
+    pub cursor: Option<String>,
+    pub snapshot_cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphChangesRequest {
+    pub cursor: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphDiscoveryMetadata {
+    pub projection_status: String,
+    pub source_watermark: String,
+    pub last_completed_at: Option<String>,
+    pub is_degraded: bool,
+    pub truncated: bool,
+    pub recovery: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphEntitiesResponse {
+    pub entities: Vec<GraphEntity>,
+    pub next_cursor: Option<String>,
+    pub snapshot_cursor: String,
+    pub metadata: GraphDiscoveryMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphRelationshipsResponse {
+    pub relationships: Vec<GraphRelationship>,
+    pub next_cursor: Option<String>,
+    pub snapshot_cursor: String,
+    pub metadata: GraphDiscoveryMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphChange {
+    pub seq: i64,
+    pub object_kind: String,
+    pub operation: String,
+    pub item_key: String,
+    pub occurred_at: String,
+    pub entity: Option<GraphEntity>,
+    pub relationship: Option<GraphRelationship>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphChangesResponse {
+    pub changes: Vec<GraphChange>,
+    pub next_cursor: String,
+    pub metadata: GraphDiscoveryMetadata,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphProjectionStatusResponse {
     pub projection_status: String,
@@ -161,6 +231,8 @@ pub struct GraphRelationship {
     pub confidence: f64,
     pub evidence_count: i64,
     pub evidence_ids: Vec<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_kinds: Vec<String>,
     pub first_seen_at: Option<String>,
     pub last_seen_at: Option<String>,
 }

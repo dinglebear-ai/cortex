@@ -1,7 +1,7 @@
 ---
 title: "Testing Guide -- cortex"
 created: "2026-07-30"
-updated: "2026-07-30"
+updated: 2026-09-30
 ---
 
 # Testing Guide -- cortex
@@ -9,10 +9,11 @@ updated: "2026-07-30"
 ## Unit tests
 
 ```bash
-cargo test
+env -u CORTEX_API_TOKEN -u NO_AUTH cargo nextest run --locked
+cargo test --doc --locked
 ```
 
-Shortcut: `just test`
+Shortcuts: `just test` (nextest) and `just test-doc` (doctests).
 
 Coverage summary:
 
@@ -33,7 +34,7 @@ Tests are colocated with source code in `#[cfg(test)]` modules:
 | --- | --- |
 | `src/config.rs` | Env var overrides, defaults, validation (host format, storage budget relationships, pool size) |
 | `src/db.rs` | Schema init, insert/search/tail/errors/hosts/stats, FTS5 queries, retention purge, storage budget enforcement, batch retry |
-| `src/syslog.rs` | RFC 3164/5424 parsing, UniFi CEF extraction, severity mapping, facility mapping, malformed input |
+| `src/receiver.rs` + `src/receiver/` | RFC 3164/5424 parsing, UniFi CEF extraction, severity mapping, facility mapping, malformed input |
 | `src/mcp.rs` + `src/mcp/` | Health endpoint, auth middleware (valid/invalid/missing token, no-auth mode), RMCP tool dispatch, timestamp validation, MCP lifecycle |
 | `src/main.rs` | Background interval timing |
 

@@ -1,7 +1,15 @@
 //! Replay identity validation for transcript receipt ledgers.
 
+use super::structured_events::{ForwardedEventContext, insert_forwarded_events_in_tx};
 use super::*;
 use sha2::{Digest, Sha256};
+
+#[path = "legacy_receipt_replay.rs"]
+mod replay;
+use replay::{
+    accept_codex_project_reclassification, accept_codex_whitespace_reparse, receipt_key,
+    upgrade_codex_message_role,
+};
 
 #[derive(Debug)]
 pub(super) struct IdempotencyConflict;
@@ -14,29 +22,68 @@ impl std::fmt::Display for IdempotencyConflict {
 
 impl std::error::Error for IdempotencyConflict {}
 
-fn envelope_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
+fn v2_fingerprint_with_locator(
+    envelope: &EvidenceEnvelope,
+    locator: &str,
+) -> anyhow::Result<String> {
     // Supplemental display metadata can change without a transcript revision.
+    // Keep the persisted v2 format rollback-compatible with older Cortex
+    // releases; locator mutability is handled during replay verification.
     let mut evidence = envelope.clone();
     evidence.source.title = None;
     evidence.source.title_provenance = None;
+    evidence.source.locator = locator.to_string();
     let encoded = serde_json::to_vec(&evidence)?;
     Ok(format!("evidence-v2:sha256:{:x}", Sha256::digest(encoded)))
 }
 
-fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: bool) -> String {
-    if shared_bearer {
-        source_record_id.to_owned()
-    } else {
-        format!(
-            "principal:sha256:{:x}",
-            Sha256::digest(format!("{forwarder_identity}\0{source_record_id}").as_bytes())
-        )
-    }
+fn envelope_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
+    v2_fingerprint_with_locator(envelope, &envelope.source.locator)
 }
 
-/// Reconstruct only mutable titles from the stored row, then check the old
-/// full-envelope hash. This also preserves timestamp-less exact replays: the
-/// hash, unlike a canonical log timestamp, retains their original `None`.
+fn transient_v3_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
+    // A pre-review patched deployment briefly wrote v3 receipts whose only
+    // semantic difference was excluding the movable locator. Continue to read
+    // those receipts and lazily rebind them to the durable v2 format.
+    let mut evidence = envelope.clone();
+    evidence.source.title = None;
+    evidence.source.title_provenance = None;
+    evidence.source.locator.clear();
+    Ok(format!(
+        "evidence-v3:sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&evidence)?)
+    ))
+}
+
+fn canonical_v2_fingerprint(
+    envelope: &EvidenceEnvelope,
+    stored_locator: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let Some(locator) = stored_locator else {
+        return Ok(None);
+    };
+    Ok(Some(v2_fingerprint_with_locator(envelope, locator)?))
+}
+
+fn v2_fingerprint_matches(
+    envelope: &EvidenceEnvelope,
+    stored_locator: Option<&str>,
+    previous: &str,
+) -> anyhow::Result<bool> {
+    Ok(canonical_v2_fingerprint(envelope, stored_locator)?.as_deref() == Some(previous))
+}
+
+fn transient_v3_fingerprint_matches(
+    envelope: &EvidenceEnvelope,
+    previous: &str,
+) -> anyhow::Result<bool> {
+    Ok(previous == transient_v3_fingerprint(envelope)?)
+}
+
+/// Reconstruct mutable display/location metadata from the stored row, then
+/// check the old full-envelope hash. This also preserves timestamp-less exact
+/// replays: the hash, unlike a canonical log timestamp, retains their original
+/// `None`.
 fn old_fingerprint_matches(
     tx: &rusqlite::Transaction<'_>,
     key: &str,
@@ -44,7 +91,8 @@ fn old_fingerprint_matches(
     previous: &str,
 ) -> anyhow::Result<bool> {
     // An exact old hash is sufficient even if bounded log metadata omitted
-    // its source fields. Canonical metadata is needed only for a title change.
+    // its source fields. Canonical metadata is needed only when mutable title
+    // or locator metadata changed.
     if previous == format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(envelope)?)) {
         return Ok(true);
     }
@@ -65,6 +113,7 @@ fn old_fingerprint_matches(
     let mut original = envelope.clone();
     original.source.title = source.title;
     original.source.title_provenance = source.title_provenance;
+    original.source.locator = source.locator;
     Ok(previous
         == format!(
             "sha256:{:x}",
@@ -86,7 +135,7 @@ fn legacy_receipt_matches(
             "SELECT r.envelope_version, r.provider, r.source_identity,
                     r.source_epoch, r.source_revision,
                     l.timestamp, l.message, l.ai_project, l.ai_session_id,
-                    l.ai_transcript_path, l.metadata_json
+                    l.metadata_json
              FROM ai_transcript_forward_receipts r
              JOIN logs l ON l.id = r.log_id
              WHERE r.source_record_id = ?1",
@@ -103,7 +152,6 @@ fn legacy_receipt_matches(
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Option<String>>(10)?,
                 ))
             },
         )
@@ -118,7 +166,6 @@ fn legacy_receipt_matches(
         message,
         ai_project,
         ai_session_id,
-        locator,
         metadata_json,
     )) = stored
     else {
@@ -136,9 +183,11 @@ fn legacy_receipt_matches(
     let mut incoming_source = envelope.source.clone();
     incoming_source.title = None;
     incoming_source.title_provenance = None;
+    incoming_source.locator.clear();
     if let Some(source) = &mut stored_source {
         source.title = None;
         source.title_provenance = None;
+        source.locator.clear();
     }
     let stored_capabilities = metadata
         .get("capabilities")
@@ -171,7 +220,6 @@ fn legacy_receipt_matches(
         && message == envelope.message
         && ai_project == envelope.ai_project
         && ai_session_id == envelope.ai_session_id
-        && locator.as_deref() == Some(envelope.source.locator.as_str())
         // A legacy canonical row does not record whether its timestamp came
         // from the source envelope or the receiver clock. Requiring the replay
         // to supply the stored value avoids silently binding an ambiguous
@@ -246,32 +294,169 @@ fn insert_envelopes_with_identity(
         )?;
         let already_accepted = tx
             .query_row(
-                "SELECT request_fingerprint FROM ai_transcript_forward_receipts WHERE source_record_id = ?1",
+                "SELECT r.request_fingerprint, l.ai_transcript_path, l.id, l.ai_tool,
+                        l.ai_project, l.ai_session_id, l.hostname, l.timestamp
+                 FROM ai_transcript_forward_receipts r
+                 JOIN logs l ON l.id = r.log_id
+                 WHERE r.source_record_id = ?1",
                 [&stored_receipt_key],
-                |row| row.get::<_, Option<String>>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        ForwardedEventContext {
+                            log_id: row.get(2)?,
+                            ai_tool: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                            ai_project: row.get(4)?,
+                            ai_session_id: row.get(5)?,
+                            hostname: row.get(6)?,
+                            timestamp: row.get(7)?,
+                        },
+                    ))
+                },
             )
             .optional()?;
-        if let Some(previous_fingerprint) = already_accepted {
+        if let Some((previous_fingerprint, stored_locator, existing_context)) = already_accepted {
             if previous_fingerprint.as_deref() != Some(request_fingerprint.as_str()) {
-                // Old hashes included titles. Rebind only after comparing all
-                // immutable evidence against the canonical row, never merely
-                // because the caller reused an existing source-record ID.
-                let matches = match previous_fingerprint.as_deref() {
-                    Some(previous) if previous.starts_with("sha256:") => {
-                        old_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?
+                // A previous agent could only forward display text. An exact
+                // replay of that base envelope may add structured events
+                // once, using the original log row and receipt transaction.
+                // A second, different enrichment still conflicts.
+                let mut base_envelope = envelope.clone();
+                base_envelope.mcp_events.clear();
+                base_envelope.hook_events.clear();
+                let upgrades_base = (!envelope.mcp_events.is_empty()
+                    || !envelope.hook_events.is_empty())
+                    && match previous_fingerprint.as_deref() {
+                        Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
+                            transient_v3_fingerprint_matches(&base_envelope, previous)?
+                        }
+                        Some(previous) if previous.starts_with("evidence-v2:sha256:") => {
+                            v2_fingerprint_matches(
+                                &base_envelope,
+                                stored_locator.as_deref(),
+                                previous,
+                            )?
+                        }
+                        Some(previous) if previous.starts_with("sha256:") => {
+                            old_fingerprint_matches(
+                                &tx,
+                                &stored_receipt_key,
+                                &base_envelope,
+                                previous,
+                            )?
+                        }
+                        None => legacy_receipt_matches(&tx, &stored_receipt_key, &base_envelope)?,
+                        _ => false,
+                    };
+                if upgrades_base {
+                    insert_forwarded_events_in_tx(&tx, &envelope, &existing_context)?;
+                    let upgraded_fingerprint =
+                        canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                            .ok_or(IdempotencyConflict)?;
+                    tx.execute(
+                        "UPDATE ai_transcript_forward_receipts
+                         SET request_fingerprint = ?2 WHERE source_record_id = ?1",
+                        rusqlite::params![stored_receipt_key, upgraded_fingerprint],
+                    )?;
+                    receipts.push(AiTranscriptReceipt {
+                        source_record_id: envelope.source_record_id,
+                        disposition: ReceiptDisposition::Duplicate,
+                    });
+                    continue;
+                }
+                if upgrade_codex_message_role(
+                    &tx,
+                    &envelope,
+                    previous_fingerprint.as_deref(),
+                    stored_locator.as_deref(),
+                    &stored_receipt_key,
+                    &existing_context,
+                )? {
+                    receipts.push(AiTranscriptReceipt {
+                        source_record_id: envelope.source_record_id,
+                        disposition: ReceiptDisposition::Duplicate,
+                    });
+                    continue;
+                }
+                if accept_codex_project_reclassification(
+                    &tx,
+                    &envelope,
+                    previous_fingerprint.as_deref(),
+                    stored_locator.as_deref(),
+                    &stored_receipt_key,
+                    &existing_context,
+                )? {
+                    receipts.push(AiTranscriptReceipt {
+                        source_record_id: envelope.source_record_id,
+                        disposition: ReceiptDisposition::Duplicate,
+                    });
+                    continue;
+                }
+                if accept_codex_whitespace_reparse(
+                    &tx,
+                    &envelope,
+                    previous_fingerprint.as_deref(),
+                    stored_locator.as_deref(),
+                    &stored_receipt_key,
+                    &existing_context,
+                )? {
+                    receipts.push(AiTranscriptReceipt {
+                        source_record_id: envelope.source_record_id,
+                        disposition: ReceiptDisposition::Duplicate,
+                    });
+                    continue;
+                }
+                // Compatibility fingerprints are validated against the
+                // canonical row before any rebinding. Persist v2 so a rollback
+                // still recognizes the durable receipt format; locator-move
+                // tolerance itself is provided by this version's verifier.
+                let (matches, replacement_fingerprint) = match previous_fingerprint.as_deref() {
+                    Some(previous) if previous.starts_with("evidence-v3:sha256:") => {
+                        let matches = transient_v3_fingerprint_matches(&envelope, previous)?;
+                        let replacement = if matches {
+                            canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                        } else {
+                            None
+                        };
+                        (matches, replacement)
                     }
-                    Some(_) => false,
-                    None => legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?,
+                    Some(previous) if previous.starts_with("evidence-v2:sha256:") => (
+                        v2_fingerprint_matches(&envelope, stored_locator.as_deref(), previous)?,
+                        None,
+                    ),
+                    Some(previous) if previous.starts_with("sha256:") => {
+                        let matches =
+                            old_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?;
+                        let replacement = if matches {
+                            canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                        } else {
+                            None
+                        };
+                        (matches, replacement)
+                    }
+                    Some(_) => (false, None),
+                    None => {
+                        let matches = legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?;
+                        let replacement = if matches {
+                            canonical_v2_fingerprint(&envelope, stored_locator.as_deref())?
+                        } else {
+                            None
+                        };
+                        (matches, replacement)
+                    }
                 };
                 if !matches {
                     return Err(IdempotencyConflict.into());
                 }
-                tx.execute(
-                    "UPDATE ai_transcript_forward_receipts
-                     SET request_fingerprint = ?2
-                     WHERE source_record_id = ?1",
-                    rusqlite::params![stored_receipt_key, request_fingerprint],
-                )?;
+                if let Some(replacement_fingerprint) = replacement_fingerprint {
+                    tx.execute(
+                        "UPDATE ai_transcript_forward_receipts
+                         SET request_fingerprint = ?2
+                         WHERE source_record_id = ?1",
+                        rusqlite::params![stored_receipt_key, replacement_fingerprint],
+                    )?;
+                }
             }
             receipts.push(AiTranscriptReceipt {
                 source_record_id: envelope.source_record_id,
@@ -309,6 +494,15 @@ fn insert_envelopes_with_identity(
             .collect::<Vec<_>>();
             db::insert_skill_events_in_tx(&tx, &events)?;
         }
+        let context = ForwardedEventContext {
+            log_id,
+            ai_tool: entry.ai_tool.clone().unwrap_or_default(),
+            ai_project: entry.ai_project.clone(),
+            ai_session_id: entry.ai_session_id.clone(),
+            hostname: entry.hostname.clone(),
+            timestamp: entry.timestamp.clone(),
+        };
+        insert_forwarded_events_in_tx(&tx, &envelope, &context)?;
         tx.execute(
             "INSERT INTO ai_transcript_forward_receipts
                 (source_record_id, envelope_version, log_id, provider,

@@ -92,6 +92,154 @@ async fn live_smoke_transcript_fixture_is_accepted() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn forwarded_structured_tool_and_hook_events_are_indexed_once() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    record["envelope"]["mcp_events"] = serde_json::json!([{
+        "call_id": format!("sha256:{}", "1".repeat(64)),
+        "tool_name": "mcp__labby__search",
+        "event_kind": "call",
+        "status": null,
+        "is_error": null
+    }, {
+        "call_id": format!("sha256:{}", "1".repeat(64)),
+        "tool_name": "",
+        "event_kind": "result",
+        "status": "error",
+        "is_error": true
+    }]);
+    record["envelope"]["hook_events"] = serde_json::json!([{
+        "hook_event": "PreToolUse",
+        "hook_name": "policy-check",
+        "status": "failed",
+        "exit_code": 1,
+        "duration_ms": 12
+    }]);
+    let body = serde_json::json!({"records": [record]}).to_string();
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(transcript_request(body.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let mcp: (i64, String) = conn
+        .query_row(
+            "SELECT COUNT(*), MAX(mcp_server) FROM ai_mcp_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(mcp, (2, "labby".to_string()));
+    let hooks: (i64, String) = conn
+        .query_row(
+            "SELECT COUNT(*), MAX(status) FROM ai_hook_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(hooks, (1, "failed".to_string()));
+}
+
+#[tokio::test]
+async fn older_transcript_receipt_accepts_structured_evidence_on_replay() {
+    let (app, dir) = test_app(Some("secret"));
+    let old_record = sample_record();
+    let old_body = serde_json::json!({"records": [old_record.clone()]}).to_string();
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(old_body))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
+    let mut upgraded_record = old_record;
+    upgraded_record["envelope"]["mcp_events"] = serde_json::json!([{
+        "call_id": format!("sha256:{}", "2".repeat(64)),
+        "tool_name": "mcp__labby__search",
+        "event_kind": "call",
+        "status": null,
+        "is_error": null
+    }]);
+    let upgraded_body = serde_json::json!({"records": [upgraded_record.clone()]}).to_string();
+    for _ in 0..2 {
+        assert_eq!(
+            app.clone()
+                .oneshot(transcript_request(upgraded_body.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM ai_mcp_events", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+
+    upgraded_record["envelope"]["mcp_events"][0]["tool_name"] =
+        serde_json::json!("mcp__other__tool");
+    let changed_body = serde_json::json!({"records": [upgraded_record]}).to_string();
+    assert_eq!(
+        app.oneshot(transcript_request(changed_body))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn forwarded_event_identifiers_cannot_become_empty_after_scrubbing() {
+    let (app, _dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    record["envelope"]["mcp_events"] = serde_json::json!([{
+        "call_id": format!("sha256:{}", "3".repeat(64)),
+        "tool_name": "\n",
+        "event_kind": "call",
+        "status": null,
+        "is_error": null
+    }]);
+    let body = serde_json::json!({"records": [record.clone()]}).to_string();
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(body))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    record["envelope"]["mcp_events"] = serde_json::json!([]);
+    record["envelope"]["hook_events"] = serde_json::json!([{
+        "hook_event": "\n",
+        "hook_name": null,
+        "status": "success",
+        "exit_code": 0,
+        "duration_ms": 1
+    }]);
+    let body = serde_json::json!({"records": [record]}).to_string();
+    assert_eq!(
+        app.oneshot(transcript_request(body))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
 async fn barrier_transcript_request(
     app: Router,
     barrier: Arc<tokio::sync::Barrier>,
