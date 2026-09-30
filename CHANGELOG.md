@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.17.0](https://github.com/dinglebear-ai/cortex/compare/v3.16.2...v3.17.0) (2026-09-30)
+
+
+### Added
+
+* add first-class install-cortex skill ([#249](https://github.com/dinglebear-ai/cortex/issues/249)) ([f708c51](https://github.com/dinglebear-ai/cortex/commit/f708c5118d3347531edc57220e9646512a30f94e))
+* add session investigation evidence bundle ([#251](https://github.com/dinglebear-ai/cortex/issues/251)) ([d58f48b](https://github.com/dinglebear-ai/cortex/commit/d58f48ba7317a3f54dca9a78099120890450626e))
+* **cortex:** expose bounded graph inventory and changes ([00ce2fa](https://github.com/dinglebear-ai/cortex/commit/00ce2fa5c311df8ddae247dbf955abf9052037d7))
+* **cortex:** page session inventory metadata ([2155f23](https://github.com/dinglebear-ai/cortex/commit/2155f23f9a205bbdff4085229025eb919ee821b7))
+* **plugin:** split installer and usage packages ([#270](https://github.com/dinglebear-ai/cortex/issues/270)) ([7619a23](https://github.com/dinglebear-ai/cortex/commit/7619a233484542a3f5eb03d563a80ab6d92c605b))
+* **skills:** consolidate Cortex guidance and add Code Mode snippets ([4ace090](https://github.com/dinglebear-ai/cortex/commit/4ace090a000aee20b20ea176200927cf39244126))
+
+
+### Fixed
+
+* **cortex:** bound snippet evidence and search ([#259](https://github.com/dinglebear-ai/cortex/issues/259)) ([5b0da71](https://github.com/dinglebear-ai/cortex/commit/5b0da71ec5d24674aa5d3cd63022f9e566282e57))
+* **db:** bound host-only log searches by index ([1ae5282](https://github.com/dinglebear-ai/cortex/commit/1ae52825717a03e1bb0feaa2b47f5e766b2bff79))
+* **docs:** regenerate references from canonical inputs and enforce drift checks ([#273](https://github.com/dinglebear-ai/cortex/issues/273)) ([8d7de4a](https://github.com/dinglebear-ai/cortex/commit/8d7de4adc8e70dea5c37e118e00c5979039a962c))
+* harden ingestion, recovery, and review qualification ([#244](https://github.com/dinglebear-ai/cortex/issues/244)) ([4455dc4](https://github.com/dinglebear-ai/cortex/commit/4455dc430c787984c2c8ee12246b2bd7e46a77a0))
+* **ingest:** accept AI transcript archive replays ([#252](https://github.com/dinglebear-ai/cortex/issues/252)) ([a1a8443](https://github.com/dinglebear-ai/cortex/commit/a1a8443db32518d13740d1a6cbcf16009baa6d7b))
+* **ingest:** accept corrected Codex speaker on exact replay ([#264](https://github.com/dinglebear-ai/cortex/issues/264)) ([c9c4a39](https://github.com/dinglebear-ai/cortex/commit/c9c4a39be6dfcc3ac36f6d77cebbaf8343623ddb))
+* **ingest:** preserve structured tool and hook evidence from agents ([#263](https://github.com/dinglebear-ai/cortex/issues/263)) ([5c6e025](https://github.com/dinglebear-ai/cortex/commit/5c6e025307cde6f66725ec94668dd44d92a7568a))
+* **ingest:** remediate comprehensive review findings ([#246](https://github.com/dinglebear-ai/cortex/issues/246)) ([12a41e9](https://github.com/dinglebear-ai/cortex/commit/12a41e9645ad17f121000bd1c4c4adb27fd6d88d))
+* **ingest:** tolerate Codex project drift on exact replay ([#267](https://github.com/dinglebear-ai/cortex/issues/267)) ([a1642c4](https://github.com/dinglebear-ai/cortex/commit/a1642c4f3d7b552b9c33bfd775146dd18bd2834a))
+* recover forwarded Claude skills and scope session search ([#248](https://github.com/dinglebear-ai/cortex/issues/248)) ([3b9855e](https://github.com/dinglebear-ai/cortex/commit/3b9855e01d0f539d24977731aafdb36ca5a78dd0))
+* repair transcript skill evidence and search ([#247](https://github.com/dinglebear-ai/cortex/issues/247)) ([03ba04d](https://github.com/dinglebear-ai/cortex/commit/03ba04dfd406f1c9511a4bbd540d32e2002d973d))
+* **transcripts:** accept equivalent Codex whitespace replays ([#269](https://github.com/dinglebear-ai/cortex/issues/269)) ([b484ac3](https://github.com/dinglebear-ai/cortex/commit/b484ac35d33183adaba1463b8b617b0317c67af6))
+
 ## [3.16.2](https://github.com/dinglebear-ai/cortex/compare/v3.16.1...v3.16.2) (2026-09-11)
 
 
