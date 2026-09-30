@@ -31,6 +31,34 @@ def seeded_incident_id() -> str:
     return _INCIDENT_ID
 
 
+def seeded_session_page_args() -> list[str]:
+    observed = subprocess.run(
+        [os.environ["LIVE_DOCKER_BIN"], "exec", os.environ["LIVE_CANDIDATE_ID"],
+         "cortex", "sessions", "--json", "--limit", "100"],
+        capture_output=True, check=True, timeout=20,
+    )
+    sessions = json.loads(observed.stdout)["sessions"]
+    matches = [session for session in sessions if session["session_id"] == "mcp-live-session"]
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one seeded MCP session, found {len(matches)}")
+    session = matches[0]
+    return ["--project", session["project"], "--tool", session["tool"],
+            "--session-id", session["session_id"], "--host", session["hostname"],
+            "--json", "--limit", "1"]
+
+
+def rendered_session_page_valid(observation: dict) -> bool:
+    if observation.get("exit") != 0 or observation.get("timeout", False):
+        return False
+    try:
+        page = json.loads(observation["terminal"])
+        return (page["contract_version"] == "1.0.0" and len(page["events"]) == 1
+                and bool(page["events"][0]["text"])
+                and page["has_more"] is True and bool(page["next_cursor"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         local_only: bool = False, prepare_compose: bool = True) -> dict:
     container_local = authenticated and (spelling.startswith(("assess", "graph", "sessions assess", "sessions mcp", "sessions skill")) or spelling == "entity")
@@ -172,7 +200,7 @@ ARGS = {
     "state host": ["--json"], "state fleet": ["--json"], "state clockskew": ["--json", "--limit", "5"],
     "stats summary": ["--json"], "stats ingestrate": ["--json"], "timeline": ["--json", "--since", "1h"],
     "sessions": ["--json", "--limit", "2"], "sessions search": ["\"cortex-live\"", "--json", "--limit", "2"],
-    "sessions page": ["--project", "/", "--tool", "codex", "--session-id", "mcp-live-session", "--host", "cortex-live", "--json", "--limit", "1"],
+    "sessions page": ["--json", "--limit", "1"],
     "sessions abuse": ["--json", "--limit", "2"], "sessions correlate": ["--json", "--ai-query", "\"cortex-live\"", "--limit", "2"],
     "sessions blocks": ["--json", "--limit", "2"], "sessions context": ["cortex-live", "--json", "--limit", "2"],
     "sessions tools": ["--json"], "sessions projects": ["--json"], "sessions checkpoints": ["--json", "--limit", "2"],
@@ -369,6 +397,8 @@ def main() -> int:
             "{incident-id}": seeded_incident_id(),
         }
         tail = [replacements.get(item, item) for item in tail]
+        if entry["spelling"] == "sessions page":
+            tail = seeded_session_page_args()
         if entry["spelling"] in {"setup sessionswatch check", "setup doctor", "doctor"}:
             (Path(os.environ["LIVE_RUN_TMP"]) / "systemctl-state" / "sessions-index-enabled").unlink(missing_ok=True)
             # Doctor inspects managed appdata this run's synthetic HOME has
@@ -388,6 +418,8 @@ def main() -> int:
         if execute:
             positive = run_long_lived(binary_path, entry["spelling"]) if execution_mode == "executed-long-lived-cleanup" else run(binary_path, entry["spelling"], tail, local_only=entry["auth"] == "local-only")
             ok = not positive.get("timeout", False) and positive["exit"] == 0
+            if entry["spelling"] == "sessions page":
+                ok = rendered_session_page_valid(positive)
         else:
             positive = {"exit": 0, "bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "topology_evidence": True}
             ok = True
