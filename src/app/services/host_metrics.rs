@@ -27,11 +27,11 @@ impl CortexService {
         &self,
         req: ListHostMetricsRequest,
     ) -> ServiceResult<ListHostMetricsResponse> {
-        let hostname = required_filter(req.hostname, "hostname")?;
-        let metric_name = required_filter(req.metric_name, "metric_name")?;
+        let hostname = required_filter(req.hostname, "hostname", 255)?;
+        let metric_name = required_filter(req.metric_name, "metric_name", 512)?;
         let service_name = req
             .service_name
-            .map(|value| required_filter(value, "service_name"))
+            .map(|value| required_filter(value, "service_name", 512))
             .transpose()?;
         let minutes = req.minutes.unwrap_or(60);
         if !(1..=1440).contains(&minutes) {
@@ -81,12 +81,18 @@ impl CortexService {
     }
 }
 
-fn required_filter(value: String, name: &str) -> ServiceResult<String> {
+// Match the character limits used by OTLP metric normalization so every
+// accepted resource and metric identifier remains queryable.
+fn required_filter(value: String, name: &str, max_chars: usize) -> ServiceResult<String> {
     let value = value.trim();
-    if value.is_empty() || value.len() > 256 {
+    if value.is_empty() || value.chars().count() > max_chars {
         return Err(ServiceError::InvalidInput(format!(
-            "{name} must contain 1 to 256 characters"
+            "{name} must contain 1 to {max_chars} characters"
         )));
     }
     Ok(value.to_owned())
 }
+
+#[cfg(test)]
+#[path = "host_metrics_tests.rs"]
+mod tests;

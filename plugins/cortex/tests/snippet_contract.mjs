@@ -145,4 +145,41 @@ const deepSearch = await loadSnippet("cortex-searching-sessions", async () => de
 assert.equal(deepSearch.preview_truncated, true);
 assert.ok(deepSearch.evidence_preview.length < 500);
 
+const redactionEvidence = { password: "private-password", credential: "private-credential", metadata: { url: "private-metadata" },
+  evidence: [{ transcript_before_truncated: true, text: "private-transcript" }], total_incidents: 7, truncated: true };
+for (const [name, input] of [
+  ["cortex-frustration-assessment", { incident_id: "one" }],
+  ["cortex-hook-friction-assessment", { hook_name: "hook" }],
+  ["cortex-mcp-friction-assessment", { mcp_server: "server" }],
+  ["cortex-incidents", { limit: 5 }],
+]) {
+  const run = loadSnippet(name, async () => redactionEvidence);
+  const result = await run(input);
+  assert.ok(!JSON.stringify(result).includes("private-"), `${name} redacts credential and transcript values`);
+  assert.equal(result.truncated, true);
+  assert.equal(JSON.parse(result.evidence_preview).evidence[0].transcript_before_truncated, true);
+  const broad = await loadSnippet(name, async () => wideEvidence)(input);
+  assert.equal(broad.preview_truncated, true);
+  assert.ok(broad.evidence_keys.length <= 20);
+  assert.ok(broad.evidence_preview.length <= 4000);
+  const nested = await loadSnippet(name, async () => deepEvidence)(input);
+  assert.equal(nested.preview_truncated, true);
+  assert.ok(nested.evidence_preview.length < 500);
+}
+for (const name of ["cortex-report", "cortex-troubleshoot"]) {
+  const run = loadSnippet(name, async () => {}, { batch: async () => ({
+    all_ok: false,
+    ok: [{ i: 0, value: redactionEvidence }],
+    failed: [{ i: 1, error: Error("Authorization: Bearer private-token") }],
+  }) });
+  const result = await run({});
+  assert.equal(result.ok, false);
+  assert.ok(!JSON.stringify(result).includes("private-"), `${name} redacts values and upstream failures`);
+  const broad = await loadSnippet(name, async () => {}, { batch: async () => ({
+    all_ok: true, ok: [{ i: 0, value: wideEvidence }], failed: [],
+  }) })({});
+  assert.equal(broad.results[0].preview_truncated, true);
+  assert.ok(broad.results[0].preview.length <= 1800);
+}
+
 console.log("Cortex snippet contracts passed");

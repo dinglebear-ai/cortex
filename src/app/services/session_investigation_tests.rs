@@ -227,3 +227,42 @@ async fn related_sessions_signal_truncation() {
     assert_eq!(rows.len(), 20);
     assert!(truncated);
 }
+
+#[tokio::test]
+async fn session_investigation_scan_stages_respect_heavy_read_admission() {
+    let (_dir, mut service) = fixture_service();
+    service.acquire_timeout = std::time::Duration::from_millis(10);
+    let held = service
+        .heavy_read_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .unwrap();
+    let session = fixture_session();
+
+    let correlation = service.session_graph_correlation(&session, None).await;
+    assert!(
+        matches!(correlation, Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+    let notifications =
+        super::super::session_investigation_sections::session_notifications(&service, &session, 2)
+            .await;
+    assert!(
+        matches!(notifications, Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+    let observatory =
+        super::super::session_investigation_sections::session_observatory(&service, &session, 2)
+            .await;
+    assert!(
+        matches!(observatory, Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+
+    drop(held);
+    assert!(
+        service
+            .session_graph_correlation(&session, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

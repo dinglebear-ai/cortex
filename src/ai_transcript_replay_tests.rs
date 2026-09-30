@@ -134,6 +134,7 @@ async fn codex_project_normalization_change_preserves_canonical_project() {
     assert_eq!(log_count, 1);
     let mut canonical_replay = replay.clone();
     canonical_replay["envelope"]["source"]["locator"] = original_locator;
+    canonical_replay["envelope"]["ai_project"] = old_project.clone();
     assert_eq!(fingerprint, receipt_v2_fingerprint(&canonical_replay));
 
     replay["envelope"]["message"] = json!("different transcript evidence");
@@ -144,6 +145,43 @@ async fn codex_project_normalization_change_preserves_canonical_project() {
             .status(),
         StatusCode::CONFLICT
     );
+}
+
+#[tokio::test]
+async fn codex_project_replays_can_return_to_the_preserved_canonical_project() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut original = sample_record();
+    original["envelope"]["source"]["provider"] = json!("codex");
+    original["envelope"]["event_kind"] = json!("unknown");
+    let canonical_project = original["envelope"]["ai_project"].clone();
+    for (project, kind) in [
+        (canonical_project.clone(), "unknown"),
+        (json!("project:sha256:deleted-worktree"), "user"),
+        (canonical_project.clone(), "user"),
+        (json!("project:sha256:another-archive"), "user"),
+        (canonical_project.clone(), "user"),
+    ] {
+        let mut record = original.clone();
+        record["envelope"]["ai_project"] = project;
+        record["envelope"]["event_kind"] = json!(kind);
+        let response = app
+            .clone()
+            .oneshot(transcript_request(json!({"records": [record]}).to_string()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let (count, project, kind, fingerprint): (i64, String, String, String) = conn.query_row(
+        "SELECT COUNT(*), l.ai_project, json_extract(l.metadata_json, '$.event_kind'), r.request_fingerprint
+         FROM logs l JOIN ai_transcript_forward_receipts r ON r.log_id = l.id", [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(project, canonical_project.as_str().unwrap());
+    assert_eq!(kind, "user");
+    original["envelope"]["event_kind"] = json!("user");
+    assert_eq!(fingerprint, receipt_v2_fingerprint(&original));
 }
 
 #[tokio::test]
@@ -220,6 +258,7 @@ async fn codex_reparse_accepts_only_equivalent_message_and_metadata() {
     assert_eq!(kind, "user");
     let mut canonical_replay = replay.clone();
     canonical_replay["envelope"]["source"]["locator"] = old_locator;
+    canonical_replay["envelope"]["ai_project"] = old_project.clone();
     assert_eq!(fingerprint, receipt_v2_fingerprint(&canonical_replay));
 
     replay["envelope"]["message"] = json!("one two changed");

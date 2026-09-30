@@ -165,6 +165,29 @@ pub struct ErrorSummaryEntry {
     pub count: i64,
 }
 
+/// A reported log hostname is not necessarily a physical device.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostSourceKind {
+    #[default]
+    Host,
+    ForwardingPrincipal,
+    Unattributed,
+}
+
+impl HostSourceKind {
+    pub(crate) fn for_hostname(hostname: &str) -> Self {
+        let name = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
+        if name.starts_with("agent-") || name.starts_with("bearer-shared-") {
+            Self::ForwardingPrincipal
+        } else if name == "localhost" || name == "unresolved-host.invalid" {
+            Self::Unattributed
+        } else {
+            Self::Host
+        }
+    }
+}
+
 /// Host registry entry with first/last seen and log count
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostEntry {
@@ -172,6 +195,11 @@ pub struct HostEntry {
     pub first_seen: String,
     pub last_seen: String,
     pub log_count: i64,
+    /// Raw stored spellings retained for exact filters; no evidence is rewritten.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub source_kind: HostSourceKind,
 }
 
 /// Database statistics snapshot

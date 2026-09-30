@@ -133,7 +133,7 @@ impl CortexService {
         let retention_session_id = session.session_id.clone();
         let retention_host = session.hostname.clone();
         let mut retention_lineage = self
-            .run_db("session_investigate_retention_lineage", move |pool| {
+            .run_heavy_db("session_investigate_retention_lineage", move |pool| {
                 let conn = pool.get()?;
                 let mut stmt = conn.prepare(
                     "SELECT id, hostname, app_name, severity, ai_project, ai_tool, ai_session_id,

@@ -57,6 +57,8 @@ fn human_log_summary_outputs_accept_representative_payloads() {
                 first_seen: "2026-06-12T00:00:00Z".to_string(),
                 last_seen: "2026-06-13T00:00:00Z".to_string(),
                 log_count: 10,
+                aliases: Vec::new(),
+                source_kind: Default::default(),
             }],
         },
         false,

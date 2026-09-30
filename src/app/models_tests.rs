@@ -40,6 +40,8 @@ fn summary_and_host_conversions_preserve_counts() {
         first_seen: "2026-01-01T00:00:00Z".into(),
         last_seen: "2026-01-01T01:00:00Z".into(),
         log_count: 11,
+        aliases: Vec::new(),
+        source_kind: Default::default(),
     });
 
     assert_eq!(summary.count, 7);

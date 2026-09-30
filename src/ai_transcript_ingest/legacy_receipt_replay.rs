@@ -87,8 +87,13 @@ pub(super) fn accept_codex_project_reclassification(
     }
 
     insert_forwarded_events_in_tx(tx, envelope, context)?;
+    // The project in the canonical log is deliberately preserved. Bind the
+    // receipt to that same project so resolving a restored worktree (or another
+    // equivalent reparse) cannot conflict with its own accepted history.
+    let mut canonical = envelope.clone();
+    canonical.ai_project = context.ai_project.clone();
     let fingerprint =
-        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+        canonical_v2_fingerprint(&canonical, stored_locator)?.ok_or(IdempotencyConflict)?;
     tx.execute(
         "UPDATE ai_transcript_forward_receipts
          SET request_fingerprint = ?2 WHERE source_record_id = ?1",
@@ -167,8 +172,13 @@ pub(super) fn accept_codex_whitespace_reparse(
     }
 
     insert_forwarded_events_in_tx(tx, envelope, context)?;
+    // The project in the canonical log is deliberately preserved. Bind the
+    // receipt to that same project so resolving a restored worktree (or another
+    // equivalent reparse) cannot conflict with its own accepted history.
+    let mut canonical = envelope.clone();
+    canonical.ai_project = context.ai_project.clone();
     let fingerprint =
-        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+        canonical_v2_fingerprint(&canonical, stored_locator)?.ok_or(IdempotencyConflict)?;
     tx.execute(
         "UPDATE ai_transcript_forward_receipts
          SET request_fingerprint = ?2 WHERE source_record_id = ?1",
@@ -219,8 +229,13 @@ pub(super) fn upgrade_codex_message_role(
     // Preserve the canonical log and add only the corrected speaker label and
     // any newly available structured events in the same transaction.
     insert_forwarded_events_in_tx(tx, envelope, context)?;
+    // The project in the canonical log is deliberately preserved. Bind the
+    // receipt to that same project so resolving a restored worktree (or another
+    // equivalent reparse) cannot conflict with its own accepted history.
+    let mut canonical = envelope.clone();
+    canonical.ai_project = context.ai_project.clone();
     let fingerprint =
-        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+        canonical_v2_fingerprint(&canonical, stored_locator)?.ok_or(IdempotencyConflict)?;
     tx.execute(
         "UPDATE ai_transcript_forward_receipts
          SET request_fingerprint = ?2 WHERE source_record_id = ?1",

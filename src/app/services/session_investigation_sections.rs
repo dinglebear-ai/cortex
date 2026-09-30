@@ -9,7 +9,7 @@ pub(super) async fn session_notifications(
     let start = session.first_seen.clone();
     let end = session.last_seen.clone();
     service
-        .run_db("session_investigate_notifications", move |pool| {
+        .run_heavy_db("session_investigate_notifications", move |pool| {
             let conn = pool.get()?;
             let mut stmt = conn.prepare(
                 "SELECT id,outbox_id,rule_id,hostname,fired_at,status_code
@@ -60,7 +60,7 @@ pub(super) async fn session_observatory(
     let observatory_tool = session.tool.clone();
     let observatory_host = session.hostname.clone();
     service
-        .run_db("session_investigate_observatory", move |pool| {
+        .run_heavy_db("session_investigate_observatory", move |pool| {
             let query = db::agent_observatory::AgentRunQuery {
                 tools: vec![observatory_tool.clone()],
                 host: Some(observatory_host.clone()),

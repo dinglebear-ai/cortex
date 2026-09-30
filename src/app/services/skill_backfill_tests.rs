@@ -198,6 +198,93 @@ async fn real_run_inserts_events_and_is_idempotent() {
 
 #[tokio::test]
 #[serial(skill_backfill_guard)]
+async fn backfill_prefers_recoverable_attribution_over_persisted_command_tags() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    let message = "<command-message>vibin:repo-status</command-message> <command-name>/vibin:repo-status</command-name> <command-name>/vibin:gh-pr</command-name>";
+    let raw = serde_json::json!({
+        "attributionSkill": "repo-status",
+        "attributionPlugin": "vibin",
+        "message": {"role": "user", "content": message}
+    });
+    let log_id = insert_claude_log_row(&pool, dir.path(), "mixed.jsonl", &raw.to_string());
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "UPDATE logs SET message = ?2, metadata_json = ?3 WHERE id = ?1",
+            rusqlite::params![log_id, message, r#"{"line_no":0,"event_kind":"user"}"#],
+        )
+        .unwrap();
+    }
+    for (inserted, skipped) in [(2, 0), (0, 2)] {
+        let result = service
+            .backfill_skill_events(SkillBackfillRequest {
+                since: None,
+                limit: Some(100),
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.inserted, inserted);
+        assert_eq!(result.skipped_duplicates, skipped);
+        assert_eq!(result.source_unavailable, 0);
+    }
+    let conn = pool.get().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT skill_name, event_kind FROM ai_skill_events ORDER BY skill_name")
+        .unwrap();
+    let events = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        events,
+        vec![
+            ("repo-status".to_string(), "claude_attribution".to_string()),
+            (
+                "vibin:gh-pr".to_string(),
+                "claude_skill_command".to_string()
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+#[serial(skill_backfill_guard)]
+async fn backfill_uses_persisted_command_when_recorded_source_is_missing() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    let message = "<command-name>/vibin:repo-status</command-name>";
+    let id = insert_forwarded_claude_command_row(&pool, message);
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "UPDATE logs SET ai_transcript_path = ?2, metadata_json = ?3 WHERE id = ?1",
+            rusqlite::params![
+                id,
+                dir.path().join("missing.jsonl").to_string_lossy(),
+                r#"{"line_no":0,"event_kind":"user"}"#
+            ],
+        )
+        .unwrap();
+    }
+    let result = service
+        .backfill_skill_events(SkillBackfillRequest {
+            since: None,
+            limit: Some(100),
+            dry_run: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.inserted, 1);
+    assert_eq!(result.source_unavailable, 0);
+}
+
+#[tokio::test]
+#[serial(skill_backfill_guard)]
 async fn backfill_recovers_modern_claude_skill_command_envelope() {
     let (service, dir) = test_service();
     let pool = service.pool_for_test();

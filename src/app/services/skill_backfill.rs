@@ -204,8 +204,9 @@ fn run_backfill(
         result.scanned += rows.len() as u64;
         remaining = remaining.saturating_sub(rows.len() as u64);
 
-        // Resolve source lines only for Claude rows that cannot be recovered
-        // from a persisted command envelope. Rows sharing a transcript file
+        // Resolve available source lines even when a persisted command envelope
+        // exists: structured attribution takes precedence over content evidence.
+        // Rows sharing a transcript file
         // open and scan it once per chunk. Two borrowed maps over `rows` (no
         // owned-String clones): `row_source` maps each row id to its
         // `(path, line_no)`, and `wanted_by_file` collects the distinct line
@@ -217,9 +218,6 @@ fn run_backfill(
             if row.ai_tool != "claude" {
                 continue;
             }
-            if !extract_forwarded_claude_skill_events(row).is_empty() {
-                continue;
-            }
             match (
                 row.ai_transcript_path.as_deref(),
                 row.metadata_json.as_deref().and_then(line_no_from_metadata),
@@ -228,13 +226,14 @@ fn run_backfill(
                     row_source.insert(row.id, (path, line_no));
                     wanted_by_file.entry(path).or_default().insert(line_no);
                 }
-                _ => {
+                _ if extract_forwarded_claude_skill_events(row).is_empty() => {
                     result.source_unavailable += 1;
                     tracing::debug!(
                         log_id = row.id,
                         "skill backfill: claude row missing ai_transcript_path/line_no metadata; unrecoverable"
                     );
                 }
+                _ => {}
             }
         }
         let mut resolved: HashMap<(&str, usize), String> = HashMap::new();
@@ -262,35 +261,42 @@ fn run_backfill(
             let extracted = match row.ai_tool.as_str() {
                 "claude" => {
                     let forwarded = extract_forwarded_claude_skill_events(row);
-                    if !forwarded.is_empty() {
-                        forwarded
-                    } else {
-                        let Some(&(path, line_no)) = row_source.get(&row.id) else {
-                            // Already counted in `source_unavailable` above.
-                            continue;
-                        };
-                        let Some(line_text) = resolved.get(&(path, line_no)) else {
-                            result.source_unavailable += 1;
-                            tracing::debug!(
-                                log_id = row.id,
-                                path,
-                                line_no,
-                                "skill backfill: transcript line unavailable (missing file or line out of range)"
-                            );
-                            continue;
-                        };
-                        // Cheap short-circuit on the actual raw JSON line (not
-                        // the scrubbed `row.message`) before parsing.
-                        if !claude_line_may_contain_skill_event(line_text) {
-                            continue;
-                        }
-                        match serde_json::from_str::<serde_json::Value>(line_text) {
-                            Ok(value) => extract_claude_skill_events(&value),
-                            Err(_) => {
-                                result.parse_errors += 1;
-                                continue;
+                    if let Some(&(path, line_no)) = row_source.get(&row.id) {
+                        if let Some(line_text) = resolved.get(&(path, line_no)) {
+                            if claude_line_may_contain_skill_event(line_text) {
+                                match serde_json::from_str::<serde_json::Value>(line_text) {
+                                    Ok(value) => {
+                                        let source_events = extract_claude_skill_events(&value);
+                                        if !source_events.is_empty() {
+                                            source_events
+                                        } else {
+                                            forwarded
+                                        }
+                                    }
+                                    Err(_) => {
+                                        result.parse_errors += 1;
+                                        forwarded
+                                    }
+                                }
+                            } else {
+                                forwarded
                             }
+                        } else {
+                            if forwarded.is_empty() {
+                                result.source_unavailable += 1;
+                                tracing::debug!(
+                                    log_id = row.id,
+                                    path,
+                                    line_no,
+                                    "skill backfill: transcript line unavailable (missing file or line out of range)"
+                                );
+                            }
+                            forwarded
                         }
+                    } else {
+                        // Missing source metadata was counted above only when
+                        // persisted command evidence could not recover the row.
+                        forwarded
                     }
                 }
                 "codex" => {

@@ -6,6 +6,8 @@ fn host_entry(name: &str, first: &str, last: &str, count: i64) -> HostEntry {
         first_seen: first.to_string(),
         last_seen: last.to_string(),
         log_count: count,
+        aliases: Vec::new(),
+        source_kind: Default::default(),
     }
 }
 
