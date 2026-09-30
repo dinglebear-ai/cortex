@@ -278,6 +278,46 @@ version_files = [
 }
 
 #[test]
+fn repository_version_sync_updates_upgrade_candidate_without_changing_predecessor_pins() {
+    use std::fs;
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let manifest = load_manifest(source).unwrap();
+    let component = sole_component(&manifest).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join("release")).unwrap();
+    fs::copy(
+        source.join("release/components.toml"),
+        root.join("release/components.toml"),
+    )
+    .unwrap();
+    for file in &component.version_files {
+        let destination = root.join(&file.path);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::copy(source.join(&file.path), destination).unwrap();
+    }
+    let matrix = root.join("tests/live/contracts/releases/compatibility.json");
+    let before: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&matrix).unwrap()).unwrap();
+    let current = Version::parse(&read_version(root, &component.version_source).unwrap()).unwrap();
+    let next = Version::new(current.major, current.minor, current.patch + 1).to_string();
+    let cargo = root.join("Cargo.toml");
+    fs::write(
+        &cargo,
+        replace_cargo_package_version(&fs::read_to_string(&cargo).unwrap(), Some("cortex"), &next)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(check_sync(root).is_err());
+    sync_version(root).unwrap();
+    let after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&matrix).unwrap()).unwrap();
+    assert_eq!(after["candidate"], next);
+    assert_eq!(after["supported"], before["supported"]);
+    check_release(root).unwrap();
+}
+
+#[test]
 fn drift_is_detected() {
     use std::fs;
     let dir = tempfile::tempdir().unwrap();

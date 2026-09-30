@@ -12,6 +12,10 @@ def validate(root):
     if matrix['candidate'] != current:
         raise ValueError(f'upgrade candidate {matrix["candidate"]} does not match Cargo version {current}; refresh predecessor pins')
     version = lambda text: tuple(map(int, text.split('.')))
+    released = re.findall(r'^## \[(\d+\.\d+\.\d+)\]', (root / 'CHANGELOG.md').read_text(), re.MULTILINE)
+    predecessors = [entry for entry in released if version(entry) < version(current)]
+    if not predecessors or matrix['supported']['n_minus_1']['version'] != max(predecessors, key=version):
+        raise ValueError('upgrade n_minus_1 must match the previous release; refresh predecessor pins')
     for entry in matrix['supported'].values():
         if version(entry['version']) >= version(current):
             raise ValueError('upgrade predecessor must precede candidate')
