@@ -5,7 +5,7 @@ description: Use when installing, running, or adapting reusable Labby Code Mode 
 
 # Cortex Snippets
 
-The bundled Markdown files are Labby Code Mode snippets for repeated Cortex investigations. Large evidence bundles return bounded previews and key names; fetch full records with the direct Cortex tool for a supported follow-up. They call the live `cortex::cortex` upstream. A snippet is an evidence collector, not a complete assessment or proof that a service is healthy.
+The bundled Markdown files are Labby Code Mode snippets for repeated Cortex investigations. Skill assessment and session search return bounded, redacted previews and key names with `preview_truncated`; their separate coverage counters and upstream truncation flags survive preview clipping. Fetch full records with the direct Cortex tool for a supported follow-up. They call the live `cortex::cortex` upstream. A snippet is an evidence collector, not a complete assessment or proof that a service is healthy.
 
 ## Workflow
 
@@ -27,8 +27,8 @@ Resolve `<path>` relative to this skill's `snippets/` directory. Snippets declar
 | MCP call failure | [cortex-mcp-friction-assessment](snippets/cortex-mcp-friction-assessment.md) | Fetch MCP incident evidence; separate server, tool, and agent factors. |
 | Skill underperformance | [cortex-skill-improvement-assessment](snippets/cortex-skill-improvement-assessment.md) | Fetch skill evidence; separate trigger/instruction problems from model or tool failures. |
 | Error backlog | [cortex-incidents](snippets/cortex-incidents.md) | List active signatures. Acknowledging one is a separate admin operation. |
-| Past conversation | [cortex-searching-sessions](snippets/cortex-searching-sessions.md) | Search transcript index; inspect matching context before claiming a result. |
-| Host services | [cortex-topology](snippets/cortex-topology.md) | Map observed host services; check graph/cache freshness. |
+| Past conversation | [cortex-searching-sessions](snippets/cortex-searching-sessions.md) | Search the recent transcript index, starting with a one-hour window; widen `since` deliberately and inspect matching context before claiming a result. |
+| Host activity | [cortex-topology](snippets/cortex-topology.md) | List a known host and apps observed in its logs during a bounded window. Use `using-cortex` for running-service or graph dependency claims. |
 | Time-bounded report | [cortex-report](snippets/cortex-report.md) | Collect error evidence for the chosen window; pair with stats, hosts and targeted context. |
 | Service or ingest failure | [cortex-troubleshoot](snippets/cortex-troubleshoot.md) | Check status; choose follow-up tests from evidence. |
 | Service stdout/stderr | [cortex-logs](snippets/cortex-logs.md) | Compose diagnostics only. Follow stdout with `cortex compose logs` on the service host. |
