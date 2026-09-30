@@ -39,6 +39,10 @@ jobs:
     name: build cortex (linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -59,12 +63,58 @@ jobs:
           tar -czf cortex-linux-x86_64.tar.gz cortex
           sha256sum cortex-linux-x86_64.tar.gz > cortex-linux-x86_64.tar.gz.sha256
 
+      - name: Attest Linux x86_64 archive
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-path: .cache/cargo/release/cortex-linux-x86_64.tar.gz
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cortex-linux-x86_64
           path: |
             .cache/cargo/release/cortex-linux-x86_64.tar.gz
             .cache/cargo/release/cortex-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  cortex-linux-arm64:
+    name: build cortex (linux arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
+        with:
+          s3-access-key: ${{ secrets.KACHE_S3_ACCESS_KEY }}
+          s3-secret-key: ${{ secrets.KACHE_S3_SECRET_KEY }}
+          s3-endpoint: ${{ vars.KACHE_S3_ENDPOINT }}
+
+      - name: cargo build --release --bin cortex
+        run: cargo build --release --locked --bin cortex
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd .cache/cargo/release
+          tar -czf cortex-linux-aarch64.tar.gz cortex
+          sha256sum cortex-linux-aarch64.tar.gz > cortex-linux-aarch64.tar.gz.sha256
+
+      - name: Attest Linux ARM64 archive
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-path: .cache/cargo/release/cortex-linux-aarch64.tar.gz
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cortex-linux-aarch64
+          path: |
+            .cache/cargo/release/cortex-linux-aarch64.tar.gz
+            .cache/cargo/release/cortex-linux-aarch64.tar.gz.sha256
           if-no-files-found: error
 
   cortex-windows:
@@ -212,17 +262,29 @@ jobs:
           if-no-files-found: error
 
   package-release-gate:
-    name: package qualification
-    needs: [cortex-linux, cortex-windows]
-    runs-on: ubuntu-24.04
+    name: package qualification (${{ matrix.platform }})
+    needs: [cortex-linux, cortex-linux-arm64, cortex-windows]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: ubuntu-24.04
+            artifact: cortex-linux-x86_64
+            archive: cortex-linux-x86_64.tar.gz
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            artifact: cortex-linux-aarch64
+            archive: cortex-linux-aarch64.tar.gz
     env:
       LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: cortex-linux-x86_64
+          name: ${{ matrix.artifact }}
           path: candidate
       - name: Create pinned candidate manifest
         run: |
@@ -234,10 +296,11 @@ jobs:
             version="$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)"
           fi
           [ -n "$version" ] || { echo "::error::could not determine the release version"; exit 1; }
-          archive="$GITHUB_WORKSPACE/candidate/cortex-linux-x86_64.tar.gz"
+          archive="$GITHUB_WORKSPACE/candidate/${{ matrix.archive }}"
           digest="$(sha256sum "$archive" | cut -d' ' -f1)"
           jq -n --arg version "$version" --arg archive "$archive" --arg digest "$digest" \
-            '{schema:"cortex-live-artifact-manifest-v1",release:$version,artifacts:[{name:"cortex-linux-x86_64",kind:"archive",origin:("file://"+$archive),path:$archive,sha256:$digest,platform:"linux-amd64"}]}' > candidate-manifest.json
+            --arg name "${{ matrix.artifact }}" --arg platform "${{ matrix.platform }}" \
+            '{schema:"cortex-live-artifact-manifest-v1",release:$version,artifacts:[{name:$name,kind:"archive",origin:("file://"+$archive),path:$archive,sha256:$digest,platform:$platform}]}' > candidate-manifest.json
           echo "LIVE_ARTIFACT_MANIFEST=$GITHUB_WORKSPACE/candidate-manifest.json" >> "$GITHUB_ENV"
       - name: Qualify exact package
         run: bash tests/live/run-profile.sh artifact
@@ -250,13 +313,13 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: release-package-${{ github.run_id }}
+          name: release-package-${{ github.run_id }}-${{ matrix.platform }}
           path: live-upload
           if-no-files-found: error
 
   publish:
     name: publish github release
-    needs: [cortex-linux, cortex-windows, live-release-gate, package-release-gate]
+    needs: [cortex-linux, cortex-linux-arm64, cortex-windows, live-release-gate, package-release-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Tag pushes publish automatically. workflow_dispatch stays dry-run unless
@@ -285,6 +348,8 @@ jobs:
           files: |
             dist/cortex-linux-x86_64.tar.gz
             dist/cortex-linux-x86_64.tar.gz.sha256
+            dist/cortex-linux-aarch64.tar.gz
+            dist/cortex-linux-aarch64.tar.gz.sha256
             dist/cortex-windows-x86_64.zip
             dist/cortex-windows-x86_64.zip.sha256
             dist/cortex-windows-x86_64.exe
