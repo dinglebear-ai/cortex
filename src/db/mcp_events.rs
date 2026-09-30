@@ -12,8 +12,8 @@
 //! rows itself: each extracted event (call or result) is inserted as its
 //! own row keyed by `(ai_tool, ai_session_id, call_id, event_kind)`, and
 //! `mcp_tool`/`mcp_server`/`tool_name` on a bare result row are populated
-//! via a best-effort backfill-join against the earlier call row in the same
-//! statement batch (see `resolve_result_tool_name_in_tx`) — a result event
+//! from their paired call whenever either event is inserted or replayed
+//! (see `resolve_result_tool_name_in_tx`) — a result event
 //! extracted with an empty `tool_name` (see
 //! `scanner::mcp_events::extract_claude_mcp_events`) looks up its sibling
 //! call row by `(ai_tool, ai_session_id, call_id)` and copies
@@ -140,6 +140,39 @@ pub(crate) fn insert_mcp_events_in_tx(
             item.event.error_text,
         ])?;
         inserted += changed;
+        // Evidence may arrive out of order. Enrich only an unnamed result,
+        // using the stored call rather than potentially conflicting replay
+        // fields. Keep its outcome, timestamp, and original log association.
+        if let Some((tool_name, mcp_server, mcp_tool)) = resolve_result_tool_name_in_tx(
+            tx,
+            &item.ai_tool,
+            item.ai_session_id.as_deref(),
+            &item.event.call_id,
+        )? && !tool_name.is_empty()
+        {
+            let repaired_id: Option<i64> = tx
+                .prepare_cached(
+                    "UPDATE ai_mcp_events SET tool_name = ?4, mcp_server = ?5, mcp_tool = ?6
+                 WHERE ai_tool = ?1
+                   AND COALESCE(ai_session_id, '') = COALESCE(?2, '')
+                   AND call_id = ?3 AND event_kind = 'result' AND tool_name = '' RETURNING id",
+                )?
+                .query_row(
+                    params![
+                        item.ai_tool,
+                        item.ai_session_id,
+                        item.event.call_id,
+                        tool_name,
+                        mcp_server,
+                        mcp_tool
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(source_id) = repaired_id {
+                super::agent_observatory::repair_mcp_result_projection_in_tx(tx, source_id)?;
+            }
+        }
     }
     Ok(inserted)
 }
@@ -148,10 +181,12 @@ pub(crate) fn insert_mcp_events_in_tx(
 /// the backfill service, which owns its own chunked transaction boundary).
 pub fn insert_mcp_events(pool: &DbPool, events: &[McpEventInsert]) -> Result<usize> {
     let mut conn = crate::db::write_conn(pool)?;
+    let changes_before = conn.total_changes();
     let tx = conn.transaction()?;
     let inserted = insert_mcp_events_in_tx(&tx, events)?;
     tx.commit()?;
-    if inserted > 0 {
+    // A duplicate call/result may still repair a legacy unnamed result.
+    if conn.total_changes() > changes_before {
         super::agent_observatory::notify_projection_work();
     }
     Ok(inserted)

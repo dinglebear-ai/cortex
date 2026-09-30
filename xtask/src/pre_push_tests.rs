@@ -41,6 +41,22 @@ fn docs_only_push_runs_instruction_and_generator_gates() {
 }
 
 #[test]
+fn plugin_package_changes_keep_behavior_validation() {
+    for path in [
+        "plugins/install-cortex/skills/install-cortex/SKILL.md",
+        "plugins/install-cortex/.claude-plugin/plugin.json",
+        "plugins/cortex/.claude-plugin/plugin.json",
+        "plugins/cortex/tests/snippet_contract.mjs",
+        "plugins/cortex/scripts/plugin-setup.sh",
+    ] {
+        assert!(
+            plan_for(&[path], false).contains(&"skills"),
+            "{path} must validate plugin contracts"
+        );
+    }
+}
+
+#[test]
 fn rust_change_runs_clippy_without_full_tests() {
     let plan = plan_for(&["src/web_app.rs"], false);
     assert!(plan.contains(&"version-sync"));

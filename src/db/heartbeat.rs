@@ -603,6 +603,53 @@ pub(crate) fn heartbeat_flags(sample: &HeartbeatSampleState) -> HeartbeatStateFl
 }
 
 fn resolve_unique_hostname(conn: &rusqlite::Connection, hostname: &str) -> Result<String> {
+    // Current device identity comes from the small latest-heartbeat table. Use
+    // the same conservative aliases as log-source listings, but never merge
+    // two stable device IDs merely because their reported names look alike.
+    let current = {
+        let mut stmt = conn.prepare("SELECT hostname, host_id FROM host_heartbeats_latest")?;
+        stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut names: Vec<String> = current.iter().map(|(name, _)| name.clone()).collect();
+    names.push(hostname.to_owned());
+    let aliases = super::queries::canonical_host_keys(&names);
+    let requested = aliases.get(hostname);
+    let matching_ids: std::collections::HashSet<&str> = current
+        .iter()
+        .filter(|(name, _)| aliases.get(name) == requested)
+        .map(|(_, id)| id.as_str())
+        .collect();
+    if matching_ids.len() > 1 {
+        return Err(anyhow!("ambiguous_host"));
+    }
+    if let Some(current_id) = matching_ids.into_iter().next() {
+        // A renamed device's historical name may later be reused by another
+        // device. Current cache entries cannot erase that ambiguity. Check only
+        // the exact requested/current alias names using the existing index.
+        let mut history_names: Vec<&str> = current
+            .iter()
+            .filter(|(name, _)| aliases.get(name) == requested)
+            .map(|(name, _)| name.as_str())
+            .collect();
+        history_names.push(hostname);
+        history_names.sort_unstable();
+        history_names.dedup();
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT host_id FROM host_heartbeats WHERE hostname = ?1 LIMIT 2")?;
+        for name in history_names {
+            let ids = stmt
+                .query_map([name], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if ids.iter().any(|id| id != current_id) {
+                return Err(anyhow!("ambiguous_host"));
+            }
+        }
+        return Ok(current_id.to_owned());
+    }
+    // Preserve indexed exact-name lookup for historical names after a rename.
     let mut stmt = conn.prepare(
         "SELECT host_id
          FROM host_heartbeats

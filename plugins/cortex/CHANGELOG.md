@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Apply bounded, redacted previews to all assessment and incident snippets, and omit raw failure strings from report and troubleshooting results.
+
 - Bound assessment and session preview traversal, retain coverage and truncation metadata, redact transcript excerpts, normalize topology hostname spelling, and keep raw upstream errors out of snippet output.
 
 - Switch the `cortex-topology` snippet from full inventory snapshots to bounded host and app activity queries so it can return useful evidence without a slow inventory fetch; label the reduced coverage explicitly.

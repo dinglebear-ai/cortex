@@ -930,6 +930,19 @@ pub fn index_file_with_options(
     }
     let checkpoint_store = checkpoint::CheckpointStore::new(pool);
     let source_id = checkpoint_store.ensure_source(&canonical, source_kind.as_str())?;
+    // Gemini whole-file JSON has no resumable parser. Preserve any existing
+    // evidence/checkpoint until this pass can acquire its replacement within
+    // budget, including automatic extractor-revision replay and forced scans.
+    if source_kind == SourceKind::GeminiSession
+        && let Some(budget) = options.scan_budget
+        && current_metadata.size > budget.per_source_max_bytes
+    {
+        return Ok(IndexResult {
+            discovered_files: 1,
+            source_budget_cap_hits: 1,
+            ..Default::default()
+        });
+    }
     if options.force {
         checkpoint_store.reset_source(source_id, &canonical)?;
     }
@@ -984,18 +997,6 @@ pub fn index_file_with_options(
         });
     }
     if source_kind == SourceKind::GeminiSession {
-        // Gemini chats are whole-file JSON. Until their parser has a
-        // resumable representation, a bounded scan must defer an oversized
-        // chat rather than bypass its allowance with `read_to_string`.
-        if let Some(budget) = options.scan_budget
-            && current_metadata.size > budget.per_source_max_bytes
-        {
-            return Ok(IndexResult {
-                discovered_files: 1,
-                source_budget_cap_hits: 1,
-                ..Default::default()
-            });
-        }
         let raw = match snapshot.as_ref() {
             Some(bytes) => match String::from_utf8(bytes.clone()) {
                 Ok(raw) => raw,

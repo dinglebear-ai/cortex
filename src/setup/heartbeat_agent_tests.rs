@@ -33,7 +33,7 @@ impl Drop for EnvGuard {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 fn write_executable(path: &std::path::Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
 
@@ -41,6 +41,123 @@ fn write_executable(path: &std::path::Path, body: &str) {
     let mut perms = std::fs::metadata(path).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
+fn launchd_service_observation(home: &Path) -> SetupPhase {
+    check_launchd(
+        home,
+        Path::new("/cortex"),
+        Path::new("/env"),
+        Path::new("/host-id"),
+    )
+    .into_iter()
+    .find(|phase| phase.name == "heartbeat-agent-service")
+    .unwrap()
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn launchd_check_accepts_output_larger_than_pipe_capacity() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("launchctl");
+    write_executable(
+        &program,
+        "#!/bin/sh\ncase \"$2\" in\n*transcript-forwarder) exit 113;;\nesac\ndd if=/dev/zero bs=131072 count=1 2>/dev/null\nprintf 'state = running\\npid = 123\\n'\n",
+    );
+    let _program = EnvGuard::set("CORTEX_TEST_LAUNCHCTL", &program);
+    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "200");
+    let _home = EnvGuard::set("CORTEX_HOME", dir.path());
+    let phase = launchd_service_observation(dir.path());
+    assert!(matches!(phase.status, SetupStatus::Ok), "{}", phase.detail);
+    assert_eq!(phase.detail, "canonical loaded");
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn launchd_check_reports_timeout_as_unknown_service_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("launchctl");
+    write_executable(
+        &program,
+        "#!/bin/sh\ncase \"$2\" in\n*transcript-forwarder) exit 113;;\nesac\nexec sleep 30\n",
+    );
+    let _program = EnvGuard::set("CORTEX_TEST_LAUNCHCTL", &program);
+    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "50");
+    let _home = EnvGuard::set("CORTEX_HOME", dir.path());
+    let phase = launchd_service_observation(dir.path());
+    assert!(matches!(phase.status, SetupStatus::Error));
+    assert!(
+        phase
+            .detail
+            .contains("canonical launchd inspection failed; service state unknown")
+    );
+    assert!(phase.detail.contains("timed out"));
+    assert!(!phase.detail.contains("no heartbeat agent loaded"));
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn launchd_check_distinguishes_missing_jobs_from_inspection_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("launchctl");
+    let _program = EnvGuard::set("CORTEX_TEST_LAUNCHCTL", &program);
+    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "1000");
+    let _home = EnvGuard::set("CORTEX_HOME", dir.path());
+    write_executable(&program, "#!/bin/sh\nexit 113\n");
+    let phase = launchd_service_observation(dir.path());
+    assert!(matches!(phase.status, SetupStatus::Warn));
+    assert_eq!(phase.detail, "no heartbeat agent loaded");
+    for failing_label in [
+        super::super::launchd::LABEL,
+        super::super::launchd::LEGACY_LABEL,
+    ] {
+        write_executable(
+            &program,
+            &format!(
+                "#!/bin/sh\ncase \"$2\" in\n*/{failing_label}) printf 'private-token' >&2; exit 1;;\nesac\nexit 113\n"
+            ),
+        );
+        let phase = launchd_service_observation(dir.path());
+        assert!(
+            matches!(phase.status, SetupStatus::Error),
+            "{}",
+            phase.detail
+        );
+        assert!(phase.detail.contains("service state unknown"));
+        assert!(!phase.detail.contains("private-token"));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn launchd_rollback_recovery_requires_confirmed_legacy_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("launchctl");
+    write_executable(
+        &program,
+        "#!/bin/sh\ncase \"$2\" in\n*transcript-forwarder) exit 1;;\nesac\nprintf 'state = running\\n'\n",
+    );
+    std::fs::write(
+        dir.path().join("heartbeat-agent-migration.json"),
+        "{\"step\":\"rollback\"}",
+    )
+    .unwrap();
+    let _program = EnvGuard::set("CORTEX_TEST_LAUNCHCTL", &program);
+    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "1000");
+    let _home = EnvGuard::set("CORTEX_HOME", dir.path());
+    let phase = check_lifecycle_state(dir.path(), ServiceBackend::Launchd);
+    assert!(
+        matches!(phase.status, SetupStatus::Warn),
+        "{}",
+        phase.detail
+    );
+    assert!(phase.detail.contains("migration=rollback"));
+    assert!(!phase.detail.contains("recovered-canonical"));
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

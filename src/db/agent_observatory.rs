@@ -39,8 +39,9 @@ pub use projection::{
 pub(crate) use projection::{
     AgentRepositoryObservationRunMatch, find_unique_projection_run_for_repository_observation,
     projection_event_has_summary, reconcile_unmatched_trace_relations,
-    write_agent_existing_run_event, write_agent_existing_run_event_with_cursor,
-    write_agent_projection_with_cursor, write_agent_trace_relation_without_run,
+    repair_mcp_result_projection_in_tx, write_agent_existing_run_event,
+    write_agent_existing_run_event_with_cursor, write_agent_projection_with_cursor,
+    write_agent_trace_relation_without_run,
 };
 
 #[path = "agent_observatory_observations.rs"]

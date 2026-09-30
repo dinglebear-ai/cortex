@@ -397,3 +397,25 @@ raw collector warnings, raw frames, or `metadata_json` are returned.
 | `tempfile` | Temporary directories for test databases |
 | `serial_test` | Serialized test execution for env var tests |
 | `tower` | HTTP testing utilities |
+
+## Reported sources and device identity
+
+`cortex hosts` and `GET /api/hosts` enumerate reported log sources. Each entry
+preserves raw `aliases` for exact log filters and declares `source_kind`:
+`host`, `forwarding_principal`, or `unattributed`. `agent-shared_bearer` and legacy
+`bearer-shared-*` labels represent shared credential sources; several devices
+may contribute to one such source. Their provenance retains the transport peer
+and a claimed hostname. A claim alone does not verify a device or justify
+rewriting historical log ownership.
+
+Log-source grouping folds case and trailing dots, and only combines a qualified
+`.local` or tailnet hostname with an independently present short name when there
+is no competing qualified name. Other DNS domains and case-sensitive forwarding
+principal labels remain distinct. The portal displays source hostnames and
+classifies credential sources separately from its host count.
+
+Heartbeat device identity remains the stable `host_id`. Host-state lookup uses
+conservative current hostname aliases, preserves historical exact-name lookup,
+and returns `ambiguous_host` if an alias matches multiple device IDs. Select a
+specific `host_id` to resolve that ambiguity. No host record or log evidence is
+deleted or reassigned by these display and lookup rules.

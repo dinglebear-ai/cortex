@@ -25,6 +25,26 @@ use chrono::{Duration, SecondsFormat, Utc};
 use rusqlite::params;
 use serde_json::json;
 
+pub(crate) struct McpProjectionDisplay {
+    pub title: String,
+    pub summary: String,
+    pub payload_json: String,
+    pub actor_name: String,
+}
+
+pub(crate) fn mcp_projection_display(
+    row: &crate::db::agent_observatory::AgentMcpSourceRow,
+) -> McpProjectionDisplay {
+    let source = projection_parts(&AgentSourceRecord::Mcp(row.clone()));
+    let payload_json = bounded_payload(source.payload, &source.title, &source.source_cursor);
+    McpProjectionDisplay {
+        title: truncate_utf8(&source.title, MAX_SUMMARY_BYTES),
+        summary: source.summary,
+        payload_json,
+        actor_name: truncate_utf8(&source.actor_name, MAX_SUMMARY_BYTES),
+    }
+}
+
 const OTEL_GENAI_SEMCONV_VERSION: &str = "opentelemetry-genai-v1.26.0";
 const TRACE_RELATION_CANDIDATE_CAP: i64 = 8;
 

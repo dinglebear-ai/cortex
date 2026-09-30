@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::models::HostEntry;
+use super::models::{HostEntry, HostSourceKind};
 use super::pool::DbPool;
 
 /// Lowercase, trim, and strip trailing dots from a hostname so case and a
@@ -10,53 +10,59 @@ fn case_fold_host(raw: &str) -> String {
     raw.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// Map each input hostname to its canonical identity, applying two folds:
-/// 1. **Case / trailing-dot** via [`case_fold_host`] (`BACKUPHOST` → `backuphost`).
-/// 2. **FQDN → short name, only when the short name independently exists** among
-///    the inputs (`nashost.<tailnet>` → `nashost` when a bare `nashost` is present,
-///    but `host.docker.internal` is left alone). This never invents a merge that
-///    could mask a distinct machine.
-///
-/// Shared by [`dedupe_hosts`] (the `hosts` action) and `clock_skew` so every
-/// host-keyed view collapses the same case/FQDN variants.
+/// Fold case and trailing dots, then recognize an unambiguous local or tailnet
+/// alias only when its bare name is independently present. Arbitrary DNS domains
+/// and competing qualified names never establish that two sources are one host.
 pub(crate) fn canonical_host_keys(
     hostnames: &[String],
 ) -> std::collections::HashMap<String, String> {
+    use std::collections::{HashMap, HashSet};
     let cased: Vec<(String, String)> = hostnames
         .iter()
-        .map(|h| (h.clone(), case_fold_host(h)))
+        .map(|h| {
+            (
+                h.clone(),
+                if HostSourceKind::for_hostname(h) == HostSourceKind::ForwardingPrincipal {
+                    h.trim().to_string()
+                } else {
+                    case_fold_host(h)
+                },
+            )
+        })
         .collect();
-    let shorts: std::collections::HashSet<&str> = cased
+    let shorts: HashSet<&str> = cased
         .iter()
         .filter(|(_, c)| !c.is_empty() && !c.contains('.'))
         .map(|(_, c)| c.as_str())
         .collect();
+    let mut qualified: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (_, name) in &cased {
+        if let Some((head, _)) = name.split_once('.') {
+            qualified.entry(head).or_default().insert(name);
+        }
+    }
     cased
         .iter()
-        .map(|(raw, c)| {
-            let canonical = match c.split_once('.') {
-                Some((head, _)) if shorts.contains(head) => head.to_string(),
-                _ => c.clone(),
+        .map(|(raw, name)| {
+            let canonical = match name.split_once('.') {
+                Some((head, suffix))
+                    if HostSourceKind::for_hostname(raw) != HostSourceKind::ForwardingPrincipal
+                        && shorts.contains(head)
+                        && (suffix == "local" || suffix.ends_with(".ts.net"))
+                        && qualified.get(head).is_some_and(|names| names.len() == 1) =>
+                {
+                    head.to_string()
+                }
+                _ => name.clone(),
             };
             (raw.clone(), canonical)
         })
         .collect()
 }
 
-/// Merge host rows that refer to the same machine. Two folds are applied:
-/// 1. **Case / trailing-dot** — `BACKUPHOST` and `backuphost` collapse, `WINHOST`→`winhost`.
-/// 2. **FQDN → short name, only when the short name independently exists** as
-///    its own host. So `nashost.example.ts.net` folds into `nashost`
-///    (a real host), but `host.docker.internal` is left alone because no bare
-///    `host` row exists — we never invent a merge that could mask a distinct
-///    machine.
-///
-/// Blank hostnames are excluded because they cannot be selected or correlated.
-/// Other ambiguous self-identifiers (`localhost`, `host:user` forms with no
-/// dot) are left untouched: resolving those to a real machine needs the
-/// network-verified `source_ip`, which is a deferred follow-up.
-/// Merged rows sum `log_count`, take the earliest `first_seen` and latest
-/// `last_seen`, and display the canonical (lowercased) name.
+/// Aggregate reported log sources using conservative hostname aliases. Counts
+/// and time bounds combine, while raw spellings and source identity remain visible.
+/// This is not a merge of heartbeat device IDs or authentication principals.
 pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
     let names: Vec<String> = rows.iter().map(|h| h.hostname.clone()).collect();
     let canon = canonical_host_keys(&names);
@@ -73,6 +79,7 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
         match merged.get_mut(&canonical) {
             Some(acc) => {
                 acc.log_count += entry.log_count;
+                acc.aliases.push(entry.hostname.clone());
                 if entry.first_seen < acc.first_seen {
                     acc.first_seen = entry.first_seen.clone();
                 }
@@ -89,6 +96,8 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
                         first_seen: entry.first_seen.clone(),
                         last_seen: entry.last_seen.clone(),
                         log_count: entry.log_count,
+                        aliases: vec![entry.hostname.clone()],
+                        source_kind: super::models::HostSourceKind::for_hostname(&canonical),
                     },
                 );
             }
@@ -98,7 +107,15 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
         .into_iter()
         .map(|k| merged.remove(&k).expect("key inserted above"))
         .collect();
-    out.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+    for entry in &mut out {
+        entry.aliases.sort();
+        entry.aliases.dedup();
+    }
+    out.sort_by(|a, b| {
+        b.last_seen
+            .cmp(&a.last_seen)
+            .then_with(|| a.hostname.cmp(&b.hostname))
+    });
     out
 }
 
@@ -115,6 +132,8 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
             first_seen: row.get(1)?,
             last_seen: row.get(2)?,
             log_count: row.get(3)?,
+            aliases: Vec::new(),
+            source_kind: Default::default(),
         })
     })?;
 

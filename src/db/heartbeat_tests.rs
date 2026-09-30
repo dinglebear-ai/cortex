@@ -482,3 +482,149 @@ mod stale_heartbeat_hosts_tests {
         assert!(stale.is_empty());
     }
 }
+
+#[test]
+fn host_state_resolves_current_aliases_without_merging_device_ids() {
+    let (pool, _dir) = test_pool();
+    let first = insert_heartbeat(
+        &pool,
+        "stable-mac",
+        "DEVHOST.local",
+        1,
+        "2026-05-25T00:00:00Z",
+        false,
+    );
+    seed_latest(
+        &pool,
+        "stable-mac",
+        first,
+        "DEVHOST.local",
+        "2026-05-25T00:00:00Z",
+        false,
+    );
+    let state = heartbeat_host_state(
+        &pool,
+        HeartbeatHostLookup::Hostname("devhost".into()),
+        None,
+        1,
+    )
+    .unwrap();
+    assert_eq!(state.host_id, "stable-mac");
+    let second = insert_heartbeat(
+        &pool,
+        "another-mac",
+        "devhost",
+        1,
+        "2026-05-25T00:01:00Z",
+        false,
+    );
+    seed_latest(
+        &pool,
+        "another-mac",
+        second,
+        "devhost",
+        "2026-05-25T00:01:00Z",
+        false,
+    );
+    let error = heartbeat_host_state(
+        &pool,
+        HeartbeatHostLookup::Hostname("devhost".into()),
+        None,
+        1,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "ambiguous_host");
+    let state = heartbeat_host_state(
+        &pool,
+        HeartbeatHostLookup::HostId("stable-mac".into()),
+        None,
+        1,
+    )
+    .unwrap();
+    assert_eq!(state.host_id, "stable-mac");
+}
+
+#[test]
+fn host_state_does_not_alias_distinct_dns_names() {
+    let (pool, _dir) = test_pool();
+    let row = insert_heartbeat(
+        &pool,
+        "prod",
+        "db.prod.example",
+        1,
+        "2026-05-25T00:00:00Z",
+        false,
+    );
+    seed_latest(
+        &pool,
+        "prod",
+        row,
+        "db.prod.example",
+        "2026-05-25T00:00:00Z",
+        false,
+    );
+    let error = heartbeat_host_state(&pool, HeartbeatHostLookup::Hostname("db".into()), None, 1)
+        .unwrap_err();
+    assert_eq!(error.to_string(), "not_found");
+}
+
+#[test]
+fn current_hostname_reuse_preserves_historical_device_ambiguity() {
+    let (pool, _dir) = test_pool();
+    insert_heartbeat(
+        &pool,
+        "first-device",
+        "old-name",
+        1,
+        "2026-05-25T00:00:00Z",
+        false,
+    );
+    let renamed = insert_heartbeat(
+        &pool,
+        "first-device",
+        "new-name",
+        2,
+        "2026-05-25T00:01:00Z",
+        false,
+    );
+    seed_latest(
+        &pool,
+        "first-device",
+        renamed,
+        "new-name",
+        "2026-05-25T00:01:00Z",
+        false,
+    );
+    let reused = insert_heartbeat(
+        &pool,
+        "second-device",
+        "old-name",
+        1,
+        "2026-05-25T00:02:00Z",
+        false,
+    );
+    seed_latest(
+        &pool,
+        "second-device",
+        reused,
+        "old-name",
+        "2026-05-25T00:02:00Z",
+        false,
+    );
+    let error = heartbeat_host_state(
+        &pool,
+        HeartbeatHostLookup::Hostname("old-name".into()),
+        None,
+        1,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "ambiguous_host");
+    let state = heartbeat_host_state(
+        &pool,
+        HeartbeatHostLookup::HostId("second-device".into()),
+        None,
+        1,
+    )
+    .unwrap();
+    assert_eq!(state.host_id, "second-device");
+}

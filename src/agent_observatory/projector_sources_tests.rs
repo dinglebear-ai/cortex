@@ -799,3 +799,231 @@ fn trace_association_caps_high_cardinality_candidate_evidence() {
         super::SpanAssociation::Ambiguous(8)
     );
 }
+
+#[test]
+fn late_mcp_call_repairs_projected_orphan_without_recounting_events() {
+    use crate::db::{McpEventInsert, insert_mcp_events};
+    use crate::scanner::mcp_events::{ExtractedMcpEvent, McpEventKind};
+    let (pool, _dir, log_id) = setup();
+    assert_eq!(projection_cursor(&pool, "mcp_events").unwrap(), "");
+    let make = |kind| McpEventInsert {
+        log_id,
+        ai_tool: "claude".to_string(),
+        ai_project: Some(PROJECT.to_string()),
+        ai_session_id: Some("session-one".to_string()),
+        hostname: "devhost".to_string(),
+        timestamp: if kind == McpEventKind::Call {
+            "2026-08-05T12:00:00.000Z"
+        } else {
+            "2026-08-05T12:01:00.000Z"
+        }
+        .to_string(),
+        event: ExtractedMcpEvent {
+            call_id: "late-one".to_string(),
+            tool_name: if kind == McpEventKind::Call {
+                "mcp__server__tool"
+            } else {
+                ""
+            }
+            .to_string(),
+            mcp_server: (kind == McpEventKind::Call).then(|| "server".to_string()),
+            mcp_tool: (kind == McpEventKind::Call).then(|| "tool".to_string()),
+            event_kind: kind,
+            turn_id: None,
+            status: None,
+            is_error: (kind == McpEventKind::Result).then_some(true),
+            arguments_json: None,
+            output_preview: None,
+            error_text: (kind == McpEventKind::Result).then(|| "boom".to_string()),
+        },
+    };
+    insert_mcp_events(&pool, &[make(McpEventKind::Result)]).unwrap();
+    let initial = page_agent_sources(&pool, AgentSourceKind::Mcp, "", 500).unwrap();
+    let outcome = project_agent_source_with_cursor(
+        &pool,
+        &initial.records[0],
+        "mcp_events",
+        &initial.next_cursor,
+    )
+    .unwrap();
+    let SourceProjectionOutcome::Projected(first) = outcome else {
+        panic!("orphan result must project");
+    };
+    let event_id = first.event.id;
+    assert_eq!(
+        first.actor.as_ref().unwrap().display_name.as_deref(),
+        Some("")
+    );
+    assert_eq!((first.run.event_count, first.run.error_count), (1, 1));
+    insert_mcp_events(&pool, &[make(McpEventKind::Call)]).unwrap();
+    assert_eq!(
+        projection_cursor(&pool, "mcp_events").unwrap(),
+        initial.next_cursor
+    );
+    {
+        let conn = pool.get().unwrap();
+        let (id, title, summary, payload, actor_name): (i64, String, String, String, String) = conn
+            .query_row(
+                "SELECT e.id, e.title, e.summary, e.payload_json, a.display_name
+             FROM agent_run_events e JOIN agent_run_actors a ON a.id = e.actor_id WHERE e.id = ?1",
+                [event_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(id, event_id);
+        assert_eq!(title, "MCP result: server/tool");
+        assert_eq!(summary, "boom");
+        assert_eq!(actor_name, "server/tool");
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(payload["mcp_server"], "server");
+        assert_eq!(payload["mcp_tool"], "tool");
+        assert_eq!(payload["tool_name"], "mcp__server__tool");
+        assert_eq!(payload["is_error"], true);
+        let counts: (i64, i64) = conn
+            .query_row(
+                "SELECT event_count, error_count FROM agent_runs WHERE id = ?1",
+                [first.run.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(counts, (1, 1));
+    }
+    let later = page_agent_sources(&pool, AgentSourceKind::Mcp, &initial.next_cursor, 500).unwrap();
+    assert_eq!(later.records.len(), 1);
+    project_agent_source_with_cursor(&pool, &later.records[0], "mcp_events", &later.next_cursor)
+        .unwrap();
+    let repaired = page_agent_sources(&pool, AgentSourceKind::Mcp, "", 500).unwrap();
+    let result = repaired
+        .records
+        .iter()
+        .find(|record| matches!(record, AgentSourceRecord::Mcp(row) if row.event_kind == "result"))
+        .unwrap();
+    let outcome = project_agent_source(&pool, result).unwrap();
+    let SourceProjectionOutcome::Projected(replay) = outcome else {
+        panic!("repaired result must replay");
+    };
+    assert!(!replay.event_inserted);
+    assert_eq!(replay.event.id, event_id);
+    assert_eq!((replay.run.event_count, replay.run.error_count), (2, 1));
+    assert_eq!(
+        projection_cursor(&pool, "mcp_events").unwrap(),
+        later.next_cursor
+    );
+}
+
+#[test]
+fn legacy_projected_mcp_orphan_repair_emits_one_fresh_correction_receipt() {
+    use crate::db::{McpEventInsert, insert_mcp_events};
+    use crate::scanner::mcp_events::{ExtractedMcpEvent, McpEventKind};
+    let (pool, _dir, log_id) = setup();
+    assert_eq!(projection_cursor(&pool, "mcp_events").unwrap(), "");
+    // Reproduce rows stored by the old writer: result before call, with both
+    // already projected and the durable source cursor beyond both rows.
+    {
+        let conn = pool.get().unwrap();
+        for (kind, name, server, tool, timestamp, error) in [
+            (
+                "result",
+                "",
+                None,
+                None,
+                "2026-08-05T12:01:00.000Z",
+                Some(1),
+            ),
+            (
+                "call",
+                "mcp__server__tool",
+                Some("server"),
+                Some("tool"),
+                "2026-08-05T12:00:00.000Z",
+                None,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO ai_mcp_events (call_log_id, result_log_id, ai_tool, ai_project, ai_session_id, hostname, timestamp, call_id, tool_name, mcp_server, mcp_tool, event_kind, is_error)
+                 VALUES (?1, ?2, 'claude', ?3, 'session-one', 'devhost', ?4, 'legacy-call', ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![(kind == "call").then_some(log_id), (kind == "result").then_some(log_id), PROJECT, timestamp, name, server, tool, kind, error],
+            ).unwrap();
+        }
+    }
+    let sources = page_agent_sources(&pool, AgentSourceKind::Mcp, "", 500).unwrap();
+    for source in &sources.records {
+        project_agent_source_with_cursor(&pool, source, "mcp_events", &source.next_cursor())
+            .unwrap();
+    }
+    let snapshot = || {
+        let conn = pool.get().unwrap();
+        conn.query_row(
+            "SELECT (SELECT MAX(id) FROM agent_stream_outbox), event_count, error_count FROM agent_runs",
+            [], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+        ).unwrap()
+    };
+    let before = snapshot();
+    assert_eq!((before.1, before.2), (2, 1));
+    let call = McpEventInsert {
+        log_id,
+        ai_tool: "claude".to_string(),
+        ai_project: Some(PROJECT.to_string()),
+        ai_session_id: Some("session-one".to_string()),
+        hostname: "devhost".to_string(),
+        timestamp: "2026-08-05T12:00:00.000Z".to_string(),
+        event: ExtractedMcpEvent {
+            call_id: "legacy-call".to_string(),
+            tool_name: "mcp__server__tool".to_string(),
+            mcp_server: Some("server".to_string()),
+            mcp_tool: Some("tool".to_string()),
+            event_kind: McpEventKind::Call,
+            turn_id: None,
+            status: None,
+            is_error: None,
+            arguments_json: None,
+            output_preview: None,
+            error_text: None,
+        },
+    };
+    assert_eq!(
+        insert_mcp_events(&pool, std::slice::from_ref(&call)).unwrap(),
+        0
+    );
+    let after = snapshot();
+    assert_eq!(after, (before.0 + 1, 2, 1));
+    {
+        let conn = pool.get().unwrap();
+        let (kind, expires_at, payload): (String, String, String) = conn.query_row(
+            "SELECT stream_event_type, expires_at, payload_json FROM agent_stream_outbox WHERE id = ?1",
+            [after.0], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(kind, "run.updated");
+        assert!(chrono::DateTime::parse_from_rfc3339(&expires_at).unwrap() > chrono::Utc::now());
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(payload["changed"][0], "mcp_identity");
+        let event_id = payload["event_id"]
+            .as_str()
+            .expect("SQLite event IDs must be decimal strings");
+        assert!(event_id.parse::<i64>().unwrap() > 0);
+    }
+    assert_eq!(
+        projection_cursor(&pool, "mcp_events").unwrap(),
+        sources.next_cursor
+    );
+    assert!(
+        page_agent_sources(&pool, AgentSourceKind::Mcp, &sources.next_cursor, 500)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(insert_mcp_events(&pool, &[call]).unwrap(), 0);
+    assert_eq!(
+        snapshot(),
+        after,
+        "unchanged replay must not create another receipt"
+    );
+}

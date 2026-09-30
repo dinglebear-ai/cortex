@@ -6,6 +6,8 @@ fn host_entry(name: &str, first: &str, last: &str, count: i64) -> HostEntry {
         first_seen: first.to_string(),
         last_seen: last.to_string(),
         log_count: count,
+        aliases: Vec::new(),
+        source_kind: Default::default(),
     }
 }
 
@@ -111,4 +113,83 @@ fn dedupe_hosts_orders_by_last_seen_desc() {
     ]);
     assert_eq!(out[0].hostname, "bravo"); // most recent first
     assert_eq!(out[1].hostname, "alpha");
+}
+
+#[test]
+fn host_aliases_remain_available_for_exact_filters() {
+    let out = dedupe_hosts(vec![
+        host_entry("DEVHOST", "2026-06-01", "2026-06-02", 2),
+        host_entry("devhost.local.", "2026-06-01", "2026-06-03", 3),
+    ]);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].hostname, "devhost");
+    assert_eq!(out[0].aliases, vec!["DEVHOST", "devhost.local."]);
+    assert_eq!(out[0].log_count, 5);
+}
+
+#[test]
+fn hostname_similarity_does_not_merge_distinct_domains_or_guests() {
+    let names = [
+        "db",
+        "db.prod.example",
+        "db.dev.example",
+        "db.local",
+        "db.alpha.ts.net",
+        "db.beta.ts.net",
+        "db-wsl",
+    ];
+    let rows = names
+        .iter()
+        .map(|name| host_entry(name, "2026-06-01", "2026-06-02", 1))
+        .collect();
+    let out = dedupe_hosts(rows);
+    assert_eq!(out.len(), names.len());
+    assert!(out.iter().all(|row| row.log_count == 1));
+}
+
+#[test]
+fn forwarding_principals_are_not_devices_or_case_insensitive_aliases() {
+    let rows = [
+        "agent-shared_bearer",
+        "bearer-shared-one",
+        "bearer-shared-Mac",
+        "bearer-shared-mac",
+        "localhost",
+        "devhost",
+    ]
+    .iter()
+    .map(|name| host_entry(name, "2026-06-01", "2026-06-02", 1))
+    .collect();
+    let out = dedupe_hosts(rows);
+    assert_eq!(out.len(), 6);
+    assert_eq!(
+        out.iter()
+            .filter(|row| row.source_kind == HostSourceKind::ForwardingPrincipal)
+            .count(),
+        4
+    );
+    assert_eq!(
+        out.iter()
+            .filter(|row| row.source_kind == HostSourceKind::Unattributed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        out.iter()
+            .filter(|row| row.source_kind == HostSourceKind::Host)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn real_device_names_with_agent_prefix_remain_hosts() {
+    let out = dedupe_hosts(vec![
+        host_entry("AGENT-OS", "2026-06-01", "2026-06-02", 1),
+        host_entry("agent-os", "2026-06-01", "2026-06-03", 2),
+    ]);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].hostname, "agent-os");
+    assert_eq!(out[0].source_kind, HostSourceKind::Host);
+    assert_eq!(out[0].log_count, 3);
 }

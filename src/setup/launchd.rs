@@ -1,8 +1,12 @@
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Output;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use super::heartbeat_agent_env::atomic_private_write;
 
@@ -61,36 +65,143 @@ pub(crate) fn install_plist(path: &Path, content: &str) -> io::Result<()> {
 }
 
 fn launchctl(uid: u32, args: &[&str]) -> io::Result<Output> {
-    let program = std::env::var_os("CORTEX_TEST_LAUNCHCTL")
+    let program = crate::env::var_os("CORTEX_TEST_LAUNCHCTL")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/bin/launchctl"));
-    let mut child = Command::new(program)
-        .args(args)
-        .env("CORTEX_LAUNCHD_UID", uid.to_string())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let deadline = std::env::var("CORTEX_TEST_COMMAND_DEADLINE_MS")
+    let deadline = crate::env::var("CORTEX_TEST_COMMAND_DEADLINE_MS")
         .ok()
         .and_then(|v| v.parse().ok())
         .map(Duration::from_millis)
         .unwrap_or(Duration::from_secs(30));
-    let started = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    launchctl_command(&program, uid, args, deadline)
+}
+
+#[cfg(not(unix))]
+fn launchctl_command(_: &Path, _: u32, _: &[&str], _: Duration) -> io::Result<Output> {
+    Err(io::Error::new(
+        ErrorKind::Unsupported,
+        "launchd requires Unix",
+    ))
+}
+
+#[cfg(unix)]
+fn launchctl_command(
+    program: &Path,
+    uid: u32,
+    args: &[&str],
+    deadline: Duration,
+) -> io::Result<Output> {
+    use std::os::unix::process::CommandExt;
+
+    let mut child = Command::new(program)
+        .args(args)
+        .env("CORTEX_LAUNCHD_UID", uid.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let _group = LaunchctlProcessGroup(child.id());
+    let result = (|| {
+        let mut stdout = child.stdout.take().expect("stdout piped");
+        let mut stderr = child.stderr.take().expect("stderr piped");
+        nonblocking(&stdout)?;
+        nonblocking(&stderr)?;
+        let started = Instant::now();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut status = None;
+        let mut stdout_closed = false;
+        let mut stderr_closed = false;
+        loop {
+            // Drain both pipes while the child runs. Waiting for exit first can
+            // deadlock when launchctl prints more than a pipe's capacity.
+            if !stdout_closed {
+                stdout_closed = drain(&mut stdout, &mut out)?;
+            }
+            if !stderr_closed {
+                stderr_closed = drain(&mut stderr, &mut err)?;
+            }
+            if status.is_none() {
+                status = child.try_wait()?;
+            }
+            if let Some(status) = status
+                && stdout_closed
+                && stderr_closed
+            {
+                return Ok(Output {
+                    status,
+                    stdout: out,
+                    stderr: err,
+                });
+            }
+            // EOF is covered too: a child may exit after passing a pipe to a
+            // descendant. The owned process group is killed on every exit.
+            if started.elapsed() >= deadline {
+                return Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    "launchctl command timed out",
+                ));
+            }
+            std::thread::sleep(
+                Duration::from_millis(5).min(deadline.saturating_sub(started.elapsed())),
+            );
         }
-        if started.elapsed() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                ErrorKind::TimedOut,
-                "launchctl command timed out",
-            ));
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+#[cfg(unix)]
+struct LaunchctlProcessGroup(u32);
+
+#[cfg(unix)]
+impl Drop for LaunchctlProcessGroup {
+    fn drop(&mut self) {
+        // launchctl itself owns this group; launched services are owned by
+        // launchd via IPC, not descendants of this inspection command.
+        unsafe {
+            libc::kill(-(self.0 as i32), libc::SIGKILL);
         }
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[cfg(unix)]
+fn nonblocking(pipe: &impl std::os::fd::AsRawFd) -> io::Result<()> {
+    let fd = pipe.as_raw_fd();
+    // The descriptor remains owned by the child pipe throughout both calls.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn drain(pipe: &mut impl std::io::Read, output: &mut Vec<u8>) -> io::Result<bool> {
+    let mut buffer = [0; 8192];
+    loop {
+        match pipe.read(&mut buffer) {
+            Ok(0) => return Ok(true),
+            Ok(n) => {
+                if output.len() + n > 1024 * 1024 {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "launchctl output exceeded 1 MiB",
+                    ));
+                }
+                output.extend_from_slice(&buffer[..n]);
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn domain(uid: u32) -> String {
     format!("gui/{uid}")
 }
@@ -148,8 +259,13 @@ pub(crate) fn print(uid: u32, label: &str) -> io::Result<Option<String>> {
     let out = launchctl(uid, &["print", &target])?;
     if out.status.success() {
         Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
-    } else {
+    } else if out.status.code() == Some(113) {
         Ok(None)
+    } else {
+        Err(io::Error::other(format!(
+            "launchctl print failed: {}",
+            out.status
+        )))
     }
 }
 
@@ -163,29 +279,5 @@ pub(crate) fn rotate_log(path: &Path, max: u64) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn plist_is_deterministic_and_escapes() {
-        let p = render_plist(
-            Path::new("/a & b/cortex"),
-            Path::new("/e<.env"),
-            Path::new("/h"),
-            Path::new("/o"),
-            Path::new("/x"),
-        );
-        assert_eq!(
-            p,
-            render_plist(
-                Path::new("/a & b/cortex"),
-                Path::new("/e<.env"),
-                Path::new("/h"),
-                Path::new("/o"),
-                Path::new("/x")
-            )
-        );
-        assert!(p.contains("/a &amp; b/cortex"));
-        assert!(p.contains("/e&lt;.env"));
-        assert!(!p.contains("TOKEN"));
-    }
-}
+#[path = "launchd_tests.rs"]
+mod tests;

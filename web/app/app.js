@@ -193,19 +193,37 @@
     cy.on("tap", "node", (event) => showNodeEvidence(event.target.data()));
   }
 
+  function normalizeHostSources(hosts) {
+    const sources = new Map();
+    for (const item of hosts) {
+      const host = typeof item === "string" ? item : item?.hostname;
+      if (typeof host !== "string" || !host.trim()) continue;
+      const name = host.trim();
+      const sourceKind = item?.source_kind ||
+        (/^(agent-(shared_bearer|loopback)$|bearer-shared-)/i.test(name) ? "forwarding_principal" :
+          /^(localhost|unresolved-host\.invalid)$/i.test(name) ? "unattributed" : "host");
+      if (!sources.has(name)) {
+        sources.set(name, { hostname: name, source_kind: sourceKind,
+          aliases: Array.isArray(item?.aliases) ? item.aliases.filter((alias) => typeof alias === "string") : [name] });
+      }
+    }
+    return Array.from(sources.values());
+  }
+
   function graphFromHosts(hosts) {
-    const uniqueHosts = Array.from(new Set(hosts.map(String))).slice(0, 36);
+    const sources = normalizeHostSources(hosts).slice(0, 36);
     const nodes = [
       { data: { id: "cortex", label: "cortex", kind: "service", status: "online" } },
-      ...uniqueHosts.map((host) => ({
-        data: { id: `host:${host}`, label: host, kind: "host", status: "online" },
+      ...sources.map((source) => ({
+        data: { id: `source:${source.hostname}`, label: source.hostname,
+          kind: source.source_kind, aliases: source.aliases, status: "observed" },
       })),
       { data: { id: "sqlite", label: "SQLite WAL", kind: "store", status: "online" } },
     ];
-    const edges = uniqueHosts.map((host) => ({
+    const edges = sources.map((source) => ({
       data: {
-        id: `host:${host}->cortex`,
-        source: `host:${host}`,
+        id: `source:${source.hostname}->cortex`,
+        source: `source:${source.hostname}`,
         target: "cortex",
         label: "ingests",
       },
@@ -257,7 +275,8 @@
     ];
     const related = latestLogs.filter((row) => {
       const host = row.hostname || row.host || "";
-      return data.label && String(host).toLowerCase() === String(data.label).toLowerCase();
+      const aliases = Array.isArray(data.aliases) ? data.aliases : [data.label];
+      return aliases.some((alias) => alias === String(host));
     }).slice(0, 4);
     clear(ui.evidenceList);
     facts.forEach(([label, value]) => {
@@ -363,7 +382,8 @@
       latestLogs = tail.logs || tail.entries || tail.items || [];
       ui.serverVersion.textContent = version.version || "Unknown";
       ui.schemaVersion.textContent = `Schema ${version.schema_version ?? "--"}`;
-      ui.hostCount.textContent = String(latestHosts.length);
+      ui.hostCount.textContent = String(normalizeHostSources(latestHosts)
+        .filter((source) => source.source_kind === "host").length);
       ui.logCount.textContent = String(stats.total_logs ?? stats.total ?? "--");
       setBadge(ui.logStatus, "Live", "success");
       updateGraph(graphFromHosts(latestHosts));
