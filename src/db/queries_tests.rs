@@ -206,6 +206,52 @@ fn host_filters_accept_the_canonical_name_returned_by_list_hosts() {
 }
 
 #[test]
+fn host_only_search_bounds_each_host_before_merging_aliases() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            make_entry("2026-01-01T00:00:01Z", "nashost", "info", "first"),
+            make_entry(
+                "2026-01-01T00:00:02Z",
+                "nashost.example.test",
+                "info",
+                "second",
+            ),
+            make_entry("2026-01-01T00:00:03Z", "nashost", "info", "third"),
+            make_entry("2026-01-01T00:00:04Z", "other", "info", "excluded"),
+        ],
+    )
+    .unwrap();
+    let rows = search_logs(
+        &pool,
+        &SearchParams {
+            host: Some("nashost".into()),
+            limit: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.message.as_str())
+            .collect::<Vec<_>>(),
+        ["third", "second"]
+    );
+
+    let (sql, bindings) = host_only_search_sql("nashost", 2);
+    let plan = query_plan(&pool, &sql, &bindings);
+    assert!(
+        plan.contains("idx_logs_host_time"),
+        "host search must use the host/time index: {plan}"
+    );
+    assert!(
+        !plan.contains("USE TEMP B-TREE"),
+        "host search must not sort all historical rows: {plan}"
+    );
+}
+
+#[test]
 fn get_error_summary_limit_is_bound_and_min_clamped() {
     let (sql, bindings) = get_error_summary_sql(
         Some("2026-01-01T00:00:00Z"),

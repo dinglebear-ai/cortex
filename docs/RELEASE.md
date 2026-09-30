@@ -43,7 +43,7 @@ the nested harness lockfiles `tests/live/surface-exporter/Cargo.lock` and
 `mcpb/manifest.json`, `docker-compose.prod.yml` (`${CORTEX_VERSION:-X.Y.Z}`),
 and `CHANGELOG.md`. Plugin manifests are intentionally unversioned —
 `check-version-sync` rejects a top-level `version` key in
-`.claude-plugin/plugin.json`. Release-please manages normal release PRs; its
+`plugins/install-cortex/.claude-plugin/plugin.json`. Release-please manages normal release PRs; its
 fixup runs `cargo xtask sync-version`. `cargo xtask bump-version` is a manual
 escape hatch, not a feature-branch requirement.
 

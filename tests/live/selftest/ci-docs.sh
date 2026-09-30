@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-python3 "$root/tests/live/generate-docs.py" --check
+env -u CORTEX_API_TOKEN -u NO_AUTH python3 "$root/scripts/test-generated-docs.py"
+python3 "$root/scripts/generate-docs.py" --check
 python3 - "$root" <<'PY'
 import json, pathlib, re, sys
 root = pathlib.Path(sys.argv[1])

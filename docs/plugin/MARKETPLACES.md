@@ -20,7 +20,7 @@ Repository-owned packaging surfaces and registry metadata. Public directory acce
 
 | Marketplace | Manifest | Registry entry |
 | --- | --- | --- |
-| Claude Code | `.claude-plugin/plugin.json` | Client/onboarding package in this repository |
+| Claude Code | `plugins/install-cortex/.claude-plugin/plugin.json` and `plugins/cortex/.claude-plugin/plugin.json` | Client/onboarding package in this repository |
 | Codex | `.codex-plugin/plugin.json` | Not currently shipped |
 | Gemini | `gemini-extension.json` | Not currently shipped |
 | MCP Registry | `server.json` | Tracked MCP Registry metadata |

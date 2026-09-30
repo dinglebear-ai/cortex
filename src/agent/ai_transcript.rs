@@ -34,7 +34,8 @@ use crate::ai_project::normalize_local_ai_project_path;
 use crate::ai_transcript_ingest::{
     AI_TRANSCRIPT_BODY_LIMIT_BYTES, AiTranscriptIngestRequest, AiTranscriptIngestResponse,
     AiTranscriptRecord, EVIDENCE_ENVELOPE_VERSION, EvidenceCapabilityCoverage, EvidenceCoverage,
-    EvidenceDiagnostic, EvidenceEnvelope, EvidenceSource,
+    EvidenceDiagnostic, EvidenceEnvelope, EvidenceSource, ForwardedHookEvent, ForwardedMcpEvent,
+    MAX_STRUCTURED_EVENTS_PER_RECORD,
 };
 use crate::scanner;
 
@@ -385,7 +386,7 @@ async fn scan_and_forward(
                             .as_ref()
                             .map(|metadata| metadata.provenance.clone())
                     });
-                    records.push(transcript_record(
+                    let mut record = transcript_record(
                         config,
                         path,
                         source_kind,
@@ -400,7 +401,9 @@ async fn scan_and_forward(
                             title_provenance,
                             diagnostics: Vec::new(),
                         },
-                    ));
+                    );
+                    attach_structured_events(&mut record, source_kind, line);
+                    records.push(record);
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -495,74 +498,9 @@ async fn scan_and_forward(
     Ok(sent)
 }
 
-async fn send_records(
-    config: &AiTranscriptForwardConfig,
-    client: &reqwest::Client,
-    records: Vec<AiTranscriptRecord>,
-) -> Result<usize> {
-    let sent = records.len();
-    let expected_receipts: HashSet<String> = records
-        .iter()
-        .map(|record| record.envelope.source_record_id.clone())
-        .collect();
-    anyhow::ensure!(
-        expected_receipts.len() == sent,
-        "ai transcript forward constructed duplicate source-record identities"
-    );
-    let payload = serde_json::to_vec(&AiTranscriptIngestRequest { records })?;
-    anyhow::ensure!(
-        payload.len() <= MAX_FORWARD_BODY_BYTES,
-        "ai transcript forward payload exceeded bounded request budget"
-    );
-    let mut url = config.target.trim_end_matches('/').to_string();
-    url.push_str("/v1/ai-transcripts");
-    let mut request = client
-        .post(&url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(payload);
-    if let Some(token) = &config.token {
-        request = request.bearer_auth(token);
-    }
-    let response = request.send().await.context("ai transcript POST failed")?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let detail = response
-            .text()
-            .await
-            .map(|body| {
-                crate::receiver::enrichment::scrub_ai_message(
-                    &truncate_utf8(body.trim(), 1_024),
-                    None,
-                )
-            })
-            .unwrap_or_else(|error| format!("response_body_read_failed: {error}"));
-        anyhow::bail!("ai transcript forward rejected: {} {}", status, detail);
-    }
-    let receipt: AiTranscriptIngestResponse = response
-        .json()
-        .await
-        .context("ai transcript forward response was not a receipt")?;
-    let returned_receipts: HashSet<String> = receipt
-        .receipts
-        .iter()
-        .map(|receipt| receipt.source_record_id.clone())
-        .collect();
-    if receipt.accepted != sent
-        || receipt.receipts.len() != sent
-        || returned_receipts != expected_receipts
-    {
-        anyhow::bail!(
-            "ai transcript forward returned incomplete receipt set: expected {sent}, accepted {}, receipts {}",
-            receipt.accepted,
-            receipt.receipts.len()
-        );
-    }
-
-    // Only advance after the server supplied an exact receipt for every
-    // submitted source-record ID. A lost/malformed response leaves the local
-    // cursor untouched; a retry is deduplicated by the server receipt table.
-    Ok(sent)
-}
+#[path = "ai_transcript_delivery.rs"]
+mod delivery;
+use delivery::send_records;
 
 #[path = "ai_transcript_skill_recovery.rs"]
 mod skill_recovery;

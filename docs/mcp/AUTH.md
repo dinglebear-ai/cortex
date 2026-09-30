@@ -70,7 +70,7 @@ When exposed to the internet or untrusted networks, always set `CORTEX_TOKEN`.
 
 ## Plugin userConfig integration
 
-When installed as a Claude Code plugin, the token is managed via `userConfig` in `.claude-plugin/plugin.json`:
+When installed as a Claude Code plugin, the token is managed via `userConfig` in `plugins/install-cortex/.claude-plugin/plugin.json`:
 
 ```json
 {

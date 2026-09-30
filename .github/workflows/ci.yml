@@ -211,6 +211,9 @@ jobs:
         # matches the previous `cargo test` invocation.
         run: cargo test --doc --locked
 
+      - name: Verify generated documentation
+        run: bash tests/live/selftest/ci-docs.sh
+
       - name: Run live harness security and aggregate mutants
         run: |
           bash tests/live/phases/artifacts/selftest.sh

@@ -1,0 +1,20 @@
+name: cortex-otel-producer
+services:
+  collector:
+    image: otel/opentelemetry-collector:0.161.0@sha256:b6d2b9a85b1029d05b5ad913150c1f014eed4ae99be81a1813ca5ade4a191913
+    container_name: cortex-otel-producer
+    restart: unless-stopped
+    command: ["--config=/config.yaml"]
+    network_mode: host
+    pid: host
+    read_only: true
+    user: "10001:10001"
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - /proc:/hostfs/proc:ro
+      - /sys:/hostfs/sys:ro

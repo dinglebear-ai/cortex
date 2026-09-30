@@ -39,9 +39,9 @@ use crate::app::{
     GraphChangesRequest, GraphEntitiesRequest, GraphEntityLookupRequest,
     GraphEvidenceLookupRequest, GraphExplainRequest, GraphRelationshipsRequest, HostStateRequest,
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
-    ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListMcpEventsRequest,
-    ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
-    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest,
+    ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListHostMetricsRequest,
+    ListMcpEventsRequest, ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest,
+    LlmInvocationsRequest, NotificationsRecentRequest, PatternsRequest, ProjectContextRequest,
     RecurringErrorComparisonRequest, RenderedSessionPageRequest, RequestActor, SearchLogsRequest,
     SearchSessionsRequest, ServiceError, SilentHostsRequest, SimilarIncidentsRequest,
     TailLogsRequest, TimelineRequest, TopicCorrelateRequest, UnackErrorRequest,
@@ -284,6 +284,8 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .contract_route("GET /api/tail", get(tail))
         .contract_route("GET /api/errors", get(errors))
         .contract_route("GET /api/hosts", get(hosts))
+        .contract_route("GET /api/host-metrics", get(host_metrics))
+        .contract_route("GET /api/metric-hosts", get(metric_hosts))
         .contract_route("GET /api/correlate", get(correlate))
         .contract_route("GET /api/stats", get(stats))
         .contract_route("GET /api/version", get(version))
@@ -1965,6 +1967,17 @@ async fn ai_mcp_events(
     Query(q): Query<ListMcpEventsRequest>,
 ) -> impl IntoResponse {
     respond(state.service.list_mcp_events(q).await)
+}
+
+async fn host_metrics(
+    State(state): State<ApiState>,
+    Query(req): Query<ListHostMetricsRequest>,
+) -> impl IntoResponse {
+    respond(state.service.list_host_metrics(req).await)
+}
+
+async fn metric_hosts(State(state): State<ApiState>) -> impl IntoResponse {
+    respond(state.service.list_metric_hosts().await)
 }
 
 async fn ai_mcp_incidents(

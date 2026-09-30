@@ -179,6 +179,10 @@ opentelemetry-proto = { version = "0.32", default-features = false, features = [
 ] }
 prost = "0.14"
 notify = "8.2.0"
+opentelemetry = "0.32"
+opentelemetry_sdk = "0.32"
+opentelemetry-otlp = "0.32"
+tracing-opentelemetry = "0.33"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

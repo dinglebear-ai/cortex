@@ -15,9 +15,9 @@ use super::*;
 #[test]
 fn documented_rest_route_count_matches_router_registrations() {
     let binding_count = crate::surfaces::api_bindings().count();
-    assert_eq!(binding_count, 96, "update the documented API denominator");
-    assert!(include_str!("../docs/api.md").contains("96 method/path bindings total"));
-    assert!(include_str!("../docs/architecture.md").contains("(96 method/path bindings)"));
+    assert_eq!(binding_count, 98, "update the documented API denominator");
+    assert!(include_str!("../docs/api.md").contains("98 method/path bindings total"));
+    assert!(include_str!("../docs/architecture.md").contains("(98 method/path bindings)"));
 }
 
 /// Build the router for a test, layering a `MockConnectInfo` so handlers
@@ -28,6 +28,97 @@ fn test_router(state: ApiState) -> axum::Router {
     router(state)
         .unwrap()
         .layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 99], 65000))))
+}
+
+#[tokio::test]
+async fn host_metrics_returns_recent_source_and_receipt_times_with_auth() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    let time = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO otel_metric_points
+             (point_key,metric_name,instrument_kind,time_unix_nano,hostname,service_name,
+              value_json,received_at)
+             VALUES ('api-host-metric','system.cpu.utilization','gauge',?1,'host-a',
+                     'cortex-hostmetrics','{\"type\":\"double\",\"value\":0.4}',
+                     '2026-09-29T14:00:00Z')",
+            [time],
+        )
+        .unwrap();
+    let app = test_router(state);
+    let path = "/api/host-metrics?hostname=host-a&metric_name=system.cpu.utilization&minutes=5";
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["points"][0]["hostname"], "host-a");
+    assert_eq!(json["points"][0]["service_name"], "cortex-hostmetrics");
+    assert_eq!(json["points"][0]["value"]["value"], 0.4);
+    assert_eq!(json["points"][0]["time_unix_nano"], time);
+    assert_eq!(json["points"][0]["received_at"], "2026-09-29T14:00:00Z");
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO otel_metric_points
+             (point_key,metric_name,instrument_kind,time_unix_nano,hostname,service_name,
+              value_json,received_at)
+             VALUES ('api-host-memory','system.memory.utilization','gauge',?1,'host-a',
+                     'cortex-hostmetrics','{\"type\":\"double\",\"value\":0.5}',
+                     '2026-09-29T14:00:00Z')",
+            [time],
+        )
+        .unwrap();
+    let inventory = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/metric-hosts")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inventory.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(inventory.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["hosts"][0]["hostname"], "host-a");
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/host-metrics?hostname=host-a&metric_name=system.cpu.utilization&limit=0")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), axum::http::StatusCode::BAD_REQUEST);
+    let unauthenticated = app
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        unauthenticated.status(),
+        axum::http::StatusCode::UNAUTHORIZED
+    );
 }
 
 /// Build an ApiState. The /api/* router forces bearer enforcement regardless

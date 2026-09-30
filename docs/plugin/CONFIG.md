@@ -65,7 +65,7 @@ Client-mode installs only connect to an existing server and skip local setup.
 | `fleet_hosts` | string | no | Fleet hosts for Docker ingest and rsyslog drop-in deployment |
 
 Sensitive fields are stored encrypted by Claude Code and masked in the UI.
-See `.claude-plugin/plugin.json` for the full field list and descriptions.
+See `plugins/install-cortex/.claude-plugin/plugin.json` for the full field list and descriptions.
 
 ## Why the plugin defaults to HTTP
 

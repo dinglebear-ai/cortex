@@ -118,7 +118,7 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
 /// guessed at, per GH #94's "normalize by shape, not by one exact prefix"
 /// guidance (shape here means: exactly the `mcp__` delimiter convention both
 /// platforms are observed to emit for MCP-routed tools).
-fn classify_tool_name(name: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn classify_tool_name(name: &str) -> (Option<String>, Option<String>) {
     let Some(rest) = name.strip_prefix("mcp__") else {
         return (None, None);
     };

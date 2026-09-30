@@ -1,7 +1,7 @@
 ---
 title: "Cortex architecture"
 created: 2026-05-18
-updated: 2026-09-27
+updated: 2026-09-29
 ---
 
 # Cortex architecture
@@ -57,11 +57,13 @@ The preferred Docker log path is the **host-local cortex agent**, reading the lo
 
 Agents forward supported evidence over HTTP routes such as `/v1/ai-transcripts`, `/v1/agent-commands`, `/v1/shell-history`, `/v1/file-tails`, and `/v1/syslog-forward`. Do not describe a proposed WebSocket transport as implemented merely because the system streams data.
 
+For Claude and Codex transcript JSONL, the host agent extracts bounded tool-call identity and outcome fields before scrubbing the display message. Claude runtime hook attachments also contribute bounded event names and outcomes. The `/v1/ai-transcripts` receiver commits those normalized event rows with the canonical log and receipt in one transaction. Older agents may still forward only display text, so an empty normalized event table cannot by itself establish that no tool or hook activity occurred. The forwarding coverage remains partial where the source format cannot expose nested calls or runtime hooks.
+
 Transcript source metadata is centralized in `src/scanner/providers.rs`; parsing remains provider-local. Static adapter support differs from receipt-backed observed coverage. Mutable file paths are locators, not immutable source identities. Read [ADDING_SOURCES.md](ADDING_SOURCES.md) and [agent-protocol.md](contracts/agent-protocol.md) before extending these boundaries.
 
 ## Query paths and ownership
 
-HTTP MCP runs the single action-dispatch `cortex` tool. `ACTION_SPECS` in `src/mcp/actions.rs` owns action names, scopes, flags, and handlers. The REST API (96 method/path bindings) and CLI have additional/local-only surfaces; `src/surfaces/` and their adapters define those contracts. The REST denominator is guarded by `documented_rest_route_count_matches_router_registrations`; update the registry, reference, and test together.
+HTTP MCP runs the single action-dispatch `cortex` tool. `ACTION_SPECS` in `src/mcp/actions.rs` owns action names, scopes, flags, and handlers. The REST API (98 method/path bindings) and CLI have additional/local-only surfaces; `src/surfaces/` and their adapters define those contracts. The REST denominator is guarded by `documented_rest_route_count_matches_router_registrations`; update the registry, reference, and test together.
 
 An installed CLI commonly uses HTTP settings written into the managed environment. Explicit flags and `CORTEX_USE_HTTP` select routing in `src/cli/run.rs`; local-only commands retain their own rules. Direct SQLite consumers are not automatically governed by another process's in-memory service limits. Do not assume every CLI call reaches the container.
 

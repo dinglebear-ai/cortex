@@ -1,7 +1,7 @@
 ---
 title: "Adding an ingestion source"
 created: 2026-09-27
-updated: 2026-09-27
+updated: 2026-09-29
 ---
 
 # Adding an ingestion source
@@ -19,6 +19,8 @@ A new format needs a descriptor, safe discovery rules, its parser, and integrati
 `ProviderLane` distinguishes session metadata, transcript, tool calls, MCP events, skills, hooks, and usage. `AdapterSupport` is a static capability statement: `supported`, `partial`, or `unsupported`. `Coverage` is receipt-backed runtime evidence: `observed`, `partial`, `not_observed`, or `failed`. Supporting a format does not prove this installation ingested it. No observed records must not become a claim of successful zero-result collection.
 
 `CheckpointPolicy` records a locator, revision, and content fingerprint. A canonical filesystem path is mutable, not an immutable source identity. Preserve replay/rewrite detection, privacy transformations, bounded payloads, and committed-checkpoint behavior. Do not advance a delivery checkpoint before durable server acknowledgement. Review [agent-protocol.md](contracts/agent-protocol.md) and the applicable ingest contract before changing the wire shape.
+
+The HTTP transcript forwarder sends redacted display text plus bounded structured tool-call evidence for Claude and Codex, and runtime hook outcomes for Claude. Structured records carry hashed call IDs, names, status, and numeric outcomes; arguments, output, hook commands, and local paths stay on the agent. The receiver writes these events and the transcript receipt in one transaction. Existing agents that send only display text remain accepted, but their MCP/hook coverage is partial or unobserved rather than a proven absence of activity. Codex runtime hooks have no supported transcript attachment format; config inventory is a separate evidence lane. Codex calls wrapped inside a generic tool cannot be attributed to an inner MCP server from the transcript alone.
 
 ### Tests and delivery checks
 

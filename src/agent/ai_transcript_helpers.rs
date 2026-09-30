@@ -460,6 +460,16 @@ pub(super) fn evidence_coverage(coverage: scanner::providers::Coverage) -> Evide
     }
 }
 
+#[path = "ai_transcript_structured.rs"]
+mod structured;
+pub(super) fn attach_structured_events(
+    record: &mut AiTranscriptRecord,
+    source_kind: scanner::SourceKind,
+    raw_line: &str,
+) {
+    structured::attach_structured_events(record, source_kind, raw_line);
+}
+
 pub(super) fn safe_provenance_id(prefix: &str, value: Option<String>) -> Option<String> {
     value.map(|value| format!("{prefix}:{}", sha256_id([value.as_bytes()])))
 }
@@ -555,6 +565,8 @@ pub(super) fn transcript_record(
             ),
             capabilities: capability_coverage(source_kind),
             diagnostics: details.diagnostics,
+            mcp_events: Vec::new(),
+            hook_events: Vec::new(),
         },
     }
 }

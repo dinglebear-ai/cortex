@@ -1,0 +1,16 @@
+{
+  "description": "Cortex observability and investigation skills for an existing service.",
+  "author": {
+    "name": "jmagar"
+  },
+  "repository": "https://github.com/dinglebear-ai/cortex",
+  "license": "MIT",
+  "keywords": [
+    "cortex",
+    "mcp",
+    "logging",
+    "homelab"
+  ],
+  "name": "cortex",
+  "skills": "./skills"
+}

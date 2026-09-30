@@ -54,4 +54,4 @@ Rust modules use sibling `foo.rs` plus `foo/`, with sidecar `*_tests.rs` files. 
 
 ## Plugin boundaries
 
-`plugins/cortex/` is the client/onboarding package. Skills live under `plugins/cortex/skills/`, including the current entry skills `install-cortex`, `using-cortex`, and `cortex-snippets`. Setup scripts delegate to the Cortex binary; the package does not register Claude Code lifecycle hooks. See its scoped [instructions](../../plugins/cortex/AGENTS.md).
+`plugins/install-cortex/` is the onboarding package, while `plugins/cortex/` contains usage skills. The entry skills are `install-cortex`, `using-cortex`, and `cortex-snippets`. Setup scripts delegate to the Cortex binary; the package does not register Claude Code lifecycle hooks. See its scoped [instructions](../../plugins/cortex/AGENTS.md).

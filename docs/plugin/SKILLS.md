@@ -13,7 +13,7 @@ Description: Skill definitions and validation guidance for the cortex plugin.
 
 # Cortex skills
 
-The package lives in `plugins/cortex/skills/`. Read its scoped [AGENTS.md](../../plugins/cortex/AGENTS.md) before changing onboarding or runtime instructions. The directory contents and validation scripts, not an old copied tree, define what ships.
+The usage package lives in `plugins/cortex/skills/`; the installer skill lives in `plugins/install-cortex/skills/`. Read its scoped [AGENTS.md](../../plugins/cortex/AGENTS.md) before changing onboarding or runtime instructions. The directory contents and validation scripts, not an old copied tree, define what ships.
 
 ## Entry skills
 
@@ -21,15 +21,15 @@ The package lives in `plugins/cortex/skills/`. Read its scoped [AGENTS.md](../..
 | --- | --- |
 | `install-cortex` | Install/onboard through the binary-owned setup flow; distinguish server and client-only roles |
 | `using-cortex` | Discover current tools and shared operating guidance; detailed reference in `references/operations.md` |
-| `cortex-snippets` | Labby snippet migration entrypoints and bounded workflows |
+| `cortex-snippets` | Catalog and installation guide for eleven bounded Labby snippet workflows |
 
 The old `plugins/cortex/skills/cortex/` directory has been renamed to `using-cortex`. Update include paths and tests when moving skill content; a rename must not silently remove instructions from compiled runtime prompts.
 
-## Specialized skills
+## Specialized workflows
 
-The package retains `troubleshoot`, `report`, `logs`, `version-check`, `incidents`, `topology`, `searching-sessions`, `frustration-assessment`, `mcp-friction-assessment`, `hook-friction-assessment`, and `skill-improvement-assessment` during snippet migration. Do not remove them until replacement entrypoints are verified.
+The eleven task-specific workflows live under `plugins/cortex/skills/cortex-snippets/snippets/` as Labby Code Mode sources. Install them explicitly with `labby snippet add`; plugin installation does not save them to Labby. `using-cortex` retains general operating guidance.
 
-Several specialized `SKILL.md` files are intentionally thin and delegate detailed procedure to `references/workflow.md`. Runtime assessment code that embeds a skill must include the referenced workflow as well; read `src/assessment.rs`, `src/mcp_assessment.rs`, and `src/skill_assessment.rs` before refactoring their instruction files.
+Runtime assessment code still embeds the original entrypoint and detailed workflow prompts from `src/prompts/`. Read `src/assessment.rs`, `src/mcp_assessment.rs`, and `src/skill_assessment.rs` before changing those prompts. Their location is independent of the plugin skill inventory.
 
 LLM-backed assessment execution remains an explicit CLI operation. MCP investigations return bounded deterministic evidence; a skill description is not permission to bypass runtime scope or confirmation rules.
 
