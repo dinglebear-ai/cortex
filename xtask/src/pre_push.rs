@@ -232,8 +232,21 @@ fn classify_paths(paths: &[&str]) -> Categories {
         );
     let hooks = any_file(paths, &["lefthook.yml"])
         || any_path(paths, &["xtask/src/pre_push", "xtask/src/main"]);
-    let docs = any_path(paths, &["docs/"])
-        || any_file(paths, &["README.md", "CONTRIBUTING.md"])
+    let docs = any_path(paths, &["docs/", "contracts/", "packages/cortex-rmcp/"])
+        || any_file(
+            paths,
+            &[
+                "README.md",
+                "CONTRIBUTING.md",
+                "Justfile",
+                "tests/TEST_COVERAGE.md",
+            ],
+        )
+        || paths.iter().any(|path| {
+            !path.contains('/')
+                && (path.to_ascii_lowercase().starts_with("license")
+                    || path.to_ascii_lowercase().starts_with("licence"))
+        })
         || paths.iter().any(|path| {
             matches!(
                 path.rsplit('/').next(),
@@ -267,6 +280,12 @@ fn command_plan(paths: &[String], categories: &Categories, full: bool) -> Vec<Pl
         plan.push(PlanStep {
             name: "repository-contract-tests",
             command: "python3 scripts/test-repository-contract.py",
+        });
+    }
+    if full || categories.docs || categories.rust {
+        plan.push(PlanStep {
+            name: "generated-docs",
+            command: "just docs-check",
         });
     }
     if full || categories.release {

@@ -61,8 +61,9 @@ def classify(event: str, paths: list[str]) -> dict[str, bool]:
     )
     docs = any_match(
         paths,
-        lambda p: starts(p, "docs/")
-        or p in {"README.md", "CONTRIBUTING.md"}
+        lambda p: starts(p, "docs/", "contracts/", "packages/cortex-rmcp/")
+        or p in {"README.md", "CONTRIBUTING.md", "Justfile", "tests/TEST_COVERAGE.md"}
+        or ("/" not in p and p.lower().startswith(("license", "licence")))
         or Path(p).name in {"AGENTS.md", "CLAUDE.md", "GEMINI.md"},
     )
     web = any_match(paths, lambda p: starts(p, "web/"))

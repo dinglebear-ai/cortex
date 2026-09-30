@@ -111,6 +111,15 @@ live-docs:
 live-docs-check:
     python3 tests/live/generate-docs.py --check
 
+# Regenerate every tracked documentation snapshot from its canonical inputs.
+docs-generate:
+    python3 scripts/generate-docs.py
+
+# Read-only drift checks plus hermetic generator regressions.
+docs-check:
+    env -u CORTEX_API_TOKEN -u NO_AUTH python3 scripts/test-generated-docs.py
+    python3 scripts/generate-docs.py --check
+
 setup:
     cp -n .env.example .env || true
     bash scripts/prepare-compose-dirs.sh

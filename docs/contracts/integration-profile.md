@@ -1,12 +1,12 @@
 ---
 title: Palette integration profile
 created: 2026-08-29
-updated: 2026-09-10
+updated: 2026-09-29
 ---
 
 # Palette integration profile
 
-Cortex owns this conservative version/schema contract. Its canonical source is `contracts/integration-profile.schema.json`, its generated snapshot is `docs/contracts/generated/integration-profile.schema.json`, and `python3 scripts/check-integration-contracts.py` checks drift and fail-closed fixtures.
+Cortex owns this conservative version/schema contract. Its canonical source is `contracts/integration-profile.schema.json`, its generated snapshot is `docs/contracts/generated/integration-profile.schema.json`, and `python3 scripts/check-integration-contracts.py` checks drift and fail-closed fixtures. Edit the canonical schema, run `just docs-generate`, and verify `just docs-check`; do not edit the snapshot independently. The same workflow owns the base-vocabulary and rendered-session-page schema mirrors. See [documentation source ownership](../repo/DOCUMENTATION.md#generated-documentation-and-source-ownership).
 
 The root advertises stable identity, API compatibility, auth binding, current route support, and stream support. It does not claim full capability discovery and does not define session-page or stream-event DTOs; those land with their Cortex slices. Route support is therefore conservative. Stream transport remains `none` until the streaming slice adds Cortex-owned event schemas and cursor behavior.
 

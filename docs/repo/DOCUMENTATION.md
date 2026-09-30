@@ -1,7 +1,7 @@
 ---
 title: "Documentation maintenance contract"
 created: 2026-09-27
-updated: 2026-09-27
+updated: 2026-09-29
 ---
 
 # Documentation maintenance contract
@@ -55,6 +55,39 @@ The npm package README is an intentional byte-identical mirror of the root READM
 
 Avoid copying long inventories into every guide. Link to a canonical reference or registry and retain tests for any intentionally repeated count. Command examples must name existing commands, correct paths, explicit prerequisites, and the appropriate read-only or mutating behavior.
 
+## Generated documentation and source ownership
+
+Do not patch a generated output to make a guide look current. Change its canonical input or generator, regenerate, and commit both sides. The complete tracked-snapshot entrypoint is [scripts/generate-docs.py](../../scripts/generate-docs.py):
+
+```bash
+just docs-generate
+just docs-check
+```
+
+These commands require Python 3, Node.js, and the repository-selected Rust toolchain. They do not require pnpm, a running Cortex service, Docker, production credentials, or live fleet grants. Cargo may fetch locked dependencies and populate its build cache, but check mode must not modify tracked documentation or lockfiles.
+
+| Output | Canonical inputs | Generator / check |
+| --- | --- | --- |
+| `docs/contracts/generated/*.schema.json` | Top-level `contracts/*.schema.json`, currently base vocabulary, integration profile, and rendered session page | `scripts/generate-docs.py` discovers and byte-copies the schemas; `--check` reports missing/stale snapshots without writing. The existing integration validator also checks compatibility and redaction fixtures. |
+| `tests/TEST_COVERAGE.md`, only the `BEGIN/END GENERATED LIVE INVENTORY` block | Compiled `SurfaceContract` from `src/surfaces/` and its source registries, plus `tests/live/contracts/profiles.json` | `tests/live/generate-docs.py`; `just live-docs` and `just live-docs-check` remain supported for this block alone. |
+| `packages/cortex-rmcp/README.md` and packaged license mirrors | Root `README.md` and root license files selected by the package script | `node packages/cortex-rmcp/scripts/sync-readme.js`, now with a read-only `--check`; retain `npm run check --prefix packages/cortex-rmcp` for packaging validation. |
+
+The inventory exporter is a separate Cargo workspace with its own checked-in `tests/live/surface-exporter/Cargo.lock`. Generation uses `cargo run --locked`: a stale dependency lock is an error, not permission to resolve new versions silently. Resolve intentional dependency changes separately and review their lockfile diff.
+
+The live generator owns exactly one ordered marker pair. Missing, duplicated, or reversed markers fail rather than appending a second table or replacing surrounding prose. Frontmatter, narrative, and line endings outside the owned block are preserved. New surface kinds fail until the renderer explicitly covers them. Schema source files are validated before snapshot writes; an orphan snapshot without a canonical source fails and must be reviewed rather than silently deleted.
+
+### Maintained references are not generated snapshots
+
+`docs/CLI.md`, `docs/api.md`, `docs/mcp/TOOLS.md`, and `docs/mcp/SCHEMA.md` remain human-maintained, with Rust documentation/registry drift tests. The runtime MCP JSON schema is generated from `ACTION_SPECS`; that does not make its Markdown explanation generated. Agent Observatory planning contracts under `docs/contracts/` are maintained specifications checked by `scripts/check-agent-observatory-contracts.sh`, not outputs of the snapshot copier.
+
+The logo-pack script, deploy-template renderer, shell-completion generation, static browser export, release/version tooling, and dated evidence receipts have separate owners and purposes. They are not a license to rewrite historical documents, regenerate release history, change package versions, or run deployment commands during a documentation refresh.
+
+### Required generator validation
+
+`just docs-check` runs hermetic generator regressions and all snapshot checks. `tests/live/selftest/ci-docs.sh` runs the same checks alongside live-workflow shape checks. CI invokes it from both the Rust Tests job and the non-Rust Docs Contract job. The CI router recognizes schema inputs, packaged mirrors, root licenses, and the generated coverage document; local `cargo xtask pre-push` also runs the generator gate for docs and Rust inputs.
+
+After a correction, run generation twice and confirm the second pass produces no further diff. Run check mode and confirm that it leaves the tree unchanged. Commit regenerated snapshots with their source/generator changes; do not weaken validators to accept stale output.
+
 ## Current versus historical documentation
 
 `docs/README.md` is the navigation entrypoint. Current guides describe implemented source. Contracts/specs must state whether they are implemented or proposed; the presence of a design document does not prove delivery. Dated plans, research, reports, reviews, and session notes preserve the state at their stated date. Link to them as history, not as present operational instructions. Runbooks are operational documents unless explicitly marked historical.
@@ -63,4 +96,4 @@ When reviewing a change, check local Markdown links, source paths, workflow name
 
 ## Completion evidence
 
-Documentation work is complete when the relevant source has been inspected, affected current guides agree, aliases validate, applicable doc/registry tests pass, and the final diff has been reviewed. Report a failed or unrun gate explicitly. A local test result, remote CI result, and live deployment verification are separate claims.
+Documentation work is complete when the relevant source has been inspected, affected current guides agree, generated snapshots reproduce from their canonical inputs, a second generation pass is unchanged, aliases validate, applicable generator/doc/registry tests pass, and the final diff has been reviewed. Report a failed or unrun gate explicitly. A local test result, remote CI result, and live deployment verification are separate claims.

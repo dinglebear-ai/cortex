@@ -27,6 +27,7 @@ just validate-plugin
 bash scripts/check-agent-memory-symlinks.sh
 bash scripts/test-agent-memory-symlinks.sh
 python3 scripts/test-repository-contract.py
+just docs-check
 git diff --check
 ```
 
@@ -48,7 +49,7 @@ pnpm --dir web build
 
 Implement shared behavior in `src/app/` and storage behavior in `src/db/`. MCP action metadata comes from `src/mcp/actions.rs`; public surface discovery comes from `src/surfaces/`. Add sidecar tests for validation, authorization, bounds, privacy, failures, and replay where relevant. For a new ingest format, start with [Adding sources](docs/ADDING_SOURCES.md), not a second scanner or transport-specific provider table.
 
-Update the matching current docs in the same change. Preserve dated design/history documents as history rather than silently rewriting their original claims. [Documentation maintenance](docs/repo/DOCUMENTATION.md) maps behavior to its authoritative files.
+Update the matching current docs in the same change. Preserve dated design/history documents as history rather than silently rewriting their original claims. [Documentation maintenance](docs/repo/DOCUMENTATION.md) maps behavior to its authoritative files and distinguishes generated snapshots from maintained guides. Edit generator inputs rather than generated output, run `just docs-generate`, and commit the regenerated schemas, package mirrors, and live-inventory block together with the source changes. `just docs-check` is read-only for tracked files; a second generation pass must produce no further diff. The Rust and docs-only CI paths both enforce this gate.
 
 ## Live work is separate
 
