@@ -154,6 +154,52 @@ fn extract_forwarded_claude_skill_events(row: &CandidateRow) -> Vec<ExtractedSki
     }))
 }
 
+fn source_matches_persisted_command(
+    row: &CandidateRow,
+    line: &str,
+    path: &str,
+    line_no: usize,
+) -> bool {
+    let Ok(Some(parsed)) = crate::scanner::parse_line_for_source(
+        crate::scanner::SourceKind::ClaudeProject,
+        line,
+        Path::new(path),
+        line_no,
+    ) else {
+        return false;
+    };
+    if crate::receiver::enrichment::scrub_ai_message(&parsed.message, None) != row.message {
+        return false;
+    }
+    row.metadata_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("record_key")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_none_or(|record_key| record_key == parsed.record_key)
+}
+
+fn same_command_identities(
+    source: &[ExtractedSkillEvent],
+    persisted: &[ExtractedSkillEvent],
+) -> bool {
+    let identity = |event: &ExtractedSkillEvent| {
+        if event.skill_name.contains(':') {
+            event.skill_name.clone()
+        } else if let Some(plugin) = event.skill_plugin.as_deref() {
+            format!("{plugin}:{}", event.skill_name)
+        } else {
+            event.skill_name.clone()
+        }
+    };
+    source.iter().map(identity).collect::<HashSet<_>>()
+        == persisted.iter().map(identity).collect::<HashSet<_>>()
+}
+
 impl CortexService {
     pub async fn backfill_skill_events(
         &self,
@@ -220,7 +266,8 @@ fn run_backfill(
         remaining = remaining.saturating_sub(rows.len() as u64);
 
         // Resolve available source lines even when a persisted command envelope
-        // exists: structured attribution takes precedence over content evidence.
+        // exists: matching structured attribution takes precedence over
+        // content evidence when the source still matches the stored record.
         // Rows sharing a transcript file
         // open and scan it once per chunk. Two borrowed maps over `rows` (no
         // owned-String clones): `row_source` maps each row id to its
@@ -282,7 +329,18 @@ fn run_backfill(
                                 match serde_json::from_str::<serde_json::Value>(line_text) {
                                     Ok(value) => {
                                         let source_events = extract_claude_skill_events(&value);
-                                        if !source_events.is_empty() {
+                                        // The stored command is durable evidence. A rotated or
+                                        // rewritten source line may now occupy this line number;
+                                        // do not replace it with a different record or skill.
+                                        if !source_events.is_empty()
+                                            && (forwarded.is_empty()
+                                                || (source_matches_persisted_command(
+                                                    row, line_text, path, line_no,
+                                                ) && same_command_identities(
+                                                    &source_events,
+                                                    &forwarded,
+                                                )))
+                                        {
                                             source_events
                                         } else {
                                             forwarded

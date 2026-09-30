@@ -254,6 +254,171 @@ async fn backfill_prefers_recoverable_attribution_over_persisted_command_tags() 
 
 #[tokio::test]
 #[serial(skill_backfill_guard)]
+async fn backfill_keeps_persisted_command_when_source_line_is_rewritten() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    let path = dir.path().join("rewritten.jsonl");
+    let original_message = "<command-message>vibin:review-pr</command-message>";
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "uuid": "original-record",
+                "message": {"role": "user", "content": original_message}
+            })
+        ),
+    )
+    .unwrap();
+    let log_id = insert_claude_log_row_for_path(&pool, &path.to_string_lossy(), 0);
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "UPDATE logs SET message = ?2, metadata_json = ?3 WHERE id = ?1",
+            rusqlite::params![
+                log_id,
+                original_message,
+                r#"{"line_no":0,"event_kind":"user","record_key":"id:original-record"}"#
+            ],
+        )
+        .unwrap();
+    }
+    // A changed first line has both a different record identity and a
+    // different command. Its attribution must not replace the stored command.
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "uuid": "replacement-record",
+                "attributionSkill": "repo-status",
+                "attributionPlugin": "vibin",
+                "message": {"role": "user", "content": "<command-message>vibin:repo-status</command-message>"}
+            })
+        ),
+    )
+    .unwrap();
+
+    let result = service
+        .backfill_skill_events(SkillBackfillRequest {
+            since: None,
+            limit: Some(100),
+            dry_run: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.inserted, 1);
+    let conn = pool.get().unwrap();
+    let (skill, kind): (String, String) = conn
+        .query_row(
+            "SELECT skill_name, event_kind FROM ai_skill_events WHERE log_id = ?1",
+            [log_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(skill, "vibin:review-pr");
+    assert_eq!(kind, "claude_skill_command");
+}
+
+#[tokio::test]
+#[serial(skill_backfill_guard)]
+async fn backfill_keeps_persisted_command_when_record_identity_changes() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    let message = "<command-message>vibin:review-pr</command-message>";
+    let replacement = serde_json::json!({
+        "uuid": "replacement-record",
+        "attributionSkill": "review-pr",
+        "attributionPlugin": "vibin",
+        "message": {"role": "user", "content": message}
+    });
+    let log_id =
+        insert_claude_log_row(&pool, dir.path(), "rotated.jsonl", &replacement.to_string());
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "UPDATE logs SET message = ?2, metadata_json = ?3 WHERE id = ?1",
+            rusqlite::params![
+                log_id,
+                message,
+                r#"{"line_no":0,"event_kind":"user","record_key":"id:original-record"}"#
+            ],
+        )
+        .unwrap();
+    }
+    let result = service
+        .backfill_skill_events(SkillBackfillRequest {
+            since: None,
+            limit: Some(100),
+            dry_run: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.inserted, 1);
+    let conn = pool.get().unwrap();
+    let kind: String = conn
+        .query_row(
+            "SELECT event_kind FROM ai_skill_events WHERE log_id = ?1",
+            [log_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "claude_skill_command");
+}
+
+#[tokio::test]
+#[serial(skill_backfill_guard)]
+async fn backfill_keeps_persisted_command_when_only_attribution_changes() {
+    let (service, dir) = test_service();
+    let pool = service.pool_for_test();
+    let message = "<command-message>vibin:review-pr</command-message>";
+    let changed = serde_json::json!({
+        "uuid": "same-record",
+        "attributionSkill": "repo-status",
+        "attributionPlugin": "vibin",
+        "message": {"role": "user", "content": message}
+    });
+    let log_id = insert_claude_log_row(
+        &pool,
+        dir.path(),
+        "changed-attribution.jsonl",
+        &changed.to_string(),
+    );
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "UPDATE logs SET message = ?2, metadata_json = ?3 WHERE id = ?1",
+            rusqlite::params![
+                log_id,
+                message,
+                r#"{"line_no":0,"event_kind":"user","record_key":"id:same-record"}"#
+            ],
+        )
+        .unwrap();
+    }
+    let result = service
+        .backfill_skill_events(SkillBackfillRequest {
+            since: None,
+            limit: Some(100),
+            dry_run: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.inserted, 1);
+    let conn = pool.get().unwrap();
+    let (skill, kind): (String, String) = conn
+        .query_row(
+            "SELECT skill_name, event_kind FROM ai_skill_events WHERE log_id = ?1",
+            [log_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(skill, "vibin:review-pr");
+    assert_eq!(kind, "claude_skill_command");
+}
+
+#[tokio::test]
+#[serial(skill_backfill_guard)]
 async fn backfill_uses_persisted_command_when_recorded_source_is_missing() {
     let (service, dir) = test_service();
     let pool = service.pool_for_test();
