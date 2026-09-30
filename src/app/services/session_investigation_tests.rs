@@ -25,7 +25,7 @@ fn external_references_are_classified_and_deduplicated() {
         ),
     ];
 
-    let refs = extract_session_external_references(&events);
+    let (refs, _) = extract_session_external_references(&events, 100);
 
     assert!(refs.iter().any(|item| {
         item.kind == models::SessionExternalReferenceKind::LinearIssue && item.value == "CLD-1149"
@@ -110,22 +110,120 @@ fn source_evidence_groups_source_kinds_and_bounds_log_ids() {
     assert_eq!(summaries["unknown"].log_ids, vec![4]);
 }
 
-#[test]
-fn timestamp_window_is_inclusive_and_rejects_invalid_values() {
-    let start = "2026-09-21T00:00:00Z";
-    let end = "2026-09-21T00:10:00Z";
+fn fixture_service() -> (tempfile::TempDir, CortexService) {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("investigate.db"));
+    let pool = std::sync::Arc::new(db::init_pool(&storage).unwrap());
+    (dir, CortexService::new(pool, storage))
+}
 
-    assert!(timestamp_inclusive_between(start, start, end));
-    assert!(timestamp_inclusive_between(end, start, end));
-    assert!(timestamp_inclusive_between(
-        "2026-09-21T00:05:00Z",
-        start,
-        end
-    ));
-    assert!(!timestamp_inclusive_between(
-        "2026-09-21T00:11:00Z",
-        start,
-        end
-    ));
-    assert!(!timestamp_inclusive_between("not-a-time", start, end));
+fn fixture_session() -> AiSessionEntry {
+    db::AiSessionEntry {
+        ai_project: "p".into(),
+        ai_tool: "codex".into(),
+        ai_session_id: "s".into(),
+        ai_transcript_path: None,
+        hostname: "h".into(),
+        first_seen: "2026-09-21T00:00:00Z".into(),
+        last_seen: "2026-09-21T00:10:00Z".into(),
+        event_count: 1,
+        title: None,
+        title_provenance: None,
+    }
+    .into()
+}
+
+#[tokio::test]
+async fn notification_identity_and_end_window_are_applied_before_limit() {
+    let (_dir, service) = fixture_service();
+    let conn = service.pool.get().unwrap();
+    for (host, time) in [
+        ("h", "2026-09-21T00:00:00Z"),
+        ("h", "2026-09-21T00:05:00Z"),
+        ("h", "2026-09-21T00:10:00Z"),
+        ("h", "2026-09-21T01:00:00Z"),
+    ] {
+        conn.execute("INSERT INTO notification_firings(outbox_id,rule_id,severity,hostname,fired_at) VALUES(1,'r','err',?1,?2)", rusqlite::params![host,time]).unwrap();
+    }
+    for _ in 0..501 {
+        conn.execute("INSERT INTO notification_firings(outbox_id,rule_id,severity,hostname,fired_at) VALUES(1,'r','err','other','2026-09-21T00:09:00Z')", []).unwrap();
+    }
+    drop(conn);
+    let rows = super::super::session_investigation_sections::session_notifications(
+        &service,
+        &fixture_session(),
+        2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.len(),
+        3,
+        "sentinel detects truncation among matching rows"
+    );
+    assert!(rows.iter().all(|row| row.hostname == "h"));
+    assert!(
+        rows.iter()
+            .all(|row| row.fired_at.as_str() <= "2026-09-21T00:10:00Z")
+    );
+}
+
+#[test]
+fn artifact_union_is_deduplicated_bounded_and_signals_overflow() {
+    let entry = |id| models::ArtifactEvidenceEntry {
+        cortex_log_id: id,
+        event: serde_json::from_value(serde_json::json!({
+            "schemaVersion": "dinglebear.cortex-artifact-evidence/v1", "eventId": format!("e-{id}"),
+            "eventKind": "installed", "sourceSystem": "test", "sourceIssuer": "fixture",
+            "observedAt": "2026-09-21T00:05:00Z"
+        }))
+        .unwrap(),
+    };
+    let (events, truncated) = super::super::session_investigation_sections::merge_artifact_evidence(
+        models::ListArtifactEvidenceResponse {
+            events: vec![entry(1), entry(2)],
+            truncated: false,
+        },
+        models::ListArtifactEvidenceResponse {
+            events: vec![entry(2), entry(3)],
+            truncated: false,
+        },
+        2,
+    );
+    assert_eq!(
+        events
+            .iter()
+            .map(|item| item.cortex_log_id)
+            .collect::<Vec<_>>(),
+        vec![3, 2]
+    );
+    assert!(truncated);
+}
+
+#[test]
+fn external_references_deduplicate_across_positions_and_cap_unique_values() {
+    let events = vec![event(1, "#123 #456"), event(2, "#123 #789")];
+    let (refs, truncated) = extract_session_external_references(&events, 2);
+    assert!(truncated);
+    assert_eq!(refs.len(), 2);
+    assert_eq!(refs.iter().filter(|item| item.value == "#123").count(), 1);
+    assert!(
+        refs.iter()
+            .all(|item| !item.verified && item.trust_level == "claimed")
+    );
+}
+
+#[tokio::test]
+async fn related_sessions_signal_truncation() {
+    let (_dir, service) = fixture_service();
+    let conn = service.pool.get().unwrap();
+    for id in 0..23 {
+        conn.execute("INSERT INTO logs(timestamp,hostname,severity,message,raw,source_ip,ai_tool,ai_project,ai_session_id) VALUES('2026-09-21T00:05:00Z','h','info','message','','fixture','codex','p',?1)", [format!("session-{id}")]).unwrap();
+    }
+    drop(conn);
+    let (rows, truncated) = related_sessions_for_investigation(&service, &fixture_session())
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 20);
+    assert!(truncated);
 }

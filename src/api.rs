@@ -730,6 +730,7 @@ async fn observatory_runs(
                 since: query.since,
                 until: query.until,
                 active_only: query.active_only.unwrap_or(false),
+                ..Default::default()
             },
             query.cursor,
             query.limit.unwrap_or(50),

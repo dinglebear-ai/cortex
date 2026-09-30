@@ -182,6 +182,7 @@ pub fn upsert_agent_run_commit(
     Ok(relation)
 }
 
+#[cfg(test)]
 pub fn list_agent_run_commits(pool: &DbPool, run_id: i64) -> Result<Vec<AgentRunCommitRow>> {
     if run_id <= 0 {
         bail!("run_id must be positive");
@@ -198,44 +199,48 @@ pub fn list_agent_run_commits(pool: &DbPool, run_id: i64) -> Result<Vec<AgentRun
 pub fn list_agent_run_attributed_commits(
     pool: &DbPool,
     run_id: i64,
+    limit: usize,
 ) -> Result<Vec<AgentRunAttributedCommit>> {
-    let relations = list_agent_run_commits(pool, run_id)?;
+    if run_id <= 0 {
+        bail!("run_id must be positive");
+    }
     let connection = pool.get().context("acquire database connection")?;
     let mut statement = connection.prepare(
-        "SELECT id, repository_id, sha, parent_shas_json, author_name, author_email_hash,
-                authored_at, committed_at, subject, changed_files, insertions, deletions,
-                changed_paths_json, first_observed_at, last_observed_at, reachable, metadata_json
-           FROM git_commits WHERE id = ?1",
+        "SELECT r.id,r.relation_key,r.run_id,r.commit_id,r.worktree_id,r.evidence_kind,
+                r.evidence_source,r.trust_level,r.confidence,r.first_seen_at,r.last_seen_at,r.metadata_json,
+                c.id,c.repository_id,c.sha,c.parent_shas_json,c.author_name,c.author_email_hash,
+                c.authored_at,c.committed_at,c.subject,c.changed_files,c.insertions,c.deletions,
+                c.changed_paths_json,c.first_observed_at,c.last_observed_at,c.reachable,c.metadata_json
+           FROM agent_run_commits r JOIN git_commits c ON c.id=r.commit_id
+          WHERE r.run_id=?1 ORDER BY r.first_seen_at,r.id LIMIT ?2",
     )?;
-    relations
-        .into_iter()
-        .map(|relation| {
-            let commit = statement
-                .query_row([relation.commit_id], |row| {
-                    Ok(super::GitCommitRow {
-                        id: row.get(0)?,
-                        repository_id: row.get(1)?,
-                        sha: row.get(2)?,
-                        parent_shas_json: row.get(3)?,
-                        author_name: row.get(4)?,
-                        author_email_hash: row.get(5)?,
-                        authored_at: row.get(6)?,
-                        committed_at: row.get(7)?,
-                        subject: row.get(8)?,
-                        changed_files: row.get(9)?,
-                        insertions: row.get(10)?,
-                        deletions: row.get(11)?,
-                        changed_paths_json: row.get(12)?,
-                        first_observed_at: row.get(13)?,
-                        last_observed_at: row.get(14)?,
-                        reachable: row.get(15)?,
-                        metadata_json: row.get(16)?,
-                    })
-                })
-                .context("resolve attributed git commit")?;
-            Ok(AgentRunAttributedCommit { relation, commit })
-        })
-        .collect()
+    statement
+        .query_map(params![run_id, (limit.clamp(1, 200) + 1) as i64], |item| {
+            Ok(AgentRunAttributedCommit {
+                relation: row(item)?,
+                commit: super::GitCommitRow {
+                    id: item.get(12)?,
+                    repository_id: item.get(13)?,
+                    sha: item.get(14)?,
+                    parent_shas_json: item.get(15)?,
+                    author_name: item.get(16)?,
+                    author_email_hash: item.get(17)?,
+                    authored_at: item.get(18)?,
+                    committed_at: item.get(19)?,
+                    subject: item.get(20)?,
+                    changed_files: item.get(21)?,
+                    insertions: item.get(22)?,
+                    deletions: item.get(23)?,
+                    changed_paths_json: item.get(24)?,
+                    first_observed_at: item.get(25)?,
+                    last_observed_at: item.get(26)?,
+                    reachable: item.get(27)?,
+                    metadata_json: item.get(28)?,
+                },
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()
+        .context("list attributed git commits")
 }
 
 pub fn commit_attribution_evidence(

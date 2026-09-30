@@ -27,6 +27,8 @@ pub struct RepositoryQuery {
 }
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct AgentRunQuery {
+    pub native_session_id: Option<String>,
+    pub exclude_run_id: Option<i64>,
     pub repository_id: Option<i64>,
     pub worktree_id: Option<i64>,
     pub branch: Option<String>,

@@ -1984,3 +1984,53 @@ async fn help_action_dispatch_returns_the_tool_reference() {
     assert!(reference.contains("## cortex search\n"));
     assert!(reference.contains("## cortex ack_error\n"));
 }
+
+#[tokio::test]
+async fn session_investigate_rejects_unsupported_window_minutes() {
+    let harness = TestHarness::new();
+    let error = execute_tool(
+        &harness.state,
+        "cortex",
+        json!({
+            "action": "session_investigate", "session_id": "s", "window_minutes": 5
+        }),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown field `window_minutes`"));
+}
+
+#[tokio::test]
+async fn session_investigate_dispatch_preserves_selected_identity_and_bounded_metadata() {
+    let harness = TestHarness::new();
+    let conn = harness.pool.get().unwrap();
+    for host in ["selected", "other"] {
+        conn.execute("INSERT INTO logs(timestamp,hostname,severity,message,raw,source_ip,ai_tool,ai_project,ai_session_id) VALUES('2026-09-21T00:00:00Z',?1,'info','user message','','fixture','codex','p','shared')", [host]).unwrap();
+    }
+    drop(conn);
+    let response = execute_tool(&harness.state, "cortex", json!({
+        "action": "session_investigate", "session_id": "shared", "host": "selected", "project": "p", "tool": "codex"
+    }), None).await.unwrap();
+    assert_eq!(response["result"]["session"]["hostname"], "selected");
+    assert!(
+        response["result"]["correlation"]["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|log| log["entry"]["hostname"] == "selected")
+    );
+    assert_eq!(response["metadata"]["auth_state"], "unknown");
+    assert!(
+        response["metadata"]["budget_used"]["payload_bytes"]
+            .as_u64()
+            .unwrap()
+            <= 65_536
+    );
+    assert_eq!(
+        response["metadata"]["budget_used"]["payload_bytes"]
+            .as_u64()
+            .unwrap() as usize,
+        serde_json::to_vec(&response).unwrap().len()
+    );
+}

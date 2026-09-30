@@ -133,6 +133,7 @@ Scope taxonomy: every action requires `cortex:read` except the six **admin** act
 | `apps` | Enumerate all known application names |
 | `sessions` | List AI transcript sessions |
 | `search_sessions` | Full-text search over AI transcript sessions |
+| `session_investigate` | Build a bounded evidence bundle rooted at one AI session |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | Detect resource-abuse patterns in AI sessions |
 | `abuse_incidents` | List detected abuse incidents |

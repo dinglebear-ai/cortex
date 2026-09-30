@@ -37,6 +37,10 @@ use super::models::{
 use super::pool::DbPool;
 use super::queries_service_instances;
 
+#[path = "queries_session_graph.rs"]
+mod session_graph;
+pub use session_graph::{SessionGraphScope, correlate_session_graph_scoped};
+
 const SEARCH_FTS_CANDIDATE_CAP: usize = 10_000;
 const SIMILAR_INCIDENT_FTS_CANDIDATE_CAP: usize = 5_000;
 /// Cap on the FTS match-set materialization in the fast (index-led) search
@@ -510,7 +514,7 @@ pub fn list_ai_sessions(
     params: &ListAiSessionsParams,
 ) -> Result<Vec<AiSessionEntry>> {
     let time_filtered = params.since.is_some() || params.until.is_some();
-    if !time_filtered && ai_session_rollup_is_populated(pool)? {
+    if !time_filtered && params.ai_session_id.is_none() && ai_session_rollup_is_populated(pool)? {
         return list_ai_sessions_from_rollup(pool, params);
     }
     list_ai_sessions_live(pool, params)
@@ -2100,6 +2104,7 @@ pub fn correlate_session_graph(
         discovered_entities,
         used_graph,
         logs,
+        source_fields_truncated: false,
     })
 }
 

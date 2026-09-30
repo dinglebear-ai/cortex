@@ -303,6 +303,17 @@ pub fn list_observatory_runs(
     let mut values = Vec::new();
     let mut sql="SELECT DISTINCT a.id,a.run_key,a.native_session_id,a.tool,a.provider_tool,a.hostname,a.parent_run_id,a.previous_run_id,a.status,a.status_reason,a.status_observed_at,a.started_at,a.last_activity_at,a.ended_at,a.transcript_path,a.primary_worktree_id,a.primary_branch,a.start_head_sha,a.current_head_sha,a.event_count,a.error_count,a.freshness_json FROM agent_runs a WHERE 1=1".to_string();
     push_filter(&mut sql, &mut values, "a.id <= ?", high_water);
+    if let Some(session_id) = &q.native_session_id {
+        push_filter(
+            &mut sql,
+            &mut values,
+            "a.native_session_id = ?",
+            session_id.clone(),
+        );
+    }
+    if let Some(run_id) = q.exclude_run_id {
+        push_filter(&mut sql, &mut values, "a.id != ?", run_id);
+    }
     if let Some(id) = q.worktree_id {
         push_filter(
             &mut sql,
@@ -333,11 +344,22 @@ pub fn list_observatory_runs(
         values.extend(q.statuses.iter().cloned().map(Value::from));
     }
     if !q.tools.is_empty() {
+        let tool_column = if q.native_session_id.is_some() {
+            "lower(a.tool)"
+        } else {
+            "a.tool"
+        };
         sql.push_str(&format!(
-            " AND a.tool IN ({})",
+            " AND {tool_column} IN ({})",
             vec!["?"; q.tools.len()].join(",")
         ));
-        values.extend(q.tools.iter().cloned().map(Value::from));
+        values.extend(q.tools.iter().map(|tool| {
+            Value::from(if q.native_session_id.is_some() {
+                tool.to_ascii_lowercase()
+            } else {
+                tool.clone()
+            })
+        }));
     }
     if q.active_only {
         sql.push_str(" AND a.status IN ('starting','active','waiting','idle')");

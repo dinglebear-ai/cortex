@@ -389,7 +389,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         Expensive,
         SessionInvestigate,
         exact: {
-            allowed: &["session_id", "tool", "project", "host", "limit", "window_minutes", "severity_min"],
+            allowed: &["session_id", "tool", "project", "host", "limit", "severity_min"],
             required: &["session_id"]
         }
     ),

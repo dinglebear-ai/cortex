@@ -185,7 +185,6 @@ pub struct SessionInvestigateRequest {
     pub project: Option<String>,
     pub host: Option<String>,
     pub limit: Option<u32>,
-    pub window_minutes: Option<u32>,
     pub severity_min: Option<String>,
 }
 
@@ -242,6 +241,7 @@ pub struct SessionObservatoryEvidence {
     pub repository: Option<db::agent_observatory::ObservatoryRepositoryRow>,
     pub worktree: Option<db::agent_observatory::ObservatoryWorktreeRow>,
     pub commits: Vec<db::agent_observatory::AgentRunAttributedCommit>,
+    pub commits_truncated: bool,
     pub events: Vec<db::agent_observatory::ObservatoryEventRow>,
     pub spans: Vec<db::agent_observatory::ObservatorySpanRow>,
     pub metrics: Vec<db::agent_observatory::ObservatoryMetricRow>,
@@ -272,7 +272,9 @@ pub struct SessionInvestigateResponse {
     pub retention_lineage: Vec<SessionRetentionLineageEntry>,
     pub retention_lineage_truncated: bool,
     pub related_sessions: Vec<AiSessionEntry>,
+    pub related_sessions_truncated: bool,
     pub external_references: Vec<SessionExternalReference>,
+    pub external_references_truncated: bool,
     pub source_counts: BTreeMap<String, usize>,
     pub source_evidence: BTreeMap<String, SessionSourceEvidenceSummary>,
     pub partial_reasons: Vec<String>,
@@ -389,22 +391,22 @@ pub fn app_graph_from_around_response(around: &GraphAroundResponse) -> AppGraphR
 }
 
 pub fn safe_passive_text(input: &str, max_chars: usize) -> String {
-    let mut out = input
+    static BEARER_VALUE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\bBearer\s+[^\s,;]+").expect("static bearer redaction pattern")
+    });
+    let scrubbed = crate::receiver::enrichment::scrub_ai_message(input, None);
+    let scrubbed = BEARER_VALUE.replace_all(&scrubbed, "[REDACTED]");
+    let mut out = crate::assessment::redact_secrets(&scrubbed)
         .chars()
         .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
         .collect::<String>();
-    for marker in [
-        "sk-proj-",
-        "Bearer ",
-        "password=",
-        "token=",
-        "CORTEX_API_TOKEN=",
-    ] {
-        out = out.replace(marker, "[redacted]");
-    }
     if out.chars().count() > max_chars {
         out = out.chars().take(max_chars).collect::<String>();
         out.push_str("...");
     }
     out
 }
+
+#[cfg(test)]
+#[path = "investigation_tests.rs"]
+mod tests;

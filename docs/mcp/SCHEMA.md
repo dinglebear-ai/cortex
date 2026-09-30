@@ -45,6 +45,7 @@ selects one of the actions below. The mechanically generated current count is in
 | `apps` | `cortex:read` | cheap | Distinct application names with counts |
 | `sessions` | `cortex:read` | cheap | AI transcript session inventory |
 | `search_sessions` | `cortex:read` | cheap | FTS5 search over AI transcript sessions |
+| `session_investigate` | `cortex:read` | expensive | Bounded evidence bundle rooted at one AI session |
 | `evidence_scope` | `cortex:read` | moderate | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | `cortex:read` | moderate | Abuse-term hits with same-session context |
 | `abuse_incidents` | `cortex:read` | moderate | Grouped abuse incident candidates |
@@ -175,12 +176,13 @@ boundary.
 | `query` | `search`, `search_sessions`, `correlate`, `similar_incidents` |
 | `hostname` | `search`, `filter`, `tail`, `correlate`, `host_state`, `ai_correlate`, `apps`, `sessions`, `timeline`, `patterns`, `context`, `similar_incidents`, `incident_context` |
 | `host_id` | Authoritative heartbeat identity for `host_state` |
-| `host` | Optional host_id-or-hostname filter for `correlate_state` |
+| `host` | Optional host_id-or-hostname filter for `correlate_state`; exact session identity qualifier for `session_investigate` |
 | `reference_time` | Required window center for `correlate_state`; for `correlate`, required unless `query` is given (then derived from an AI-session search) |
 | `source_ip` | `search`, `filter`, `tail`, `correlate`, `ai_correlate` |
 | `source_kind` | `filter` only; aliases Docker, file-tail, command-history, shell-history, transcript, and AI-tool rows |
 | `project` | `filter`, `sessions`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools` |
 | `tool` | `filter`, `sessions`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_projects` |
+| `session_id` | Required for `session_investigate`; optional exact native identity filter for `sessions` |
 | `branch`, `worktree` | `evidence_scope`; at least one is required by service validation |
 | `kinds`, `include_payload`, `after_id` | `evidence_scope` filtering and durable pagination |
 | `session_id` | `filter`, `ai_correlate` |

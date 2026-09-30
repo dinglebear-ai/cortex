@@ -63,6 +63,7 @@ fn build_graph_session_correlation_classifies_lanes_and_filters_heartbeats() {
         discovered_hosts: vec!["devhost".into()],
         discovered_entities: vec!["devhost".into(), "cortex".into()],
         used_graph: true,
+        source_fields_truncated: false,
         logs: vec![
             db_log(
                 "agent-command://devhost/claude/s1",

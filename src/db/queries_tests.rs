@@ -3663,3 +3663,43 @@ fn lint_flags_unquoted_hyphen_term_alongside_a_quoted_phrase() {
         .to_string();
     assert!(err.contains("NOT operator"), "{err}");
 }
+
+#[test]
+fn exact_session_lookup_finds_new_evidence_after_rollup_refresh() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[make_ai_entry(
+            "2026-01-01T00:00:00Z",
+            "host-a",
+            "claude",
+            "/tmp/project",
+            "old",
+            "old event",
+        )],
+    )
+    .unwrap();
+    refresh_ai_session_rollup(&pool).unwrap();
+    insert_logs_batch(
+        &pool,
+        &[make_ai_entry(
+            "2026-01-01T00:01:00Z",
+            "host-a",
+            "claude",
+            "/tmp/project",
+            "fresh",
+            "fresh event",
+        )],
+    )
+    .unwrap();
+    let result = list_ai_sessions(
+        &pool,
+        &ListAiSessionsParams {
+            ai_session_id: Some("fresh".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].ai_session_id, "fresh");
+}

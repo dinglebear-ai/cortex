@@ -5,7 +5,7 @@ use super::*;
 use super::session_investigation_support::{
     build_session_source_counts, extract_session_external_references,
     related_sessions_for_investigation, session_investigation_metadata,
-    summarize_session_source_evidence, timestamp_inclusive_between,
+    summarize_session_source_evidence,
 };
 
 impl CortexService {
@@ -13,8 +13,20 @@ impl CortexService {
         &self,
         req: models::SessionInvestigateRequest,
     ) -> ServiceResult<InvestigationEnvelope<models::SessionInvestigateResponse>> {
-        let started = Instant::now();
         let budget = InvestigationBudget::default();
+        super::session_investigation_budget::within_session_budget(
+            budget.max_wall_time_ms,
+            self.session_investigate_inner(req),
+        )
+        .await
+    }
+
+    async fn session_investigate_inner(
+        &self,
+        req: models::SessionInvestigateRequest,
+    ) -> ServiceResult<InvestigationEnvelope<models::SessionInvestigateResponse>> {
+        let started = Instant::now();
+        let mut budget = InvestigationBudget::default();
         let session_id = req.session_id.trim().to_string();
         if session_id.is_empty() {
             return Err(ServiceError::InvalidInput(
@@ -22,6 +34,9 @@ impl CortexService {
             ));
         }
         let section_limit = req.limit.unwrap_or(100).clamp(1, 200);
+        // The composition has multiple independently bounded evidence lanes.
+        budget.max_log_rows = 1_000 + section_limit;
+        budget.max_evidence_rows = section_limit * 18 + 512;
 
         let sessions = self
             .list_sessions(ListSessionsRequest {
@@ -62,26 +77,15 @@ impl CortexService {
             })
             .await?;
 
-        let correlated = self
-            .correlate_ai_logs(AiCorrelateRequest {
-                project: Some(session.project.clone()),
-                tool: Some(session.tool.clone()),
-                session_id: Some(session.session_id.clone()),
-                host: Some(session.hostname.clone()),
-                window_minutes: req.window_minutes,
-                severity_min: req.severity_min.clone(),
-                limit: Some(10),
-                events_per_anchor: Some(section_limit.min(100)),
-                ..Default::default()
-            })
+        let correlation = self
+            .session_graph_correlation(&session, req.severity_min.as_deref())
             .await?;
-
-        let session_entity_keys = correlated
-            .graph_correlation
+        let session_entity_keys = correlation
             .as_ref()
             .map(|value| value.session_entity_keys.clone())
             .unwrap_or_default();
         let session_graph_entity_ambiguous = session_entity_keys.len() > 1;
+        let mut graph_neighborhood_truncated = false;
         let graph_neighborhood = match session_entity_keys.as_slice() {
             [session_key] => {
                 let around = self
@@ -96,6 +100,7 @@ impl CortexService {
                         ..Default::default()
                     })
                     .await?;
+                graph_neighborhood_truncated = around.metadata.truncated;
                 Some(models::app_graph_from_around_response(&around))
             }
             _ => None,
@@ -113,23 +118,12 @@ impl CortexService {
             })
             .await?;
 
-        let mut notifications = self
-            .notifications_recent_checked(models::NotificationsRecentRequest {
-                limit: Some(i64::from(section_limit.saturating_mul(5).min(500))),
-                rule_id: None,
-                since: Some(session.first_seen.clone()),
-            })
-            .await?
-            .into_iter()
-            .filter(|firing| {
-                firing.hostname == session.hostname
-                    && timestamp_inclusive_between(
-                        &firing.fired_at,
-                        &session.first_seen,
-                        &session.last_seen,
-                    )
-            })
-            .collect::<Vec<_>>();
+        let mut notifications = super::session_investigation_sections::session_notifications(
+            self,
+            &session,
+            section_limit,
+        )
+        .await?;
         let notifications_truncated = notifications.len() > section_limit as usize;
         notifications.truncate(section_limit as usize);
 
@@ -221,150 +215,27 @@ impl CortexService {
                 ..Default::default()
             })
         )?;
-        let artifact_evidence_truncated =
-            artifact_by_correlation.truncated || artifact_by_request.truncated;
-        let mut artifact_evidence_by_id = BTreeMap::new();
-        for event in artifact_by_correlation
-            .events
-            .into_iter()
-            .chain(artifact_by_request.events)
-        {
-            artifact_evidence_by_id.insert(event.cortex_log_id, event);
-        }
-        let artifact_evidence = artifact_evidence_by_id.into_values().collect::<Vec<_>>();
+        let (artifact_evidence, artifact_evidence_truncated) =
+            super::session_investigation_sections::merge_artifact_evidence(
+                artifact_by_correlation,
+                artifact_by_request,
+                section_limit as usize,
+            );
 
-        let observatory_session_id = session.session_id.clone();
-        let observatory_tool = session.tool.clone();
-        let observatory_host = session.hostname.clone();
-        let observatory = self
-            .run_db("session_investigate_observatory", move |pool| {
-                let query = db::agent_observatory::AgentRunQuery {
-                    tools: vec![observatory_tool.clone()],
-                    host: Some(observatory_host.clone()),
-                    query: Some(observatory_session_id.clone()),
-                    ..Default::default()
-                };
-                let mut runs =
-                    db::agent_observatory::list_observatory_runs(pool, &query, None, 50, i64::MAX)?;
-                runs.retain(|run| {
-                    run.native_session_id == observatory_session_id
-                        && run.tool.eq_ignore_ascii_case(&observatory_tool)
-                        && run.hostname == observatory_host
-                });
-                let ambiguous_run = runs.len() > 1;
-                let Some(run) = runs.first().cloned().filter(|_| !ambiguous_run) else {
-                    return Ok(models::SessionObservatoryEvidence {
-                        runs,
-                        ambiguous_run,
-                        ..Default::default()
-                    });
-                };
-                let resolved = db::agent_observatory::resolve_observatory_run(pool, &run.run_key)?;
-                let (run_id, identity) = resolved.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Agent Observatory run disappeared during session investigation"
-                    )
-                })?;
-                let parent_run = match run.parent_run_id {
-                    Some(id) => db::agent_observatory::resolve_observatory_run_row(pool, id)?,
-                    None => None,
-                };
-                let previous_run = match run.previous_run_id {
-                    Some(id) => db::agent_observatory::resolve_observatory_run_row(pool, id)?,
-                    None => None,
-                };
-                let mut actors = db::agent_observatory::list_observatory_run_actors(
-                    pool,
-                    run_id,
-                    section_limit as usize + 1,
-                )?;
-                let actors_truncated = actors.len() > section_limit as usize;
-                actors.truncate(section_limit as usize);
-                let worktree = match run.primary_worktree_id {
-                    Some(id) => db::agent_observatory::resolve_observatory_worktree(pool, id)?,
-                    None => None,
-                };
-                let repository = match worktree.as_ref() {
-                    Some(worktree) => db::agent_observatory::resolve_observatory_repository(
-                        pool,
-                        worktree.repository_id,
-                    )?,
-                    None => None,
-                };
-                let commits =
-                    db::agent_observatory::list_agent_run_attributed_commits(pool, run_id)?;
-                let mut related_runs = match run.primary_worktree_id {
-                    Some(worktree_id) => db::agent_observatory::list_observatory_runs(
-                        pool,
-                        &db::agent_observatory::AgentRunQuery {
-                            worktree_id: Some(worktree_id),
-                            ..Default::default()
-                        },
-                        None,
-                        section_limit as usize + 1,
-                        i64::MAX,
-                    )?,
-                    None => Vec::new(),
-                };
-                related_runs.retain(|candidate| candidate.id != run_id);
-                let related_runs_truncated = related_runs.len() > section_limit as usize;
-                related_runs.truncate(section_limit as usize);
-                let events = db::agent_observatory::list_observatory_events(
-                    pool,
-                    &run.run_key,
-                    &db::agent_observatory::AgentEventQuery::default(),
-                    None,
-                    section_limit as usize + 1,
-                    true,
-                    i64::MAX,
-                )?;
-                let spans = db::agent_observatory::list_observatory_spans(
-                    pool,
-                    run_id,
-                    &identity,
-                    &db::agent_observatory::TelemetryQuery::default(),
-                    None,
-                    section_limit as usize + 1,
-                    i64::MAX,
-                )?;
-                let metrics = db::agent_observatory::list_observatory_metrics(
-                    pool,
-                    run_id,
-                    &identity,
-                    &db::agent_observatory::TelemetryQuery::default(),
-                    None,
-                    section_limit as usize + 1,
-                    i64::MAX,
-                )?;
-                Ok(models::SessionObservatoryEvidence {
-                    runs,
-                    ambiguous_run,
-                    parent_run,
-                    previous_run,
-                    actors,
-                    actors_truncated,
-                    related_runs,
-                    related_runs_truncated,
-                    repository,
-                    worktree,
-                    commits,
-                    events_truncated: events.len() > section_limit as usize,
-                    spans_truncated: spans.len() > section_limit as usize,
-                    metrics_truncated: metrics.len() > section_limit as usize,
-                    events: events.into_iter().take(section_limit as usize).collect(),
-                    spans: spans.into_iter().take(section_limit as usize).collect(),
-                    metrics: metrics.into_iter().take(section_limit as usize).collect(),
-                })
-            })
-            .await?;
+        let observatory = super::session_investigation_sections::session_observatory(
+            self,
+            &session,
+            section_limit,
+        )
+        .await?;
 
-        let related_sessions = related_sessions_for_investigation(self, &session).await?;
+        let (related_sessions, related_sessions_truncated) =
+            related_sessions_for_investigation(self, &session).await?;
 
-        let external_references = extract_session_external_references(&transcript_page.events);
-        let source_evidence = summarize_session_source_evidence(
-            correlated.graph_correlation.as_ref(),
-            section_limit as usize,
-        );
+        let (external_references, external_references_truncated) =
+            extract_session_external_references(&transcript_page.events, section_limit as usize);
+        let source_evidence =
+            summarize_session_source_evidence(correlation.as_ref(), section_limit as usize);
         let graph_counts = graph_neighborhood.as_ref().map(|graph| {
             (
                 graph.entities.len(),
@@ -372,8 +243,7 @@ impl CortexService {
                 graph.evidence.len(),
             )
         });
-        let heartbeat_summary_count = correlated
-            .graph_correlation
+        let heartbeat_summary_count = correlation
             .as_ref()
             .map_or(0, |value| value.heartbeat_summaries.len());
         let source_counts = build_session_source_counts(
@@ -391,15 +261,23 @@ impl CortexService {
         );
 
         let mut partial_reasons = Vec::new();
+        if external_references_truncated {
+            partial_reasons.push("external_references_truncated".to_string());
+        }
         if transcript_page.has_more {
             partial_reasons.push("transcript_truncated".to_string());
         }
-        if correlated
-            .graph_correlation
-            .as_ref()
-            .is_some_and(|value| value.truncated)
-        {
+        if correlation.as_ref().is_some_and(|value| value.truncated) {
             partial_reasons.push("correlation_truncated".to_string());
+        }
+        if graph_neighborhood_truncated {
+            partial_reasons.push("graph_neighborhood_truncated".to_string());
+        }
+        if related_sessions_truncated {
+            partial_reasons.push("related_sessions_truncated".to_string());
+        }
+        if observatory.commits_truncated {
+            partial_reasons.push("observatory_commits_truncated".to_string());
         }
         if session_graph_entity_ambiguous {
             partial_reasons.push("session_graph_entity_ambiguous".to_string());
@@ -447,19 +325,19 @@ impl CortexService {
         let metadata = session_investigation_metadata(
             &budget,
             started,
-            correlated.graph_correlation.as_ref(),
+            correlation.as_ref(),
             graph_neighborhood.is_some(),
             &partial_reasons,
             transcript_page.events.len(),
             observatory.events.len(),
         );
-        Ok(InvestigationEnvelope {
+        let envelope = InvestigationEnvelope {
             metadata,
             result: models::SessionInvestigateResponse {
                 session,
                 transcript: transcript_page.events,
                 transcript_has_more: transcript_page.has_more,
-                correlation: correlated.graph_correlation,
+                correlation,
                 graph_neighborhood,
                 skill_events: skill_events.events,
                 skill_events_truncated: skill_events.truncated,
@@ -476,12 +354,34 @@ impl CortexService {
                 retention_lineage,
                 retention_lineage_truncated,
                 related_sessions,
+                related_sessions_truncated,
                 external_references,
+                external_references_truncated,
                 source_counts,
                 source_evidence,
                 partial_reasons,
             },
+        };
+        self.run_db("session_investigate_finalize", move |_| {
+            let mut envelope =
+                super::session_investigation_budget::finalize_session_envelope(envelope)
+                    .map_err(anyhow::Error::from)?;
+            envelope.metadata.budget_used.wall_time_ms =
+                started.elapsed().as_millis().min(u32::MAX as u128) as u32;
+            if started.elapsed()
+                > std::time::Duration::from_millis(u64::from(
+                    envelope.metadata.budget.max_wall_time_ms,
+                ))
+            {
+                return Err(anyhow::Error::from(ServiceError::Busy(
+                    "session_investigation_wall_time_budget_exceeded".into(),
+                )));
+            }
+            // Updating elapsed usage can change the escaped envelope byte count.
+            super::session_investigation_budget::finalize_session_envelope(envelope)
+                .map_err(anyhow::Error::from)
         })
+        .await
     }
 }
 

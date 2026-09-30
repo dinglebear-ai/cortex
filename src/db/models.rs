@@ -286,6 +286,7 @@ pub struct SessionGraphInputs {
     pub discovered_entities: Vec<String>,
     pub used_graph: bool,
     pub logs: Vec<LogEntry>,
+    pub source_fields_truncated: bool,
 }
 
 /// A graph entity matched while resolving a topic string, with how it matched

@@ -363,3 +363,56 @@ fn run_reads_expose_lineage_and_bounded_actors() {
     );
     assert_eq!(actors[0].native_actor_id, "subagent-b");
 }
+
+#[test]
+fn exact_native_identity_is_filtered_before_run_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("exact.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('exact','s','codex','h','completed','2026-09-21T00:00:00Z','2026-09-21T00:00:00Z','2026-09-21T00:00:00Z')", []).unwrap();
+    for id in 0..60 {
+        conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES(?1,?1,'codex','h','active','2026-09-21T01:00:00Z','2026-09-21T01:00:00Z','2026-09-21T01:00:00Z')", [format!("prefix-s-{id}")]).unwrap();
+    }
+    drop(conn);
+    let query = AgentRunQuery {
+        native_session_id: Some("s".into()),
+        tools: vec!["Codex".into()],
+        host: Some("h".into()),
+        ..Default::default()
+    };
+    let rows = list_observatory_runs(&pool, &query, None, 1, i64::MAX).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].run_key, "exact");
+    pool.get().unwrap().execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('case-variant','s','CODEX','h','active','2026-09-21T01:00:00Z','2026-09-21T01:00:00Z','2026-09-21T01:00:00Z')", []).unwrap();
+    assert_eq!(
+        list_observatory_runs(&pool, &query, None, 1, i64::MAX)
+            .unwrap()
+            .len(),
+        2,
+        "sentinel retains exact ambiguity"
+    );
+}
+
+#[test]
+fn attributed_commit_join_is_bounded_with_sentinel_and_preserves_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("commits.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO repositories(repository_key,hostname,common_git_dir,primary_path,display_name,first_seen_at,last_seen_at) VALUES('repo','h','/git','/p','p','2026-09-21T00:00:00Z','2026-09-21T00:00:00Z')", []).unwrap();
+    let repository_id = conn.last_insert_rowid();
+    conn.execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('run','s','codex','h','active','2026-09-21T00:00:00Z','2026-09-21T00:00:00Z','2026-09-21T00:00:00Z')", []).unwrap();
+    let run_id = conn.last_insert_rowid();
+    for id in 0..3 {
+        conn.execute("INSERT INTO git_commits(repository_id,sha,subject,first_observed_at,last_observed_at) VALUES(?1,?2,?3,'2026-09-21T00:00:00Z','2026-09-21T00:00:00Z')", rusqlite::params![repository_id,format!("sha-{id}"),format!("subject-{id}")]).unwrap();
+        let commit_id = conn.last_insert_rowid();
+        conn.execute("INSERT INTO agent_run_commits(relation_key,run_id,commit_id,evidence_kind,evidence_source,trust_level,confidence,first_seen_at,last_seen_at) VALUES(?1,?2,?3,'attributed','test','claimed',0.5,'2026-09-21T00:00:00Z','2026-09-21T00:00:00Z')", rusqlite::params![format!("relation-{id}"),run_id,commit_id]).unwrap();
+    }
+    drop(conn);
+    let commits =
+        crate::db::agent_observatory::list_agent_run_attributed_commits(&pool, run_id, 1).unwrap();
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[0].commit.sha, "sha-0");
+    assert_eq!(commits[0].commit.subject, "subject-0");
+    assert_eq!(commits[0].relation.commit_id, commits[0].commit.id);
+    assert_eq!(commits[0].relation.confidence, 0.5);
+}

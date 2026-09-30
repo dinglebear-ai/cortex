@@ -1,68 +1,6 @@
 use super::*;
 
-/// Log fan-out cap for the graph-anchored session lane of `ai_correlate`.
-/// Clamped again to `[1, 1000]` inside `db::correlate_session_graph`.
-const GRAPH_SESSION_LOG_LIMIT: usize = 500;
-
-/// Shape the DB-layer `SessionGraphInputs` into the API response, classifying
-/// each row into a source lane (`agent_command` / `shell_history` /
-/// `graph:host:<host>`) and counting the agent-command and shell-history lanes.
-/// Heartbeat summaries are filtered to the discovered hosts. Returns `None` when
-/// the session has no rows at all (empty bounds).
-fn build_graph_session_correlation(
-    session_id: String,
-    inputs: db::SessionGraphInputs,
-    summaries: Vec<db::HeartbeatWindowSummary>,
-) -> Option<GraphSessionCorrelation> {
-    let (session_start, session_end) = inputs.bounds?;
-
-    let truncated = inputs.logs.len() >= GRAPH_SESSION_LOG_LIMIT;
-    let mut agent_command_count = 0usize;
-    let mut shell_history_count = 0usize;
-    let logs: Vec<CorrelatedLogRow> = inputs
-        .logs
-        .into_iter()
-        .map(|entry| {
-            let source_kind = row_source_kind(&entry);
-            let discovery = if entry.source_ip.starts_with("agent-command://") {
-                agent_command_count += 1;
-                "agent_command".to_string()
-            } else if source_kind.as_deref() == Some("shell-history") {
-                shell_history_count += 1;
-                "shell_history".to_string()
-            } else {
-                format!("graph:host:{}", entry.hostname)
-            };
-            CorrelatedLogRow {
-                entry: entry.into(),
-                source_kind,
-                discovery,
-            }
-        })
-        .collect();
-
-    let discovered: std::collections::HashSet<&str> =
-        inputs.discovered_hosts.iter().map(String::as_str).collect();
-    let heartbeat_summaries: Vec<db::HeartbeatWindowSummary> = summaries
-        .into_iter()
-        .filter(|s| discovered.contains(s.hostname.as_str()))
-        .collect();
-
-    Some(GraphSessionCorrelation {
-        session_id,
-        session_start,
-        session_end,
-        used_graph: inputs.used_graph,
-        session_entity_keys: inputs.session_entity_keys,
-        discovered_hosts: inputs.discovered_hosts,
-        discovered_entities: inputs.discovered_entities,
-        logs,
-        agent_command_count,
-        shell_history_count,
-        heartbeat_summaries,
-        truncated,
-    })
-}
+use super::session_graph_correlation::{GRAPH_SESSION_LOG_LIMIT, build_graph_session_correlation};
 
 impl CortexService {
     pub async fn list_sessions(
@@ -74,7 +12,7 @@ impl CortexService {
         // The unbounded (no time-window) path reads from the periodically
         // refreshed rollup; expose its staleness so callers know the `as_of`.
         // Time-windowed queries run live, so no staleness applies.
-        let unbounded = from.is_none() && to.is_none();
+        let unbounded = from.is_none() && to.is_none() && req.session_id.is_none();
         let params = db::ListAiSessionsParams {
             ai_project: req.project,
             ai_tool: req.tool,

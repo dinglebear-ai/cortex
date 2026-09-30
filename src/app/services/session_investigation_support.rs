@@ -5,8 +5,8 @@ use super::*;
 pub(super) async fn related_sessions_for_investigation(
     service: &CortexService,
     session: &AiSessionEntry,
-) -> ServiceResult<Vec<AiSessionEntry>> {
-    Ok(service
+) -> ServiceResult<(Vec<AiSessionEntry>, bool)> {
+    let mut sessions = service
         .list_sessions(ListSessionsRequest {
             project: Some(session.project.clone()),
             tool: None,
@@ -14,14 +14,16 @@ pub(super) async fn related_sessions_for_investigation(
             host: None,
             since: Some(session.first_seen.clone()),
             until: Some(session.last_seen.clone()),
-            limit: Some(50),
+            limit: Some(22),
         })
         .await?
         .sessions
         .into_iter()
         .filter(|candidate| candidate.session_key != session.session_key)
-        .take(20)
-        .collect())
+        .collect::<Vec<_>>();
+    let truncated = sessions.len() > 20;
+    sessions.truncate(20);
+    Ok((sessions, truncated))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -122,11 +124,17 @@ pub(super) fn session_investigation_metadata(
             .filter(|value| !value.used_graph)
             .map(|_| vec!["session_graph_entity_unavailable".to_string()])
             .unwrap_or_default(),
-        truncated: partial,
-        truncation_reasons: partial_reasons.to_vec(),
+        truncated: partial_reasons
+            .iter()
+            .any(|reason| reason.contains("truncated")),
+        truncation_reasons: partial_reasons
+            .iter()
+            .filter(|reason| reason.contains("truncated"))
+            .cloned()
+            .collect(),
         partial,
         partial_reasons: partial_reasons.to_vec(),
-        auth_state: "bearer".to_string(),
+        auth_state: "unknown".to_string(),
         budget: budget.clone(),
         budget_used: InvestigationBudgetUsed {
             graph_calls,
@@ -168,23 +176,11 @@ pub(super) fn summarize_session_source_evidence(
     summaries
 }
 
-pub(super) fn timestamp_inclusive_between(value: &str, start: &str, end: &str) -> bool {
-    let Ok(value) = chrono::DateTime::parse_from_rfc3339(value) else {
-        return false;
-    };
-    let Ok(start) = chrono::DateTime::parse_from_rfc3339(start) else {
-        return false;
-    };
-    let Ok(end) = chrono::DateTime::parse_from_rfc3339(end) else {
-        return false;
-    };
-    value >= start && value <= end
-}
-
 pub(super) fn extract_session_external_references(
     events: &[models::RenderedSessionEvent],
-) -> Vec<models::SessionExternalReference> {
-    let mut references = std::collections::BTreeSet::new();
+    limit: usize,
+) -> (Vec<models::SessionExternalReference>, bool) {
+    let mut references = BTreeMap::new();
     for event in events {
         for raw in event.text.split_whitespace() {
             let token = raw.trim_matches(|ch: char| {
@@ -215,17 +211,22 @@ pub(super) fn extract_session_external_references(
             } else {
                 continue;
             };
-            references.insert(models::SessionExternalReference {
-                kind,
-                value: safe_passive_text(token, 500),
-                source_position: Some(event.position),
-                evidence_kind: "transcript_text".to_string(),
-                trust_level: "claimed".to_string(),
-                verified: false,
-            });
+            references
+                .entry((kind.clone(), safe_passive_text(token, 500)))
+                .or_insert(models::SessionExternalReference {
+                    kind,
+                    value: safe_passive_text(token, 500),
+                    source_position: Some(event.position),
+                    evidence_kind: "transcript_text".to_string(),
+                    trust_level: "claimed".to_string(),
+                    verified: false,
+                });
+            if references.len() > limit {
+                return (references.into_values().take(limit).collect(), true);
+            }
         }
     }
-    references.into_iter().collect()
+    (references.into_values().collect(), false)
 }
 
 pub(super) fn looks_like_linear_identifier(token: &str) -> bool {
