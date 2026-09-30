@@ -4,8 +4,10 @@ function packageVersion() { return require("../package.json").version; }
 function binaryVersion() { return require("../package.json").binaryVersion || packageVersion(); }
 function targetFor(platform = process.platform, arch = process.arch) {
   if (platform === "linux" && arch === "x64") return { asset: "cortex-linux-x86_64.tar.gz", binary: "cortex", archiveType: "tar.gz" };
+  if (platform === "linux" && arch === "arm64") return { asset: "cortex-linux-aarch64.tar.gz", binary: "cortex", archiveType: "tar.gz" };
+  if (platform === "darwin" && arch === "arm64") return { asset: "cortex-macos-arm64", binary: "cortex", archiveType: "binary" };
   if (platform === "win32" && arch === "x64") return { asset: "cortex-windows-x86_64.zip", binary: "cortex.exe", archiveType: "zip" };
-  throw new Error(`Unsupported platform ${platform}/${arch}. Supported targets: linux/x64, win32/x64.`);
+  throw new Error(`Unsupported platform ${platform}/${arch}. Supported targets: linux/x64, linux/arm64, darwin/arm64, win32/x64.`);
 }
 function releaseVersion(env = process.env) { const raw = env.CORTEX_RMCP_BINARY_VERSION || env.CORTEX_RMCP_VERSION || binaryVersion(); return raw.startsWith("v") ? raw : `v${raw}`; }
 function releaseBaseUrl(env = process.env) { const repo = env.CORTEX_RMCP_REPO || "dinglebear-ai/cortex"; return env.CORTEX_RMCP_RELEASE_BASE_URL || `https://github.com/${repo}/releases/download`; }
