@@ -23,6 +23,7 @@ cortex exposes one MCP tool named `cortex`. The required
 | `fleet_state` | Fleet-wide heartbeat snapshot with pressure flags and summary counts |
 | `correlate_state` | Correlate logs with heartbeat window summaries around a reference time |
 | `sessions` | AI transcript sessions by project |
+| `session_page` | Bounded rendered transcript page by exact session identity |
 | `search_sessions` | Ranked grouped session search |
 | `session_investigate` | Bounded evidence bundle rooted at one AI session |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree |
@@ -174,6 +175,10 @@ List AI transcript sessions grouped by project, tool, session, and host.
 Required argument: `action = "sessions"`
 
 Optional arguments: `project`, `tool`, `hostname`, `from`, `to`, `limit`.
+
+## cortex session_page
+
+Read a rendered transcript page through the shared `CortexService` contract. Supply `project`, `tool`, `session_id`, and `host` from a `sessions` result. Pass the returned `next_cursor` as `cursor` while `has_more` is true. The page contains at most 200 events and 256 KiB, with redaction and truncation markers. REST signs its cursor at the authenticated HTTP boundary; MCP uses the service cursor.
 
 ## cortex search_sessions
 

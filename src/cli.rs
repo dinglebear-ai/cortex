@@ -21,7 +21,7 @@ pub(crate) use args::{
     SessionsHookInvestigateArgs, SessionsHooksBackfillArgs, SessionsIncidentContextArgs,
     SessionsIncidentsArgs, SessionsIndexArgs, SessionsInvestigateArgs, SessionsListArgs,
     SessionsLlmInvocationsArgs, SessionsMcpEventsBackfillArgs, SessionsMcpEventsListArgs,
-    SessionsMcpIncidentsArgs, SessionsMcpInvestigateArgs, SessionsOutputDetail,
+    SessionsMcpIncidentsArgs, SessionsMcpInvestigateArgs, SessionsOutputDetail, SessionsPageArgs,
     SessionsPruneCheckpointsArgs, SessionsSearchArgs, SessionsSimilarArgs,
     SessionsSkillIncidentsArgs, SessionsSkillInvestigateArgs, SessionsSkillsBackfillArgs,
     SessionsSkillsListArgs, SessionsWatchArgs, SetupArgs, SetupCommand, ShellAgentCommand,

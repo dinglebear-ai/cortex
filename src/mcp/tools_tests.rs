@@ -12,6 +12,31 @@ use crate::mcp::AppState;
 use serde_json::json;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn session_page_action_uses_shared_rendered_paging() {
+    let h = TestHarness::new();
+    let conn = h.pool.get().unwrap();
+    for message in ["first event", "second event"] {
+        conn.execute(
+            "INSERT INTO logs(timestamp,hostname,severity,message,raw,source_ip,ai_tool,ai_project,ai_session_id) VALUES('2026-09-27T00:00:00Z','mac','info',?1,'','fixture','codex','/repo','session')",
+            [message],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let identity = json!({"action":"session_page","project":"/repo","tool":"codex","session_id":"session","host":"mac","limit":1});
+    let first = execute_tool(&h.state, "cortex", identity.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first["events"][0]["text"], "first event");
+    assert_eq!(first["has_more"], true);
+    let mut next = identity;
+    next["cursor"] = first["next_cursor"].clone();
+    let second = execute_tool(&h.state, "cortex", next, None).await.unwrap();
+    assert_eq!(second["events"][0]["text"], "second event");
+}
+
 fn test_state_with_token(token: Option<String>) -> (AppState, Arc<db::DbPool>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let storage = StorageConfig::for_test(dir.path().join("mcp-test.db"));
@@ -1375,6 +1400,9 @@ fn sample_args_for_action(action: &str) -> Option<serde_json::Value> {
             json!({"action": action, "reference_time": "2026-01-01T00:00:00Z"})
         }
         "search_sessions" => json!({"action": action, "query": "schema"}),
+        "session_page" => {
+            json!({"action": action, "project": "/schema/project", "tool": "codex", "session_id": "schema-session", "host": "schema-session-host"})
+        }
         "session_investigate" => json!({"action": action, "session_id": "schema-session"}),
         "evidence_scope" => json!({"action": action, "branch": "codex/schema-test"}),
         "ai_correlate" => json!({"action": action, "project": "/tmp/project"}),
@@ -1484,6 +1512,7 @@ fn typed_unknown_field_samples() -> Vec<serde_json::Value> {
         "correlate_state",
         "apps",
         "sessions",
+        "session_page",
         "search_sessions",
         "session_investigate",
         "abuse",

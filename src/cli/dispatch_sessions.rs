@@ -6,8 +6,8 @@ use cortex::app::{
     AiHookIncidentRequest, AiHookInvestigateRequest, AiIncidentRequest, AiInvestigateRequest,
     AiParseErrorsRequest, AiPruneCheckpointsRequest, HookAssessRequest, IncidentContextRequest,
     ListAiProjectsRequest, ListAiToolsRequest, ListHookEventsRequest, McpAssessRequest,
-    ProjectContextRequest, SearchSessionsRequest, SimilarIncidentsRequest, SkillAssessRequest,
-    UsageBlocksRequest,
+    ProjectContextRequest, RenderedSessionPageRequest, SearchSessionsRequest,
+    SimilarIncidentsRequest, SkillAssessRequest, UsageBlocksRequest,
 };
 use std::io::Write;
 
@@ -48,7 +48,7 @@ use super::{
     SessionsIncidentContextArgs, SessionsIncidentsArgs, SessionsIndexArgs, SessionsInvestigateArgs,
     SessionsListArgs, SessionsLlmInvocationsArgs, SessionsMcpEventsBackfillArgs,
     SessionsMcpEventsListArgs, SessionsMcpIncidentsArgs, SessionsMcpInvestigateArgs,
-    SessionsPruneCheckpointsArgs, SessionsSearchArgs, SessionsSimilarArgs,
+    SessionsPageArgs, SessionsPruneCheckpointsArgs, SessionsSearchArgs, SessionsSimilarArgs,
     SessionsSkillIncidentsArgs, SessionsSkillInvestigateArgs, SessionsSkillsBackfillArgs,
     SessionsSkillsListArgs, SessionsWatchArgs,
 };
@@ -215,6 +215,39 @@ pub(crate) async fn run_ai_search(mode: &CliMode, args: SessionsSearchArgs) -> R
         CliMode::Http(client) => http_or_cancel(client.ai_search(&req)).await?,
     };
     print_search_sessions_response(&response, json)
+}
+
+pub(crate) async fn run_session_page(mode: &CliMode, args: SessionsPageArgs) -> Result<()> {
+    let req = RenderedSessionPageRequest {
+        project: args.project,
+        tool: args.tool,
+        session_id: args.session_id,
+        host: args.host,
+        cursor: args.cursor,
+        limit: args.limit,
+    };
+    let response = match mode {
+        CliMode::Local(service) => service.rendered_session_page(req).await?,
+        CliMode::Http(client) => http_or_cancel(client.session_page(&req)).await?,
+    };
+    if args.json {
+        print_json(&response)
+    } else {
+        for event in &response.events {
+            println!(
+                "[{}] {}: {}",
+                event.timestamp,
+                serde_json::to_value(event.kind)?
+                    .as_str()
+                    .unwrap_or("unknown"),
+                event.text
+            );
+        }
+        if response.has_more {
+            println!("Next cursor: {}", response.next_cursor);
+        }
+        Ok(())
+    }
 }
 
 pub(crate) async fn run_ai_abuse(mode: &CliMode, args: SessionsAbuseArgs) -> Result<()> {

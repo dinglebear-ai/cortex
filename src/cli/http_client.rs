@@ -83,11 +83,12 @@ use cortex::app::{
     ListMcpEventsRequest, ListMcpEventsResponse, ListSessionsRequest, ListSessionsResponse,
     ListSkillEventsRequest, ListSkillEventsResponse, ListSourceIpsRequest, ListSourceIpsResponse,
     MaintenanceJobStatus, PatternsRequest, PatternsResponse, ProjectContextRequest,
-    ProjectContextResponse, SearchLogsRequest, SearchLogsResponse, SearchSessionsRequest,
-    SearchSessionsResponse, SilentHostsRequest, SilentHostsResponse, SimilarIncidentsRequest,
-    SimilarIncidentsResponse, TailLogsRequest, TimelineRequest, TimelineResponse,
-    TopicCorrelateRequest, TopicCorrelateResponse, UnackErrorRequest, UnackErrorResponse,
-    UnaddressedErrorsRequest, UnaddressedErrorsResponse, UsageBlocksRequest, UsageBlocksResponse,
+    ProjectContextResponse, RenderedSessionPageRequest, RenderedSessionPageResponse,
+    SearchLogsRequest, SearchLogsResponse, SearchSessionsRequest, SearchSessionsResponse,
+    SilentHostsRequest, SilentHostsResponse, SimilarIncidentsRequest, SimilarIncidentsResponse,
+    TailLogsRequest, TimelineRequest, TimelineResponse, TopicCorrelateRequest,
+    TopicCorrelateResponse, UnackErrorRequest, UnackErrorResponse, UnaddressedErrorsRequest,
+    UnaddressedErrorsResponse, UsageBlocksRequest, UsageBlocksResponse,
 };
 use cortex::scanner::{CheckpointEntry, ParseErrorEntry, PruneCheckpointsResult};
 
@@ -541,6 +542,13 @@ impl HttpClient {
 
     pub async fn sessions(&self, req: &ListSessionsRequest) -> Result<ListSessionsResponse> {
         self.get_json("/api/sessions", Some(req)).await
+    }
+
+    pub async fn session_page(
+        &self,
+        req: &RenderedSessionPageRequest,
+    ) -> Result<RenderedSessionPageResponse> {
+        self.get_json("/api/sessions/rendered", Some(req)).await
     }
 
     pub async fn artifact_evidence(

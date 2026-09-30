@@ -326,6 +326,7 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
     mcp!("status", Runtime, Canonical, Read),
     mcp!("apps", Search, Canonical, Read),
     mcp!("sessions", Sessions, Canonical, Read),
+    mcp!("session_page", Sessions, Canonical, Read),
     mcp!("search_sessions", Sessions, Canonical, Read),
     mcp!("evidence_scope", Sessions, Canonical, Read),
     mcp!("abuse", Sessions, Canonical, Read),

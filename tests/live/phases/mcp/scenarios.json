@@ -43,7 +43,7 @@
     "artifact_evidence":"events","artifact_evidence_record":"inserted","context":"reference","errors":"summary","file_tails":"sources","filter":"logs","fleet_state":"summary","get":"log","help":"help","hook_events":"events","hook_incidents":"incidents",
     "hook_investigate":"evidence","hosts":"hosts","incident_context":"total_logs","ingest_rate":"buckets","list_ai_projects":"projects",
     "list_ai_tools":"tools","llm_invocations":"$array","map":"schema","mcp_events":"events","mcp_incidents":"incidents","mcp_investigate":"evidence",
-    "notifications_recent":"$array","patterns":"patterns","project_context":"project","search":"logs","search_sessions":"sessions","sessions":"sessions",
+    "notifications_recent":"$array","patterns":"patterns","project_context":"project","search":"logs","search_sessions":"sessions","sessions":"sessions","session_page":"events",
     "session_investigate":"result","evidence_scope":"items","recurring_error_comparison":"comparisons","silent_hosts":"hosts","similar_incidents":"clusters","skill_events":"events","skill_incidents":"incidents","skill_investigate":"evidence",
     "source_ips":"source_ips","stats":"total_logs","status":"status","tail":"logs","timeline":"points","topic_correlate":"topic",
     "unaddressed_errors":"signatures","usage_blocks":"blocks","ack_error":"signature_hash","unack_error":"signature_hash","host_state":"host_id","compose_doctor":"diagnostics","notifications_test":"result","graph":"resolved_entity"

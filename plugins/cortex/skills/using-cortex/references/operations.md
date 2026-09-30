@@ -22,6 +22,7 @@ A single MCP tool, `mcp__cortex__cortex`, dispatches on a required `action` argu
 | `fleet_state` | Fleet-wide heartbeat snapshot with pressure flags and summary counts |
 | `correlate_state` | Correlate logs with heartbeat summaries around a reference time |
 | `sessions` | AI transcript sessions by project |
+| `session_page` | Bounded rendered transcript page for an exact session |
 | `search_sessions` | Ranked grouped session search |
 | `session_investigate` | Bounded evidence bundle rooted at one AI session |
 | `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree |

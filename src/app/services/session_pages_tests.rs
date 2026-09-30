@@ -101,6 +101,9 @@ async fn escaped_source_fields_are_bounded_and_cursor_advances() {
     assert!(first.high_watermark > 0);
     assert!(first.has_more);
     assert!(serde_json::to_vec(&first).unwrap().len() <= RENDERED_SESSION_PAGE_MAX_BYTES);
+    let round_tripped: RenderedSessionPageResponse =
+        serde_json::from_value(serde_json::to_value(&first).unwrap()).unwrap();
+    assert_eq!(round_tripped.next_cursor, first.next_cursor);
     let next = service
         .rendered_session_page(RenderedSessionPageRequest {
             cursor: Some(first.next_cursor),

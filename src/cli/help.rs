@@ -170,6 +170,7 @@ const CATALOG: &[CommandDoc] = &[
         name: "sessions",
         summary: "AI transcript search, correlation, and indexing",
         usage: &[
+            "cortex sessions page --project PATH --tool TOOL --session-id ID --host HOST [--cursor CURSOR] [--limit N] [--json]",
             "cortex sessions search QUERY [--project PATH] [--tool TOOL] [--since TIME] [--until TIME] [--limit N] [--json]",
             "cortex sessions abuse [--project PATH] [--tool TOOL] [--since TIME] [--until TIME] [--limit N] [--before N] [--after N] [--term WORD] [--json]",
             "cortex sessions incidents [--project PATH] [--tool TOOL] [--since TIME] [--until TIME] [--limit N] [--window-minutes N] [--term WORD] [--json]",
@@ -360,6 +361,13 @@ const NESTED_CATALOG: &[NestedCommandDoc] = &[
         usage: &[
             "cortex ingest inventory refresh [--json]",
             "cortex ingest inventory status [--json]",
+        ],
+    },
+    NestedCommandDoc {
+        path: "sessions page",
+        summary: "Read the next rendered transcript page for one session",
+        usage: &[
+            "cortex sessions page --project PATH --tool TOOL --session-id ID --host HOST [--cursor CURSOR] [--limit N] [--json]",
         ],
     },
     NestedCommandDoc {
