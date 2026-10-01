@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.18.1](https://github.com/dinglebear-ai/cortex/compare/v3.18.0...v3.18.1) (2026-10-01)
+
+
+### Fixed
+
+* **release:** restore filtered FTS mutation qualification for release assets ([f21c716](https://github.com/dinglebear-ai/cortex/commit/f21c716b7e40743f675698a007159ccc91ede9c2))
+
 ## [3.18.0](https://github.com/dinglebear-ai/cortex/compare/v3.17.0...v3.18.0) (2026-10-01)
 
 
