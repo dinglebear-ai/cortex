@@ -153,6 +153,10 @@
           style: { "background-color": theme.rose, "border-color": theme.rose },
         },
         {
+          selector: 'node[kind = "claimed_host"]',
+          style: { "background-color": theme.warn, "border-color": theme.warn },
+        },
+        {
           selector: 'node[kind = "store"]',
           style: { "shape": "round-rectangle", "background-color": theme.violet, "border-color": theme.violet },
         },
@@ -193,19 +197,46 @@
     cy.on("tap", "node", (event) => showNodeEvidence(event.target.data()));
   }
 
+  function normalizeHostSources(hosts) {
+    const sources = new Map();
+    for (const item of hosts) {
+      const host = typeof item === "string" ? item : item?.hostname;
+      if (typeof host !== "string" || !host.trim()) continue;
+      const name = host.trim();
+      const sourceKind = item?.source_kind ||
+        (/^(agent-(shared_bearer|loopback)$|bearer-shared-)/i.test(name) ? "forwarding_principal" :
+          /^(localhost|unresolved-host\.invalid)$/i.test(name) ? "unattributed" : "host");
+      const hostId = sourceKind === "host" && typeof item?.host_id === "string" && item.host_id.trim()
+        ? item.host_id : null;
+      const key = JSON.stringify(hostId ? ["host_id", hostId] : ["source", sourceKind, name]);
+      const aliases = [name, ...(Array.isArray(item?.aliases) ? item.aliases : [])]
+        .filter((alias) => typeof alias === "string" && alias.trim());
+      if (!sources.has(key)) {
+        sources.set(key, { hostname: name, host_id: hostId, source_kind: sourceKind,
+          node_id: hostId ? `source:heartbeat:${encodeURIComponent(hostId)}`
+            : `source:name:${encodeURIComponent(sourceKind)}:${encodeURIComponent(name)}`,
+          aliases: [] });
+      }
+      const source = sources.get(key);
+      source.aliases = Array.from(new Set([...source.aliases, ...aliases]));
+    }
+    return Array.from(sources.values());
+  }
+
   function graphFromHosts(hosts) {
-    const uniqueHosts = Array.from(new Set(hosts.map(String))).slice(0, 36);
+    const sources = normalizeHostSources(hosts).slice(0, 36);
     const nodes = [
       { data: { id: "cortex", label: "cortex", kind: "service", status: "online" } },
-      ...uniqueHosts.map((host) => ({
-        data: { id: `host:${host}`, label: host, kind: "host", status: "online" },
+      ...sources.map((source) => ({
+        data: { id: source.node_id, label: source.hostname, host_id: source.host_id,
+          kind: source.source_kind, aliases: source.aliases, status: "observed" },
       })),
       { data: { id: "sqlite", label: "SQLite WAL", kind: "store", status: "online" } },
     ];
-    const edges = uniqueHosts.map((host) => ({
+    const edges = sources.map((source) => ({
       data: {
-        id: `host:${host}->cortex`,
-        source: `host:${host}`,
+        id: `${source.node_id}->cortex`,
+        source: source.node_id,
         target: "cortex",
         label: "ingests",
       },
@@ -249,15 +280,18 @@
 
   function showNodeEvidence(data) {
     ui.selectedTitle.textContent = data.label || data.id;
-    setBadge(ui.selectedKind, data.kind || "node", data.status === "degraded" ? "warn" : "neutral");
+    const kindLabel = data.kind === "claimed_host" ? "Claimed device name" : data.kind || "node";
+    setBadge(ui.selectedKind, kindLabel, data.kind === "claimed_host" || data.status === "degraded" ? "warn" : "neutral");
     const facts = [
       ["Node id", data.id],
-      ["Kind", data.kind || "unknown"],
+      ["Kind", kindLabel],
       ["Status", data.status || "unknown"],
     ];
+    if (data.host_id) facts.push(["Heartbeat ID", data.host_id]);
     const related = latestLogs.filter((row) => {
       const host = row.hostname || row.host || "";
-      return data.label && String(host).toLowerCase() === String(data.label).toLowerCase();
+      const aliases = Array.isArray(data.aliases) ? data.aliases : [data.label];
+      return aliases.some((alias) => alias === String(host));
     }).slice(0, 4);
     clear(ui.evidenceList);
     facts.forEach(([label, value]) => {
@@ -363,7 +397,8 @@
       latestLogs = tail.logs || tail.entries || tail.items || [];
       ui.serverVersion.textContent = version.version || "Unknown";
       ui.schemaVersion.textContent = `Schema ${version.schema_version ?? "--"}`;
-      ui.hostCount.textContent = String(latestHosts.length);
+      ui.hostCount.textContent = String(normalizeHostSources(latestHosts)
+        .filter((source) => source.source_kind === "host").length);
       ui.logCount.textContent = String(stats.total_logs ?? stats.total ?? "--");
       setBadge(ui.logStatus, "Live", "success");
       updateGraph(graphFromHosts(latestHosts));

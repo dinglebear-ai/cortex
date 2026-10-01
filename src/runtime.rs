@@ -94,6 +94,7 @@ pub struct MaintenanceHandles {
     notification_digest: Option<JoinHandle<()>>,
     inventory_refresh: Option<JoinHandle<()>>,
     inventory_backfill: Option<JoinHandle<()>>,
+    host_attribution_backfill: Option<JoinHandle<()>>,
     graph_refresh: Option<JoinHandle<()>>,
     session_rollup: Option<JoinHandle<()>>,
     timeline_rollup: Option<JoinHandle<()>>,
@@ -148,6 +149,7 @@ impl MaintenanceHandles {
             self.notification_digest,
             self.inventory_refresh,
             self.inventory_backfill,
+            self.host_attribution_backfill,
             self.graph_refresh,
             self.session_rollup,
             self.timeline_rollup,
@@ -741,6 +743,7 @@ impl RuntimeCore {
             Arc::clone(&self.observability),
         );
         let inventory_backfill = self.spawn_inventory_backfill_task(token.clone());
+        let host_attribution_backfill = self.spawn_host_attribution_backfill_task(token.clone());
         let graph_refresh = graph_refresh::spawn(
             token.clone(),
             Arc::clone(&self.pool),
@@ -773,6 +776,7 @@ impl RuntimeCore {
             notification_digest,
             inventory_refresh,
             inventory_backfill,
+            host_attribution_backfill,
             graph_refresh,
             session_rollup,
             timeline_rollup,
@@ -1020,6 +1024,69 @@ impl RuntimeCore {
             }
         });
         Some(handle)
+    }
+
+    fn spawn_host_attribution_backfill_task(
+        &self,
+        token: CancellationToken,
+    ) -> Option<JoinHandle<()>> {
+        let pool = Arc::clone(&self.pool);
+        let limiter = Arc::clone(&self.maintenance_permit);
+        Some(tokio::spawn(async move {
+            loop {
+                let permit = tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return,
+                    permit = Arc::clone(&limiter).acquire_owned() => match permit {
+                        Ok(permit) => permit,
+                        Err(_) => return,
+                    },
+                };
+                let batch_pool = Arc::clone(&pool);
+                let result = tokio::task::spawn_blocking(move || {
+                    // An aborted async wrapper cannot release admission while
+                    // detached SQLite work continues on the blocking thread.
+                    let _permit = permit;
+                    db::host_attribution::backfill_batch(&batch_pool, 1_000)
+                })
+                .await;
+                let delay = match result {
+                    Ok(Ok(progress)) if progress.complete => {
+                        tracing::info!(
+                            cursor = progress.cursor,
+                            high_water = progress.high_water,
+                            scanned = progress.scanned,
+                            attributed = progress.attributed,
+                            "forwarded host attribution backfill complete"
+                        );
+                        return;
+                    }
+                    Ok(Ok(progress)) => {
+                        tracing::debug!(
+                            cursor = progress.cursor,
+                            high_water = progress.high_water,
+                            scanned = progress.scanned,
+                            attributed = progress.attributed,
+                            "forwarded host attribution batch complete"
+                        );
+                        std::time::Duration::from_millis(100)
+                    }
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "forwarded host attribution backfill retry");
+                        std::time::Duration::from_secs(5)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "forwarded host attribution worker failed");
+                        return;
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return,
+                    _ = tokio::time::sleep(delay) => {},
+                }
+            }
+        }))
     }
 
     fn spawn_inventory_backfill_task(&self, token: CancellationToken) -> Option<JoinHandle<()>> {

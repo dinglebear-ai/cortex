@@ -110,6 +110,9 @@ jobs:
       - name: Check version sync
         run: cargo xtask check-version-sync
 
+      - name: Validate plugin packages and behavior
+        run: bash scripts/validate-marketplace.sh
+
       - name: Check Rust module sizes
         run: bash scripts/check-rust-module-size.sh --limit 500
 

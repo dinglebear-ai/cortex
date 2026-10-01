@@ -145,4 +145,68 @@ const deepSearch = await loadSnippet("cortex-searching-sessions", async () => de
 assert.equal(deepSearch.preview_truncated, true);
 assert.ok(deepSearch.evidence_preview.length < 500);
 
+const redactionEvidence = { password: "private-password", credential: "private-credential", metadata: { url: "private-metadata" },
+  evidence: [{ transcript_before_truncated: true, text: "private-transcript" }], total_incidents: 7, truncated: true };
+for (const [name, input] of [
+  ["cortex-frustration-assessment", { incident_id: "one" }],
+  ["cortex-hook-friction-assessment", { hook_name: "hook" }],
+  ["cortex-mcp-friction-assessment", { mcp_server: "server" }],
+  ["cortex-incidents", { limit: 5 }],
+]) {
+  const run = loadSnippet(name, async () => redactionEvidence);
+  const result = await run(input);
+  assert.ok(!JSON.stringify(result).includes("private-"), `${name} redacts credential and transcript values`);
+  assert.equal(result.truncated, true);
+  assert.equal(JSON.parse(result.evidence_preview).evidence[0].transcript_before_truncated, true);
+  const broad = await loadSnippet(name, async () => wideEvidence)(input);
+  assert.equal(broad.preview_truncated, true);
+  assert.ok(broad.evidence_keys.length <= 20);
+  assert.ok(broad.evidence_preview.length <= 4000);
+  const nested = await loadSnippet(name, async () => deepEvidence)(input);
+  assert.equal(nested.preview_truncated, true);
+  assert.ok(nested.evidence_preview.length < 500);
+}
+for (const name of ["cortex-report", "cortex-troubleshoot"]) {
+  const run = loadSnippet(name, async () => {}, { batch: async () => ({
+    all_ok: false,
+    ok: [{ i: 0, value: redactionEvidence }],
+    failed: [{ i: 1, error: Error("Authorization: Bearer private-token") }],
+  }) });
+  const result = await run({});
+  assert.equal(result.ok, false);
+  assert.ok(!JSON.stringify(result).includes("private-"), `${name} redacts values and upstream failures`);
+  const broad = await loadSnippet(name, async () => {}, { batch: async () => ({
+    all_ok: true, ok: [{ i: 0, value: wideEvidence }], failed: [],
+  }) })({});
+  assert.equal(broad.results[0].preview_truncated, true);
+  assert.ok(broad.results[0].preview.length <= 1800);
+}
+
+const actualMcpEvidence = { evidence: [{ mcp_events: [{
+  arguments_json: '{"env":"private-argument"}', output_preview: "private-tool-output",
+  input: { api_key: "private-input" }, output: "private-output", is_error: false,
+}] }] };
+for (const [name, input] of [
+  ["cortex-frustration-assessment", { incident_id: "one" }],
+  ["cortex-hook-friction-assessment", { hook_name: "hook" }],
+  ["cortex-mcp-friction-assessment", { mcp_server: "server" }],
+  ["cortex-incidents", { limit: 5 }],
+  ["cortex-skill-improvement-assessment", { skill: "skill" }],
+  ["cortex-searching-sessions", { query: "query" }],
+]) {
+  const result = await loadSnippet(name, async () => actualMcpEvidence)(input);
+  assert.ok(!JSON.stringify(result).includes("private-"), `${name} omits actual MCP argument/input/output fields`);
+  assert.equal(JSON.parse(result.evidence_preview).evidence[0].mcp_events[0].is_error, false);
+}
+for (const name of ["cortex-report", "cortex-troubleshoot"]) {
+  const result = await loadSnippet(name, async () => {}, { batch: async () => ({
+    all_ok: true, ok: [{ i: 0, value: actualMcpEvidence }], failed: [],
+  }) })({});
+  assert.ok(!JSON.stringify(result).includes("private-"), `${name} omits actual MCP argument/input/output fields`);
+}
+
+const validator = readFileSync(fileURLToPath(new URL("../../../scripts/validate-marketplace.sh", import.meta.url)), "utf8");
+assert.match(validator, /python3 -m unittest discover -s plugins\/cortex\/tests/);
+const ci = readFileSync(fileURLToPath(new URL("../../../.github/workflows/ci.yml", import.meta.url)), "utf8");
+assert.ok(ci.split("\n  version-sync:")[1].split("\n  identity:")[0].includes("bash scripts/validate-marketplace.sh"));
 console.log("Cortex snippet contracts passed");

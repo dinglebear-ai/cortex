@@ -39,6 +39,18 @@ fn prior_fingerprint_matches(
     }
 }
 
+fn replay_fingerprint(
+    envelope: &EvidenceEnvelope,
+    stored_locator: Option<&str>,
+    context: &ForwardedEventContext,
+) -> anyhow::Result<String> {
+    // Match the project deliberately preserved in the canonical log, so a
+    // restored worktree or equivalent reparse can replay its accepted history.
+    let mut canonical = envelope.clone();
+    canonical.ai_project = context.ai_project.clone();
+    canonical_v2_fingerprint(&canonical, stored_locator)?.ok_or_else(|| IdempotencyConflict.into())
+}
+
 pub(super) fn accept_codex_project_reclassification(
     tx: &rusqlite::Transaction<'_>,
     envelope: &EvidenceEnvelope,
@@ -87,8 +99,7 @@ pub(super) fn accept_codex_project_reclassification(
     }
 
     insert_forwarded_events_in_tx(tx, envelope, context)?;
-    let fingerprint =
-        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+    let fingerprint = replay_fingerprint(envelope, stored_locator, context)?;
     tx.execute(
         "UPDATE ai_transcript_forward_receipts
          SET request_fingerprint = ?2 WHERE source_record_id = ?1",
@@ -167,8 +178,7 @@ pub(super) fn accept_codex_whitespace_reparse(
     }
 
     insert_forwarded_events_in_tx(tx, envelope, context)?;
-    let fingerprint =
-        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+    let fingerprint = replay_fingerprint(envelope, stored_locator, context)?;
     tx.execute(
         "UPDATE ai_transcript_forward_receipts
          SET request_fingerprint = ?2 WHERE source_record_id = ?1",
@@ -219,8 +229,7 @@ pub(super) fn upgrade_codex_message_role(
     // Preserve the canonical log and add only the corrected speaker label and
     // any newly available structured events in the same transaction.
     insert_forwarded_events_in_tx(tx, envelope, context)?;
-    let fingerprint =
-        canonical_v2_fingerprint(envelope, stored_locator)?.ok_or(IdempotencyConflict)?;
+    let fingerprint = replay_fingerprint(envelope, stored_locator, context)?;
     tx.execute(
         "UPDATE ai_transcript_forward_receipts
          SET request_fingerprint = ?2 WHERE source_record_id = ?1",

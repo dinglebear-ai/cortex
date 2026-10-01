@@ -691,20 +691,27 @@ fn check_launchd(user_home: &Path, binary: &Path, env: &Path, host_id: &Path) ->
         PhaseTimer::start("heartbeat-agent-content")
             .finish(status, "launchd plist content observation"),
     );
-    let canonical = super::launchd::print(uid, super::launchd::LABEL)
-        .ok()
-        .flatten();
-    let legacy = super::launchd::print(uid, super::launchd::LEGACY_LABEL)
-        .ok()
-        .flatten();
-    let (status, detail) = match (canonical.is_some(), legacy.is_some()) {
-        (true, false) => (SetupStatus::Ok, "canonical loaded"),
-        (true, true) => (
+    let canonical = super::launchd::print(uid, super::launchd::LABEL);
+    let legacy = super::launchd::print(uid, super::launchd::LEGACY_LABEL);
+    let (status, detail) = match (canonical, legacy) {
+        (Ok(Some(_)), Ok(None)) => (SetupStatus::Ok, "canonical loaded".to_string()),
+        (Ok(Some(_)), Ok(Some(_))) => (
             SetupStatus::Error,
-            "critical: canonical and exact legacy jobs both loaded",
+            "critical: canonical and exact legacy jobs both loaded".to_string(),
         ),
-        (false, true) => (SetupStatus::Warn, "legacy loaded; canonical absent"),
-        (false, false) => (SetupStatus::Warn, "no heartbeat agent loaded"),
+        (Ok(None), Ok(Some(_))) => (
+            SetupStatus::Warn,
+            "legacy loaded; canonical absent".to_string(),
+        ),
+        (Ok(None), Ok(None)) => (SetupStatus::Warn, "no heartbeat agent loaded".to_string()),
+        (Err(error), _) => (
+            SetupStatus::Error,
+            format!("canonical launchd inspection failed; service state unknown: {error}"),
+        ),
+        (_, Err(error)) => (
+            SetupStatus::Error,
+            format!("legacy launchd inspection failed; service state unknown: {error}"),
+        ),
     };
     p.push(PhaseTimer::start("heartbeat-agent-service").finish(status, detail));
     p
@@ -732,14 +739,13 @@ fn check_lifecycle_state(home: &Path, backend: ServiceBackend) -> SetupPhase {
                 .unwrap_or_else(|| "corrupt".into());
             let canonical_recovered = backend == ServiceBackend::Launchd
                 && step == "rollback"
-                && super::launchd::print(effective_uid(), super::launchd::LABEL)
-                    .ok()
-                    .flatten()
-                    .is_some()
-                && super::launchd::print(effective_uid(), super::launchd::LEGACY_LABEL)
-                    .ok()
-                    .flatten()
-                    .is_none();
+                && matches!(
+                    (
+                        super::launchd::print(effective_uid(), super::launchd::LABEL),
+                        super::launchd::print(effective_uid(), super::launchd::LEGACY_LABEL),
+                    ),
+                    (Ok(Some(_)), Ok(None))
+                );
             let (status, migration_detail) = match (step.as_str(), canonical_recovered) {
                 ("rollback", true) => (SetupStatus::Ok, "recovered-canonical"),
                 ("rollback" | "corrupt", false) => (SetupStatus::Warn, step.as_str()),

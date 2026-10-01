@@ -78,7 +78,7 @@ def classify(event: str, paths: list[str]) -> dict[str, bool]:
             "docker-compose.prod.yml",
         },
     )
-    skills = any_match(paths, lambda p: starts(p, "plugins/cortex/skills/", "plugins/install-cortex/", "plugins/cortex/.claude-plugin/", ".claude-plugin/"))
+    skills = any_match(paths, lambda p: starts(p, "plugins/cortex/skills/", "plugins/install-cortex/", "plugins/cortex/.claude-plugin/", "plugins/cortex/scripts/", "plugins/cortex/tests/", ".claude-plugin/"))
     rust = any_match(
         paths,
         lambda p: starts(p, "src/", "tests/", "xtask/", ".cargo/", "scripts/")

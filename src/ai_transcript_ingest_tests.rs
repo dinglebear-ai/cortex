@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Request, StatusCode, header};
+use serde_json::Value;
 use tower::ServiceExt;
 
 use super::*;
@@ -79,6 +80,101 @@ fn transcript_request(body: String) -> Request<Body> {
         .header(header::AUTHORIZATION, "Bearer secret")
         .body(Body::from(body))
         .unwrap()
+}
+
+#[tokio::test]
+async fn shared_transcript_forwarding_keeps_device_claims_and_legacy_replay_identity() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut first = sample_record();
+    first["envelope"]["hostname"] = json!("SERVERHOST");
+    let mut second = sample_record();
+    second["envelope"]["hostname"] = json!("EDGEHOST");
+    second["envelope"]["source_record_id"] = json!(format!("sha256:{}", "f".repeat(64)));
+    let body = json!({"records": [first, second]}).to_string();
+    assert_eq!(
+        app.clone()
+            .oneshot(transcript_request(body.clone()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let mut statement = conn
+        .prepare("SELECT hostname, source_ip, metadata_json FROM logs ORDER BY id")
+        .unwrap();
+    let subjects: Vec<_> = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .map(|row| {
+            let (hostname, source, metadata) = row.unwrap();
+            assert_eq!(hostname, "agent-shared_bearer");
+            crate::forwarded_host::subject_hostname(&hostname, &source, Some(&metadata)).unwrap()
+        })
+        .collect();
+    assert_eq!(subjects, ["SERVERHOST", "EDGEHOST"]);
+    drop(statement);
+    conn.execute(
+        "UPDATE ai_transcript_forward_receipts SET request_fingerprint = NULL",
+        [],
+    )
+    .unwrap();
+    let response = app.oneshot(transcript_request(body)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        value["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|receipt| receipt["disposition"] == "duplicate")
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn oversized_transcript_metadata_keeps_device_provenance() {
+    let mut record = sample_record();
+    // Exercise the encoding boundary independently of today's tighter
+    // request diagnostic cap, so optional evidence cannot later erase proof.
+    record["envelope"]["diagnostics"] = json!(
+        (0..64)
+            .map(|_| json!({"code":"adapter_note", "detail":"e".repeat(2048)}))
+            .collect::<Vec<_>>()
+    );
+    let record: AiTranscriptRecord = serde_json::from_value(record).unwrap();
+    let envelope = record.envelope;
+    let entry = to_log_batch_entry(
+        envelope,
+        "shared_bearer",
+        &"10.1.0.8:41000".parse().unwrap(),
+    );
+    let metadata = entry.metadata_json.as_deref().unwrap();
+    assert!(metadata.len() <= crate::ingest_metadata::MAX_METADATA_JSON_BYTES);
+    assert_eq!(
+        serde_json::from_str::<Value>(metadata).unwrap()["metadata_truncated"],
+        true
+    );
+    assert_eq!(entry.hostname, "agent-shared_bearer");
+    assert_eq!(
+        crate::forwarded_host::subject_hostname(&entry.hostname, &entry.source_ip, Some(metadata)),
+        Some("devhost".to_string())
+    );
 }
 
 #[tokio::test]

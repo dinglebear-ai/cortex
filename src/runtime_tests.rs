@@ -569,9 +569,7 @@ async fn maintenance_shutdown_is_unclean_when_file_tail_checkpoint_fails() {
         crate::filetail::FileTailRegistry::path_from_storage_db(&config.storage.db_path),
     ));
     let log_path = tmp.path().join("runtime-tail.log");
-    tokio::fs::write(&log_path, b"runtime line\n")
-        .await
-        .unwrap();
+    tokio::fs::write(&log_path, b"").await.unwrap();
     registry
         .upsert(crate::filetail::FileTailSource {
             id: "runtime-tail".into(),
@@ -591,17 +589,16 @@ async fn maintenance_shutdown_is_unclean_when_file_tail_checkpoint_fails() {
         .unwrap();
     let runtime = RuntimeCore::for_server(config).await.unwrap();
     let handles = runtime.spawn_maintenance_tasks();
-    // The all-features suite runs thousands of CPU- and SQLite-heavy tests in
-    // parallel. Allow scheduler headroom while still bounding readiness; this
-    // assertion is about the checkpoint-failure shutdown result below.
+    // Establish the initial checkpoint before injecting failure. Waiting for
+    // last_line_at is too late when durable ingestion already flushed it.
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            if runtime
-                .file_tail_supervisor
-                .statuses()
-                .first()
-                .and_then(|status| status.last_line_at.as_ref())
-                .is_some()
+            if registry
+                .get("runtime-tail")
+                .unwrap()
+                .unwrap()
+                .checkpoint_offset
+                == Some(0)
             {
                 break;
             }
@@ -613,6 +610,28 @@ async fn maintenance_shutdown_is_unclean_when_file_tail_checkpoint_fails() {
     runtime
         .file_tail_supervisor
         .fail_checkpoint_writes_for_test(true);
+    tokio::fs::write(&log_path, b"runtime line\n")
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if runtime
+                .file_tail_supervisor
+                .statuses()
+                .iter()
+                .any(|status| {
+                    status.last_error.as_deref().is_some_and(|error| {
+                        error.contains("injected file-tail checkpoint persistence failure")
+                    })
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 
     assert!(!handles.shutdown(Duration::from_secs(3)).await);
     runtime.shutdown(Duration::from_secs(1)).await;

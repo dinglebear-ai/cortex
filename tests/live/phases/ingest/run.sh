@@ -244,9 +244,9 @@ live_ingest_syslog_forward() {
   if [[ "$status" != 200 ]]; then live_die "syslog-forward ingest returned HTTP $status"; return 1; fi
   jq -e --arg key "$key" '.receipts==[$key]' "$response" >/dev/null
   live_ingest_wait_marker "$marker" syslog-forward 15
-  # The forwarder identity is server-derived: a hostname claimed in the frame
-  # never becomes the stored identity.
-  jq -e --arg claimed "$instance" '.count==1 and .logs[0].hostname!=$claimed and (.logs[0].hostname|startswith("agent-"))' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-15-rest.json" >/dev/null
+  # Search presents the validated device claim, while the transport provenance
+  # remains attached to the row; the stored authentication principal is unchanged.
+  jq -e --arg claimed "$instance" '.count==1 and .logs[0].hostname==$claimed and (.logs[0].source_ip|startswith("agent-syslog://"))' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-15-rest.json" >/dev/null
   # Replay is the point of the receipt: an identical batch is acknowledged
   # without a second row.
   [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/syslog-forward)")" == 200 ]]

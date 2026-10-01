@@ -191,6 +191,10 @@ impl<'a> CheckpointStore<'a> {
     pub fn reset_source(&self, source_id: i64, canonical_path: &str) -> Result<()> {
         let mut conn = crate::db::write_conn(self.pool)?;
         let tx = conn.transaction()?;
+        let affected_hosts = tx
+            .prepare("SELECT DISTINCT hostname FROM logs WHERE ai_transcript_path = ?1")?
+            .query_map([canonical_path], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         tx.execute(
             "DELETE FROM transcript_import_records WHERE source_id = ?1",
             [source_id],
@@ -218,18 +222,20 @@ impl<'a> CheckpointStore<'a> {
             "DELETE FROM logs WHERE ai_transcript_path = ?1",
             [canonical_path],
         )?;
-        tx.execute(
-            "UPDATE hosts
-             SET log_count = (SELECT COUNT(*) FROM logs WHERE logs.hostname = hosts.hostname),
-                 first_seen = COALESCE((SELECT MIN(received_at) FROM logs WHERE logs.hostname = hosts.hostname), first_seen),
-                 last_seen = COALESCE((SELECT MAX(received_at) FROM logs WHERE logs.hostname = hosts.hostname), last_seen)
-             WHERE hostname = 'localhost'",
-            [],
-        )?;
-        tx.execute(
-            "DELETE FROM hosts WHERE hostname = 'localhost' AND log_count = 0",
-            [],
-        )?;
+        for hostname in affected_hosts {
+            tx.execute(
+                "UPDATE hosts
+                 SET log_count = (SELECT COUNT(*) FROM logs WHERE hostname = ?1),
+                     first_seen = COALESCE((SELECT MIN(received_at) FROM logs WHERE hostname = ?1), first_seen),
+                     last_seen = COALESCE((SELECT MAX(received_at) FROM logs WHERE hostname = ?1), last_seen)
+                 WHERE hostname = ?1",
+                [&hostname],
+            )?;
+            tx.execute(
+                "DELETE FROM hosts WHERE hostname = ?1 AND log_count = 0",
+                [&hostname],
+            )?;
+        }
         tx.execute(
             "UPDATE transcript_sources
              SET file_size = NULL,

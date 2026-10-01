@@ -192,6 +192,132 @@ fn result_event_without_paired_call_still_inserts_unclassified() {
 }
 
 #[test]
+fn late_call_and_replays_resolve_result_identity_without_replacing_outcome() {
+    for session in [None, Some("sess-1")] {
+        let (pool, _dir) = test_pool();
+        let result_log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:01.000Z");
+        let call_log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
+        let result = McpEventInsert {
+            log_id: result_log_id,
+            ai_tool: "claude".to_string(),
+            ai_project: None,
+            ai_session_id: session.map(str::to_string),
+            hostname: "devhost".to_string(),
+            timestamp: "2026-06-01T00:00:01.000Z".to_string(),
+            event: result_event("late-call", true),
+        };
+        let call = McpEventInsert {
+            log_id: call_log_id,
+            ai_tool: "claude".to_string(),
+            ai_project: None,
+            ai_session_id: session.map(str::to_string),
+            hostname: "devhost".to_string(),
+            timestamp: "2026-06-01T00:00:00.000Z".to_string(),
+            event: call_event("late-call", "mcp__gh__search", Some("gh"), Some("search")),
+        };
+        assert_eq!(
+            insert_mcp_events(&pool, std::slice::from_ref(&result)).unwrap(),
+            1
+        );
+        assert_eq!(
+            insert_mcp_events(&pool, std::slice::from_ref(&call)).unwrap(),
+            1
+        );
+        let assert_result = || {
+            let rows = list_mcp_events(
+                &pool,
+                &AiMcpEventParams {
+                    mcp_server: Some("gh".to_string()),
+                    is_error: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                rows.total, 1,
+                "failed result must be visible through MCP filters"
+            );
+            let row = &rows.events[0];
+            assert_eq!(row.tool_name, "mcp__gh__search");
+            assert_eq!(row.mcp_tool.as_deref(), Some("search"));
+            assert_eq!(row.result_log_id, Some(result_log_id));
+            assert_eq!(row.status.as_deref(), Some("error"));
+            assert_eq!(row.error_text.as_deref(), Some("boom"));
+            assert_eq!(row.timestamp, result.timestamp);
+        };
+        assert_result();
+        // Old orphan rows can also be repaired by replay without a new insert.
+        {
+            let conn = pool.get().unwrap();
+            conn.execute("UPDATE ai_mcp_events SET tool_name = '', mcp_server = NULL, mcp_tool = NULL WHERE event_kind = 'result'", []).unwrap();
+        }
+        assert_eq!(
+            insert_mcp_events(&pool, std::slice::from_ref(&result)).unwrap(),
+            0
+        );
+        assert_result();
+        let mut conflicting_call = call;
+        conflicting_call.event = call_event(
+            "late-call",
+            "mcp__other__wrong",
+            Some("other"),
+            Some("wrong"),
+        );
+        assert_eq!(insert_mcp_events(&pool, &[conflicting_call]).unwrap(), 0);
+        assert_result();
+    }
+}
+
+#[test]
+fn late_call_preserves_explicit_result_identity_and_other_sessions() {
+    let (pool, _dir) = test_pool();
+    let log_id = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");
+    let make = |session: &str, event| McpEventInsert {
+        log_id,
+        ai_tool: "claude".to_string(),
+        ai_project: None,
+        ai_session_id: Some(session.to_string()),
+        hostname: "devhost".to_string(),
+        timestamp: "2026-06-01T00:00:00.000Z".to_string(),
+        event,
+    };
+    let mut named_result = result_event("same-id", true);
+    named_result.tool_name = "explicit-tool".to_string();
+    insert_mcp_events(
+        &pool,
+        &[
+            make("session-a", named_result),
+            make("session-b", result_event("same-id", true)),
+            make(
+                "session-a",
+                call_event("same-id", "mcp__gh__search", Some("gh"), Some("search")),
+            ),
+        ],
+    )
+    .unwrap();
+    let rows = list_mcp_events(&pool, &AiMcpEventParams::default()).unwrap();
+    let results = rows
+        .events
+        .iter()
+        .filter(|event| event.event_kind == "result")
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2);
+    assert!(
+        results
+            .iter()
+            .any(|event| event.ai_session_id.as_deref() == Some("session-a")
+                && event.tool_name == "explicit-tool")
+    );
+    assert!(
+        results
+            .iter()
+            .any(|event| event.ai_session_id.as_deref() == Some("session-b")
+                && event.tool_name.is_empty()
+                && event.mcp_server.is_none())
+    );
+}
+
+#[test]
 fn list_filters_by_mcp_server_project_and_is_error() {
     let (pool, _dir) = test_pool();
     let log_id_a = insert_log_row(&pool, "devhost", "2026-06-01T00:00:00.000Z");

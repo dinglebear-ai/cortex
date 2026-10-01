@@ -204,8 +204,9 @@ pub(super) fn forwarded_metadata(
             "trust": if forwarder_identity == "shared_bearer" { "claimed" } else { "verified_forwarder_claimed_host" },
         }),
     );
-    Ok(crate::ingest_metadata::bounded_metadata_json(
+    Ok(crate::forwarded_host::bounded_metadata_json(
         Value::Object(metadata),
+        "forwarded_provenance",
     ))
 }
 

@@ -103,6 +103,45 @@ fn reset_source_removes_all_transcript_derived_projections() {
 }
 
 #[test]
+fn reset_source_reconciles_affected_hosts_and_preserves_unrelated_hosts() {
+    let (pool, _dir) = test_pool();
+    let store = CheckpointStore::new(&pool);
+    let path = "/tmp/replay-host-count.jsonl";
+    let source_id = store.ensure_source(path, "codex_session").unwrap();
+    {
+        let conn = pool.get().unwrap();
+        for (hostname, source) in [
+            ("host-a", path),
+            ("host-a", "/tmp/other.jsonl"),
+            ("host-b", "/tmp/other.jsonl"),
+            ("host-c", path),
+        ] {
+            conn.execute(
+                "INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_transcript_path)
+                 VALUES ('2026-01-01T00:00:00Z', ?1, 'info', 'row', 'row', 'local', ?2)",
+                params![hostname, source],
+            ).unwrap();
+        }
+        conn.execute("INSERT INTO hosts (hostname, log_count) VALUES ('host-a', 2), ('host-b', 1), ('host-c', 1)", []).unwrap();
+    }
+    store.reset_source(source_id, path).unwrap();
+    let conn = pool.get().unwrap();
+    let hosts = conn
+        .prepare("SELECT hostname, log_count FROM hosts ORDER BY hostname")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        hosts,
+        vec![("host-a".to_string(), 1), ("host-b".to_string(), 1)]
+    );
+}
+
+#[test]
 fn ensure_source_updates_source_kind_for_existing_path() {
     let (pool, _dir) = test_pool();
     let store = CheckpointStore::new(&pool);

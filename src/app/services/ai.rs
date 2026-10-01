@@ -24,7 +24,7 @@ impl CortexService {
             offset: req.offset,
         };
         let (rows, rollup_as_of) = self
-            .run_db("list_sessions", move |pool| {
+            .run_heavy_db("list_sessions", move |pool| {
                 let rows = db::list_ai_sessions(pool, &params)?;
                 // Only attach staleness when the rollup path was actually used
                 // (unbounded query AND rollup populated). If unbounded but the
@@ -79,7 +79,7 @@ impl CortexService {
             limit: req.limit,
         };
         let result = self
-            .run_db("search_sessions", move |pool| {
+            .run_heavy_db("search_sessions", move |pool| {
                 db::search_ai_sessions(pool, &params)
             })
             .await?;
@@ -252,7 +252,7 @@ impl CortexService {
             Vec<db::AiRelatedLogsForAnchor>,
         );
         let (anchors_truncated, anchor_entries, related_by_anchor) = self
-            .run_db(
+            .run_heavy_db(
                 "correlate_ai_logs",
                 move |pool| -> anyhow::Result<CorrelateDbResult> {
                     let mut anchors = db::search_ai_anchors(pool, &anchor_params)?;
@@ -327,7 +327,7 @@ impl CortexService {
             Some(session_id) => {
                 let sid = session_id.clone();
                 let (inputs, summaries) = self
-                    .run_db(
+                    .run_heavy_db(
                         "correlate_session_graph",
                         move |pool| -> anyhow::Result<(
                             db::SessionGraphInputs,

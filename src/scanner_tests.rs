@@ -47,6 +47,38 @@ fn test_pool() -> (crate::db::DbPool, tempfile::TempDir) {
     (pool, dir)
 }
 
+#[test]
+fn automatic_extractor_replay_preserves_host_log_count() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("replay-count.jsonl");
+    std::fs::write(&file, concat!(
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}"#,
+        "\n",
+    )).unwrap();
+    assert_eq!(
+        index_file(&pool, &file, "codex_session").unwrap().ingested,
+        1
+    );
+    {
+        let conn = pool.get().unwrap();
+        conn.execute("UPDATE transcript_sources SET extractor_revision = 0", [])
+            .unwrap();
+    }
+    assert_eq!(
+        index_file(&pool, &file, "codex_session").unwrap().ingested,
+        1
+    );
+    let conn = pool.get().unwrap();
+    let (count, stored_count): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), MAX(h.log_count) FROM logs l JOIN hosts h ON h.hostname = l.hostname",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((count, stored_count), (1, 1));
+}
+
 fn write_codex_app_worktree_git_pointer(worktree: &std::path::Path, project: &std::path::Path) {
     std::fs::create_dir_all(worktree).unwrap();
     let gitdir = project.join(".git/worktrees/codex-app");
@@ -1653,6 +1685,90 @@ fn snapshot_bytes_count_when_gemini_utf8_validation_fails_before_records() {
     assert_eq!(result.parse_errors, 1, "result={result:#?}");
     assert_eq!(result.scanned_bytes, 3, "invalid source bytes must count");
     assert!(result.scan_budget_cap_hit, "later source must be deferred");
+}
+
+#[test]
+fn oversized_gemini_revision_replay_preserves_existing_evidence_and_checkpoint() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("gemini-replay.json");
+    std::fs::write(
+        &file,
+        format!(
+            r#"{{"sessionId":"large","messages":[{{"id":"m","content":"{}"}}]}}"#,
+            "x".repeat(512),
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        index_file(&pool, &file, "gemini_session").unwrap().ingested,
+        1
+    );
+    let before = {
+        let conn = pool.get().unwrap();
+        conn.execute("UPDATE transcript_sources SET extractor_revision = 0", [])
+            .unwrap();
+        conn.query_row(
+            "SELECT file_size, last_offset, content_hash FROM transcript_sources",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let result = index_file_with_options(
+        &pool,
+        &file,
+        "gemini_session",
+        IndexFileOptions {
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 64,
+                scan_max_bytes: 64,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.source_budget_cap_hits, 1);
+    assert_eq!(result.ingested, 0);
+    let conn = pool.get().unwrap();
+    let after = conn
+        .query_row(
+            "SELECT file_size, last_offset, content_hash FROM transcript_sources",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "deferred replay must keep its durable checkpoint"
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM transcript_import_records",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
 }
 
 #[test]

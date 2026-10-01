@@ -180,8 +180,9 @@ impl CortexService {
             .run_db("context", move |pool| -> anyhow::Result<_> {
                 let (reference, hostname, timestamp, id): (LogEntry, String, String, Option<i64>) =
                     if let Some(id) = req.log_id {
-                        let row = db::fetch_log_by_id(pool, id)?
+                        let mut row = db::fetch_log_by_id(pool, id)?
                             .ok_or_else(|| anyhow::anyhow!("context_log_not_found:{id}"))?;
+                        display_device_hostname(&mut row);
                         let entry = LogEntry {
                             id: row.id,
                             timestamp: row.timestamp.clone(),
@@ -265,10 +266,11 @@ impl CortexService {
 
     pub async fn get_log(&self, req: GetLogRequest) -> ServiceResult<GetLogResponse> {
         let id = req.id;
-        let row = self
+        let mut row = self
             .run_db("get_log", move |pool| db::fetch_log_by_id(pool, id))
             .await?
             .ok_or_else(|| ServiceError::InvalidInput(format!("No log found for id {id}")))?;
+        display_device_hostname(&mut row);
         Ok(GetLogResponse { log: row.into() })
     }
 
@@ -468,5 +470,15 @@ impl CortexService {
             delta_total_logs,
             delta_total_errors,
         })
+    }
+}
+
+fn display_device_hostname(row: &mut db::LogEntryWithRaw) {
+    if let Some(hostname) = crate::forwarded_host::subject_hostname(
+        &row.hostname,
+        &row.source_ip,
+        row.metadata_json.as_deref(),
+    ) {
+        row.hostname = hostname;
     }
 }

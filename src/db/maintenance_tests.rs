@@ -52,6 +52,30 @@ fn update_received_at(pool: &DbPool, message: &str, received_at: &str) {
     .unwrap();
 }
 
+fn forwarded_entry(principal: &str, device: &str, msg: &str) -> LogBatchEntry {
+    let mut entry = make_entry(
+        "2026-09-30T00:00:00Z",
+        &format!("agent-{principal}"),
+        "info",
+        msg,
+    );
+    entry.source_ip = "agent-ai-transcript://192.0.2.8".into();
+    entry.metadata_json = Some(
+        serde_json::json!({"provenance": {
+            "authenticated_forwarder": principal,
+            "transport_peer": "192.0.2.8",
+            "hostname_claim": device,
+            "trust": if principal == "shared_bearer" {
+                "claimed"
+            } else {
+                "verified_forwarder_claimed_host"
+            },
+        }})
+        .to_string(),
+    );
+    entry
+}
+
 fn insert_heartbeat(pool: &DbPool, hostname: &str, received_at: &str) -> i64 {
     let conn = pool.get().unwrap();
     conn.execute(
@@ -217,6 +241,195 @@ fn test_purge_zero_retention_noop() {
 
     let deleted = purge_old_logs(&pool, 0, 0).unwrap();
     assert_eq!(deleted, 0, "retention_days=0 should be a no-op");
+}
+
+#[test]
+fn age_retention_reconciles_raw_and_forwarded_hosts_after_reopen() {
+    let (pool, dir) = test_pool();
+    let entries = [
+        make_entry("2020-01-01T00:00:00Z", "device-a", "info", "raw-old"),
+        make_entry("2099-01-01T00:00:00Z", "device-a", "info", "raw-new"),
+        forwarded_entry("shared_bearer", "device-a", "forwarded-old"),
+        forwarded_entry("shared_bearer", "device-a", "forwarded-new"),
+        forwarded_entry("retired-forwarder", "retired-device", "retired-forwarded"),
+        make_entry("2020-01-01T00:00:00Z", "retired-raw", "info", "retired-raw"),
+        make_entry("2019-01-01T00:00:00Z", "protected", "err", "old-error"),
+    ];
+    insert_logs_batch(&pool, &entries).unwrap();
+    for message in [
+        "raw-old",
+        "forwarded-old",
+        "retired-forwarded",
+        "retired-raw",
+    ] {
+        update_received_at(&pool, message, "2020-01-01T00:00:00Z");
+    }
+    for message in ["raw-new", "forwarded-new"] {
+        update_received_at(&pool, message, "2099-01-01T00:00:00Z");
+    }
+    update_received_at(&pool, "old-error", "2019-01-01T00:00:00Z");
+    // A depleted legacy source must disappear even if an earlier purge left
+    // its registry counter inflated.
+    pool.get()
+        .unwrap()
+        .execute(
+            "UPDATE hosts SET log_count = 9 WHERE hostname = 'agent-retired-forwarder'",
+            [],
+        )
+        .unwrap();
+
+    assert_eq!(purge_old_logs(&pool, 90, 0).unwrap(), 4);
+    {
+        let conn = pool.get().unwrap();
+        let retained: Vec<(String, i64)> = conn
+            .prepare("SELECT hostname, log_count FROM hosts ORDER BY hostname")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            retained,
+            vec![
+                ("agent-shared_bearer".into(), 1),
+                ("device-a".into(), 1),
+                ("protected".into(), 1),
+            ]
+        );
+        for hostname in ["device-a", "agent-shared_bearer"] {
+            let bounds: (String, String) = conn
+                .query_row(
+                    "SELECT first_seen, last_seen FROM hosts WHERE hostname = ?1",
+                    [hostname],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                bounds,
+                ("2099-01-01T00:00:00Z".into(), "2099-01-01T00:00:00Z".into())
+            );
+        }
+        let forwarded: Vec<(String, i64)> = conn
+            .prepare("SELECT hostname, log_count FROM forwarded_host_counts ORDER BY hostname")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(forwarded, vec![("device-a".into(), 1)]);
+    }
+    drop(pool);
+
+    let config = test_storage_config(dir.path().join("test.db"));
+    let reopened = init_pool(&config).unwrap();
+    let hosts = list_hosts(&reopened).unwrap();
+    assert_eq!(hosts.len(), 3);
+    // Source totals and claimed-device views overlap; retention preserves both.
+    let principal = hosts
+        .iter()
+        .find(|host| host.hostname == "agent-shared_bearer")
+        .unwrap();
+    assert_eq!(
+        principal.source_kind,
+        crate::db::HostSourceKind::ForwardingPrincipal
+    );
+    assert_eq!(
+        hosts
+            .iter()
+            .find(|h| h.hostname == "device-a")
+            .unwrap()
+            .log_count,
+        2
+    );
+    assert_eq!(
+        hosts
+            .iter()
+            .find(|h| h.hostname == "agent-shared_bearer")
+            .unwrap()
+            .log_count,
+        1 // The principal retains its raw row alongside the device claim.
+    );
+    assert_eq!(
+        hosts
+            .iter()
+            .find(|h| h.hostname == "protected")
+            .unwrap()
+            .log_count,
+        1
+    );
+    let stats = crate::db::get_stats(&reopened, &config).unwrap();
+    assert_eq!(stats.total_hosts, 3);
+    assert_eq!(stats.total_logs, 3);
+}
+
+#[test]
+fn age_retention_rolls_back_deletion_if_host_accounting_fails() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            forwarded_entry("shared_bearer", "device-a", "old"),
+            forwarded_entry("shared_bearer", "device-a", "new"),
+        ],
+    )
+    .unwrap();
+    update_received_at(&pool, "old", "2020-01-01T00:00:00Z");
+    update_received_at(&pool, "new", "2099-01-01T00:00:00Z");
+    let conn = pool.get().unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER reject_retention_accounting BEFORE UPDATE ON hosts
+         BEGIN SELECT RAISE(ABORT, 'accounting failure'); END;",
+    )
+    .unwrap();
+    drop(conn);
+
+    assert!(delete_age_retention_chunk(&pool, "2026-01-01T00:00:00Z", None).is_err());
+    let conn = pool.get().unwrap();
+    for sql in [
+        "SELECT COUNT(*) FROM logs",
+        "SELECT log_count FROM hosts WHERE hostname = 'agent-shared_bearer'",
+        "SELECT log_count FROM forwarded_host_counts WHERE hostname = 'device-a'",
+    ] {
+        assert_eq!(
+            conn.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap(),
+            2
+        );
+    }
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM forwarded_deleted_log_hosts",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn tag_retention_reconciles_only_hosts_with_removed_rows() {
+    let (pool, _dir) = test_pool();
+    let mut old = make_entry("2020-01-01T00:00:00Z", "partial", "info", "target-old");
+    old.app_name = Some("short-window".into());
+    let mut new = make_entry("2099-01-01T00:00:00Z", "partial", "info", "target-new");
+    new.app_name = Some("short-window".into());
+    let mut keep = make_entry("2020-01-01T00:00:00Z", "partial", "info", "other-tag");
+    keep.app_name = Some("long-window".into());
+    let mut depleted = make_entry("2020-01-01T00:00:00Z", "depleted", "info", "depleted");
+    depleted.app_name = Some("short-window".into());
+    insert_logs_batch(&pool, &[old, new, keep, depleted]).unwrap();
+    for message in ["target-old", "other-tag", "depleted"] {
+        update_received_at(&pool, message, "2020-01-01T00:00:00Z");
+    }
+    update_received_at(&pool, "target-new", "2099-01-01T00:00:00Z");
+
+    assert_eq!(purge_by_tag_window(&pool, "short-window", 7, 0).unwrap(), 2);
+    let hosts = list_hosts(&pool).unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].hostname, "partial");
+    assert_eq!(hosts[0].log_count, 2);
+    assert_eq!(hosts[0].first_seen, "2020-01-01T00:00:00Z");
+    assert_eq!(hosts[0].last_seen, "2099-01-01T00:00:00Z");
 }
 
 #[test]

@@ -113,8 +113,10 @@ where
                 entry.event_action,
                 entry.parse_error,
             ])?;
+            let id = tx.last_insert_rowid();
+            super::host_attribution::insert_in_tx(tx, id, entry)?;
             if let Some(ids) = ids.as_deref_mut() {
-                ids.push(tx.last_insert_rowid());
+                ids.push(id);
             }
         }
 

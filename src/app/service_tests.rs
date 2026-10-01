@@ -3296,3 +3296,61 @@ async fn db_backup_rejects_existing_destinations_without_modifying_them() {
         assert_eq!(std::fs::read(&other).unwrap(), b"preserve-existing-auth");
     }
 }
+
+#[tokio::test]
+async fn ai_session_public_scan_reads_respect_heavy_admission() {
+    let (mut service, _pool, _dir) = test_service();
+    service.acquire_timeout = std::time::Duration::from_millis(10);
+    let held = service
+        .heavy_read_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .unwrap();
+
+    let sessions = service
+        .list_sessions(ListSessionsRequest {
+            since: Some("2026-09-01T00:00:00Z".into()),
+            ..Default::default()
+        })
+        .await;
+    assert!(
+        matches!(sessions, Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+    let search = service
+        .search_sessions(SearchSessionsRequest {
+            query: "needle".into(),
+            ..Default::default()
+        })
+        .await;
+    assert!(matches!(search, Err(ServiceError::Busy(message)) if message == "heavy_read_limited"));
+    let correlate = service
+        .correlate_ai_logs(AiCorrelateRequest::default())
+        .await;
+    assert!(
+        matches!(correlate, Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+
+    drop(held);
+    assert!(
+        service
+            .list_sessions(ListSessionsRequest::default())
+            .await
+            .is_ok()
+    );
+    assert!(
+        service
+            .search_sessions(SearchSessionsRequest {
+                query: "needle".into(),
+                ..Default::default()
+            })
+            .await
+            .is_ok()
+    );
+    assert!(
+        service
+            .correlate_ai_logs(AiCorrelateRequest::default())
+            .await
+            .is_ok()
+    );
+}

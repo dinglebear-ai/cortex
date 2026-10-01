@@ -689,18 +689,8 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32, fts_merge_pages: u32) 
     // immediately (future timestamp) or retained forever (past timestamp).
     let mut total_deleted: usize = 0;
     loop {
-        let conn = crate::db::write_conn(pool)?;
-        let chunk = conn.execute(
-            "DELETE FROM logs WHERE id IN (
-                 SELECT id FROM logs
-                 WHERE received_at < ?1
-                   AND severity NOT IN ('err', 'crit', 'alert', 'emerg')
-                 LIMIT 10000
-             )",
-            params![cutoff],
-        )?;
+        let chunk = delete_age_retention_chunk(pool, &cutoff, None)?;
         total_deleted += chunk;
-        drop(conn); // release back to pool before sleeping
         if chunk == 0 {
             break;
         }
@@ -723,6 +713,66 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32, fts_merge_pages: u32) 
 
     tracing::info!(deleted = total_deleted, cutoff = %cutoff, "Purged old logs");
     Ok(total_deleted)
+}
+
+/// Keep raw host accounting in the same transaction as each bounded deletion.
+/// RETURNING counts only removed rows; timestamp endpoints use the existing
+/// (hostname, received_at) index rather than recounting retained host history.
+fn delete_age_retention_chunk(
+    pool: &DbPool,
+    cutoff: &str,
+    app_name: Option<&str>,
+) -> Result<usize> {
+    let mut conn = crate::db::write_conn(pool)?;
+    let tx = conn.transaction()?;
+    let app_filter = if app_name.is_some() {
+        "AND app_name = ?2"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "DELETE FROM logs WHERE id IN (
+             SELECT id FROM logs WHERE received_at < ?1 {app_filter}
+               AND severity NOT IN ('err', 'crit', 'alert', 'emerg')
+             LIMIT 10000
+         ) RETURNING hostname"
+    );
+    let mut values = vec![rusqlite::types::Value::Text(cutoff.to_owned())];
+    if let Some(app_name) = app_name {
+        values.push(rusqlite::types::Value::Text(app_name.to_owned()));
+    }
+    let removed = tx
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(values), |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let deleted = removed.len();
+    let mut host_counts = std::collections::HashMap::<String, i64>::new();
+    for hostname in removed {
+        *host_counts.entry(hostname).or_default() += 1;
+    }
+    for (hostname, count) in host_counts {
+        // Remove fully depleted sources even if an older retention pass left
+        // their stored counter too high. Do not delete a host with retained
+        // err+ or newer evidence merely because its counter was stale.
+        tx.execute(
+            "DELETE FROM hosts WHERE hostname = ?1
+             AND NOT EXISTS (SELECT 1 FROM logs WHERE hostname = ?1)",
+            [&hostname],
+        )?;
+        tx.execute(
+            "UPDATE hosts SET log_count = MAX(0, log_count - ?2),
+                 first_seen = (SELECT received_at FROM logs WHERE hostname = ?1
+                               ORDER BY received_at ASC LIMIT 1),
+                 last_seen = (SELECT received_at FROM logs WHERE hostname = ?1
+                              ORDER BY received_at DESC LIMIT 1)
+             WHERE hostname = ?1",
+            params![hostname, count],
+        )?;
+    }
+    tx.commit()?;
+    Ok(deleted)
 }
 
 /// Purge heartbeat samples older than N days.
@@ -821,19 +871,8 @@ pub fn purge_by_tag_window(
 
     let mut total_deleted: usize = 0;
     loop {
-        let conn = crate::db::write_conn(pool)?;
-        let chunk = conn.execute(
-            "DELETE FROM logs WHERE id IN (
-                 SELECT id FROM logs
-                 WHERE app_name = ?1
-                   AND received_at < ?2
-                   AND severity NOT IN ('err', 'crit', 'alert', 'emerg')
-                 LIMIT 10000
-             )",
-            params![app_name, cutoff],
-        )?;
+        let chunk = delete_age_retention_chunk(pool, &cutoff, Some(app_name))?;
         total_deleted += chunk;
-        drop(conn);
         if chunk == 0 {
             break;
         }

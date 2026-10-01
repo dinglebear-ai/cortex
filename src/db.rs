@@ -19,6 +19,7 @@ mod hook_incident_evidence;
 mod hook_incidents;
 mod ingest;
 pub(crate) use ingest::{TRANSIENT_SQLITE_RETRY_DELAYS_MS, is_transient_sqlite_lock};
+pub mod host_attribution;
 mod host_metrics;
 mod ingest_health;
 pub(crate) mod llm_invocations;
@@ -119,10 +120,10 @@ pub use models::{
     AiRelatedLogsForAnchor, AiRelatedLogsParams, AiRelatedWindow, AiSessionEntry,
     AiToolInventoryEntry, AiUsageBlock, AiUsageBlocksParams, AiUsageBlocksResult, AppLogCount,
     CorrelatedSession, DbStats, DockerCheckpoint, DurableStreamPage, DurableStreamParams,
-    DurableStreamRow, ErrorSummaryEntry, GraphRelatedLogEntry, HostEntry, IncidentCluster,
-    IncidentContextParams, IncidentContextResult, IncidentEvidence, ListAiProjectsParams,
-    ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams, ListAiToolsResult,
-    LogBatchEntry, LogEntry, RenderedSessionEventRow, RenderedSessionPageParams,
+    DurableStreamRow, ErrorSummaryEntry, GraphRelatedLogEntry, HostEntry, HostSourceKind,
+    IncidentCluster, IncidentContextParams, IncidentContextResult, IncidentEvidence,
+    ListAiProjectsParams, ListAiProjectsResult, ListAiSessionsParams, ListAiToolsParams,
+    ListAiToolsResult, LogBatchEntry, LogEntry, RenderedSessionEventRow, RenderedSessionPageParams,
     SearchAiSessionsParams, SearchAiSessionsResult, SearchParams, SearchedAiSessionEntry,
     SessionGraphInputs, SeverityCount, SimilarIncidentsParams, SimilarIncidentsResult,
     TopicGraphInputs,
