@@ -152,7 +152,7 @@ The initial collection warms the CPU counters for the native minimum interval.
 Windows has no Unix load average: its required v1 `load1`, `load5`, and `load15`
 fields are legacy zero placeholders, not measured load; use `usage_pct`.
 Unsupported CPU breakdowns, process scheduler-state counts, and top-process
-lists are not synthesized. The required Windows zombie count remains a legacy
+lists are not synthesized. The required desktop zombie count remains a legacy
 zero placeholder. Desktop container inventory is not collected by these resource
 probes; configured Docker log forwarding remains independent.
 
