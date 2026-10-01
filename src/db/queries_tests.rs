@@ -355,6 +355,55 @@ fn search_fts_hostname_filter_returns_only_that_host() {
 }
 
 #[test]
+fn search_fts_app_filter_returns_newest_first() {
+    let (pool, _dir) = test_pool();
+    let entries = [
+        make_app_entry(
+            "2026-01-01T00:02:00Z",
+            "host-a",
+            "err",
+            "collector",
+            "panic newest",
+        ),
+        make_app_entry(
+            "2026-01-01T00:01:00Z",
+            "host-a",
+            "err",
+            "collector",
+            "panic oldest",
+        ),
+        make_app_entry(
+            "2026-01-01T00:04:00Z",
+            "host-b",
+            "err",
+            "other",
+            "panic excluded",
+        ),
+        make_app_entry(
+            "2026-01-01T00:01:30Z",
+            "host-a",
+            "err",
+            "collector",
+            "panic middle",
+        ),
+    ];
+    insert_logs_batch(&pool, &entries).unwrap();
+
+    let results = search_logs(
+        &pool,
+        &SearchParams {
+            query: Some("panic".to_string()),
+            app: Some("collector".to_string()),
+            limit: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let messages: Vec<_> = results.iter().map(|row| row.message.as_str()).collect();
+    assert_eq!(messages, ["panic newest", "panic middle"]);
+}
+
+#[test]
 fn search_fts_plan_selection_branches_on_indexed_filter() {
     // No indexed equality filter → capped materialized-candidate plan.
     let plain = SearchParams {

@@ -27,7 +27,7 @@
       "needle": "sql.push_str(\" ORDER BY l.timestamp DESC, l.id DESC\");",
       "replacement": "sql.push_str(\" ORDER BY l.timestamp ASC, l.id ASC\");",
       "killer": "db.filtered-fts-newest-first",
-      "expected_test": "db::queries::tests::search_fts_hostname_filter_returns_only_that_host"
+      "expected_test": "db::queries::tests::search_fts_app_filter_returns_newest_first"
     },
     {
       "id": "token-confusion",
