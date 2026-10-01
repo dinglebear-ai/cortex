@@ -17,10 +17,10 @@ fn shared_credential_and_nat_preserve_distinct_device_claims() {
         ("agent-syslog://10.1.0.8", "forwarded_provenance"),
     ] {
         for host in [
-            "TOOTIE",
-            "AGENT-OS",
-            "macpoo.local",
-            "squirts.manatee-triceratops.ts.net",
+            "SERVERHOST",
+            "EDGEHOST",
+            "workstation.local",
+            "edgehost.example.ts.net",
         ] {
             let metadata = proof(key, "shared_bearer", host).to_string();
             assert_eq!(
@@ -33,14 +33,14 @@ fn shared_credential_and_nat_preserve_distinct_device_claims() {
 
 #[test]
 fn named_device_claim_remains_distinct_from_authentication() {
-    let metadata = proof("provenance", "tootie", "tootie").to_string();
+    let metadata = proof("provenance", "serverhost", "serverhost").to_string();
     assert_eq!(
         subject_hostname(
-            "agent-tootie",
+            "agent-serverhost",
             "agent-ai-transcript://10.1.0.8",
             Some(&metadata)
         ),
-        Some("tootie".to_string())
+        Some("serverhost".to_string())
     );
 }
 
@@ -99,11 +99,11 @@ fn invalid_placeholder_and_credential_claims_fall_back() {
 
 #[test]
 fn only_matching_server_forwarding_proof_can_attribute_a_row() {
-    let metadata = proof("provenance", "shared_bearer", "TOOTIE");
+    let metadata = proof("provenance", "shared_bearer", "SERVERHOST");
     let encoded = metadata.to_string();
     for (host, source, value) in [
         (
-            "TOOTIE",
+            "SERVERHOST",
             "agent-ai-transcript://10.1.0.8",
             Some(encoded.as_str()),
         ),
@@ -177,7 +177,7 @@ fn only_matching_server_forwarding_proof_can_attribute_a_row() {
 #[test]
 fn oversized_metadata_keeps_bounded_server_proof() {
     for key in ["provenance", "forwarded_provenance"] {
-        let mut metadata = proof(key, "shared_bearer", "AGENT-OS");
+        let mut metadata = proof(key, "shared_bearer", "EDGEHOST");
         for n in 0..100 {
             metadata[format!("optional-{n}")] = json!("x".repeat(2048));
         }
@@ -196,7 +196,7 @@ fn oversized_metadata_keeps_bounded_server_proof() {
         };
         assert_eq!(
             subject_hostname("agent-shared_bearer", source, Some(&encoded)),
-            Some("AGENT-OS".to_string())
+            Some("EDGEHOST".to_string())
         );
     }
 }
@@ -204,7 +204,7 @@ fn oversized_metadata_keeps_bounded_server_proof() {
 #[test]
 fn metadata_field_budget_keeps_server_proof() {
     for key in ["provenance", "forwarded_provenance"] {
-        let mut metadata = proof(key, "shared_bearer", "TOOTIE");
+        let mut metadata = proof(key, "shared_bearer", "SERVERHOST");
         for n in 0..160 {
             metadata[format!("a-optional-{n}")] = json!("small");
         }
@@ -220,7 +220,7 @@ fn metadata_field_budget_keeps_server_proof() {
         };
         assert_eq!(
             subject_hostname("agent-shared_bearer", source, Some(&encoded)),
-            Some("TOOTIE".to_string())
+            Some("SERVERHOST".to_string())
         );
     }
 }

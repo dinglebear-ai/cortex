@@ -20,7 +20,7 @@ fn forwarded(host: &str, second: u32) -> crate::db::LogBatchEntry {
         process_id: None,
         message: format!("evidence from {host}"),
         raw: format!("evidence from {host}"),
-        source_ip: "agent-ai-transcript://100.120.242.29".into(),
+        source_ip: "agent-ai-transcript://192.0.2.8".into(),
         docker_checkpoint: None,
         ai_tool: Some("codex".into()),
         ai_project: Some("project".into()),
@@ -28,7 +28,7 @@ fn forwarded(host: &str, second: u32) -> crate::db::LogBatchEntry {
         ai_transcript_path: None,
         metadata_json: Some(
             serde_json::json!({"provenance":{
-                "authenticated_forwarder":"shared_bearer","transport_peer":"100.120.242.29",
+                "authenticated_forwarder":"shared_bearer","transport_peer":"192.0.2.8",
                 "hostname_claim":host,"trust":"claimed"
             }})
             .to_string(),
@@ -60,44 +60,49 @@ fn mixed_shared_principal_and_peer_keep_device_streams_separate() {
     crate::db::insert_logs_batch(
         &pool,
         &[
-            forwarded("macpoo", 1),
-            forwarded("tootie", 2),
-            forwarded("macpoo", 3),
+            forwarded("workstation", 1),
+            forwarded("serverhost", 2),
+            forwarded("workstation", 3),
             forwarded("unknown", 4),
         ],
     )
     .unwrap();
-    let mac = crate::db::durable_stream_page(&pool, &params("MACPOO")).unwrap();
+    let mac = crate::db::durable_stream_page(&pool, &params("WORKSTATION")).unwrap();
     assert_eq!(ids(&mac), vec![1, 3]);
     assert_eq!(mac.minimum_watermark, Some(1));
     assert_eq!(mac.high_watermark, 3);
-    assert!(mac.rows.iter().all(|row| row.hostname == "macpoo"));
+    assert!(mac.rows.iter().all(|row| row.hostname == "workstation"));
     assert!(mac.rows.iter().all(|row| {
         row.metadata_json
             .as_deref()
             .unwrap()
             .contains("shared_bearer")
     }));
-    let tootie = crate::db::durable_stream_page(&pool, &params("tootie")).unwrap();
-    assert_eq!(ids(&tootie), vec![2]);
-    assert_eq!(tootie.minimum_watermark, Some(2));
-    assert_eq!(tootie.high_watermark, 2);
-    assert!(tootie.rows.iter().all(|row| row.hostname == "tootie"));
+    let serverhost = crate::db::durable_stream_page(&pool, &params("serverhost")).unwrap();
+    assert_eq!(ids(&serverhost), vec![2]);
+    assert_eq!(serverhost.minimum_watermark, Some(2));
+    assert_eq!(serverhost.high_watermark, 2);
+    assert!(
+        serverhost
+            .rows
+            .iter()
+            .all(|row| row.hostname == "serverhost")
+    );
 }
 
 #[test]
 fn snapshot_pagination_merges_direct_and_projected_rows_without_new_arrivals() {
     let (pool, _dir) = fixture();
-    let mut direct = forwarded("macpoo", 4);
-    direct.hostname = "macpoo".into();
+    let mut direct = forwarded("workstation", 4);
+    direct.hostname = "workstation".into();
     direct.source_ip = "direct://log".into();
     direct.metadata_json = None;
     crate::db::insert_logs_batch(
         &pool,
         &[
-            forwarded("macpoo", 1),
-            forwarded("tootie", 2),
-            forwarded("macpoo", 3),
+            forwarded("workstation", 1),
+            forwarded("serverhost", 2),
+            forwarded("workstation", 3),
             direct,
         ],
     )
@@ -106,13 +111,13 @@ fn snapshot_pagination_merges_direct_and_projected_rows_without_new_arrivals() {
         &pool,
         &DurableStreamParams {
             limit: 1,
-            ..params("macpoo")
+            ..params("workstation")
         },
     )
     .unwrap();
     assert_eq!(ids(&first), vec![1]);
     assert_eq!(first.high_watermark, 4);
-    crate::db::insert_logs_batch(&pool, &[forwarded("macpoo", 5)]).unwrap();
+    crate::db::insert_logs_batch(&pool, &[forwarded("workstation", 5)]).unwrap();
     let next = crate::db::durable_stream_page(
         &pool,
         &DurableStreamParams {
@@ -120,7 +125,7 @@ fn snapshot_pagination_merges_direct_and_projected_rows_without_new_arrivals() {
             high_watermark: Some(first.high_watermark),
             limit: 2,
             include_bounds: false,
-            ..params("macpoo")
+            ..params("workstation")
         },
     )
     .unwrap();
@@ -133,7 +138,7 @@ fn snapshot_pagination_merges_direct_and_projected_rows_without_new_arrivals() {
             after_id: 4,
             high_watermark: Some(4),
             include_bounds: false,
-            ..params("macpoo")
+            ..params("workstation")
         },
     )
     .unwrap();
@@ -143,7 +148,7 @@ fn snapshot_pagination_merges_direct_and_projected_rows_without_new_arrivals() {
         &DurableStreamParams {
             after_id: 4,
             include_bounds: false,
-            ..params("macpoo")
+            ..params("workstation")
         },
     )
     .unwrap();
@@ -156,9 +161,9 @@ fn device_stream_retention_floor_survives_deletion_of_its_last_live_row() {
     crate::db::insert_logs_batch(
         &pool,
         &[
-            forwarded("macpoo", 1),
-            forwarded("tootie", 2),
-            forwarded("macpoo", 3),
+            forwarded("workstation", 1),
+            forwarded("serverhost", 2),
+            forwarded("workstation", 3),
         ],
     )
     .unwrap();
@@ -166,7 +171,7 @@ fn device_stream_retention_floor_survives_deletion_of_its_last_live_row() {
         .unwrap()
         .execute("DELETE FROM logs WHERE id=1", [])
         .unwrap();
-    let retained = crate::db::durable_stream_page(&pool, &params("macpoo")).unwrap();
+    let retained = crate::db::durable_stream_page(&pool, &params("workstation")).unwrap();
     assert_eq!(ids(&retained), vec![3]);
     assert_eq!(retained.minimum_watermark, Some(2));
     assert_eq!(retained.high_watermark, 3);
@@ -174,7 +179,7 @@ fn device_stream_retention_floor_survives_deletion_of_its_last_live_row() {
         .unwrap()
         .execute("DELETE FROM logs WHERE id=3", [])
         .unwrap();
-    let deleted = crate::db::durable_stream_page(&pool, &params("macpoo")).unwrap();
+    let deleted = crate::db::durable_stream_page(&pool, &params("workstation")).unwrap();
     assert!(deleted.rows.is_empty());
     assert_eq!(deleted.minimum_watermark, Some(4));
     assert_eq!(deleted.high_watermark, 3);
@@ -182,13 +187,13 @@ fn device_stream_retention_floor_survives_deletion_of_its_last_live_row() {
         .get()
         .unwrap()
         .query_row(
-            "SELECT COUNT(*) FROM forwarded_host_names WHERE hostname='macpoo'",
+            "SELECT COUNT(*) FROM forwarded_host_names WHERE hostname='workstation'",
             [],
             |r| r.get(0),
         )
         .unwrap();
     assert_eq!(names, 1);
-    let unrelated = crate::db::durable_stream_page(&pool, &params("tootie")).unwrap();
+    let unrelated = crate::db::durable_stream_page(&pool, &params("serverhost")).unwrap();
     assert_eq!(ids(&unrelated), vec![2]);
     assert_eq!(unrelated.minimum_watermark, Some(2));
     assert_eq!(unrelated.high_watermark, 2);
@@ -197,7 +202,11 @@ fn device_stream_retention_floor_survives_deletion_of_its_last_live_row() {
 #[test]
 fn fully_qualified_session_stream_keeps_raw_identity_and_retention_bounds() {
     let (pool, _dir) = fixture();
-    crate::db::insert_logs_batch(&pool, &[forwarded("macpoo", 1), forwarded("tootie", 2)]).unwrap();
+    crate::db::insert_logs_batch(
+        &pool,
+        &[forwarded("workstation", 1), forwarded("serverhost", 2)],
+    )
+    .unwrap();
     let scope = DurableStreamParams {
         hostname: Some("agent-shared_bearer".into()),
         ai_project: Some("project".into()),
@@ -216,7 +225,7 @@ fn fully_qualified_session_stream_keeps_raw_identity_and_retention_bounds() {
     );
     assert_eq!(raw.high_watermark, 2);
     let physical_scope = DurableStreamParams {
-        hostname: Some("macpoo".into()),
+        hostname: Some("workstation".into()),
         ..scope.clone()
     };
     assert!(
@@ -235,16 +244,16 @@ fn fully_qualified_session_stream_keeps_raw_identity_and_retention_bounds() {
 #[test]
 fn device_stream_bounds_respect_app_and_severity_after_retention() {
     let (pool, _dir) = fixture();
-    let mut first = forwarded("macpoo", 1);
+    let mut first = forwarded("workstation", 1);
     first.severity = "err".into();
-    let mut other_app = forwarded("macpoo", 3);
+    let mut other_app = forwarded("workstation", 3);
     other_app.severity = "err".into();
     other_app.app_name = Some("other-app".into());
-    crate::db::insert_logs_batch(&pool, &[first, forwarded("macpoo", 2), other_app]).unwrap();
+    crate::db::insert_logs_batch(&pool, &[first, forwarded("workstation", 2), other_app]).unwrap();
     let filtered = DurableStreamParams {
         app_name: Some("collector-test".into()),
         severity: Some("err".into()),
-        ..params("macpoo")
+        ..params("workstation")
     };
     let first = crate::db::durable_stream_page(&pool, &filtered).unwrap();
     assert_eq!(ids(&first), vec![1]);
@@ -260,14 +269,14 @@ fn device_stream_bounds_respect_app_and_severity_after_retention() {
 fn attributed_stream_pages_and_bounds_use_keyset_indexes() {
     let (pool, _dir) = fixture();
     let conn = pool.get().unwrap();
-    let request = params("macpoo");
+    let request = params("workstation");
     for bound in [
         None,
         Some(("retained", true)),
         Some(("retained", false)),
         Some(("deleted", false)),
     ] {
-        let (sql, values) = statement(&request, "macpoo", true, bound);
+        let (sql, values) = statement(&request, "workstation", true, bound);
         let plan = conn
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
             .unwrap()

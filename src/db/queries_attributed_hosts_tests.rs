@@ -208,16 +208,16 @@ fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
     insert_logs_batch(
         &pool,
         &[
-            forwarded_entry("macpoo.local", "10.0.0.8", 1),
-            forwarded_entry("tootie", "10.0.0.8", 2),
+            forwarded_entry("workstation.local", "10.0.0.8", 1),
+            forwarded_entry("serverhost", "10.0.0.8", 2),
             forwarded_entry("unknown", "10.0.0.8", 3),
         ],
     )
     .unwrap();
     let conn = pool.get().unwrap();
     for (id, name) in [
-        ("stable-macpoo", "macpoo.local"),
-        ("stable-tootie", "tootie"),
+        ("stable-workstation", "workstation.local"),
+        ("stable-serverhost", "serverhost"),
     ] {
         conn.execute("INSERT INTO host_heartbeats
             (host_id,hostname,source_ip,sampled_at,received_at,boot_id,uptime_secs,sequence,collection_ms,partial,agent_version,os,architecture,metadata_json)
@@ -228,20 +228,20 @@ fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
     assert_eq!(
         hosts
             .iter()
-            .find(|h| h.hostname == "macpoo.local")
+            .find(|h| h.hostname == "workstation.local")
             .unwrap()
             .host_id
             .as_deref(),
-        Some("stable-macpoo")
+        Some("stable-workstation")
     );
     assert_eq!(
         hosts
             .iter()
-            .find(|h| h.hostname == "tootie")
+            .find(|h| h.hostname == "serverhost")
             .unwrap()
             .host_id
             .as_deref(),
-        Some("stable-tootie")
+        Some("stable-serverhost")
     );
     assert!(
         hosts
@@ -254,13 +254,13 @@ fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
     let conn = pool.get().unwrap();
     conn.execute("INSERT INTO host_heartbeats
         (host_id,hostname,source_ip,sampled_at,received_at,boot_id,uptime_secs,sequence,collection_ms,partial,agent_version,os,architecture,metadata_json)
-        VALUES ('other-macpoo','macpoo.local','10.0.0.8:41001','2026-09-30T12:00:01Z','2026-09-30T12:00:01Z','boot-b',60,1,5,0,'3.17.0','linux','x86_64','{}')", []).unwrap();
+        VALUES ('other-workstation','workstation.local','10.0.0.8:41001','2026-09-30T12:00:01Z','2026-09-30T12:00:01Z','boot-b',60,1,5,0,'3.17.0','linux','x86_64','{}')", []).unwrap();
     drop(conn);
     assert!(
         list_hosts(&pool)
             .unwrap()
             .iter()
-            .find(|h| h.hostname == "macpoo.local")
+            .find(|h| h.hostname == "workstation.local")
             .unwrap()
             .host_id
             .is_none(),

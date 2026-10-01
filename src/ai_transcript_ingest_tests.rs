@@ -86,9 +86,9 @@ fn transcript_request(body: String) -> Request<Body> {
 async fn shared_transcript_forwarding_keeps_device_claims_and_legacy_replay_identity() {
     let (app, dir) = test_app(Some("secret"));
     let mut first = sample_record();
-    first["envelope"]["hostname"] = json!("TOOTIE");
+    first["envelope"]["hostname"] = json!("SERVERHOST");
     let mut second = sample_record();
-    second["envelope"]["hostname"] = json!("AGENT-OS");
+    second["envelope"]["hostname"] = json!("EDGEHOST");
     second["envelope"]["source_record_id"] = json!(format!("sha256:{}", "f".repeat(64)));
     let body = json!({"records": [first, second]}).to_string();
     assert_eq!(
@@ -118,7 +118,7 @@ async fn shared_transcript_forwarding_keeps_device_claims_and_legacy_replay_iden
             crate::forwarded_host::subject_hostname(&hostname, &source, Some(&metadata)).unwrap()
         })
         .collect();
-    assert_eq!(subjects, ["TOOTIE", "AGENT-OS"]);
+    assert_eq!(subjects, ["SERVERHOST", "EDGEHOST"]);
     drop(statement);
     conn.execute(
         "UPDATE ai_transcript_forward_receipts SET request_fingerprint = NULL",

@@ -18,7 +18,7 @@ fn forwarded(host: &str) -> LogBatchEntry {
         process_id: None,
         message: "forwarded evidence".into(),
         raw: "forwarded evidence".into(),
-        source_ip: "agent-ai-transcript://100.120.242.29".into(),
+        source_ip: "agent-ai-transcript://192.0.2.8".into(),
         docker_checkpoint: None,
         ai_tool: Some("codex".into()),
         ai_project: Some("p".into()),
@@ -26,7 +26,7 @@ fn forwarded(host: &str) -> LogBatchEntry {
         ai_transcript_path: None,
         metadata_json: Some(
             serde_json::json!({"provenance":{
-                "authenticated_forwarder":"shared_bearer","transport_peer":"100.120.242.29",
+                "authenticated_forwarder":"shared_bearer","transport_peer":"192.0.2.8",
                 "hostname_claim":host,"trust":"claimed"
             }})
             .to_string(),
@@ -43,9 +43,9 @@ fn forwarded(host: &str) -> LogBatchEntry {
 fn future_projection_preserves_auth_identity_and_separates_devices() {
     let (pool, _dir) = fixture();
     let entries = [
-        forwarded("tootie"),
-        forwarded("macpoo"),
-        forwarded("tootie"),
+        forwarded("serverhost"),
+        forwarded("workstation"),
+        forwarded("serverhost"),
     ];
     super::super::insert_logs_batch(&pool, &entries).unwrap();
     let conn = pool.get().unwrap();
@@ -62,7 +62,7 @@ fn future_projection_preserves_auth_identity_and_separates_devices() {
     assert_eq!(
         counts
             .iter()
-            .find(|c| c.hostname == "tootie")
+            .find(|c| c.hostname == "serverhost")
             .unwrap()
             .log_count,
         2
@@ -70,7 +70,7 @@ fn future_projection_preserves_auth_identity_and_separates_devices() {
     assert_eq!(
         counts
             .iter()
-            .find(|c| c.hostname == "macpoo")
+            .find(|c| c.hostname == "workstation")
             .unwrap()
             .log_count,
         1
@@ -95,7 +95,7 @@ fn future_projection_preserves_auth_identity_and_separates_devices() {
         list_forwarded_host_counts(&conn)
             .unwrap()
             .iter()
-            .find(|c| c.hostname == "tootie")
+            .find(|c| c.hostname == "serverhost")
             .unwrap()
             .log_count,
         1
@@ -109,7 +109,7 @@ fn rollback_discards_both_evidence_and_projection() {
     let (pool, _dir) = fixture();
     let mut conn = super::super::write_conn(&pool).unwrap();
     let tx = conn.transaction().unwrap();
-    super::super::ingest::insert_logs_batch_in_tx(&tx, &[forwarded("tootie")]).unwrap();
+    super::super::ingest::insert_logs_batch_in_tx(&tx, &[forwarded("serverhost")]).unwrap();
     assert_eq!(list_forwarded_host_counts(&tx).unwrap()[0].log_count, 1);
     tx.rollback().unwrap();
     assert!(list_forwarded_host_counts(&conn).unwrap().is_empty());
@@ -125,12 +125,12 @@ fn historical_batches_resume_without_double_counting_live_rows() {
     let (pool, _dir) = fixture();
     // Legacy rows bypass the new ingest projection, as they did before migration.
     let conn = pool.get().unwrap();
-    let metadata = forwarded("tootie").metadata_json.unwrap();
+    let metadata = forwarded("serverhost").metadata_json.unwrap();
     for (id, source) in [
         (1, "ordinary://log"),
-        (2, "agent-ai-transcript://100.120.242.29"),
+        (2, "agent-ai-transcript://192.0.2.8"),
         (3, "ordinary://log"),
-        (4, "agent-ai-transcript://100.120.242.29"),
+        (4, "agent-ai-transcript://192.0.2.8"),
     ] {
         conn.execute("INSERT INTO logs(id,timestamp,hostname,severity,message,raw,source_ip,metadata_json) VALUES(?1,'2026-09-30T00:00:00Z','agent-shared_bearer','info','legacy','legacy',?2,?3)",params![id,source,metadata]).unwrap();
     }
@@ -145,7 +145,7 @@ fn historical_batches_resume_without_double_counting_live_rows() {
     assert_eq!(first.cursor, 2);
     assert!(!first.complete);
     // Future ingress is already projected and lies beyond the frozen high water.
-    super::super::insert_logs_batch(&pool, &[forwarded("macpoo")]).unwrap();
+    super::super::insert_logs_batch(&pool, &[forwarded("workstation")]).unwrap();
     let second = backfill_batch(&pool, 2).unwrap();
     assert_eq!(second.cursor, 4);
     assert_eq!(second.attributed, 1);
@@ -179,7 +179,7 @@ fn historical_batches_resume_without_double_counting_live_rows() {
 fn unproved_and_oversized_metadata_remain_unattributed() {
     let (pool, _dir) = fixture();
     let mut unknown = forwarded("unknown");
-    let mut invalid = forwarded("macpoo");
+    let mut invalid = forwarded("workstation");
     invalid.source_ip = "agent-ai-transcript://100.0.0.9".into();
     unknown.metadata_json = Some("x".repeat(65537));
     super::super::insert_logs_batch(&pool, &[unknown, invalid]).unwrap();
@@ -194,8 +194,11 @@ fn unproved_and_oversized_metadata_remain_unattributed() {
 fn deletion_lineage_and_device_names_survive_fk_cleanup_modes() {
     for foreign_keys in [false, true] {
         let (pool, _dir) = fixture();
-        super::super::insert_logs_batch(&pool, &[forwarded("tootie"), forwarded("macpoo")])
-            .unwrap();
+        super::super::insert_logs_batch(
+            &pool,
+            &[forwarded("serverhost"), forwarded("workstation")],
+        )
+        .unwrap();
         let conn = pool.get().unwrap();
         conn.pragma_update(None, "foreign_keys", foreign_keys)
             .unwrap();
@@ -214,7 +217,7 @@ fn deletion_lineage_and_device_names_survive_fk_cleanup_modes() {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(device_lineage, vec!["tootie", "macpoo"]);
+        assert_eq!(device_lineage, vec!["serverhost", "workstation"]);
         let raw_lineage: Vec<String> = conn
             .prepare("SELECT hostname FROM stream_deleted_log_lineage ORDER BY id")
             .unwrap()
@@ -270,8 +273,8 @@ fn bounded_backfill_repairs_inflated_and_phantom_raw_host_counts() {
     let (pool, _dir) = fixture();
     let conn = pool.get().unwrap();
     for (id, host, receipt) in [
-        (1, "tootie", "2026-01-01T00:00:00Z"),
-        (2, "macpoo", "2026-03-01T00:00:00Z"),
+        (1, "serverhost", "2026-01-01T00:00:00Z"),
+        (2, "workstation", "2026-03-01T00:00:00Z"),
         (3, "unknown", "2026-02-01T00:00:00Z"),
     ] {
         conn.execute(
@@ -329,7 +332,7 @@ fn bounded_backfill_repairs_inflated_and_phantom_raw_host_counts() {
     drop(conn);
     // Completion disables repair accounting. Repeated worker starts cannot
     // overwrite the regular ingest counter with the completed snapshot.
-    super::super::insert_logs_batch(&pool, &[forwarded("tootie")]).unwrap();
+    super::super::insert_logs_batch(&pool, &[forwarded("serverhost")]).unwrap();
     assert!(backfill_batch(&pool, 1).unwrap().complete);
     let conn = pool.get().unwrap();
     assert_eq!(
@@ -358,10 +361,10 @@ fn repair_accounts_concurrent_mutations_and_resumes_after_pool_restart() {
     super::super::insert_logs_batch(
         &pool,
         &[
-            forwarded("tootie"),
-            forwarded("macpoo"),
-            forwarded("tootie"),
-            forwarded("macpoo"),
+            forwarded("serverhost"),
+            forwarded("workstation"),
+            forwarded("serverhost"),
+            forwarded("workstation"),
         ],
     )
     .unwrap();
@@ -380,11 +383,11 @@ fn repair_accounts_concurrent_mutations_and_resumes_after_pool_restart() {
         1
     );
     drop(conn);
-    super::super::insert_logs_batch(&pool, &[forwarded("macpoo")]).unwrap();
+    super::super::insert_logs_batch(&pool, &[forwarded("workstation")]).unwrap();
     let conn = pool.get().unwrap();
     conn.execute("DELETE FROM logs WHERE id=5", []).unwrap();
     drop(conn);
-    super::super::insert_logs_batch(&pool, &[forwarded("tootie")]).unwrap();
+    super::super::insert_logs_batch(&pool, &[forwarded("serverhost")]).unwrap();
     let conn = pool.get().unwrap();
     // Normal IDs are AUTOINCREMENT, but imported explicit ID reuse behind the
     // cursor must also be accounted without waiting for an impossible rescan.
@@ -455,7 +458,7 @@ fn sparse_historical_schema_defers_lineage_expiry_until_dependency_exists() {
     install_lineage_expiry_trigger(&conn).unwrap();
     conn.execute_batch(
         "INSERT INTO stream_deleted_log_lineage VALUES(1);
-        INSERT INTO forwarded_deleted_log_hosts VALUES(1,'tootie',unixepoch());
+        INSERT INTO forwarded_deleted_log_hosts VALUES(1,'serverhost',unixepoch());
         DELETE FROM stream_deleted_log_lineage WHERE id=1;",
     )
     .unwrap();

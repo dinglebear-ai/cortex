@@ -59,11 +59,11 @@ fn forwarded_entry(principal: &str, device: &str, msg: &str) -> LogBatchEntry {
         "info",
         msg,
     );
-    entry.source_ip = "agent-ai-transcript://100.120.242.29".into();
+    entry.source_ip = "agent-ai-transcript://192.0.2.8".into();
     entry.metadata_json = Some(
         serde_json::json!({"provenance": {
             "authenticated_forwarder": principal,
-            "transport_peer": "100.120.242.29",
+            "transport_peer": "192.0.2.8",
             "hostname_claim": device,
             "trust": if principal == "shared_bearer" {
                 "claimed"

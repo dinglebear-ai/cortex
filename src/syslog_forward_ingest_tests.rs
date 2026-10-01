@@ -84,7 +84,7 @@ fn shared_syslog_forwarding_keeps_device_claims_and_legacy_replay_identity() {
     ))
     .unwrap();
     let request = SyslogForwardRequest {
-        records: ["TOOTIE", "AGENT-OS"]
+        records: ["SERVERHOST", "EDGEHOST"]
             .into_iter()
             .map(|host| SyslogForwardRecord {
                 source_instance: host.to_string(),
@@ -117,7 +117,7 @@ fn shared_syslog_forwarding_keeps_device_claims_and_legacy_replay_identity() {
             crate::forwarded_host::subject_hostname(&hostname, &source, Some(&metadata)).unwrap()
         })
         .collect();
-    assert_eq!(subjects, ["TOOTIE", "AGENT-OS"]);
+    assert_eq!(subjects, ["SERVERHOST", "EDGEHOST"]);
     drop(statement);
     conn.execute(
         "UPDATE syslog_forward_receipts SET request_fingerprint = ''",
@@ -145,7 +145,7 @@ fn oversized_syslog_metadata_keeps_device_provenance() {
         Some(&metadata.to_string()),
         "shared_bearer",
         "10.1.0.8",
-        "AGENT-OS".to_string(),
+        "EDGEHOST".to_string(),
     )
     .unwrap();
     assert!(encoded.len() <= crate::ingest_metadata::MAX_METADATA_JSON_BYTES);
@@ -160,7 +160,7 @@ fn oversized_syslog_metadata_keeps_device_provenance() {
             "agent-syslog://10.1.0.8",
             Some(&encoded)
         ),
-        Some("AGENT-OS".to_string())
+        Some("EDGEHOST".to_string())
     );
 }
 

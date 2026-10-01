@@ -25,20 +25,20 @@ describe("host source graph", () => {
   })
 
   it("supports legacy hostname strings without attributing shared credentials to a device", () => {
-    expect(normalizeHostSources(["serverhost", "agent-os", "agent-shared_bearer", "bearer-shared-one", "localhost"]).map((host: { source_kind: string }) => host.source_kind))
+    expect(normalizeHostSources(["serverhost", "edgehost", "agent-shared_bearer", "bearer-shared-one", "localhost"]).map((host: { source_kind: string }) => host.source_kind))
       .toEqual(["host", "host", "forwarding_principal", "forwarding_principal", "unattributed"])
   })
 
   it("deduplicates physical nodes and counts using stable heartbeat IDs and merges their aliases", () => {
     const hosts = [
-      { hostname: "tootie", host_id: "device-1", source_kind: "host", aliases: ["TOOTIE", "tootie.local"] },
-      { hostname: "tootie.manatee-triceratops.ts.net", host_id: "device-1", source_kind: "host", aliases: ["tootie.local", "", null] },
-      { hostname: "agent-os", host_id: "device-2", source_kind: "host" },
+      { hostname: "serverhost", host_id: "device-1", source_kind: "host", aliases: ["SERVERHOST", "serverhost.local"] },
+      { hostname: "serverhost.example.ts.net", host_id: "device-1", source_kind: "host", aliases: ["serverhost.local", "", null] },
+      { hostname: "edgehost", host_id: "device-2", source_kind: "host" },
       { hostname: "agent-shared_bearer", host_id: "device-1", source_kind: "forwarding_principal" },
     ]
     const sources = normalizeHostSources(hosts)
     expect(sources.filter((host: { source_kind: string }) => host.source_kind === "host")).toHaveLength(2)
-    expect(sources[0].aliases).toEqual(["tootie", "TOOTIE", "tootie.local", "tootie.manatee-triceratops.ts.net"])
+    expect(sources[0].aliases).toEqual(["serverhost", "SERVERHOST", "serverhost.local", "serverhost.example.ts.net"])
     const graph = graphFromHosts(hosts)
     const device = graph.nodes.find((node: { data: { host_id?: string } }) => node.data.host_id === "device-1")
     expect(device.data.id).toBe("source:heartbeat:device-1")
@@ -54,7 +54,7 @@ describe("host source graph", () => {
       { hostname: "same-name", host_id: null, source_kind: "host", aliases: ["legacy-alias"] },
       { hostname: "same-name", host_id: " ", source_kind: "host" },
       { hostname: "same-name", source_kind: "forwarding_principal" },
-      "agent-os", "10.1.0.8",
+      "edgehost", "10.1.0.8",
     ]
     const sources = normalizeHostSources(hosts)
     expect(sources).toHaveLength(6)
@@ -72,7 +72,7 @@ describe("host source graph", () => {
       latestLogs: [], setBadge: () => {}, clear: () => {},
       text: (_tag: string, _className: string, textContent: string) => ({ textContent, children: [] as unknown[], append(...children: unknown[]) { this.children.push(...children) } }),
     })
-    showNodeEvidence({ id: "source:heartbeat:device-1", label: "tootie", kind: "host", host_id: "device-1" })
+    showNodeEvidence({ id: "source:heartbeat:device-1", label: "serverhost", kind: "host", host_id: "device-1" })
     expect(evidence.some((item) => item.children[0].textContent === "Heartbeat ID" && item.children[1].textContent === "device-1")).toBe(true)
   })
 })
