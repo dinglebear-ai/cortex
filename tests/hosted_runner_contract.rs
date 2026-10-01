@@ -16,7 +16,10 @@ fn all_workflow_runner_selectors_are_github_hosted() {
         for line in workflow.lines() {
             if let Some(selector) = line.trim().strip_prefix("runs-on:") {
                 assert!(
-                    matches!(selector.trim(), "ubuntu-24.04" | "windows-latest"),
+                    matches!(
+                        selector.trim(),
+                        "ubuntu-24.04" | "ubuntu-24.04-arm" | "macos-15" | "windows-latest"
+                    ),
                     "{} has an unaudited runner selector: {selector}",
                     path.display()
                 );
