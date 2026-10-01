@@ -16,13 +16,15 @@ pub(super) fn search(
     let mut rows = Vec::new();
     for alias in aliases {
         for attributed in [false, true] {
+            if attributed && !super::super::host_attribution::device_claim_allowed(conn, &alias)? {
+                continue;
+            }
             let (sql, bindings) = query_sql(params, &alias, limit, attributed);
             rows.extend(
                 conn.prepare(&sql)?
-                    .query_map(
-                        rusqlite::params_from_iter(bindings.iter()),
-                        map_attributed_row,
-                    )?
+                    .query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+                        map_attributed_row(conn, row)
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?,
             );
         }
@@ -41,10 +43,11 @@ pub(super) fn query_sql(
     attributed: bool,
 ) -> (String, Vec<rusqlite::types::Value>) {
     let mut sql = if attributed {
+        let guard = super::super::host_attribution::projected_host_guard("a.hostname");
         format!(
             "SELECT {FTS_SELECT_COLS} FROM forwarded_log_hosts a
                  INDEXED BY idx_forwarded_log_hosts_host_time CROSS JOIN logs l
-                 WHERE a.hostname=?1 AND l.id=a.log_id"
+                 WHERE a.hostname=?1 AND l.id=a.log_id AND {guard}"
         )
     } else {
         let index = if host_only_search(params) {

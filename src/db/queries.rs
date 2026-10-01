@@ -291,10 +291,9 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
-            .query_map(
-                rusqlite::params_from_iter(bindings.iter()),
-                map_attributed_row,
-            )
+            .query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+                map_attributed_row(&conn, row)
+            })
             .map_err(|e| {
                 tracing::error!(error = %e, query = %query, "FTS5 MATCH query failed");
                 anyhow::anyhow!("Search query failed")
@@ -318,10 +317,9 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
         push_bound_limit(&mut sql, &mut bindings, &mut idx, "LIMIT", limit);
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            rusqlite::params_from_iter(bindings.iter()),
-            map_attributed_row,
-        )?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+            map_attributed_row(&conn, row)
+        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
@@ -413,10 +411,9 @@ pub fn tail_logs(
     let (sql, bindings) = tail_logs_sql(hostname, source_ip, app_name, severity_in, n);
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(
-        rusqlite::params_from_iter(bindings.iter()),
-        map_attributed_row,
-    )?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+        map_attributed_row(&conn, row)
+    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -722,11 +719,12 @@ pub fn durable_stream_page(
                     && params.ai_session_id.is_none()
                 {
                     let raw: String = row.get(2)?;
-                    crate::forwarded_host::subject_hostname(
+                    super::host_attribution::resolved_subject_hostname(
+                        &conn,
                         &raw,
                         &row.get::<_, String>(8)?,
                         row.get::<_, Option<String>>(6)?.as_deref(),
-                    )
+                    )?
                     .unwrap_or(raw)
                 } else {
                     row.get(2)?
@@ -3675,11 +3673,12 @@ fn append_host_selector(
         .strip_suffix("hostname")
         .map(|prefix| format!("{prefix}id"))
         .expect("host selector is applied to a log hostname column");
+    let guard = super::host_attribution::projected_host_guard("attributed.hostname");
     sql.push_str(&format!(
         " AND ({column} IN ({aliases})
               OR EXISTS (SELECT 1 FROM forwarded_log_hosts attributed
                          WHERE attributed.log_id = {id_column}
-                           AND attributed.hostname IN ({aliases})))"
+                           AND attributed.hostname IN ({aliases}) AND {guard}))"
     ));
     bindings.push(rusqlite::types::Value::Text(hostname.to_string()));
     *idx += 1;
@@ -3701,13 +3700,17 @@ pub(super) fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
     map_row_offset(row, 0)
 }
 
-fn map_attributed_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
+fn map_attributed_row(
+    conn: &rusqlite::Connection,
+    row: &rusqlite::Row,
+) -> rusqlite::Result<LogEntry> {
     let mut entry = map_row(row)?;
-    if let Some(hostname) = crate::forwarded_host::subject_hostname(
+    if let Some(hostname) = super::host_attribution::resolved_subject_hostname(
+        conn,
         &entry.hostname,
         &entry.source_ip,
         entry.metadata_json.as_deref(),
-    ) {
+    )? {
         entry.hostname = hostname;
     }
     Ok(entry)

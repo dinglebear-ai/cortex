@@ -88,6 +88,13 @@ group containing forwarded claims has `source_kind: "claimed_host"`, including
 when direct logs share its name. The UI labels that group as a claimed device
 name and does not present a stable heartbeat ID for it.
 
+Proven forwarding-principal names retain a separate, persistent source namespace
+and do not establish device aliases. A claim that collides with such a source
+name, including case or trailing-dot variants, does not appear as a device entry
+or replace its raw display hostname. Selecting a forwarding principal reads only
+its raw evidence, including stream bounds and deletion floors; it cannot include
+another sender's conflicting hostname claim.
+
 `host_id` is populated only for a direct host with no merged forwarded claims
 whose hostname resolves to one stable heartbeat identity. A claimed name,
 missing heartbeat, or multiple matching IDs leaves it `null`; a shared

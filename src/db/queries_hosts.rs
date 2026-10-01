@@ -176,6 +176,9 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     // received under that principal, including rows also shown by claimed
     // device name. These two views overlap rather than partitioning evidence.
     for attributed in attributed {
+        if !super::host_attribution::device_claim_allowed(&conn, &attributed.hostname)? {
+            continue;
+        }
         rows.push(HostEntry {
             hostname: attributed.hostname,
             host_id: None,
@@ -224,11 +227,12 @@ pub(super) fn host_alias_select(parameter: &str) -> String {
     let requested_principal = principal(parameter);
     let normalized = normalize("h.hostname");
     let is_principal = principal("h.hostname");
+    let projected_guard = super::host_attribution::projected_host_guard("f.hostname");
     format!(
         "WITH active AS (
              SELECT h.hostname FROM hosts h
              WHERE h.log_count > 0
-             UNION SELECT hostname FROM forwarded_host_counts
+             UNION SELECT f.hostname FROM forwarded_host_counts f WHERE {projected_guard}
          ), active_cased AS (
              SELECT h.hostname, {normalized} AS normalized, {is_principal} AS principal FROM active h
          ), active_mapped AS (
@@ -247,7 +251,7 @@ pub(super) fn host_alias_select(parameter: &str) -> String {
              FROM active_cased h
          ), known AS (
              SELECT hostname FROM hosts
-             UNION SELECT hostname FROM forwarded_host_names
+             UNION SELECT f.hostname FROM forwarded_host_names f WHERE {projected_guard}
              UNION SELECT hostname FROM forwarded_principal_names
          ), cased AS (
              SELECT h.hostname, {normalized} AS normalized, {is_principal} AS principal FROM known h

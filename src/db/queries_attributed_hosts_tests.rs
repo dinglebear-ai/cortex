@@ -1,6 +1,9 @@
 use super::*;
 use crate::db::HostSourceKind;
 
+#[path = "queries_principal_collision_tests.rs"]
+mod principal_collisions;
+
 fn forwarded_entry(host: &str, peer: &str, second: u32) -> LogBatchEntry {
     let mut entry = make_entry(
         &format!("2026-09-30T12:00:{second:02}Z"),

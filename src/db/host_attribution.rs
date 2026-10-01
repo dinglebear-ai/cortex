@@ -56,6 +56,8 @@ pub(super) fn install_schema(conn: &Connection) -> Result<()> {
          CREATE TABLE forwarded_principal_names (
              hostname TEXT PRIMARY KEY
          );
+         CREATE INDEX idx_forwarded_principal_names_device_key
+             ON forwarded_principal_names(lower(rtrim(trim(hostname), '.')));
          CREATE TABLE forwarded_deleted_log_hosts (
              log_id INTEGER PRIMARY KEY,
              hostname TEXT NOT NULL,
@@ -206,6 +208,35 @@ pub(super) fn list_forwarding_principals(
         .prepare("SELECT hostname FROM forwarded_principal_names")?
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?)
+}
+
+/// Device claims cannot adopt an observed credential namespace. Keep the
+/// evidence, but exclude its projected lane and preserve the raw display name.
+/// Expression-index probes handle device case/trailing-dot normalization;
+/// source principal selectors themselves remain exact and case-sensitive.
+pub(super) fn projected_host_guard(column: &str) -> String {
+    format!(
+        "NOT EXISTS(SELECT 1 FROM forwarded_principal_names principal
+         WHERE lower(rtrim(trim(principal.hostname), '.'))=lower(rtrim(trim({column}), '.')))"
+    )
+}
+
+pub(super) fn device_claim_allowed(conn: &Connection, hostname: &str) -> rusqlite::Result<bool> {
+    conn.prepare_cached(&format!("SELECT {}", projected_host_guard("?1")))?
+        .query_row([hostname], |row| row.get(0))
+}
+
+pub(super) fn resolved_subject_hostname(
+    conn: &Connection,
+    raw_hostname: &str,
+    source_ip: &str,
+    metadata: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let Some(hostname) = crate::forwarded_host::subject_hostname(raw_hostname, source_ip, metadata)
+    else {
+        return Ok(None);
+    };
+    Ok(device_claim_allowed(conn, &hostname)?.then_some(hostname))
 }
 
 /// Resume one bounded historical page. Cursor and inserts commit atomically;

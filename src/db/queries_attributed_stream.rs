@@ -19,17 +19,21 @@ pub(super) fn page(
     let mut deleted: Option<i64> = None;
     for alias in aliases {
         for attributed in [false, true] {
+            if attributed && !super::super::host_attribution::device_claim_allowed(conn, &alias)? {
+                continue;
+            }
             let (sql, values) = statement(params, &alias, attributed, None);
             rows.extend(
                 conn.prepare(&sql)?
                     .query_map(rusqlite::params_from_iter(values.iter()), |r| {
                         let raw: String = r.get(2)?;
                         let metadata: Option<String> = r.get(6)?;
-                        let hostname = crate::forwarded_host::subject_hostname(
+                        let hostname = super::super::host_attribution::resolved_subject_hostname(
+                            conn,
                             &raw,
                             &r.get::<_, String>(8)?,
                             metadata.as_deref(),
-                        )
+                        )?
                         .unwrap_or(raw);
                         Ok(DurableStreamRow {
                             id: r.get(0)?,
@@ -105,6 +109,7 @@ fn statement(
         "l.id,l.timestamp,l.hostname,l.severity,l.app_name,l.message,l.metadata_json,l.parse_error,l.source_ip"
     };
     let mut sql = if attributed {
+        let guard = super::super::host_attribution::projected_host_guard("a.hostname");
         let (projection, index) = if deleted {
             (
                 "forwarded_deleted_log_hosts",
@@ -114,7 +119,7 @@ fn statement(
             ("forwarded_log_hosts", "idx_forwarded_log_hosts_host_id")
         };
         format!(
-            "SELECT {select} FROM {projection} a INDEXED BY {index} CROSS JOIN {table} l WHERE a.hostname=?1 AND l.id=a.log_id"
+            "SELECT {select} FROM {projection} a INDEXED BY {index} CROSS JOIN {table} l WHERE a.hostname=?1 AND l.id=a.log_id AND {guard}"
         )
     } else {
         format!("SELECT {select} FROM {table} l WHERE l.hostname=?1")

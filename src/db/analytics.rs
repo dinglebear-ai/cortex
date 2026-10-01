@@ -1067,24 +1067,32 @@ pub fn feed_logs(
     let mut logs = Vec::new();
     if let Some(hostname) = hostname {
         let aliases = host_aliases(&conn, hostname)?;
+        let guard = super::host_attribution::projected_host_guard("a.hostname");
         for alias in aliases {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {RAW_LOG_COLUMNS} FROM logs l INDEXED BY idx_logs_stream_host_id
                  WHERE l.hostname=?1 AND l.id>?2 ORDER BY l.id ASC LIMIT ?3"
             ))?;
             logs.extend(
-                stmt.query_map(params![alias, after_id, fetch_limit], map_public_raw_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?,
+                stmt.query_map(params![alias, after_id, fetch_limit], |row| {
+                    map_public_raw_row(&conn, row)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
             );
+            if !super::host_attribution::device_claim_allowed(&conn, &alias)? {
+                continue;
+            }
             let mut stmt = conn.prepare(&format!(
                 "SELECT {RAW_LOG_COLUMNS} FROM
-                    (SELECT log_id FROM forwarded_log_hosts
-                     WHERE hostname=?1 AND log_id>?2 ORDER BY log_id ASC LIMIT ?3) attributed
+                    (SELECT log_id FROM forwarded_log_hosts a
+                     WHERE hostname=?1 AND log_id>?2 AND {guard} ORDER BY log_id ASC LIMIT ?3) attributed
                  JOIN logs l ON l.id=attributed.log_id ORDER BY l.id ASC"
             ))?;
             logs.extend(
-                stmt.query_map(params![alias, after_id, fetch_limit], map_public_raw_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?,
+                stmt.query_map(params![alias, after_id, fetch_limit], |row| {
+                    map_public_raw_row(&conn, row)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
             );
         }
         logs.sort_unstable_by_key(|row| row.id);
@@ -1094,7 +1102,9 @@ pub fn feed_logs(
             "SELECT {RAW_LOG_COLUMNS} FROM logs l WHERE l.id>?1 ORDER BY l.id ASC LIMIT ?2"
         ))?;
         logs = stmt
-            .query_map(params![after_id, fetch_limit], map_public_raw_row)?
+            .query_map(params![after_id, fetch_limit], |row| {
+                map_public_raw_row(&conn, row)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
     }
 
@@ -1134,13 +1144,17 @@ const RAW_LOG_COLUMNS: &str = "l.id,l.timestamp,l.hostname,l.facility,l.severity
     l.app_name,l.process_id,l.message,l.raw,l.received_at,l.source_ip,
     l.ai_tool,l.ai_project,l.ai_session_id,l.ai_transcript_path,l.metadata_json";
 
-fn map_public_raw_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogEntryWithRaw> {
+fn map_public_raw_row(
+    conn: &rusqlite::Connection,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<LogEntryWithRaw> {
     let mut entry = map_row_with_raw(row)?;
-    if let Some(hostname) = crate::forwarded_host::subject_hostname(
+    if let Some(hostname) = super::host_attribution::resolved_subject_hostname(
+        conn,
         &entry.hostname,
         &entry.source_ip,
         entry.metadata_json.as_deref(),
-    ) {
+    )? {
         entry.hostname = hostname;
     }
     Ok(entry)
@@ -1172,6 +1186,7 @@ fn context_side(
     };
     let mut rows = Vec::new();
     for alias in host_aliases(conn, &reference.hostname)? {
+        let include_projection = super::host_attribution::device_claim_allowed(conn, &alias)?;
         let mut values = vec![
             rusqlite::types::Value::Text(alias),
             rusqlite::types::Value::Text(reference.timestamp.clone()),
@@ -1187,14 +1202,18 @@ fn context_side(
             super::queries::FTS_SELECT_COLS, boundary("l.timestamp", "l.id"),
         );
         let projected_boundary = boundary("timestamp", "log_id");
+        let guard = super::host_attribution::projected_host_guard("a.hostname");
         let projected_sql = format!(
             "SELECT {} FROM
-                (SELECT log_id FROM forwarded_log_hosts WHERE hostname=?1 AND {projected_boundary}
+                (SELECT log_id FROM forwarded_log_hosts a WHERE hostname=?1 AND {projected_boundary} AND {guard}
                  ORDER BY timestamp {order},log_id {order} LIMIT ?{limit_parameter}) attributed
              JOIN logs l ON l.id=attributed.log_id ORDER BY l.timestamp {order},l.id {order}",
             super::queries::FTS_SELECT_COLS,
         );
-        for sql in [raw_sql, projected_sql] {
+        for (sql, attributed) in [(raw_sql, false), (projected_sql, true)] {
+            if attributed && !include_projection {
+                continue;
+            }
             rows.extend(
                 conn.prepare(&sql)?
                     .query_map(
@@ -1216,11 +1235,12 @@ fn context_side(
     rows.retain(|row| seen.insert(row.id));
     rows.truncate(limit as usize);
     for row in &mut rows {
-        if let Some(hostname) = crate::forwarded_host::subject_hostname(
+        if let Some(hostname) = super::host_attribution::resolved_subject_hostname(
+            conn,
             &row.hostname,
             &row.source_ip,
             row.metadata_json.as_deref(),
-        ) {
+        )? {
             row.hostname = hostname;
         }
     }
