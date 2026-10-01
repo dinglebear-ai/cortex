@@ -31,13 +31,13 @@ describe("host source graph", () => {
 
   it("keeps claimed device names separate from heartbeat identities", () => {
     const sources = normalizeHostSources([
-      { hostname: "tootie", source_kind: "claimed_host", host_id: "stable-tootie" },
-      { hostname: "tootie", source_kind: "host", host_id: "stable-tootie" },
+      { hostname: "serverhost", source_kind: "claimed_host", host_id: "stable-serverhost" },
+      { hostname: "serverhost", source_kind: "host", host_id: "stable-serverhost" },
     ])
     expect(sources).toHaveLength(2)
     expect(sources[0].host_id).toBeNull()
-    expect(sources[0].node_id).toBe("source:name:claimed_host:tootie")
-    expect(sources[1].host_id).toBe("stable-tootie")
+    expect(sources[0].node_id).toBe("source:name:claimed_host:serverhost")
+    expect(sources[1].host_id).toBe("stable-serverhost")
   })
 
   it("deduplicates physical nodes and counts using stable heartbeat IDs and merges their aliases", () => {
