@@ -247,7 +247,12 @@ pub fn atomic_private_write(path: &Path, content: &[u8], mode: u32) -> io::Resul
         file.sync_all()?;
         drop(file);
         fs::rename(&tmp, path)?;
-        fs::File::open(parent)?.sync_all()
+        // Windows cannot open a directory through File::open. The file has
+        // already been synced and atomically replaced; attempting this Unix
+        // durability step reports failure after the replacement succeeded.
+        #[cfg(not(windows))]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
@@ -266,6 +271,16 @@ pub fn atomic_checkpoint_write(path: &Path, content: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn checkpoint_replacement_preserves_previous_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.json");
+        atomic_checkpoint_write(&path, b"first").unwrap();
+        atomic_checkpoint_write(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert_eq!(fs::read(path.with_extension("json.bak")).unwrap(), b"first");
+    }
     #[test]
     fn parser_rejects_duplicate_and_secret_unknown() {
         assert!(parse_agent_env("RUST_LOG=x\nRUST_LOG=y\n").is_err());
