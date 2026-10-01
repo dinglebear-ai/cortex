@@ -95,7 +95,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
 /// Everything else must declare read-only `contents`. Keeping this as an
 /// allowlist means a newly added workflow fails the test until it is either
 /// made read-only or consciously added here.
-const WRITE_SCOPED_WORKFLOWS: &[&str] = &["release.yml", "openwiki-update.yml"];
+const WRITE_SCOPED_WORKFLOWS: &[&str] = &["release.yml"];
 
 #[test]
 fn workflows_default_to_read_only_github_token_permissions() {
