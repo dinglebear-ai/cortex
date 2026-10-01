@@ -186,7 +186,12 @@ mcp_phase_run() {
       graph) args="$(jq -cn --arg h "$MCP_LIVE_HOST" '{action:"graph",mode:"entity",entity_type:"host",key:$h}')" ;;
       notifications_test) args="$(jq -cn --arg b "mcp-notify-$LIVE_RUN_ID" '{action:"notifications_test",body:$b}')" ;;
       sessions) args="$(jq -cn --arg since "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" '{action:"sessions",since:$since,limit:100}')" ;;
-      session_page) args="$(jq -c --arg s "$MCP_LIVE_SESSION" '([.result.structuredContent.sessions[]? | select(.session_id==$s)] | first) | {action:"session_page",project,tool,session_id,host:.hostname,limit:1}' "$dir/action-sessions.json")" ;;
+      session_page)
+        # The action loop is sorted, and successful responses are removed.
+        # Fetch the seeded session explicitly instead of relying on a prior
+        # "sessions" action having left its response on disk.
+        mcp_http "$LIVE_CORTEX_TOKEN" "$(jq -cn --arg since "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" '{jsonrpc:"2.0",id:198,method:"tools/call",params:{name:"cortex",arguments:{action:"sessions",since:$since,limit:100}}}')" "$dir/session-page-candidates.json"
+        args="$(jq -ce --arg s "$MCP_LIVE_SESSION" 'first(.result.structuredContent.sessions[]? | select(.session_id==$s and .event_count>0)) | {action:"session_page",project,tool,session_id,host:.hostname,limit:1} | select(.project!=null and .tool!=null and .host!=null)' "$dir/session-page-candidates.json")" ;;
       correlate) args="$(jq -cn --arg q "\"mcp-error-${LIVE_RUN_ID#cortex-e2e-}\"" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{action:"correlate",query:$q,reference_time:$t,window_minutes:10,severity_min:"warning"}')" ;;
       correlate_state) args="$(jq -cn --arg h "$MCP_LIVE_TOPIC_HOST" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{action:"correlate_state",host:$h,reference_time:$t,window_minutes:10}')" ;;
       topic_correlate) args="$(jq -cn --arg topic "$MCP_LIVE_TOPIC_HOST" --arg since "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" '{action:"topic_correlate",topic:$topic,since:$since,limit:100}')" ;;
