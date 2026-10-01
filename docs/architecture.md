@@ -1,7 +1,7 @@
 ---
 title: "Cortex architecture"
 created: 2026-05-18
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 # Cortex architecture
@@ -37,7 +37,7 @@ The diagram groups source families; they do not all use the same table, queue, o
 | --- | --- |
 | Process entry / runtime | `src/main.rs`, `src/runtime.rs`, `src/runtime/` |
 | Shared service | `src/app.rs`, `src/app/`; `CortexService`, validation, query and maintenance limits |
-| SQLite | `src/db.rs`, `src/db/`; pool, 62 sequential migrations, FTS5, evidence, projections, retention |
+| SQLite | `src/db.rs`, `src/db/`; pool, 63 sequential migrations, FTS5, evidence, projections, retention |
 | Syslog | `src/receiver.rs`, `src/receiver/`, `src/ingest.rs` |
 | Host collection | `src/agent.rs`, `src/agent/`, `src/heartbeat_agent.rs` |
 | Forwarded ingest | `src/ai_transcript_ingest*`, `src/agent_command_ingest.rs`, `src/agent_file_tail_ingest.rs`, `src/shell_history_ingest.rs`, `src/syslog_forward_ingest*` |
@@ -74,6 +74,10 @@ An installed CLI commonly uses HTTP settings written into the managed environmen
 The shared listener defaults to port 3100 and serves MCP, REST, OTLP, host ingest, health, and `/app`. Syslog uses UDP/TCP 1514. Sharing the HTTP port does not make token policies interchangeable: MCP/machine ingest, REST, and privileged REST have separate configuration. OTLP logs have a 4 MiB body cap; metrics and traces have 8 MiB caps. Verify auth behavior in the relevant route code and [SECURITY.md](SECURITY.md).
 
 Hostname/transcript content is untrusted. Persist provenance and coverage gaps, enforce schema and size limits, and acknowledge delivery only according to the applicable durable ingest contract. LLM-assisted assessments are explicit CLI operations behind the shared LLM runner; deterministic MCP investigations must not silently start one.
+
+Forwarded transcript and syslog records retain their raw authentication-principal hostname, transport peer, hostname claim and trust metadata. A separate indexed projection attributes a record to a safe device hostname only when its server-stamped forwarding provenance agrees with the raw row and transport lane. Devices sharing a credential or NAT address can therefore have separate log views. The peer address alone does not identify a device, and a projected hostname remains a claim rather than an authentication identity. Invalid or missing claims stay under the forwarding principal. Metadata size and field limits preserve the server-stamped provenance while discarding excess optional evidence.
+
+Migration 63 installs this derived host-attribution schema without rewriting raw logs, receipts or session identities. New records update attribution in their ingestion transaction. Historical attribution runs as resumable maintenance work in batches of at most 1,000 primary-key rows; each batch commits its projection and cursor together. The upgrade high-water mark bounds historical work, and restart resumes from the durable cursor. The same bounded pass counts retained raw rows, tracks concurrent inserts/deletes transactionally, and repairs legacy host-counter inflation at completion using indexed receipt-time endpoints. Inventory and device filters become complete as this backfill progresses; old records whose provenance was already discarded remain unattributed. See [host identity and filters](api.md#host-identity-and-filters) for the read contract.
 
 ## Runtime maintenance
 

@@ -37,6 +37,7 @@ fn summary_and_host_conversions_preserve_counts() {
     });
     let host = HostEntry::from(db::HostEntry {
         hostname: "host-a".into(),
+        host_id: None,
         first_seen: "2026-01-01T00:00:00Z".into(),
         last_seen: "2026-01-01T01:00:00Z".into(),
         log_count: 11,

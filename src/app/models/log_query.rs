@@ -147,6 +147,8 @@ pub struct GetErrorsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostEntry {
     pub hostname: String,
+    #[serde(default)]
+    pub host_id: Option<String>,
     pub first_seen: String,
     pub last_seen: String,
     pub log_count: i64,
@@ -166,6 +168,7 @@ impl From<db::HostEntry> for HostEntry {
             log_count: value.log_count,
             aliases: value.aliases,
             source_kind: value.source_kind,
+            host_id: value.host_id,
         }
     }
 }

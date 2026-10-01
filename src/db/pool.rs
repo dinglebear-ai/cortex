@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 62;
+pub const KNOWN_SCHEMA_VERSION: i64 = 63;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3667,6 +3667,19 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         )?;
         tracing::info!("Migration 62: graph discovery change journal ready");
     }
+
+    // Migration 63 installs only the derived host attribution schema. Historical
+    // rows are projected in bounded background batches after startup.
+    if !migration_applied(&conn, 63)? {
+        let tx = conn.transaction()?;
+        super::host_attribution::install_schema(&tx)?;
+        tx.execute("INSERT INTO schema_migrations(version) VALUES(63)", [])?;
+        tx.commit()?;
+        tracing::info!("Migration 63: forwarded device attribution projection ready");
+    }
+
+    // Recreate additive expiry coupling after historical dependency repair.
+    super::host_attribution::install_lineage_expiry_trigger(&conn)?;
 
     // Historical repair tests can replay a sparse pre-graph schema. Install
     // capture triggers only once all graph tables exist; a later pool open

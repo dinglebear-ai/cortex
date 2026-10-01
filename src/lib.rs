@@ -28,6 +28,7 @@ pub mod enrich;
 #[doc(hidden)]
 pub mod env;
 pub mod filetail;
+pub(crate) mod forwarded_host;
 pub mod git_observer;
 pub(crate) mod hook_assessment;
 pub(crate) mod hook_config;

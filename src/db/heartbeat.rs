@@ -602,7 +602,10 @@ pub(crate) fn heartbeat_flags(sample: &HeartbeatSampleState) -> HeartbeatStateFl
     heartbeat_flags::from_sample(sample)
 }
 
-fn resolve_unique_hostname(conn: &rusqlite::Connection, hostname: &str) -> Result<String> {
+pub(super) fn resolve_unique_hostname(
+    conn: &rusqlite::Connection,
+    hostname: &str,
+) -> Result<String> {
     // Current device identity comes from the small latest-heartbeat table. Use
     // the same conservative aliases as log-source listings, but never merge
     // two stable device IDs merely because their reported names look alike.

@@ -233,22 +233,25 @@ fn to_log_batch_entry(
         .timestamp
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     let source_ip = format!("agent-ai-transcript://{}", peer.ip());
-    let metadata_json = crate::ingest_metadata::bounded_metadata_json(serde_json::json!({
-        "source_type": "transcript",
-        "evidence_envelope_version": envelope.version,
-        "source_record_id": envelope.source_record_id,
-        "source": envelope.source,
-        "capabilities": envelope.capabilities,
-        "diagnostics": envelope.diagnostics,
-        "event_kind": envelope.event_kind.as_deref().unwrap_or("unknown"),
-        "provenance": {
-            "authenticated_forwarder": forwarder_identity,
-            "transport_peer": peer.ip().to_string(),
-            "hostname_claim": envelope.hostname,
-            "trust": if forwarder_identity == "shared_bearer" { "claimed" } else { "verified_forwarder_claimed_host" },
-        },
-        "content_scrubbed": true,
-    }));
+    let metadata_json = crate::forwarded_host::bounded_metadata_json(
+        serde_json::json!({
+            "source_type": "transcript",
+            "evidence_envelope_version": envelope.version,
+            "source_record_id": envelope.source_record_id,
+            "source": envelope.source,
+            "capabilities": envelope.capabilities,
+            "diagnostics": envelope.diagnostics,
+            "event_kind": envelope.event_kind.as_deref().unwrap_or("unknown"),
+            "provenance": {
+                "authenticated_forwarder": forwarder_identity,
+                "transport_peer": peer.ip().to_string(),
+                "hostname_claim": envelope.hostname,
+                "trust": if forwarder_identity == "shared_bearer" { "claimed" } else { "verified_forwarder_claimed_host" },
+            },
+            "content_scrubbed": true,
+        }),
+        "provenance",
+    );
     LogBatchEntry {
         timestamp,
         hostname: format!("agent-{forwarder_identity}"),

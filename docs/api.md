@@ -1,7 +1,7 @@
 ---
 title: "cortex REST API"
 created: 2026-05-18
-updated: 2026-09-27
+updated: 2026-09-30
 ---
 
 # cortex REST API
@@ -39,12 +39,12 @@ to them by default.
 
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| GET | `/api/search` | read | query params: `query?`, `hostname?`, `source_ip?`, `severity?`, `app_name?`, `facility?`, `process_id?`, `from?`, `to?`, `limit?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` | 200, 400, 401, 503, 500 | Y | FTS5 search; `deny_unknown_fields` rejects typos. |
-| GET | `/api/filter` | read | query params: `hostname?`, `source_ip?`, `source_kind?`, `tool?`, `project?`, `session_id?`, `container?`, `docker_host?`, `stream?`, `event_action?`, `severity?`, `app_name?`, `facility?`, `exclude_facility?`, `process_id?`, `from?`, `to?`, `received_from?`, `received_to?`, `limit?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` | 200, 400, 401, 503, 500 | Y | Structured filter-only retrieval; `query` and unknown fields are rejected. |
+| GET | `/api/search` | read | query params: `query?`, `hostname?`, `source_ip?`, `severity?`, `app_name?`, `facility?`, `process_id?`, `from?`, `to?`, `limit?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` | 200, 400, 401, 503, 500 | Y | FTS5 search; `deny_unknown_fields` rejects typos. Host filters include device-attributed forwarded rows; see Host identity and filters. |
+| GET | `/api/filter` | read | query params: `hostname?`, `source_ip?`, `source_kind?`, `tool?`, `project?`, `session_id?`, `container?`, `docker_host?`, `stream?`, `event_action?`, `severity?`, `app_name?`, `facility?`, `exclude_facility?`, `process_id?`, `from?`, `to?`, `received_from?`, `received_to?`, `limit?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` | 200, 400, 401, 503, 500 | Y | Structured filter-only retrieval; `query` and unknown fields are rejected. Device hostname filters combine direct and attributed forwarded evidence without including other devices sharing the credential. |
 | GET | `/api/feed` | read | query: `after_id?` (i64), `host?`, `limit?` (u32, max 1000) | `FeedLogsResponse { logs: [LogEntryWithRaw], next_after_id: i64, has_more: bool }` | 200, 400, 401, 503, 500 | Y | Ascending cursor feed for external consumers. Omit `after_id` to start at the current high-water mark; pass `after_id=0` to replay retained history. |
 | GET | `/api/tail` | read | query: `host?`, `source?`, `app?`, `severity_min?`, `n?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` (tail order) | 200, 400, 401, 503, 500 | Y | `severity_min` honoured per RFC severity ordering. |
 | GET | `/api/errors` | read | query: `from?`, `to?`, `group_by?` (`app_name` only) | `GetErrorsResponse { summary: [ErrorSummaryEntry] }` | 200, 400, 401, 503, 500 | Y | Counts by host (and optional secondary key). |
-| GET | `/api/hosts` | read | (none) | `ListHostsResponse { hosts: [HostEntry] }` | 200, 401, 503, 500 | Y | Reported log sources with `aliases` (raw stored names for exact filters) and `source_kind` (`host`, `forwarding_principal`, `unattributed`). A shared bearer bucket is a forwarding identity that may carry several devices, not an individual device. Case/trailing-dot variants and unambiguous `.local`/tailnet aliases combine; unrelated DNS domains and distinct forwarding principals stay separate. Device state uses stable heartbeat IDs and rejects ambiguous name aliases. |
+| GET | `/api/hosts` | read | (none) | `ListHostsResponse { hosts: [HostEntry] }` | 200, 401, 503, 500 | Y | Device/source inventory with `aliases`, optional stable heartbeat `host_id`, and `source_kind` (`host`, `forwarding_principal`, `unattributed`). Validated forwarding provenance assigns records to claimed devices; unresolved records remain under the forwarding principal. Case/trailing-dot variants and unambiguous `.local`/tailnet aliases combine. See Host identity and filters. |
 | GET | `/api/host-metrics` | read | query: `hostname` and `metric_name` (REQUIRED), `service_name?`, `minutes?` (1–1440), `limit?` (1–500), `before_time_unix_nano?` and `before_id?` (together) | `ListHostMetricsResponse { points, next_cursor?, truncated, queried_at }` | 200, 400, 401, 503, 500 | Y | Recent OTLP points for one host and metric, newest source timestamp first. Each point carries value, attributes, source timestamp, and received time. Use `next_cursor` for the next page. |
 | GET | `/api/metric-hosts` | read | — | `ListMetricHostsResponse { hosts, queried_at }` | 200, 401, 503, 500 | Y | Up to 100 hosts with memory utilization samples in the past 24 hours, ordered by latest source timestamp. |
 | GET | `/api/correlate` | read | query: `reference_time` (REQUIRED, RFC 3339), `window_minutes?` (u32), `severity_min?`, `hostname?`, `source_ip?`, `query?`, `limit?` (u32) | `CorrelateEventsResponse { reference_time, window_minutes, window_from, window_to, severity_min, total_events, truncated, hosts_count, hosts: [CorrelatedHost] }` | 200, 400, 401, 503, 500 | Y | **Distinct from `/api/sessions/correlate`** — see disambiguation below. |
@@ -54,6 +54,48 @@ to them by default.
 | GET | `/api/integration-profile` | read | (none) | `CortexIntegrationProfileV1` | 200, 401 | Y | Runtime identity conforming to `contracts/integration-profile.schema.json`; stable server ID, mounted auth modes/generation, route support, and SSE resume support are reported together. |
 | GET | `/api/streams/logs` | read | query: `cursor?`, `host?`, `app?`, `severity?`; or `Last-Event-ID` | SSE snapshot, log events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Durable ascending `logs.id` replay. Cursors bind principal and filter lineage. Batches are capped at 100 items/128 KiB and individual messages at 64 KiB. |
 | GET | `/api/streams/sessions` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`; or `Last-Event-ID` | SSE snapshot, session events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Same durable envelope and bounds as log streaming, restricted to one rendered-session identity. Retention gaps and cursor expiry require explicit resync. |
+
+### Host identity and filters
+
+`HostEntry.hostname` is the canonical device or source label for log discovery.
+`aliases` retains the reported spellings, including validated forwarded device
+claims, used by the conservative alias filter. Case and trailing dots normalize;
+an unambiguous `.local` or tailnet name combines with its independently observed
+short name. Unrelated DNS domains and distinct forwarding principals remain
+separate.
+
+Forwarded AI transcript and syslog rows can share a bearer credential while
+reporting different sending devices. A device claim is used only when the
+server-stamped authenticated forwarder, trust marker and transport peer agree
+with the stored row and forwarding lane. Empty, invalid, placeholder,
+credential-label and IP-only claims are excluded. A shared NAT address alone
+cannot establish a device identity. The hostname is still a claim; attribution
+does not authenticate that device or alter authorization.
+
+Core log hostname filters include both directly stored device rows and the
+indexed forwarded rows attributed to that device. Selecting one device does
+not include every row under its shared credential. The original principal
+hostname remains available for source-level filtering, and the provenance
+metadata retains the authenticated sender and original claim. Read-side device
+labels do not rewrite raw log/authentication identity, receipt namespaces or
+fingerprints, or stored session identities; rendered-session selectors continue
+to use their exact session identity.
+
+`host_id` is populated only when the device hostname resolves to one stable
+heartbeat identity. No matching heartbeat or multiple matching IDs leaves it
+`null`; a shared principal is not assigned a device ID. Device state lookups
+should use the returned `host_id`, or resolve a unique hostname. Ambiguous names
+require an explicit stable ID rather than choosing the freshest matching device.
+
+Migration 63 adds the attribution projection without rewriting historical
+evidence. New records project in the ingestion transaction. Historical records
+are processed by background maintenance in bounded batches of at most 1,000
+rows, with projection changes and the resume cursor committed together. Device
+inventory and filtered historical results fill in as this resumable backfill
+progresses. The same pass reconciles retained source counters at completion,
+including inflation left by older retention runs; concurrent inserts and deletes
+are accounted for transactionally. Records whose old metadata has no usable forwarding proof remain
+under the source principal; metadata budgets preserve that proof for new rows.
 
 ### Recurring error comparison (1)
 

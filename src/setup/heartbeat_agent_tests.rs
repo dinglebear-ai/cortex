@@ -67,7 +67,8 @@ fn launchd_check_accepts_output_larger_than_pipe_capacity() {
         "#!/bin/sh\ncase \"$2\" in\n*transcript-forwarder) exit 113;;\nesac\ndd if=/dev/zero bs=131072 count=1 2>/dev/null\nprintf 'state = running\\npid = 123\\n'\n",
     );
     let _program = EnvGuard::set("CORTEX_TEST_LAUNCHCTL", &program);
-    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "200");
+    // This checks pipe drainage; timeout behavior has a separate short-budget test.
+    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "2000");
     let _home = EnvGuard::set("CORTEX_HOME", dir.path());
     let phase = launchd_service_observation(dir.path());
     assert!(matches!(phase.status, SetupStatus::Ok), "{}", phase.detail);

@@ -194,6 +194,9 @@ impl HostSourceKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostEntry {
     pub hostname: String,
+    /// Stable heartbeat identity when hostname evidence resolves uniquely.
+    #[serde(default)]
+    pub host_id: Option<String>,
     pub first_seen: String,
     pub last_seen: String,
     pub log_count: i64,

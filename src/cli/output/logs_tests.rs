@@ -54,6 +54,7 @@ fn human_log_summary_outputs_accept_representative_payloads() {
         &cortex::app::ListHostsResponse {
             hosts: vec![cortex::app::HostEntry {
                 hostname: "host-a".to_string(),
+                host_id: None,
                 first_seen: "2026-06-12T00:00:00Z".to_string(),
                 last_seen: "2026-06-13T00:00:00Z".to_string(),
                 log_count: 10,

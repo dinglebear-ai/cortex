@@ -202,10 +202,19 @@
       const sourceKind = item?.source_kind ||
         (/^(agent-(shared_bearer|loopback)$|bearer-shared-)/i.test(name) ? "forwarding_principal" :
           /^(localhost|unresolved-host\.invalid)$/i.test(name) ? "unattributed" : "host");
-      if (!sources.has(name)) {
-        sources.set(name, { hostname: name, source_kind: sourceKind,
-          aliases: Array.isArray(item?.aliases) ? item.aliases.filter((alias) => typeof alias === "string") : [name] });
+      const hostId = sourceKind === "host" && typeof item?.host_id === "string" && item.host_id.trim()
+        ? item.host_id : null;
+      const key = JSON.stringify(hostId ? ["host_id", hostId] : ["source", sourceKind, name]);
+      const aliases = [name, ...(Array.isArray(item?.aliases) ? item.aliases : [])]
+        .filter((alias) => typeof alias === "string" && alias.trim());
+      if (!sources.has(key)) {
+        sources.set(key, { hostname: name, host_id: hostId, source_kind: sourceKind,
+          node_id: hostId ? `source:heartbeat:${encodeURIComponent(hostId)}`
+            : `source:name:${encodeURIComponent(sourceKind)}:${encodeURIComponent(name)}`,
+          aliases: [] });
       }
+      const source = sources.get(key);
+      source.aliases = Array.from(new Set([...source.aliases, ...aliases]));
     }
     return Array.from(sources.values());
   }
@@ -215,15 +224,15 @@
     const nodes = [
       { data: { id: "cortex", label: "cortex", kind: "service", status: "online" } },
       ...sources.map((source) => ({
-        data: { id: `source:${source.hostname}`, label: source.hostname,
+        data: { id: source.node_id, label: source.hostname, host_id: source.host_id,
           kind: source.source_kind, aliases: source.aliases, status: "observed" },
       })),
       { data: { id: "sqlite", label: "SQLite WAL", kind: "store", status: "online" } },
     ];
     const edges = sources.map((source) => ({
       data: {
-        id: `source:${source.hostname}->cortex`,
-        source: `source:${source.hostname}`,
+        id: `${source.node_id}->cortex`,
+        source: source.node_id,
         target: "cortex",
         label: "ingests",
       },
@@ -273,6 +282,7 @@
       ["Kind", data.kind || "unknown"],
       ["Status", data.status || "unknown"],
     ];
+    if (data.host_id) facts.push(["Heartbeat ID", data.host_id]);
     const related = latestLogs.filter((row) => {
       const host = row.hostname || row.host || "";
       const aliases = Array.isArray(data.aliases) ? data.aliases : [data.label];

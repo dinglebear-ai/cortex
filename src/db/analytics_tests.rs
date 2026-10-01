@@ -1521,3 +1521,169 @@ fn feed_cursor_is_never_below_the_greatest_returned_id() {
     let (duplicate, _, _) = feed_logs(&pool, Some(next_cursor), None, 100).unwrap();
     assert!(duplicate.is_empty());
 }
+
+fn attributed_analytics_fixture() -> (DbPool, tempfile::TempDir) {
+    let (pool, dir) = test_pool();
+    let mut rows = Vec::new();
+    for (host, second, message) in [
+        ("TOOTIE", 0, "before-forwarded"),
+        ("AGENT-OS", 0, "other-before"),
+        ("tootie.local", 1, "before-direct"),
+        ("TOOTIE", 1, "pivot"),
+        ("AGENT-OS", 1, "other-tie"),
+        ("TOOTIE", 1, "after-tie"),
+        ("AGENT-OS", 2, "other-after"),
+        ("TOOTIE", 2, "after-forwarded"),
+    ] {
+        let timestamp = format!("2026-09-30T12:00:{second:02}Z");
+        let mut row = entry(&timestamp, host, "info", None, message);
+        if host != "tootie.local" {
+            row.hostname = "agent-shared_bearer".into();
+            row.source_ip = "agent-syslog://10.1.0.8".into();
+            row.metadata_json = Some(
+                serde_json::json!({"forwarded_provenance": {
+                    "authenticated_forwarder":"shared_bearer", "transport_peer":"10.1.0.8",
+                    "hostname_claim":host, "trust":"claimed"
+                }})
+                .to_string(),
+            );
+        }
+        rows.push(row);
+    }
+    insert_logs_batch(&pool, &rows).unwrap();
+    (pool, dir)
+}
+
+#[test]
+fn attributed_device_feed_paginates_aliases_without_other_nat_devices() {
+    let (pool, _dir) = attributed_analytics_fixture();
+    let (first, cursor, more) = feed_logs(&pool, Some(0), Some("tootie"), 2).unwrap();
+    assert_eq!(first.iter().map(|row| row.id).collect::<Vec<_>>(), [1, 3]);
+    assert_eq!(first[0].hostname, "TOOTIE");
+    assert_eq!(first[1].hostname, "tootie.local");
+    assert_eq!(cursor, 3);
+    assert!(more);
+    let (second, cursor, more) = feed_logs(&pool, Some(cursor), Some("TOOTIE"), 2).unwrap();
+    assert_eq!(second.iter().map(|row| row.id).collect::<Vec<_>>(), [4, 6]);
+    assert_eq!(cursor, 6);
+    assert!(more);
+    let (third, cursor, more) = feed_logs(&pool, Some(cursor), Some("tootie.local"), 2).unwrap();
+    assert_eq!(third.iter().map(|row| row.id).collect::<Vec<_>>(), [8]);
+    assert!(!more);
+    assert!(
+        feed_logs(&pool, Some(cursor), Some("tootie"), 2)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    let (all, _, _) = feed_logs(&pool, Some(0), None, 20).unwrap();
+    assert_eq!(all[1].hostname, "AGENT-OS");
+    assert_eq!(
+        fetch_log_by_id(&pool, 4).unwrap().unwrap().hostname,
+        "agent-shared_bearer"
+    );
+}
+
+#[test]
+fn attributed_context_limits_each_device_partition_and_preserves_ties() {
+    let (pool, _dir) = attributed_analytics_fixture();
+    let reference = ContextRef {
+        id: Some(4),
+        hostname: "tootie".into(),
+        timestamp: "2026-09-30T12:00:01Z".into(),
+    };
+    let (before, after) = context_around(&pool, &reference, 2, 2).unwrap();
+    assert_eq!(before.iter().map(|row| row.id).collect::<Vec<_>>(), [1, 3]);
+    assert_eq!(after.iter().map(|row| row.id).collect::<Vec<_>>(), [6, 8]);
+    assert_eq!(after[0].hostname, "TOOTIE");
+    let timestamp_only = ContextRef {
+        id: None,
+        ..reference
+    };
+    let (before, after) = context_around(&pool, &timestamp_only, 10, 10).unwrap();
+    assert_eq!(before.iter().map(|row| row.id).collect::<Vec<_>>(), [1]);
+    assert_eq!(after.iter().map(|row| row.id).collect::<Vec<_>>(), [8]);
+}
+
+#[tokio::test]
+async fn public_get_and_context_use_device_display_and_logical_partition() {
+    let (pool, dir) = attributed_analytics_fixture();
+    let service = crate::app::CortexService::new(
+        std::sync::Arc::new(pool.clone()),
+        StorageConfig::for_test(dir.path().join("test.db")),
+    );
+    let got = service
+        .get_log(crate::app::GetLogRequest { id: 4 })
+        .await
+        .unwrap();
+    assert_eq!(got.log.hostname, "TOOTIE");
+    assert!(
+        got.log
+            .metadata_json
+            .as_deref()
+            .unwrap()
+            .contains("shared_bearer")
+    );
+    let context = service
+        .context(crate::app::ContextRequest {
+            log_id: Some(4),
+            before: Some(2),
+            after: Some(2),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(context.reference.hostname, "TOOTIE");
+    assert_eq!(
+        context.before.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(
+        context.after.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [6, 8]
+    );
+    assert_eq!(
+        fetch_log_by_id(&pool, 4).unwrap().unwrap().hostname,
+        "agent-shared_bearer"
+    );
+}
+
+#[test]
+fn attributed_feed_and_context_probe_ordered_indexes_without_sorting_history() {
+    let (pool, _dir) = attributed_analytics_fixture();
+    let conn = pool.get().unwrap();
+    for (sql, values, expected_index) in [
+        (
+            "SELECT log_id FROM forwarded_log_hosts WHERE hostname=?1 AND log_id>?2 ORDER BY log_id ASC LIMIT ?3",
+            vec![
+                rusqlite::types::Value::Text("TOOTIE".into()),
+                rusqlite::types::Value::Integer(0),
+                rusqlite::types::Value::Integer(10),
+            ],
+            "idx_forwarded_log_hosts_host_id",
+        ),
+        (
+            "SELECT log_id FROM forwarded_log_hosts WHERE hostname=?1 AND (timestamp,log_id)<(?2,?3) ORDER BY timestamp DESC,log_id DESC LIMIT ?4",
+            vec![
+                rusqlite::types::Value::Text("TOOTIE".into()),
+                rusqlite::types::Value::Text("2026-09-30T12:00:01Z".into()),
+                rusqlite::types::Value::Integer(4),
+                rusqlite::types::Value::Integer(10),
+            ],
+            "idx_forwarded_log_hosts_host_time",
+        ),
+    ] {
+        let plan = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains(expected_index), "{plan}");
+        assert!(!plan.contains("USE TEMP B-TREE"), "{plan}");
+    }
+}

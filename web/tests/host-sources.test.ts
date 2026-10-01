@@ -28,4 +28,51 @@ describe("host source graph", () => {
     expect(normalizeHostSources(["serverhost", "agent-os", "agent-shared_bearer", "bearer-shared-one", "localhost"]).map((host: { source_kind: string }) => host.source_kind))
       .toEqual(["host", "host", "forwarding_principal", "forwarding_principal", "unattributed"])
   })
+
+  it("deduplicates physical nodes and counts using stable heartbeat IDs and merges their aliases", () => {
+    const hosts = [
+      { hostname: "tootie", host_id: "device-1", source_kind: "host", aliases: ["TOOTIE", "tootie.local"] },
+      { hostname: "tootie.manatee-triceratops.ts.net", host_id: "device-1", source_kind: "host", aliases: ["tootie.local", "", null] },
+      { hostname: "agent-os", host_id: "device-2", source_kind: "host" },
+      { hostname: "agent-shared_bearer", host_id: "device-1", source_kind: "forwarding_principal" },
+    ]
+    const sources = normalizeHostSources(hosts)
+    expect(sources.filter((host: { source_kind: string }) => host.source_kind === "host")).toHaveLength(2)
+    expect(sources[0].aliases).toEqual(["tootie", "TOOTIE", "tootie.local", "tootie.manatee-triceratops.ts.net"])
+    const graph = graphFromHosts(hosts)
+    const device = graph.nodes.find((node: { data: { host_id?: string } }) => node.data.host_id === "device-1")
+    expect(device.data.id).toBe("source:heartbeat:device-1")
+    expect(graph.edges.some((edge: { data: { source: string } }) => edge.data.source === device.data.id)).toBe(true)
+    expect(sources.find((host: { source_kind: string }) => host.source_kind === "forwarding_principal").host_id).toBeNull()
+    expect(graphFromHosts([hosts[1]]).nodes.find((node: { data: { host_id?: string } }) => node.data.host_id === "device-1").data.id).toBe(device.data.id)
+  })
+
+  it("retains ambiguous same-name devices and legacy rows without inventing identity", () => {
+    const hosts = [
+      { hostname: "same-name", host_id: "device-1", source_kind: "host" },
+      { hostname: "same-name", host_id: "device-2", source_kind: "host" },
+      { hostname: "same-name", host_id: null, source_kind: "host", aliases: ["legacy-alias"] },
+      { hostname: "same-name", host_id: " ", source_kind: "host" },
+      { hostname: "same-name", source_kind: "forwarding_principal" },
+      "agent-os", "10.1.0.8",
+    ]
+    const sources = normalizeHostSources(hosts)
+    expect(sources).toHaveLength(6)
+    expect(sources.filter((host: { hostname: string }) => host.hostname === "same-name")).toHaveLength(4)
+    expect(sources.find((host: { host_id?: string; source_kind: string }) => !host.host_id && host.source_kind === "host").aliases).toEqual(["same-name", "legacy-alias"])
+    const graph = graphFromHosts(hosts)
+    expect(new Set(graph.nodes.map((node: { data: { id: string } }) => node.data.id)).size).toBe(graph.nodes.length)
+  })
+
+  it("shows the stable heartbeat ID in selected device evidence", () => {
+    const evidence: { children: { textContent: string }[] }[] = []
+    const snippet = source.slice(source.indexOf("  function showNodeEvidence"), source.indexOf("  function renderTimeline"))
+    const showNodeEvidence = runInNewContext(`${snippet}; showNodeEvidence`, {
+      ui: { selectedTitle: {}, selectedKind: {}, evidenceList: { append: (item: { children: { textContent: string }[] }) => evidence.push(item) } },
+      latestLogs: [], setBadge: () => {}, clear: () => {},
+      text: (_tag: string, _className: string, textContent: string) => ({ textContent, children: [] as unknown[], append(...children: unknown[]) { this.children.push(...children) } }),
+    })
+    showNodeEvidence({ id: "source:heartbeat:device-1", label: "tootie", kind: "host", host_id: "device-1" })
+    expect(evidence.some((item) => item.children[0].textContent === "Heartbeat ID" && item.children[1].textContent === "device-1")).toBe(true)
+  })
 })

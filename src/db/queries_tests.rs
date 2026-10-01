@@ -2,6 +2,9 @@ use super::*;
 use crate::config::StorageConfig;
 use crate::db::{AiRelatedWindow, DbPool, LogBatchEntry, init_pool, insert_logs_batch};
 
+#[path = "queries_attributed_hosts_tests.rs"]
+mod attributed_hosts;
+
 fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
     StorageConfig::for_test(db_path)
 }
@@ -171,7 +174,7 @@ fn host_filters_accept_the_canonical_name_returned_by_list_hosts() {
             make_entry("2026-01-01T00:00:02Z", "nashost", "info", "short name"),
             make_entry(
                 "2026-01-01T00:00:03Z",
-                "nashost.example.test",
+                "nashost.local",
                 "info",
                 "fqdn variant",
             ),
@@ -189,11 +192,7 @@ fn host_filters_accept_the_canonical_name_returned_by_list_hosts() {
 
     let alias_rows = tail_logs(&pool, Some("nashost"), None, None, None, 10).unwrap();
     assert_eq!(alias_rows.len(), 2);
-    assert!(
-        alias_rows
-            .iter()
-            .any(|row| row.hostname == "nashost.example.test")
-    );
+    assert!(alias_rows.iter().any(|row| row.hostname == "nashost.local"));
 
     let params = SearchParams {
         host: Some("the-gatewayhost".to_string()),
@@ -212,12 +211,7 @@ fn host_only_search_bounds_each_host_before_merging_aliases() {
         &pool,
         &[
             make_entry("2026-01-01T00:00:01Z", "nashost", "info", "first"),
-            make_entry(
-                "2026-01-01T00:00:02Z",
-                "nashost.example.test",
-                "info",
-                "second",
-            ),
+            make_entry("2026-01-01T00:00:02Z", "nashost.local", "info", "second"),
             make_entry("2026-01-01T00:00:03Z", "nashost", "info", "third"),
             make_entry("2026-01-01T00:00:04Z", "other", "info", "excluded"),
         ],
@@ -396,7 +390,7 @@ fn search_fts_plan_selection_branches_on_indexed_filter() {
         "intersect plan has no CTE cap"
     );
     assert!(
-        sql.contains("l.hostname IN (") && sql.contains("FROM hosts h"),
+        sql.contains("l.hostname IN (") && sql.contains("SELECT hostname FROM hosts"),
         "canonical host filter applied via append_filters"
     );
 }

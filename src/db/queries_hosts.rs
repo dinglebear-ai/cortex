@@ -93,6 +93,7 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
                     canonical.clone(),
                     HostEntry {
                         hostname: canonical.clone(),
+                        host_id: None,
                         first_seen: entry.first_seen.clone(),
                         last_seen: entry.last_seen.clone(),
                         log_count: entry.log_count,
@@ -129,6 +130,7 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     let rows = stmt.query_map([], |row| {
         Ok(HostEntry {
             hostname: row.get(0)?,
+            host_id: None,
             first_seen: row.get(1)?,
             last_seen: row.get(2)?,
             log_count: row.get(3)?,
@@ -137,8 +139,111 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
         })
     })?;
 
-    let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(dedupe_hosts(rows))
+    let mut rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    // The raw registry remains an authentication/source record. Attribute only
+    // the logs whose preserved provenance identifies a subject hostname.
+    for attributed in super::host_attribution::list_forwarded_host_counts(&conn)? {
+        if let Some(source) = rows
+            .iter_mut()
+            .find(|row| row.hostname == attributed.original_hostname)
+        {
+            source.log_count = source.log_count.saturating_sub(attributed.log_count).max(0);
+        }
+        rows.push(HostEntry {
+            hostname: attributed.hostname,
+            host_id: None,
+            first_seen: attributed.first_seen,
+            last_seen: attributed.last_seen,
+            log_count: attributed.log_count,
+            aliases: Vec::new(),
+            source_kind: HostSourceKind::Host,
+        });
+    }
+    rows.retain(|row| row.log_count > 0);
+    let mut rows = dedupe_hosts(rows);
+    for row in &mut rows {
+        if row.source_kind == HostSourceKind::Host {
+            match super::heartbeat::resolve_unique_hostname(&conn, &row.hostname) {
+                Ok(host_id) => row.host_id = Some(host_id),
+                Err(error)
+                    if matches!(error.to_string().as_str(), "not_found" | "ambiguous_host") => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// Inventory and indexed log filters must use the same conservative alias
+/// contract. Active aggregates define current ambiguity exactly as list_hosts
+/// does; catalog-only deleted names retain exact stream lineage access without
+/// changing that grouping. Safe local/tailnet tombstones can join a bare group
+/// only when no active qualified name conflicts. No raw history scan is needed.
+pub(super) fn host_alias_select(parameter: &str) -> String {
+    let normalize = |column: &str| {
+        format!(
+            "CASE WHEN lower(trim({column})) IN ('agent-shared_bearer','agent-loopback')
+                      OR lower(trim({column})) LIKE 'bearer-shared-%'
+                  THEN trim({column}) ELSE lower(rtrim(trim({column}), '.')) END"
+        )
+    };
+    let requested = normalize(parameter);
+    let normalized = normalize("hostname");
+    format!(
+        "WITH active AS (
+             SELECT h.hostname FROM hosts h
+             WHERE h.log_count > COALESCE((SELECT SUM(f.log_count)
+                 FROM forwarded_host_counts f WHERE f.original_hostname=h.hostname),0)
+             UNION SELECT hostname FROM forwarded_host_counts
+         ), active_cased AS (
+             SELECT hostname, {normalized} AS normalized FROM active
+         ), active_mapped AS (
+             SELECT h.hostname,h.normalized,
+                 CASE WHEN instr(h.normalized, '.') > 0
+                     AND (substr(h.normalized, instr(h.normalized, '.')) = '.local'
+                          OR substr(h.normalized, -7) = '.ts.net')
+                     AND EXISTS (SELECT 1 FROM active_cased bare
+                         WHERE bare.normalized = substr(h.normalized, 1, instr(h.normalized, '.')-1))
+                     AND (SELECT COUNT(DISTINCT q.normalized) FROM active_cased q
+                         WHERE instr(q.normalized, '.') > 0
+                           AND substr(q.normalized, 1, instr(q.normalized, '.')-1)
+                               = substr(h.normalized, 1, instr(h.normalized, '.')-1)) = 1
+                 THEN substr(h.normalized, 1, instr(h.normalized, '.')-1)
+                 ELSE h.normalized END AS canonical
+             FROM active_cased h
+         ), known AS (
+             SELECT hostname FROM hosts
+             UNION SELECT hostname FROM forwarded_host_names
+         ), cased AS (
+             SELECT hostname, {normalized} AS normalized FROM known
+         ), mapped AS (
+             SELECT h.hostname,h.normalized,COALESCE(
+                 (SELECT canonical FROM active_mapped a WHERE a.normalized=h.normalized LIMIT 1),
+                 CASE WHEN instr(h.normalized,'.')>0
+                     AND (substr(h.normalized,instr(h.normalized,'.'))='.local'
+                          OR substr(h.normalized,-7)='.ts.net')
+                     AND EXISTS(SELECT 1 FROM cased bare
+                         WHERE bare.normalized=substr(h.normalized,1,instr(h.normalized,'.')-1))
+                     AND NOT EXISTS(SELECT 1 FROM active_cased q
+                         WHERE instr(q.normalized,'.')>0
+                           AND substr(q.normalized,1,instr(q.normalized,'.')-1)
+                               =substr(h.normalized,1,instr(h.normalized,'.')-1))
+                     AND (EXISTS(SELECT 1 FROM active_cased bare
+                         WHERE bare.normalized=substr(h.normalized,1,instr(h.normalized,'.')-1))
+                       OR (SELECT COUNT(DISTINCT q.normalized) FROM cased q
+                         WHERE instr(q.normalized,'.')>0
+                           AND substr(q.normalized,1,instr(q.normalized,'.')-1)
+                               =substr(h.normalized,1,instr(h.normalized,'.')-1)
+                           AND (substr(q.normalized,instr(q.normalized,'.'))='.local'
+                                OR substr(q.normalized,-7)='.ts.net'))=1)
+                 THEN substr(h.normalized,1,instr(h.normalized,'.')-1)
+                 ELSE h.normalized END) AS canonical
+             FROM cased h
+         ) SELECT hostname FROM mapped
+           WHERE canonical = COALESCE(
+               (SELECT canonical FROM mapped WHERE normalized = {requested} LIMIT 1),
+               {requested})"
+    )
 }
 
 #[cfg(test)]
