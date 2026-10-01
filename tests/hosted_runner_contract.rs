@@ -15,14 +15,29 @@ fn all_workflow_runner_selectors_are_github_hosted() {
         let workflow = std::fs::read_to_string(&path).unwrap();
         for line in workflow.lines() {
             if let Some(selector) = line.trim().strip_prefix("runs-on:") {
-                assert!(
-                    matches!(
-                        selector.trim(),
-                        "ubuntu-24.04" | "ubuntu-24.04-arm" | "macos-15" | "windows-latest"
-                    ),
-                    "{} has an unaudited runner selector: {selector}",
-                    path.display()
-                );
+                if selector.trim() == "${{ matrix.runner }}" {
+                    assert_eq!(
+                        path.file_name().and_then(|name| name.to_str()),
+                        Some("release.yml"),
+                        "{} uses an unaudited runner matrix",
+                        path.display()
+                    );
+                    let runners = workflow
+                        .lines()
+                        .filter_map(|line| line.trim().strip_prefix("runner:"))
+                        .map(str::trim)
+                        .collect::<Vec<_>>();
+                    assert_eq!(runners, ["ubuntu-24.04", "ubuntu-24.04-arm"]);
+                } else {
+                    assert!(
+                        matches!(
+                            selector.trim(),
+                            "ubuntu-24.04" | "ubuntu-24.04-arm" | "macos-15" | "windows-latest"
+                        ),
+                        "{} has an unaudited runner selector: {selector}",
+                        path.display()
+                    );
+                }
                 checked += 1;
             }
         }
