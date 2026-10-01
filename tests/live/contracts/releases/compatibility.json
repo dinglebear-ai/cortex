@@ -3,10 +3,10 @@
   "candidate": "3.18.1",
   "supported": {
     "n_minus_1": {
-      "version": "3.17.0",
+      "version": "3.18.0",
       "platform": "linux-amd64",
-      "origin": "ghcr.io/dinglebear-ai/cortex:v3.17.0",
-      "image": "ghcr.io/dinglebear-ai/cortex@sha256:5f95b104157a20a35214c1976f71313c1c29c41ab97df1abf455ebbe26cd64f9"
+      "origin": "ghcr.io/dinglebear-ai/cortex:v3.18.0",
+      "image": "ghcr.io/dinglebear-ai/cortex@sha256:7e0634ad0278ed32796a55df8defed1e10a0c1ab5d76aea13dd352e9cd6b44bb"
     },
     "oldest_scheduled": {
       "version": "3.13.0",
