@@ -323,7 +323,7 @@ fn age_retention_reconciles_raw_and_forwarded_hosts_after_reopen() {
     let config = test_storage_config(dir.path().join("test.db"));
     let reopened = init_pool(&config).unwrap();
     let hosts = list_hosts(&reopened).unwrap();
-    assert_eq!(hosts.len(), 2);
+    assert_eq!(hosts.len(), 3);
     assert_eq!(
         hosts
             .iter()
@@ -331,6 +331,14 @@ fn age_retention_reconciles_raw_and_forwarded_hosts_after_reopen() {
             .unwrap()
             .log_count,
         2
+    );
+    assert_eq!(
+        hosts
+            .iter()
+            .find(|h| h.hostname == "agent-shared_bearer")
+            .unwrap()
+            .log_count,
+        1 // The principal retains its raw row alongside the device claim.
     );
     assert_eq!(
         hosts
