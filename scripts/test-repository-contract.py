@@ -19,6 +19,10 @@ class Finding:
 
 def check(repo, profile):
     findings = [Finding("symlink-convention", "AGENTS.md", "legacy CLAUDE.md ownership")]
+    if (repo / "scripts/install.sh").exists():
+        findings.append(Finding("no-arm-contract", "scripts/install.sh", "ARM outside fleet contract"))
+    if (repo / "package.json").exists():
+        findings.append(Finding("no-arm-contract", "package.json", "ARM outside fleet contract"))
     for name in ("docs-frontmatter", "future-contract-check"):
         if (repo / name).exists():
             findings.append(Finding(name, "fixture", "must remain enforced"))
@@ -52,7 +56,32 @@ class ContractAdapterTests(unittest.TestCase):
     def test_replaces_only_legacy_ownership(self):
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("AGENTS.md authority", result.stdout)
+        self.assertIn("Cortex instruction and native ARM rules", result.stdout)
+
+    def test_qualified_arm_installer_exception(self):
+        (self.root / "scripts/install.sh").write_text("arm64\n")
+        release = self.root / ".github/workflows/release.yml"
+        release.parent.mkdir(parents=True)
+        release.write_text("\n".join((
+            "cortex-linux-arm64:", "cortex-macos-arm64:",
+            "macos-package-gate:", "runs-on: ubuntu-24.04-arm",
+            "runs-on: macos-15",
+            "needs: [cortex-linux, cortex-linux-arm64, cortex-macos-arm64,",
+            "cortex-linux-aarch64.tar.gz",
+            "cortex-macos-arm64",
+        )))
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (self.root / "package.json").write_text("arm64\n")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no-arm-contract: package.json", result.stdout)
+
+    def test_arm_installer_requires_release_qualification(self):
+        (self.root / "scripts/install.sh").write_text("arm64\n")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no-arm-contract: scripts/install.sh", result.stdout)
 
     def test_rejects_missing_shared_alias(self):
         (self.root / "GEMINI.md").unlink()

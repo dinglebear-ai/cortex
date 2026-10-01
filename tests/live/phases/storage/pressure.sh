@@ -59,7 +59,10 @@ live_resource_transition storage-quota-container docker-container IDENTIFIED "$p
 docker start "$container_id" >/dev/null
 live_resource_transition storage-quota-container docker-container CREATED "$provider" "$container_id" "$container_cleanup" "$container_digest" "$container_labels" "$container_verify" storage-quota-volume
 _quota_stats() { docker exec -e RUST_LOG=error "$container" cortex stats --json 2>/dev/null; }
-_quota_ready() { _quota_stats >/dev/null; }; live_wait_until 30 quota-candidate-ready _quota_ready
+_quota_ready() {
+  _quota_stats >/dev/null &&
+    docker exec "$container" curl -fsS --max-time 2 -H 'Host: localhost' http://127.0.0.1:3100/health >/dev/null
+}; live_wait_until 30 quota-candidate-ready _quota_ready
 _otlp_post() {
   local stage="$1" signal="$2" body="$3" headers="$4"
   docker exec "$container" curl -sS --max-time 10 -D /tmp/otlp.headers -o /tmp/otlp.body -w '%{http_code}' -H 'Content-Type: application/x-protobuf' --data-binary "@/fixtures/$stage/$signal.pb" "http://127.0.0.1:3100/v1/$signal" >"$headers.status"
