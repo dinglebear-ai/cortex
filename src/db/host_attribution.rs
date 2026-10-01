@@ -11,6 +11,7 @@ const MAX_BATCH_ROWS: usize = 1_000;
 
 #[derive(Debug, Clone)]
 pub struct ForwardedHostCount {
+    pub original_hostname: String,
     pub hostname: String,
     pub log_count: i64,
     pub first_seen: String,
@@ -50,6 +51,9 @@ pub(super) fn install_schema(conn: &Connection) -> Result<()> {
              PRIMARY KEY(original_hostname,hostname)
          );
          CREATE TABLE forwarded_host_names (
+             hostname TEXT PRIMARY KEY
+         );
+         CREATE TABLE forwarded_principal_names (
              hostname TEXT PRIMARY KEY
          );
          CREATE TABLE forwarded_deleted_log_hosts (
@@ -102,6 +106,7 @@ pub(super) fn install_schema(conn: &Connection) -> Result<()> {
          END;
          CREATE TRIGGER forwarded_log_hosts_insert AFTER INSERT ON forwarded_log_hosts BEGIN
              INSERT OR IGNORE INTO forwarded_host_names(hostname) VALUES(new.hostname);
+             INSERT OR IGNORE INTO forwarded_principal_names(hostname) VALUES(new.original_hostname);
              INSERT INTO forwarded_host_counts(original_hostname,hostname,log_count,first_seen,last_seen)
              VALUES(new.original_hostname,new.hostname,1,new.received_at,new.received_at)
              ON CONFLICT(original_hostname,hostname) DO UPDATE SET
@@ -177,18 +182,30 @@ fn insert_subject(
 pub fn list_forwarded_host_counts(conn: &Connection) -> Result<Vec<ForwardedHostCount>> {
     Ok(conn
         .prepare(
-            "SELECT hostname,log_count,first_seen,last_seen
+            "SELECT original_hostname,hostname,log_count,first_seen,last_seen
          FROM forwarded_host_counts ORDER BY original_hostname,hostname",
         )?
         .query_map([], |row| {
             Ok(ForwardedHostCount {
-                hostname: row.get(0)?,
-                log_count: row.get(1)?,
-                first_seen: row.get(2)?,
-                last_seen: row.get(3)?,
+                original_hostname: row.get(0)?,
+                hostname: row.get(1)?,
+                log_count: row.get(2)?,
+                first_seen: row.get(3)?,
+                last_seen: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Validated forwarding evidence establishes a principal namespace even after
+/// its last attributed row expires. Similar-looking device names do not.
+pub(super) fn list_forwarding_principals(
+    conn: &Connection,
+) -> Result<std::collections::HashSet<String>> {
+    Ok(conn
+        .prepare("SELECT hostname FROM forwarded_principal_names")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 /// Resume one bounded historical page. Cursor and inserts commit atomically;

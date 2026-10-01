@@ -310,3 +310,181 @@ fn direct_and_claimed_rows_with_same_name_keep_claim_trust() {
     assert_eq!(host.source_kind, HostSourceKind::ClaimedHost);
     assert!(host.host_id.is_none());
 }
+
+fn named_entry(claim: &str, second: u32) -> LogBatchEntry {
+    let mut entry = forwarded_entry(claim, "10.0.0.8", second);
+    entry.hostname = "agent-collector-a".into();
+    let mut metadata: serde_json::Value =
+        serde_json::from_str(entry.metadata_json.as_deref().unwrap()).unwrap();
+    metadata["forwarded_provenance"]["authenticated_forwarder"] = "collector-a".into();
+    metadata["forwarded_provenance"]["trust"] = "verified_forwarder_claimed_host".into();
+    entry.metadata_json = Some(metadata.to_string());
+    entry
+}
+
+#[test]
+fn proved_named_principals_keep_source_identity_separate_from_device_aliases() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            named_entry("agent-collector-a.local", 1),
+            named_entry("edge-node-b", 2),
+            make_entry("2026-09-30T12:00:03Z", "agent-os", "info", "direct"),
+            make_entry(
+                "2026-09-30T12:00:04Z",
+                "AGENT-OS.local",
+                "info",
+                "direct alias",
+            ),
+        ],
+    )
+    .unwrap();
+    let conn = pool.get().unwrap();
+    for name in ["agent-collector-a", "agent-collector-a.local", "agent-os"] {
+        conn.execute("INSERT INTO host_heartbeats
+            (host_id,hostname,source_ip,sampled_at,received_at,boot_id,uptime_secs,sequence,collection_ms,partial,agent_version,os,architecture,metadata_json)
+            VALUES (?1,?1,'10.0.0.8:41000','2026-09-30T12:00:00Z','2026-09-30T12:00:00Z','boot-a',60,1,5,0,'3.17.0','linux','x86_64','{}')", [name]).unwrap();
+    }
+    drop(conn);
+    let hosts = list_hosts(&pool).unwrap();
+    let principal = hosts
+        .iter()
+        .find(|h| h.hostname == "agent-collector-a")
+        .unwrap();
+    assert_eq!(principal.source_kind, HostSourceKind::ForwardingPrincipal);
+    assert_eq!(principal.log_count, 2);
+    assert_eq!(principal.aliases, ["agent-collector-a"]);
+    assert!(principal.host_id.is_none());
+    let claim = hosts
+        .iter()
+        .find(|h| h.hostname == "agent-collector-a.local")
+        .unwrap();
+    assert_eq!(claim.source_kind, HostSourceKind::ClaimedHost);
+    assert_eq!(claim.log_count, 1);
+    assert!(claim.host_id.is_none());
+    let direct = hosts.iter().find(|h| h.hostname == "agent-os").unwrap();
+    assert_eq!(direct.source_kind, HostSourceKind::Host);
+    assert_eq!(direct.log_count, 2);
+    assert_eq!(direct.host_id.as_deref(), Some("agent-os"));
+    assert_eq!(
+        hosts
+            .iter()
+            .filter(|h| matches!(
+                h.source_kind,
+                HostSourceKind::Host | HostSourceKind::ClaimedHost
+            ))
+            .count(),
+        3
+    );
+    for (host, count) in [
+        ("agent-collector-a", 2),
+        ("AGENT-COLLECTOR-A", 0),
+        ("agent-collector-a.local", 1),
+        ("agent-os", 2),
+    ] {
+        assert_eq!(
+            tail_logs(&pool, Some(host), None, None, None, 10)
+                .unwrap()
+                .len(),
+            count
+        );
+        for query in [None, Some("forwarded".to_string())] {
+            if host == "agent-os" && query.is_some() {
+                continue;
+            }
+            assert_eq!(
+                search_logs(
+                    &pool,
+                    &SearchParams {
+                        host: Some(host.into()),
+                        query,
+                        limit: Some(10),
+                        ..Default::default()
+                    }
+                )
+                .unwrap()
+                .len(),
+                count
+            );
+        }
+        assert_eq!(
+            crate::db::durable_stream_page(
+                &pool,
+                &crate::db::DurableStreamParams {
+                    hostname: Some(host.into()),
+                    limit: 10,
+                    include_bounds: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .rows
+            .len(),
+            count
+        );
+    }
+}
+
+#[test]
+fn named_principal_proof_survives_last_attributed_row_deletion() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            named_entry("agent-collector-a.local", 1),
+            named_entry("unknown", 2),
+        ],
+    )
+    .unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("DELETE FROM logs WHERE id=1", []).unwrap();
+    // Emulate the retention path's raw registry adjustment independently from
+    // attribution cleanup, which must retain the observed principal namespace.
+    conn.execute(
+        "UPDATE hosts SET log_count=1 WHERE hostname='agent-collector-a'",
+        [],
+    )
+    .unwrap();
+    assert!(
+        crate::db::host_attribution::list_forwarded_host_counts(&conn)
+            .unwrap()
+            .is_empty()
+    );
+    drop(conn);
+    let hosts = list_hosts(&pool).unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].hostname, "agent-collector-a");
+    assert_eq!(hosts[0].source_kind, HostSourceKind::ForwardingPrincipal);
+    assert!(hosts[0].host_id.is_none());
+    assert_eq!(
+        tail_logs(&pool, Some("agent-collector-a.local"), None, None, None, 10)
+            .unwrap()
+            .len(),
+        0
+    );
+    let deleted = crate::db::durable_stream_page(
+        &pool,
+        &crate::db::DurableStreamParams {
+            hostname: Some("agent-collector-a.local".into()),
+            limit: 10,
+            include_bounds: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(deleted.rows.is_empty());
+    assert_eq!(deleted.minimum_watermark, Some(2));
+    let principal = crate::db::durable_stream_page(
+        &pool,
+        &crate::db::DurableStreamParams {
+            hostname: Some("agent-collector-a".into()),
+            limit: 10,
+            include_bounds: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(principal.rows.len(), 1);
+    assert_eq!(principal.rows[0].id, 2);
+}

@@ -63,20 +63,35 @@ pub(crate) fn canonical_host_keys(
 /// Aggregate reported log sources using conservative hostname aliases. Counts
 /// and time bounds combine, while raw spellings and source identity remain visible.
 /// This is not a merge of heartbeat device IDs or authentication principals.
-pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
-    let names: Vec<String> = rows.iter().map(|h| h.hostname.clone()).collect();
+pub(super) fn dedupe_hosts(mut rows: Vec<HostEntry>) -> Vec<HostEntry> {
+    for row in &mut rows {
+        if HostSourceKind::for_hostname(&row.hostname) == HostSourceKind::ForwardingPrincipal {
+            row.source_kind = HostSourceKind::ForwardingPrincipal;
+        }
+    }
+    let names: Vec<String> = rows
+        .iter()
+        .filter(|h| h.source_kind != HostSourceKind::ForwardingPrincipal)
+        .map(|h| h.hostname.clone())
+        .collect();
     let canon = canonical_host_keys(&names);
-    let mut merged: std::collections::HashMap<String, HostEntry> = std::collections::HashMap::new();
-    let mut order: Vec<String> = Vec::new();
+    let mut merged = std::collections::HashMap::<(String, bool), HostEntry>::new();
+    let mut order = Vec::new();
     for entry in rows {
-        let canonical = canon
-            .get(&entry.hostname)
-            .cloned()
-            .unwrap_or_else(|| case_fold_host(&entry.hostname));
+        let principal = entry.source_kind == HostSourceKind::ForwardingPrincipal;
+        let canonical = if principal {
+            entry.hostname.trim().to_string()
+        } else {
+            canon
+                .get(&entry.hostname)
+                .cloned()
+                .unwrap_or_else(|| case_fold_host(&entry.hostname))
+        };
         if canonical.is_empty() {
             continue;
         }
-        match merged.get_mut(&canonical) {
+        let key = (canonical.clone(), principal);
+        match merged.get_mut(&key) {
             Some(acc) => {
                 acc.log_count += entry.log_count;
                 if entry.source_kind == HostSourceKind::ClaimedHost {
@@ -91,9 +106,9 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
                 }
             }
             None => {
-                order.push(canonical.clone());
+                order.push(key.clone());
                 merged.insert(
-                    canonical.clone(),
+                    key,
                     HostEntry {
                         hostname: canonical.clone(),
                         host_id: None,
@@ -101,8 +116,10 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
                         last_seen: entry.last_seen.clone(),
                         log_count: entry.log_count,
                         aliases: vec![entry.hostname.clone()],
-                        source_kind: if entry.source_kind == HostSourceKind::ClaimedHost {
-                            HostSourceKind::ClaimedHost
+                        source_kind: if principal
+                            || entry.source_kind == HostSourceKind::ClaimedHost
+                        {
+                            entry.source_kind
                         } else {
                             HostSourceKind::for_hostname(&canonical)
                         },
@@ -147,10 +164,18 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     })?;
 
     let mut rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let attributed = super::host_attribution::list_forwarded_host_counts(&conn)?;
+    let mut principals = super::host_attribution::list_forwarding_principals(&conn)?;
+    principals.extend(attributed.iter().map(|row| row.original_hostname.clone()));
+    for row in &mut rows {
+        if principals.contains(&row.hostname) {
+            row.source_kind = HostSourceKind::ForwardingPrincipal;
+        }
+    }
     // Raw source totals remain intact: source-level filters include every row
     // received under that principal, including rows also shown by claimed
     // device name. These two views overlap rather than partitioning evidence.
-    for attributed in super::host_attribution::list_forwarded_host_counts(&conn)? {
+    for attributed in attributed {
         rows.push(HostEntry {
             hostname: attributed.hostname,
             host_id: None,
@@ -182,32 +207,39 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
 /// changing that grouping. Safe local/tailnet tombstones can join a bare group
 /// only when no active qualified name conflicts. No raw history scan is needed.
 pub(super) fn host_alias_select(parameter: &str) -> String {
+    let principal = |column: &str| {
+        format!(
+            "(EXISTS(SELECT 1 FROM forwarded_principal_names p WHERE p.hostname={column})
+                OR lower(rtrim(trim({column}), '.')) IN ('agent-shared_bearer','agent-loopback')
+                OR lower(rtrim(trim({column}), '.')) LIKE 'bearer-shared-%')"
+        )
+    };
     let normalize = |column: &str| {
         format!(
-            "CASE WHEN lower(trim({column})) IN ('agent-shared_bearer','agent-loopback')
-                      OR lower(trim({column})) LIKE 'bearer-shared-%'
-                  THEN trim({column}) ELSE lower(rtrim(trim({column}), '.')) END"
+            "CASE WHEN {} THEN trim({column}) ELSE lower(rtrim(trim({column}), '.')) END",
+            principal(column)
         )
     };
     let requested = normalize(parameter);
-    let normalized = normalize("hostname");
+    let requested_principal = principal(parameter);
+    let normalized = normalize("h.hostname");
+    let is_principal = principal("h.hostname");
     format!(
         "WITH active AS (
              SELECT h.hostname FROM hosts h
-             WHERE h.log_count > COALESCE((SELECT SUM(f.log_count)
-                 FROM forwarded_host_counts f WHERE f.original_hostname=h.hostname),0)
+             WHERE h.log_count > 0
              UNION SELECT hostname FROM forwarded_host_counts
          ), active_cased AS (
-             SELECT hostname, {normalized} AS normalized FROM active
+             SELECT h.hostname, {normalized} AS normalized, {is_principal} AS principal FROM active h
          ), active_mapped AS (
-             SELECT h.hostname,h.normalized,
-                 CASE WHEN instr(h.normalized, '.') > 0
+             SELECT h.hostname,h.normalized,h.principal,
+                 CASE WHEN h.principal=0 AND instr(h.normalized, '.') > 0
                      AND (substr(h.normalized, instr(h.normalized, '.')) = '.local'
                           OR substr(h.normalized, -7) = '.ts.net')
                      AND EXISTS (SELECT 1 FROM active_cased bare
-                         WHERE bare.normalized = substr(h.normalized, 1, instr(h.normalized, '.')-1))
+                         WHERE bare.principal=0 AND bare.normalized = substr(h.normalized, 1, instr(h.normalized, '.')-1))
                      AND (SELECT COUNT(DISTINCT q.normalized) FROM active_cased q
-                         WHERE instr(q.normalized, '.') > 0
+                         WHERE q.principal=0 AND instr(q.normalized, '.') > 0
                            AND substr(q.normalized, 1, instr(q.normalized, '.')-1)
                                = substr(h.normalized, 1, instr(h.normalized, '.')-1)) = 1
                  THEN substr(h.normalized, 1, instr(h.normalized, '.')-1)
@@ -216,24 +248,25 @@ pub(super) fn host_alias_select(parameter: &str) -> String {
          ), known AS (
              SELECT hostname FROM hosts
              UNION SELECT hostname FROM forwarded_host_names
+             UNION SELECT hostname FROM forwarded_principal_names
          ), cased AS (
-             SELECT hostname, {normalized} AS normalized FROM known
+             SELECT h.hostname, {normalized} AS normalized, {is_principal} AS principal FROM known h
          ), mapped AS (
-             SELECT h.hostname,h.normalized,COALESCE(
-                 (SELECT canonical FROM active_mapped a WHERE a.normalized=h.normalized LIMIT 1),
-                 CASE WHEN instr(h.normalized,'.')>0
+             SELECT h.hostname,h.normalized,h.principal,COALESCE(
+                 (SELECT canonical FROM active_mapped a WHERE a.normalized=h.normalized AND a.principal=h.principal LIMIT 1),
+                 CASE WHEN h.principal=0 AND instr(h.normalized,'.')>0
                      AND (substr(h.normalized,instr(h.normalized,'.'))='.local'
                           OR substr(h.normalized,-7)='.ts.net')
                      AND EXISTS(SELECT 1 FROM cased bare
-                         WHERE bare.normalized=substr(h.normalized,1,instr(h.normalized,'.')-1))
+                         WHERE bare.principal=0 AND bare.normalized=substr(h.normalized,1,instr(h.normalized,'.')-1))
                      AND NOT EXISTS(SELECT 1 FROM active_cased q
-                         WHERE instr(q.normalized,'.')>0
+                         WHERE q.principal=0 AND instr(q.normalized,'.')>0
                            AND substr(q.normalized,1,instr(q.normalized,'.')-1)
                                =substr(h.normalized,1,instr(h.normalized,'.')-1))
                      AND (EXISTS(SELECT 1 FROM active_cased bare
-                         WHERE bare.normalized=substr(h.normalized,1,instr(h.normalized,'.')-1))
+                         WHERE bare.principal=0 AND bare.normalized=substr(h.normalized,1,instr(h.normalized,'.')-1))
                        OR (SELECT COUNT(DISTINCT q.normalized) FROM cased q
-                         WHERE instr(q.normalized,'.')>0
+                         WHERE q.principal=0 AND instr(q.normalized,'.')>0
                            AND substr(q.normalized,1,instr(q.normalized,'.')-1)
                                =substr(h.normalized,1,instr(h.normalized,'.')-1)
                            AND (substr(q.normalized,instr(q.normalized,'.'))='.local'
@@ -242,8 +275,9 @@ pub(super) fn host_alias_select(parameter: &str) -> String {
                  ELSE h.normalized END) AS canonical
              FROM cased h
          ) SELECT hostname FROM mapped
-           WHERE canonical = COALESCE(
-               (SELECT canonical FROM mapped WHERE normalized = {requested} LIMIT 1),
+           WHERE principal={requested_principal} AND canonical = COALESCE(
+               (SELECT canonical FROM mapped WHERE normalized = {requested}
+                   AND principal={requested_principal} LIMIT 1),
                {requested})"
     )
 }

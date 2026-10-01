@@ -59,6 +59,11 @@ fn future_projection_preserves_auth_identity_and_separates_devices() {
     assert_eq!(raw, vec!["agent-shared_bearer"; 3]);
     let counts = list_forwarded_host_counts(&conn).unwrap();
     assert_eq!(counts.len(), 2);
+    assert!(
+        counts
+            .iter()
+            .all(|row| row.original_hostname == "agent-shared_bearer")
+    );
     assert_eq!(
         counts
             .iter()
@@ -156,6 +161,10 @@ fn historical_batches_resume_without_double_counting_live_rows() {
     let conn = pool.get().unwrap();
     let counts = list_forwarded_host_counts(&conn).unwrap();
     assert_eq!(counts.iter().map(|c| c.log_count).sum::<i64>(), 3);
+    assert_eq!(
+        list_forwarding_principals(&conn).unwrap(),
+        std::collections::HashSet::from(["agent-shared_bearer".to_string()])
+    );
     // Replay is idempotent, including a snapshot that overlaps live projection.
     conn.execute("DELETE FROM forwarded_raw_host_counts", [])
         .unwrap();
