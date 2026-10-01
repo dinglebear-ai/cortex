@@ -1841,15 +1841,19 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
         r#"{"sessionId":"later-provider","messages":[{"id":"later","content":"later provider discovered despite huge root"}]}"#,
     )
     .unwrap();
+    // The held worker forces the first root to time out regardless of this
+    // allowance. Healthy roots and resumed cursors need enough time for real
+    // filesystem and SQLite work on a loaded CI runner.
+    let scan_budget = ScanBudget {
+        per_source_max_bytes: 4_096,
+        scan_max_bytes: 16_384,
+        per_source_deadline: std::time::Duration::from_secs(5),
+    };
     let _delay = SnapshotWorkerGuard::for_file("projects");
     let result = index_roots_with_options(
         &pool,
         IndexOptions {
-            scan_budget: Some(ScanBudget {
-                per_source_max_bytes: 4_096,
-                scan_max_bytes: 16_384,
-                per_source_deadline: std::time::Duration::from_millis(25),
-            }),
+            scan_budget: Some(scan_budget),
             ..Default::default()
         },
         None,
@@ -1876,7 +1880,7 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
             |row| row.get(0),
     )
     .unwrap();
-    assert_eq!(later_provider_rows, 1);
+    assert_eq!(later_provider_rows, 1, "result={result:#?}");
 
     // Only the first pass models a stalled root. Subsequent incremental work
     // must prove that the recorded entry cursor itself, not another timeout,
@@ -1887,11 +1891,7 @@ fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
             &pool,
             IndexOptions {
                 discovery_start_after: continuations.clone(),
-                scan_budget: Some(ScanBudget {
-                    per_source_max_bytes: 4_096,
-                    scan_max_bytes: 16_384,
-                    per_source_deadline: std::time::Duration::from_secs(1),
-                }),
+                scan_budget: Some(scan_budget),
                 ..Default::default()
             },
             None,
