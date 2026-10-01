@@ -17,10 +17,9 @@ pub(crate) fn subject_hostname(
     let (peer, provenance_key) =
         if let Some(peer) = source_ip.strip_prefix("agent-ai-transcript://") {
             (peer, "provenance")
-        } else if let Some(peer) = source_ip.strip_prefix("agent-syslog://") {
-            (peer, "forwarded_provenance")
         } else {
-            return None;
+            let peer = source_ip.strip_prefix("agent-syslog://")?;
+            (peer, "forwarded_provenance")
         };
     let peer: IpAddr = peer.parse().ok()?;
     let encoded = metadata_json?;
