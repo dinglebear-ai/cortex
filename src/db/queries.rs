@@ -37,6 +37,12 @@ use super::models::{
 use super::pool::DbPool;
 use super::queries_service_instances;
 
+#[path = "queries_attributed_hosts.rs"]
+mod attributed_hosts;
+
+#[path = "queries_attributed_stream.rs"]
+mod attributed_stream;
+
 #[path = "queries_session_graph.rs"]
 mod session_graph;
 pub use session_graph::{SessionGraphScope, correlate_session_graph_scoped};
@@ -270,8 +276,11 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
 
-    if let Some(host) = params.host.as_deref().filter(|_| host_only_search(params)) {
-        return search_logs_for_host(&conn, host, limit);
+    if params.host.is_some() {
+        if let Some(query) = params.query.as_deref() {
+            validate_fts_query(query)?;
+        }
+        return attributed_hosts::search(&conn, params, limit);
     }
 
     // If we have a full-text query, use FTS5 join
@@ -282,7 +291,9 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(bindings.iter()), map_row)
+            .query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+                map_attributed_row(&conn, row)
+            })
             .map_err(|e| {
                 tracing::error!(error = %e, query = %query, "FTS5 MATCH query failed");
                 anyhow::anyhow!("Search query failed")
@@ -306,7 +317,9 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
         push_bound_limit(&mut sql, &mut bindings, &mut idx, "LIMIT", limit);
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), map_row)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+            map_attributed_row(&conn, row)
+        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
@@ -336,6 +349,7 @@ fn host_only_search(params: &SearchParams) -> bool {
         && !params.exclude_ai
 }
 
+#[cfg(test)]
 fn host_only_search_sql(hostname: &str, limit: u32) -> (String, Vec<rusqlite::types::Value>) {
     (
         format!(
@@ -354,31 +368,14 @@ fn search_logs_for_host(
     host: &str,
     limit: u32,
 ) -> Result<Vec<LogEntry>> {
-    // Mirror append_host_selector's canonical bare-name and FQDN matching.
-    let mut host_query = conn.prepare(
-        "SELECT h.hostname FROM hosts h
-         WHERE lower(rtrim(trim(h.hostname), '.')) = lower(rtrim(trim(?1), '.'))
-            OR (lower(rtrim(trim(h.hostname), '.')) LIKE lower(rtrim(trim(?1), '.')) || '.%'
-                AND EXISTS (SELECT 1 FROM hosts bare
-                    WHERE lower(rtrim(trim(bare.hostname), '.')) = lower(rtrim(trim(?1), '.'))
-                      AND instr(lower(rtrim(trim(bare.hostname), '.')), '.') = 0))",
-    )?;
-    let hostnames = host_query
-        .query_map([host], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut results = Vec::new();
-    for hostname in hostnames {
-        let (sql, bindings) = host_only_search_sql(&hostname, limit);
-        let mut statement = conn.prepare(&sql)?;
-        results.extend(
-            statement
-                .query_map(rusqlite::params_from_iter(bindings.iter()), map_row)?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
-        );
-    }
-    results.sort_unstable_by(|left, right| right.timestamp.cmp(&left.timestamp));
-    results.truncate(limit as usize);
-    Ok(results)
+    attributed_hosts::search(
+        conn,
+        &SearchParams {
+            host: Some(host.to_string()),
+            ..Default::default()
+        },
+        limit,
+    )
 }
 
 /// Get the N most recent logs for a host/service
@@ -391,10 +388,32 @@ pub fn tail_logs(
     n: u32,
 ) -> Result<Vec<LogEntry>> {
     let conn = pool.get()?;
+    if let Some(host) = hostname
+        && source_ip.is_none()
+        && app_name.is_none()
+        && severity_in.is_none_or(|levels| levels.is_empty())
+    {
+        return search_logs_for_host(&conn, host, n.min(500));
+    }
+    if let Some(host) = hostname {
+        return attributed_hosts::search(
+            &conn,
+            &SearchParams {
+                host: Some(host.to_string()),
+                source: source_ip.map(str::to_string),
+                app: app_name.map(str::to_string),
+                severity_in: severity_in.map(<[String]>::to_vec),
+                ..Default::default()
+            },
+            n.min(500),
+        );
+    }
     let (sql, bindings) = tail_logs_sql(hostname, source_ip, app_name, severity_in, n);
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), map_row)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
+        map_attributed_row(&conn, row)
+    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -658,8 +677,15 @@ pub fn durable_stream_page(
     params: &DurableStreamParams,
 ) -> Result<DurableStreamPage> {
     let conn = pool.get()?;
+    if params.hostname.is_some()
+        && params.ai_project.is_none()
+        && params.ai_tool.is_none()
+        && params.ai_session_id.is_none()
+    {
+        return attributed_stream::page(&conn, params);
+    }
     let mut sql = String::from(
-        "SELECT CAST(id AS INTEGER),timestamp,hostname,severity,app_name,message,metadata_json,parse_error FROM logs WHERE id > ?1",
+        "SELECT CAST(id AS INTEGER),timestamp,hostname,severity,app_name,message,metadata_json,parse_error,source_ip FROM logs WHERE id > ?1",
     );
     let mut values = vec![rusqlite::types::Value::Integer(params.after_id)];
     let mut push_filter = |column: &str, value: &Option<String>| {
@@ -688,7 +714,21 @@ pub fn durable_stream_page(
             Ok(DurableStreamRow {
                 id: row.get(0)?,
                 timestamp: row.get(1)?,
-                hostname: row.get(2)?,
+                hostname: if params.ai_project.is_none()
+                    && params.ai_tool.is_none()
+                    && params.ai_session_id.is_none()
+                {
+                    let raw: String = row.get(2)?;
+                    super::host_attribution::resolved_subject_hostname(
+                        &conn,
+                        &raw,
+                        &row.get::<_, String>(8)?,
+                        row.get::<_, Option<String>>(6)?.as_deref(),
+                    )?
+                    .unwrap_or(raw)
+                } else {
+                    row.get(2)?
+                },
                 severity: row.get(3)?,
                 app_name: row.get(4)?,
                 message: row.get(5)?,
@@ -3628,24 +3668,17 @@ fn append_host_selector(
     hostname: &str,
 ) {
     let param = format!("?{}", *idx);
-    let normalized_param = format!("lower(rtrim(trim({param}), '.'))");
-    let normalized_host = "lower(rtrim(trim(h.hostname), '.'))";
-    let normalized_bare = "lower(rtrim(trim(bare.hostname), '.'))";
+    let aliases = super::queries_hosts::host_alias_select(&param);
+    let id_column = column
+        .strip_suffix("hostname")
+        .map(|prefix| format!("{prefix}id"))
+        .expect("host selector is applied to a log hostname column");
+    let guard = super::host_attribution::projected_host_guard("attributed.hostname");
     sql.push_str(&format!(
-        " AND {column} IN (
-             SELECT h.hostname
-             FROM hosts h
-             WHERE {normalized_host} = {normalized_param}
-                OR (
-                    {normalized_host} LIKE {normalized_param} || '.%'
-                    AND EXISTS (
-                        SELECT 1
-                        FROM hosts bare
-                        WHERE {normalized_bare} = {normalized_param}
-                          AND instr({normalized_bare}, '.') = 0
-                    )
-                )
-         )"
+        " AND ({column} IN ({aliases})
+              OR EXISTS (SELECT 1 FROM forwarded_log_hosts attributed
+                         WHERE attributed.log_id = {id_column}
+                           AND attributed.hostname IN ({aliases}) AND {guard}))"
     ));
     bindings.push(rusqlite::types::Value::Text(hostname.to_string()));
     *idx += 1;
@@ -3665,6 +3698,22 @@ fn prefix_upper_bound(prefix: &str) -> Option<String> {
 
 pub(super) fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
     map_row_offset(row, 0)
+}
+
+fn map_attributed_row(
+    conn: &rusqlite::Connection,
+    row: &rusqlite::Row,
+) -> rusqlite::Result<LogEntry> {
+    let mut entry = map_row(row)?;
+    if let Some(hostname) = super::host_attribution::resolved_subject_hostname(
+        conn,
+        &entry.hostname,
+        &entry.source_ip,
+        entry.metadata_json.as_deref(),
+    )? {
+        entry.hostname = hostname;
+    }
+    Ok(entry)
 }
 
 fn map_row_offset(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<LogEntry> {

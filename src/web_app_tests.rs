@@ -136,7 +136,7 @@ async fn app_rendering_contract_covers_xss_fixtures() {
         "ui.selectedTitle.textContent = data.label || data.id;",
         "ui.serverVersion.textContent = version.version || \"Unknown\";",
         "ui.schemaVersion.textContent = `Schema ${version.schema_version ?? \"--\"}`;",
-        "ui.hostCount.textContent = String(latestHosts.length);",
+        "ui.hostCount.textContent = String(normalizeHostSources(latestHosts)",
         "ui.logCount.textContent = String(stats.total_logs ?? stats.total ?? \"--\");",
     ] {
         assert!(

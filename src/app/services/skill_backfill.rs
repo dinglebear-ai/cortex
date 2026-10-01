@@ -102,6 +102,14 @@ fn backfill_guard() -> Arc<Semaphore> {
     Arc::clone(GUARD.get_or_init(|| Arc::new(Semaphore::new(1))))
 }
 
+#[cfg(test)]
+static BACKFILL_TEST_HOLD: std::sync::Mutex<Option<BackfillTestHold>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+type BackfillTestHold = (
+    std::sync::mpsc::SyncSender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
 struct CandidateRow {
     id: i64,
     ai_tool: String,
@@ -146,6 +154,52 @@ fn extract_forwarded_claude_skill_events(row: &CandidateRow) -> Vec<ExtractedSki
     }))
 }
 
+fn source_matches_persisted_command(
+    row: &CandidateRow,
+    line: &str,
+    path: &str,
+    line_no: usize,
+) -> bool {
+    let Ok(Some(parsed)) = crate::scanner::parse_line_for_source(
+        crate::scanner::SourceKind::ClaudeProject,
+        line,
+        Path::new(path),
+        line_no,
+    ) else {
+        return false;
+    };
+    if crate::receiver::enrichment::scrub_ai_message(&parsed.message, None) != row.message {
+        return false;
+    }
+    row.metadata_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("record_key")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_none_or(|record_key| record_key == parsed.record_key)
+}
+
+fn same_command_identities(
+    source: &[ExtractedSkillEvent],
+    persisted: &[ExtractedSkillEvent],
+) -> bool {
+    let identity = |event: &ExtractedSkillEvent| {
+        if event.skill_name.contains(':') {
+            event.skill_name.clone()
+        } else if let Some(plugin) = event.skill_plugin.as_deref() {
+            format!("{plugin}:{}", event.skill_name)
+        } else {
+            event.skill_name.clone()
+        }
+    };
+    source.iter().map(identity).collect::<HashSet<_>>()
+        == persisted.iter().map(identity).collect::<HashSet<_>>()
+}
+
 impl CortexService {
     pub async fn backfill_skill_events(
         &self,
@@ -159,11 +213,18 @@ impl CortexService {
         // Eng review Fix 7: single-flight guard acquired BEFORE the run_db
         // call so a second concurrent caller never even queues for a DB
         // permit — it fails fast here instead.
-        let _permit = backfill_guard()
+        let permit = backfill_guard()
             .try_acquire_owned()
             .map_err(|_| ServiceError::Busy("skill event backfill already running".into()))?;
 
         self.run_db("backfill_skill_events", move |pool| {
+            // Cancelling the async request does not stop this blocking worker.
+            let _permit = permit;
+            #[cfg(test)]
+            if let Some((started, release)) = BACKFILL_TEST_HOLD.lock().unwrap().take() {
+                let _ = started.send(());
+                let _ = release.recv();
+            }
             run_backfill(pool, since.as_deref(), limit, dry_run)
         })
         .await
@@ -204,8 +265,10 @@ fn run_backfill(
         result.scanned += rows.len() as u64;
         remaining = remaining.saturating_sub(rows.len() as u64);
 
-        // Resolve source lines only for Claude rows that cannot be recovered
-        // from a persisted command envelope. Rows sharing a transcript file
+        // Resolve available source lines even when a persisted command envelope
+        // exists: matching structured attribution takes precedence over
+        // content evidence when the source still matches the stored record.
+        // Rows sharing a transcript file
         // open and scan it once per chunk. Two borrowed maps over `rows` (no
         // owned-String clones): `row_source` maps each row id to its
         // `(path, line_no)`, and `wanted_by_file` collects the distinct line
@@ -217,9 +280,6 @@ fn run_backfill(
             if row.ai_tool != "claude" {
                 continue;
             }
-            if !extract_forwarded_claude_skill_events(row).is_empty() {
-                continue;
-            }
             match (
                 row.ai_transcript_path.as_deref(),
                 row.metadata_json.as_deref().and_then(line_no_from_metadata),
@@ -228,13 +288,14 @@ fn run_backfill(
                     row_source.insert(row.id, (path, line_no));
                     wanted_by_file.entry(path).or_default().insert(line_no);
                 }
-                _ => {
+                _ if extract_forwarded_claude_skill_events(row).is_empty() => {
                     result.source_unavailable += 1;
                     tracing::debug!(
                         log_id = row.id,
                         "skill backfill: claude row missing ai_transcript_path/line_no metadata; unrecoverable"
                     );
                 }
+                _ => {}
             }
         }
         let mut resolved: HashMap<(&str, usize), String> = HashMap::new();
@@ -262,35 +323,53 @@ fn run_backfill(
             let extracted = match row.ai_tool.as_str() {
                 "claude" => {
                     let forwarded = extract_forwarded_claude_skill_events(row);
-                    if !forwarded.is_empty() {
-                        forwarded
-                    } else {
-                        let Some(&(path, line_no)) = row_source.get(&row.id) else {
-                            // Already counted in `source_unavailable` above.
-                            continue;
-                        };
-                        let Some(line_text) = resolved.get(&(path, line_no)) else {
-                            result.source_unavailable += 1;
-                            tracing::debug!(
-                                log_id = row.id,
-                                path,
-                                line_no,
-                                "skill backfill: transcript line unavailable (missing file or line out of range)"
-                            );
-                            continue;
-                        };
-                        // Cheap short-circuit on the actual raw JSON line (not
-                        // the scrubbed `row.message`) before parsing.
-                        if !claude_line_may_contain_skill_event(line_text) {
-                            continue;
-                        }
-                        match serde_json::from_str::<serde_json::Value>(line_text) {
-                            Ok(value) => extract_claude_skill_events(&value),
-                            Err(_) => {
-                                result.parse_errors += 1;
-                                continue;
+                    if let Some(&(path, line_no)) = row_source.get(&row.id) {
+                        if let Some(line_text) = resolved.get(&(path, line_no)) {
+                            if claude_line_may_contain_skill_event(line_text) {
+                                match serde_json::from_str::<serde_json::Value>(line_text) {
+                                    Ok(value) => {
+                                        let source_events = extract_claude_skill_events(&value);
+                                        // The stored command is durable evidence. A rotated or
+                                        // rewritten source line may now occupy this line number;
+                                        // do not replace it with a different record or skill.
+                                        if !source_events.is_empty()
+                                            && (forwarded.is_empty()
+                                                || (source_matches_persisted_command(
+                                                    row, line_text, path, line_no,
+                                                ) && same_command_identities(
+                                                    &source_events,
+                                                    &forwarded,
+                                                )))
+                                        {
+                                            source_events
+                                        } else {
+                                            forwarded
+                                        }
+                                    }
+                                    Err(_) => {
+                                        result.parse_errors += 1;
+                                        forwarded
+                                    }
+                                }
+                            } else {
+                                forwarded
                             }
+                        } else {
+                            if forwarded.is_empty() {
+                                result.source_unavailable += 1;
+                                tracing::debug!(
+                                    log_id = row.id,
+                                    path,
+                                    line_no,
+                                    "skill backfill: transcript line unavailable (missing file or line out of range)"
+                                );
+                            }
+                            forwarded
                         }
+                    } else {
+                        // Missing source metadata was counted above only when
+                        // persisted command evidence could not recover the row.
+                        forwarded
                     }
                 }
                 "codex" => {

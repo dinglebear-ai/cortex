@@ -80,7 +80,7 @@ impl CortexService {
             severity_in: levels,
         };
         let (inputs, summaries) = self
-            .run_db("session_investigation_graph", move |pool| {
+            .run_heavy_db("session_investigation_graph", move |pool| {
                 let inputs = db::correlate_session_graph_scoped(
                     pool,
                     &sid,

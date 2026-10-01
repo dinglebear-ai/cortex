@@ -22,7 +22,7 @@ There is no current `publish-crates.yml` or `codex-plugin-scanner.yml`. The root
 
 ## Validation
 
-The main CI workflow classifies changed paths and uses the checked-in Rust setup action. Applicable gates include formatting, Clippy, nextest, doctests, doc-contract tests, version synchronization, module size, public identity/security, and browser/package checks. Agent instruction authority and its regression fixtures run in a lightweight independent job so documentation-only changes cannot bypass them.
+The main CI workflow classifies changed paths and uses the checked-in Rust setup action. Applicable gates include formatting, Clippy, nextest, doctests, doc-contract tests, version synchronization, module size, public identity/security, and browser/package checks. The version-sync lane also validates both plugin packages and runs their executable installer/snippet regressions. Agent instruction authority and its regression fixtures run in a lightweight independent job so documentation-only changes cannot bypass them.
 
 Use [CONTRIBUTING.md](../../CONTRIBUTING.md) for local commands. Lefthook's pre-commit gate is staged-file scoped; its pre-push router is path-aware. A local gate pass and completed remote CI are separate evidence.
 

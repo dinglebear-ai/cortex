@@ -1064,28 +1064,49 @@ pub fn feed_logs(
     })?;
     let fetch_limit = i64::from(limit.clamp(1, 1_000)) + 1;
 
-    let sql = if hostname.is_some() {
-        "SELECT id, timestamp, hostname, facility, severity,
-                app_name, process_id, message, raw, received_at, source_ip,
-                ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
-         FROM logs WHERE id > ?1 AND hostname = ?2
-         ORDER BY id ASC LIMIT ?3"
+    let mut logs = Vec::new();
+    if let Some(hostname) = hostname {
+        let aliases = host_aliases(&conn, hostname)?;
+        let guard = super::host_attribution::projected_host_guard("a.hostname");
+        for alias in aliases {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {RAW_LOG_COLUMNS} FROM logs l INDEXED BY idx_logs_stream_host_id
+                 WHERE l.hostname=?1 AND l.id>?2 ORDER BY l.id ASC LIMIT ?3"
+            ))?;
+            logs.extend(
+                stmt.query_map(params![alias, after_id, fetch_limit], |row| {
+                    map_public_raw_row(&conn, row)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
+            if !super::host_attribution::device_claim_allowed(&conn, &alias)? {
+                continue;
+            }
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {RAW_LOG_COLUMNS} FROM
+                    (SELECT log_id FROM forwarded_log_hosts a
+                     WHERE hostname=?1 AND log_id>?2 AND {guard} ORDER BY log_id ASC LIMIT ?3) attributed
+                 JOIN logs l ON l.id=attributed.log_id ORDER BY l.id ASC"
+            ))?;
+            logs.extend(
+                stmt.query_map(params![alias, after_id, fetch_limit], |row| {
+                    map_public_raw_row(&conn, row)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
+        }
+        logs.sort_unstable_by_key(|row| row.id);
+        logs.dedup_by_key(|row| row.id);
     } else {
-        "SELECT id, timestamp, hostname, facility, severity,
-                app_name, process_id, message, raw, received_at, source_ip,
-                ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
-         FROM logs WHERE id > ?1
-         ORDER BY id ASC LIMIT ?2"
-    };
-
-    let mut stmt = conn.prepare(sql)?;
-    let mut logs = if let Some(hostname) = hostname {
-        stmt.query_map(params![after_id, hostname, fetch_limit], map_row_with_raw)?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    } else {
-        stmt.query_map(params![after_id, fetch_limit], map_row_with_raw)?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {RAW_LOG_COLUMNS} FROM logs l WHERE l.id>?1 ORDER BY l.id ASC LIMIT ?2"
+        ))?;
+        logs = stmt
+            .query_map(params![after_id, fetch_limit], |row| {
+                map_public_raw_row(&conn, row)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+    }
 
     let has_more = logs.len() > limit as usize;
     if has_more {
@@ -1110,89 +1131,120 @@ pub fn context_around(
     let before = before.min(500);
     let after = after.min(500);
 
-    let (mut before_rows, after_rows) = match reference.id {
-        Some(id) => {
-            // ID-anchored: stable (timestamp, id) tiebreaker — symmetrical because
-            // we know exactly which row at `timestamp` is the reference.
-            let mut before_stmt = conn.prepare(
-                "SELECT id, timestamp, hostname, facility, severity,
-                        app_name, process_id, message, received_at, source_ip,
-                        ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
-                 FROM logs
-                 WHERE hostname = ?1
-                   AND (timestamp < ?2 OR (timestamp = ?2 AND id < ?3))
-                 ORDER BY timestamp DESC, id DESC
-                 LIMIT ?4",
-            )?;
-            let before_rows = before_stmt
-                .query_map(
-                    params![reference.hostname, reference.timestamp, id, before],
-                    super::queries::map_row,
-                )?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-
-            let mut after_stmt = conn.prepare(
-                "SELECT id, timestamp, hostname, facility, severity,
-                        app_name, process_id, message, received_at, source_ip,
-                        ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
-                 FROM logs
-                 WHERE hostname = ?1
-                   AND (timestamp > ?2 OR (timestamp = ?2 AND id > ?3))
-                 ORDER BY timestamp ASC, id ASC
-                 LIMIT ?4",
-            )?;
-            let after_rows = after_stmt
-                .query_map(
-                    params![reference.hostname, reference.timestamp, id, after],
-                    super::queries::map_row,
-                )?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            (before_rows, after_rows)
-        }
-        None => {
-            // Timestamp-anchored: no row identity, so split strictly on the
-            // timestamp boundary. Rows that share the exact reference timestamp
-            // are excluded from both sides rather than dumped onto one —
-            // symmetry over completeness.
-            let mut before_stmt = conn.prepare(
-                "SELECT id, timestamp, hostname, facility, severity,
-                        app_name, process_id, message, received_at, source_ip,
-                        ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
-                 FROM logs
-                 WHERE hostname = ?1 AND timestamp < ?2
-                 ORDER BY timestamp DESC, id DESC
-                 LIMIT ?3",
-            )?;
-            let before_rows = before_stmt
-                .query_map(
-                    params![reference.hostname, reference.timestamp, before],
-                    super::queries::map_row,
-                )?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-
-            let mut after_stmt = conn.prepare(
-                "SELECT id, timestamp, hostname, facility, severity,
-                        app_name, process_id, message, received_at, source_ip,
-                        ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
-                 FROM logs
-                 WHERE hostname = ?1 AND timestamp > ?2
-                 ORDER BY timestamp ASC, id ASC
-                 LIMIT ?3",
-            )?;
-            let after_rows = after_stmt
-                .query_map(
-                    params![reference.hostname, reference.timestamp, after],
-                    super::queries::map_row,
-                )?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            (before_rows, after_rows)
-        }
-    };
+    let mut before_rows = context_side(&conn, reference, before, true)?;
+    let after_rows = context_side(&conn, reference, after, false)?;
 
     // Reverse the "before" rows so the result reads chronologically.
     before_rows.reverse();
 
     Ok((before_rows, after_rows))
+}
+
+const RAW_LOG_COLUMNS: &str = "l.id,l.timestamp,l.hostname,l.facility,l.severity,
+    l.app_name,l.process_id,l.message,l.raw,l.received_at,l.source_ip,
+    l.ai_tool,l.ai_project,l.ai_session_id,l.ai_transcript_path,l.metadata_json";
+
+fn map_public_raw_row(
+    conn: &rusqlite::Connection,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<LogEntryWithRaw> {
+    let mut entry = map_row_with_raw(row)?;
+    if let Some(hostname) = super::host_attribution::resolved_subject_hostname(
+        conn,
+        &entry.hostname,
+        &entry.source_ip,
+        entry.metadata_json.as_deref(),
+    )? {
+        entry.hostname = hostname;
+    }
+    Ok(entry)
+}
+
+fn host_aliases(conn: &rusqlite::Connection, hostname: &str) -> Result<Vec<String>> {
+    Ok(conn
+        .prepare(&super::queries_hosts::host_alias_select("?1"))?
+        .query_map([hostname], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Probe each raw/attributed device partition separately. Each arm stops at
+/// its own limit, and the merge never includes another shared-token device.
+fn context_side(
+    conn: &rusqlite::Connection,
+    reference: &ContextRef,
+    limit: u32,
+    before: bool,
+) -> Result<Vec<LogEntry>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let comparison = if before { "<" } else { ">" };
+    let order = if before { "DESC" } else { "ASC" };
+    let boundary = |timestamp: &str, id: &str| match reference.id {
+        Some(_) => format!("({timestamp},{id}) {comparison} (?2,?3)"),
+        None => format!("{timestamp} {comparison} ?2"),
+    };
+    let mut rows = Vec::new();
+    for alias in host_aliases(conn, &reference.hostname)? {
+        let include_projection = super::host_attribution::device_claim_allowed(conn, &alias)?;
+        let mut values = vec![
+            rusqlite::types::Value::Text(alias),
+            rusqlite::types::Value::Text(reference.timestamp.clone()),
+        ];
+        if let Some(id) = reference.id {
+            values.push(rusqlite::types::Value::Integer(id));
+        }
+        values.push(rusqlite::types::Value::Integer(i64::from(limit)));
+        let limit_parameter = values.len();
+        let raw_sql = format!(
+            "SELECT {} FROM logs l INDEXED BY idx_logs_host_time
+             WHERE l.hostname=?1 AND {} ORDER BY l.timestamp {order},l.id {order} LIMIT ?{limit_parameter}",
+            super::queries::FTS_SELECT_COLS, boundary("l.timestamp", "l.id"),
+        );
+        let projected_boundary = boundary("timestamp", "log_id");
+        let guard = super::host_attribution::projected_host_guard("a.hostname");
+        let projected_sql = format!(
+            "SELECT {} FROM
+                (SELECT log_id FROM forwarded_log_hosts a WHERE hostname=?1 AND {projected_boundary} AND {guard}
+                 ORDER BY timestamp {order},log_id {order} LIMIT ?{limit_parameter}) attributed
+             JOIN logs l ON l.id=attributed.log_id ORDER BY l.timestamp {order},l.id {order}",
+            super::queries::FTS_SELECT_COLS,
+        );
+        for (sql, attributed) in [(raw_sql, false), (projected_sql, true)] {
+            if attributed && !include_projection {
+                continue;
+            }
+            rows.extend(
+                conn.prepare(&sql)?
+                    .query_map(
+                        rusqlite::params_from_iter(values.iter()),
+                        super::queries::map_row,
+                    )?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
+        }
+    }
+    rows.sort_unstable_by(|left, right| {
+        let ordering = left
+            .timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.id.cmp(&right.id));
+        if before { ordering.reverse() } else { ordering }
+    });
+    let mut seen = std::collections::HashSet::new();
+    rows.retain(|row| seen.insert(row.id));
+    rows.truncate(limit as usize);
+    for row in &mut rows {
+        if let Some(hostname) = super::host_attribution::resolved_subject_hostname(
+            conn,
+            &row.hostname,
+            &row.source_ip,
+            row.metadata_json.as_deref(),
+        )? {
+            row.hostname = hostname;
+        }
+    }
+    Ok(rows)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

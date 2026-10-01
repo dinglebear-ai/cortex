@@ -79,6 +79,9 @@ check "plugin declares api_token as sensitive" "jq -er '.userConfig.api_token.se
 
 check "usage plugin exists" "test -f '${USAGE_JSON}'"
 check "usage plugin is valid JSON" "jq empty '${USAGE_JSON}'"
+check "usage plugin manifest omits version" "jq -er 'has(\"version\") | not' '${USAGE_JSON}'"
+check "usage plugin manifest omits hooks" "jq -er 'has(\"hooks\") | not' '${USAGE_JSON}'"
+check "usage plugin points to skills directory" "test \"\$(jq -er '.skills' '${USAGE_JSON}')\" = './skills'"
 check "usage plugin is named cortex" "test \"\$(jq -er '.name' '${USAGE_JSON}')\" = 'cortex'"
 check "usage plugin has no MCP registration" "jq -er 'has(\"mcpServers\") | not' '${USAGE_JSON}'"
 check "installer skill exists" "test -f '${INSTALL_SKILLS_DIR}/install-cortex/SKILL.md'"
@@ -126,4 +129,11 @@ if (( FAILED > 0 )); then
   exit 1
 fi
 
+# Execute the packaged behavior contracts, not only manifest/frontmatter shape.
+# Node is mandatory here so unittest cannot silently skip snippet execution.
+if ! command -v node >/dev/null 2>&1; then
+  echo "Node.js is required to validate Cortex snippet behavior." >&2
+  exit 1
+fi
+python3 -m unittest discover -s plugins/cortex/tests -p 'test_*.py' || exit 1
 printf '%b\n' "${GREEN}All checks passed.${NC}"

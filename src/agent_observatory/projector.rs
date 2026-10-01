@@ -2,11 +2,11 @@
 
 #[path = "projector_sources.rs"]
 mod sources;
-pub(crate) use sources::project_agent_source_with_cursor;
 pub use sources::{
     SourceProjectionDiagnostic, SourceProjectionOutcome, SourceProjectionSkipReason,
     project_agent_source,
 };
+pub(crate) use sources::{mcp_projection_display, project_agent_source_with_cursor};
 #[path = "projector_commands.rs"]
 mod commands;
 pub(crate) use commands::project_command_log_with_cursor;

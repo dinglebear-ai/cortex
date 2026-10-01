@@ -43,7 +43,7 @@ async (input) => {
         previewTruncated = true;
         break;
       }
-      const sensitive = /message|text|content|stdout|stderr|transcript|command|token|secret|authorization|metadata|password|credential|api[_-]?key|private[_-]?key/i.test(key);
+      const sensitive = /message|text|content|stdout|stderr|transcript|command|arguments?|input|output|token|secret|authorization|metadata|password|credential|api[_-]?key|private[_-]?key/i.test(key);
       if (key.length > 80) previewTruncated = true;
       result[key.slice(0, 80)] = sensitive && typeof value[key] !== "boolean" ? "[omitted]" : preview(value[key], depth + 1);
     }

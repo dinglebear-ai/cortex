@@ -20,10 +20,13 @@ pub use lookup::{
 pub(crate) use lookup::{
     AgentRepositoryObservationRunMatch, find_unique_projection_run_for_repository_observation,
 };
+#[path = "agent_observatory_projection/mcp_enrichment.rs"]
+mod mcp_enrichment;
 #[path = "agent_observatory_projection_refs.rs"]
 mod refs;
 #[path = "agent_observatory_projection_sql.rs"]
 mod sql;
+pub(crate) use mcp_enrichment::repair_mcp_result_projection_in_tx;
 #[path = "agent_observatory_projection/summary.rs"]
 mod summary;
 #[path = "agent_observatory_projection_tie_break.rs"]

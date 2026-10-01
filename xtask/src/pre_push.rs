@@ -218,7 +218,17 @@ fn classify_paths(paths: &[&str]) -> Categories {
                 "docker-compose.prod.yml",
             ],
         );
-    let skills = any_path(paths, &["plugins/cortex/skills/", ".claude-plugin/"]);
+    let skills = any_path(
+        paths,
+        &[
+            "plugins/cortex/skills/",
+            "plugins/cortex/.claude-plugin/",
+            "plugins/cortex/scripts/",
+            "plugins/cortex/tests/",
+            "plugins/install-cortex/",
+            ".claude-plugin/",
+        ],
+    );
     let release = rust
         || any_path(paths, &["release/"])
         || any_file(

@@ -25,7 +25,7 @@ pre-commit:
       glob: "{Cargo.toml,Cargo.lock,server.json,mcpb/manifest.json,docker-compose.prod.yml,CHANGELOG.md,release/components.toml}"
       run: scripts/with_timeout.sh 30 -- cargo xtask check-version-sync
     skills:
-      glob: "{plugins/cortex/skills/**,.claude-plugin/**}"
+      glob: "{plugins/cortex/skills/**,plugins/cortex/.claude-plugin/**,plugins/cortex/scripts/**,plugins/cortex/tests/**,plugins/install-cortex/**,.claude-plugin/**}"
       run: just validate-skills
     env_guard:
       run: scripts/with_timeout.sh 30 -- bash scripts/block-env-commits.sh

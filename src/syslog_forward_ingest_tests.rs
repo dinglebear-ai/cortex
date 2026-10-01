@@ -76,6 +76,94 @@ fn syslog_request(body: String) -> Request<Body> {
         .unwrap()
 }
 
+#[test]
+fn shared_syslog_forwarding_keeps_device_claims_and_legacy_replay_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = crate::db::init_pool(&crate::config::StorageConfig::for_test(
+        dir.path().join("device-claims.db"),
+    ))
+    .unwrap();
+    let request = SyslogForwardRequest {
+        records: ["SERVERHOST", "EDGEHOST"]
+            .into_iter()
+            .map(|host| SyslogForwardRecord {
+                source_instance: host.to_string(),
+                source_epoch: 1,
+                sequence: 1,
+                idempotency_key: format!("{host}-first"),
+                observed_at: "2026-01-01T00:00:00Z".into(),
+                line: format!("<134>1 2026-01-01T00:00:00Z {host} app - - - device-proof"),
+            })
+            .collect(),
+        gaps: vec![],
+    };
+    persist_request(&pool, request.clone(), "10.1.0.8", "shared_bearer").unwrap();
+    let conn = pool.get().unwrap();
+    let mut statement = conn
+        .prepare("SELECT hostname, source_ip, metadata_json FROM logs ORDER BY id")
+        .unwrap();
+    let subjects: Vec<_> = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .map(|row| {
+            let (hostname, source, metadata) = row.unwrap();
+            assert_eq!(hostname, "agent-shared_bearer");
+            crate::forwarded_host::subject_hostname(&hostname, &source, Some(&metadata)).unwrap()
+        })
+        .collect();
+    assert_eq!(subjects, ["SERVERHOST", "EDGEHOST"]);
+    drop(statement);
+    conn.execute(
+        "UPDATE syslog_forward_receipts SET request_fingerprint = ''",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    persist_request(&pool, request, "10.1.0.8", "shared_bearer").unwrap();
+    assert_eq!(
+        pool.get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn oversized_syslog_metadata_keeps_device_provenance() {
+    let mut metadata = json!({"source_type":"syslog", "password":"private-canary"});
+    for n in 0..100 {
+        metadata[format!("optional-{n}")] = json!("x".repeat(2048));
+    }
+    let encoded = forwarded_metadata(
+        Some(&metadata.to_string()),
+        "shared_bearer",
+        "10.1.0.8",
+        "EDGEHOST".to_string(),
+    )
+    .unwrap();
+    assert!(encoded.len() <= crate::ingest_metadata::MAX_METADATA_JSON_BYTES);
+    assert!(!encoded.contains("private-canary"));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["metadata_truncated"],
+        true
+    );
+    assert_eq!(
+        crate::forwarded_host::subject_hostname(
+            "agent-shared_bearer",
+            "agent-syslog://10.1.0.8",
+            Some(&encoded)
+        ),
+        Some("EDGEHOST".to_string())
+    );
+}
+
 async fn barrier_syslog_request(
     app: Router,
     barrier: Arc<tokio::sync::Barrier>,

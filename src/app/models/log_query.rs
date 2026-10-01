@@ -147,9 +147,16 @@ pub struct GetErrorsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostEntry {
     pub hostname: String,
+    #[serde(default)]
+    pub host_id: Option<String>,
     pub first_seen: String,
     pub last_seen: String,
     pub log_count: i64,
+    /// Raw stored spellings retained for exact filters; no evidence is rewritten.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub source_kind: db::HostSourceKind,
 }
 
 impl From<db::HostEntry> for HostEntry {
@@ -159,6 +166,9 @@ impl From<db::HostEntry> for HostEntry {
             first_seen: value.first_seen,
             last_seen: value.last_seen,
             log_count: value.log_count,
+            aliases: value.aliases,
+            source_kind: value.source_kind,
+            host_id: value.host_id,
         }
     }
 }

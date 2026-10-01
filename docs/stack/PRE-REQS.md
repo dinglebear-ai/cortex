@@ -18,7 +18,7 @@ The checked-in manifests define the supported toolchain. Use [RUST.md](../RUST.m
 | cargo-nextest | Hermetic Rust tests; doctests run separately |
 | Lefthook | Staged-file pre-commit and path-aware pre-push checks |
 | Python 3 / Bash | Repository validators and maintenance scripts |
-| Node / pnpm | Browser work only; package manager and dependencies are pinned in `web/package.json` |
+| Node / pnpm | Node runs package/snippet validators and documentation mirrors; pnpm is for browser work, pinned in `web/package.json` |
 | Docker / Compose v2 | Container development and isolated live qualification; not needed for every unit test |
 | curl / jq / openssl | HTTP diagnostics, readable JSON, and token generation recipes |
 

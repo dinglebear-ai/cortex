@@ -2,9 +2,11 @@
 """Hermetic regressions for generated documentation and its CI routing."""
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -197,6 +199,38 @@ class PackageMirrorTests(unittest.TestCase):
 
 
 class EntryPointTests(unittest.TestCase):
+    def test_split_plugin_inputs_route_to_behavior_validation(self):
+        for path in ("plugins/install-cortex/skills/install-cortex/SKILL.md",
+                     "plugins/install-cortex/.claude-plugin/plugin.json",
+                     "plugins/cortex/.claude-plugin/plugin.json",
+                     "plugins/cortex/scripts/plugin-setup.sh",
+                     "plugins/cortex/tests/snippet_contract.mjs"):
+            with self.subTest(path=path):
+                self.assertTrue(router.classify("pull_request", [path])["skills"])
+
+    def test_documented_tail_filters_match_the_strict_rest_query(self):
+        source = (ROOT / "src/api.rs").read_text()
+        fields = re.search(r"struct TailQuery \{([^}]+)\}", source).group(1)
+        accepted = set(re.findall(r"^    ([a-z_]+):", fields, re.MULTILINE))
+        row = next(line for line in (ROOT / "docs/api.md").read_text().splitlines()
+                   if line.startswith("| GET | `/api/tail` |"))
+        documented = set(re.findall(r"`([a-z_]+)\?`", row.split("|")[4]))
+        self.assertEqual(documented, accepted)
+
+    def test_isolated_live_lockfiles_include_current_cortex_dependencies(self):
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        required = {
+            spec.get("package", name) if isinstance(spec, dict) else name
+            for name, spec in manifest["dependencies"].items()
+            if not isinstance(spec, dict) or not spec.get("optional", False)
+        }
+        for path in ("tests/live/services/oauth/Cargo.lock", "tests/live/surface-exporter/Cargo.lock"):
+            with self.subTest(path=path):
+                lock = tomllib.loads((ROOT / path).read_text())
+                cortex = next(package for package in lock["package"] if package["name"] == "cortex")
+                locked = {dependency.split(" ", 1)[0] for dependency in cortex["dependencies"]}
+                self.assertFalse(required - locked, f"{path} misses Cortex dependency edges: {sorted(required - locked)}")
+
     def test_check_delegates_to_existing_owners_and_propagates_failure(self):
         with patch.object(generator, "sync_schemas", return_value=True), patch.object(generator.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run:
             self.assertEqual(generator.generate(ROOT, True), 1)

@@ -258,7 +258,11 @@ fn llm_cursor(cursor: &str) -> Result<Option<LlmCursor>> {
     Ok(Some(cursor))
 }
 
-fn mcp_page(conn: &rusqlite::Connection, after: i64, limit: i64) -> Result<Vec<AgentSourceRecord>> {
+pub(super) fn mcp_page(
+    conn: &rusqlite::Connection,
+    after: i64,
+    limit: i64,
+) -> Result<Vec<AgentSourceRecord>> {
     let mut stmt = conn.prepare(
         "SELECT id, call_log_id, result_log_id, ai_tool, ai_project, ai_session_id,
                 hostname, timestamp, turn_id, call_id, tool_name, mcp_server, mcp_tool,
