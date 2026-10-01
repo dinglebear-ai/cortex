@@ -1,6 +1,6 @@
 {
   "schema": "cortex-live-upgrade-compatibility-v1",
-  "candidate": "3.17.0",
+  "candidate": "3.18.0",
   "supported": {
     "n_minus_1": {
       "version": "3.16.2",
