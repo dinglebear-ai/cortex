@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.18.0](https://github.com/dinglebear-ai/cortex/compare/v3.17.0...v3.18.0) (2026-10-01)
+
+
+### Added
+
+* **cortex:** expose rendered session pages in CLI and MCP ([#274](https://github.com/dinglebear-ai/cortex/issues/274)) ([238bd70](https://github.com/dinglebear-ai/cortex/commit/238bd702b93c5f6336acf445946e0c1fcf60ab1f))
+
+
+### Fixed
+
+* **cortex:** preserve replay evidence and improve host identity ([#275](https://github.com/dinglebear-ai/cortex/issues/275)) ([4c46458](https://github.com/dinglebear-ai/cortex/commit/4c464588eb4cbdb5bc02a546d2db9c37ab58dcd3))
+
 ## [3.17.0](https://github.com/dinglebear-ai/cortex/compare/v3.16.2...v3.17.0) (2026-09-30)
 
 
