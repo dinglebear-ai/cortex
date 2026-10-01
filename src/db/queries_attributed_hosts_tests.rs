@@ -291,20 +291,20 @@ fn direct_and_claimed_rows_with_same_name_keep_claim_trust() {
     insert_logs_batch(
         &pool,
         &[
-            make_entry("2026-09-30T12:00:00Z", "tootie", "info", "direct"),
-            forwarded_entry("tootie", "10.0.0.8", 1),
+            make_entry("2026-09-30T12:00:00Z", "edge-node-a", "info", "direct"),
+            forwarded_entry("edge-node-a", "10.0.0.8", 1),
         ],
     )
     .unwrap();
     let conn = pool.get().unwrap();
     conn.execute("INSERT INTO host_heartbeats
         (host_id,hostname,source_ip,sampled_at,received_at,boot_id,uptime_secs,sequence,collection_ms,partial,agent_version,os,architecture,metadata_json)
-        VALUES ('stable-tootie','tootie','10.0.0.8:41000','2026-09-30T12:00:00Z','2026-09-30T12:00:00Z','boot-a',60,1,5,0,'3.17.0','linux','x86_64','{}')", []).unwrap();
+        VALUES ('stable-edge-node-a','edge-node-a','10.0.0.8:41000','2026-09-30T12:00:00Z','2026-09-30T12:00:00Z','boot-a',60,1,5,0,'3.17.0','linux','x86_64','{}')", []).unwrap();
     drop(conn);
     let host = list_hosts(&pool)
         .unwrap()
         .into_iter()
-        .find(|entry| entry.hostname == "tootie")
+        .find(|entry| entry.hostname == "edge-node-a")
         .unwrap();
     assert_eq!(host.log_count, 2);
     assert_eq!(host.source_kind, HostSourceKind::ClaimedHost);
