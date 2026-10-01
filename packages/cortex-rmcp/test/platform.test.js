@@ -5,6 +5,8 @@ const { binaryVersion, downloadUrl, releaseBaseUrl, releaseVersion, targetFor } 
 const { binaryVersion: pinnedBinaryVersion } = require("../package.json");
 test("maps supported platforms to release assets", () => {
   assert.deepEqual(targetFor("linux", "x64"), { asset: "cortex-linux-x86_64.tar.gz", binary: "cortex", archiveType: "tar.gz" });
+  assert.deepEqual(targetFor("linux", "arm64"), { asset: "cortex-linux-aarch64.tar.gz", binary: "cortex", archiveType: "tar.gz" });
+  assert.deepEqual(targetFor("darwin", "arm64"), { asset: "cortex-macos-arm64", binary: "cortex", archiveType: "binary" });
   assert.deepEqual(targetFor("win32", "x64"), { asset: "cortex-windows-x86_64.zip", binary: "cortex.exe", archiveType: "zip" });
 });
 test("rejects unsupported platforms", () => { assert.throws(() => targetFor("linux", "riscv64"), /Unsupported platform/); });

@@ -73,7 +73,7 @@ npm install --global @dinglebear/cortex
 cortex --version
 ```
 
-The launcher requires Node.js 18 or newer. It downloads a checksum-verified native release binary and currently supports Linux x64 and Windows x64.
+The launcher requires Node.js 18 or newer. It downloads a checksum-verified native release binary for Linux x64, Linux ARM64, macOS ARM64, or Windows x64.
 
 Build from source with the current stable Rust toolchain:
 
@@ -761,8 +761,8 @@ Container images published before the move remain readable under the legacy name
 
 ### Native and npm
 
-- The repository ships Linux x86_64 and Windows x86_64 release installers.
-- The npm launcher supports `linux/x64` and `win32/x64` and verifies release checksums.
+- The repository ships Linux x86_64, Linux aarch64, macOS arm64, and Windows x86_64 release assets.
+- The npm launcher supports `linux/x64`, `linux/arm64`, `darwin/arm64`, and `win32/x64` and verifies release checksums.
 - Source builds use Rust edition 2024 and the current stable toolchain in CI.
 
 ### Docker Compose

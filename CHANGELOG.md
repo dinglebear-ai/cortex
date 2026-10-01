@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * **cortex:** expose rendered session pages in CLI and MCP ([#274](https://github.com/dinglebear-ai/cortex/issues/274)) ([238bd70](https://github.com/dinglebear-ai/cortex/commit/238bd702b93c5f6336acf445946e0c1fcf60ab1f))
+* **release:** build and qualify native ARM assets ([#278](https://github.com/dinglebear-ai/cortex/issues/278)) ([b4d2666](https://github.com/dinglebear-ai/cortex/commit/b4d2666451cd65850dc069a047a3125aaa5d0c55))
 
 
 ### Fixed
