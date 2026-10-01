@@ -1,7 +1,7 @@
 ---
 title: "Heartbeat Telemetry Contract (V1 Pre-Implementation)"
 created: 2026-05-24
-updated: 2026-08-24
+updated: 2026-10-01
 ---
 
 # Heartbeat Telemetry Contract (V1 Pre-Implementation)
@@ -136,6 +136,30 @@ The agent MUST bound:
 - number of top processes,
 - number of container details,
 - retry buffer size.
+
+### Desktop resource probes
+
+macOS and Windows collectors use native system APIs through `sysinfo` for CPU
+utilization, RAM and swap, mounted-volume capacity, network byte/error rates,
+and process counts. Discovery refreshes each cycle, with at most 16 volume rows
+and 16 interfaces, prioritizing interfaces with observed traffic over idle
+adapters. Disk I/O rates are included where native counters are
+available; all-zero unobserved counters remain null. Rates require two samples
+and become null after a counter reset or interface/volume replacement.
+
+CPU utilization is sampled across logical cores and reported on a 0–100 scale.
+The initial collection warms the CPU counters for the native minimum interval.
+Windows has no Unix load average: its required v1 `load1`, `load5`, and `load15`
+fields are legacy zero placeholders, not measured load; use `usage_pct`.
+Unsupported CPU breakdowns, process scheduler-state counts, and top-process
+lists are not synthesized. The required Windows zombie count remains a legacy
+zero placeholder. Desktop container inventory is not collected by these resource
+probes; configured Docker log forwarding remains independent.
+
+Native calls run in a blocking worker with one outstanding collection permitted.
+If a deadline expires, the worker keeps its permit until it returns, preventing
+successive samples from accumulating blocked workers. Resource failures remain
+explicit partial samples. No elevated privileges or shell commands are required.
 
 ## 5. Heartbeat Request Schema
 
