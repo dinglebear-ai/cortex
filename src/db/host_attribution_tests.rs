@@ -75,11 +75,12 @@ fn future_projection_preserves_auth_identity_and_separates_devices() {
             .log_count,
         1
     );
-    assert!(
-        counts
-            .iter()
-            .all(|c| c.original_hostname == "agent-shared_bearer")
-    );
+    let unexpected_source: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM forwarded_host_counts WHERE original_hostname <> 'agent-shared_bearer'",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(unexpected_source, 0);
     let mismatched_receipts:i64=conn.query_row(
         "SELECT COUNT(*) FROM forwarded_log_hosts f JOIN logs l ON l.id=f.log_id WHERE f.received_at<>l.received_at",[],|row|row.get(0)).unwrap();
     assert_eq!(mismatched_receipts, 0);

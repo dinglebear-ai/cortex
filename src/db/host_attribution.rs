@@ -11,7 +11,6 @@ const MAX_BATCH_ROWS: usize = 1_000;
 
 #[derive(Debug, Clone)]
 pub struct ForwardedHostCount {
-    pub original_hostname: String,
     pub hostname: String,
     pub log_count: i64,
     pub first_seen: String,
@@ -178,16 +177,15 @@ fn insert_subject(
 pub fn list_forwarded_host_counts(conn: &Connection) -> Result<Vec<ForwardedHostCount>> {
     Ok(conn
         .prepare(
-            "SELECT original_hostname,hostname,log_count,first_seen,last_seen
+            "SELECT hostname,log_count,first_seen,last_seen
          FROM forwarded_host_counts ORDER BY original_hostname,hostname",
         )?
         .query_map([], |row| {
             Ok(ForwardedHostCount {
-                original_hostname: row.get(0)?,
-                hostname: row.get(1)?,
-                log_count: row.get(2)?,
-                first_seen: row.get(3)?,
-                last_seen: row.get(4)?,
+                hostname: row.get(0)?,
+                log_count: row.get(1)?,
+                first_seen: row.get(2)?,
+                last_seen: row.get(3)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)

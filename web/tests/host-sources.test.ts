@@ -29,6 +29,17 @@ describe("host source graph", () => {
       .toEqual(["host", "host", "forwarding_principal", "forwarding_principal", "unattributed"])
   })
 
+  it("keeps claimed device names separate from heartbeat identities", () => {
+    const sources = normalizeHostSources([
+      { hostname: "tootie", source_kind: "claimed_host", host_id: "stable-tootie" },
+      { hostname: "tootie", source_kind: "host", host_id: "stable-tootie" },
+    ])
+    expect(sources).toHaveLength(2)
+    expect(sources[0].host_id).toBeNull()
+    expect(sources[0].node_id).toBe("source:name:claimed_host:tootie")
+    expect(sources[1].host_id).toBe("stable-tootie")
+  })
+
   it("deduplicates physical nodes and counts using stable heartbeat IDs and merges their aliases", () => {
     const hosts = [
       { hostname: "serverhost", host_id: "device-1", source_kind: "host", aliases: ["SERVERHOST", "serverhost.local"] },

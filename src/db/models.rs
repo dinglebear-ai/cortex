@@ -171,6 +171,7 @@ pub struct ErrorSummaryEntry {
 pub enum HostSourceKind {
     #[default]
     Host,
+    ClaimedHost,
     ForwardingPrincipal,
     Unattributed,
 }

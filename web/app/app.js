@@ -153,6 +153,10 @@
           style: { "background-color": theme.rose, "border-color": theme.rose },
         },
         {
+          selector: 'node[kind = "claimed_host"]',
+          style: { "background-color": theme.warn, "border-color": theme.warn },
+        },
+        {
           selector: 'node[kind = "store"]',
           style: { "shape": "round-rectangle", "background-color": theme.violet, "border-color": theme.violet },
         },
@@ -276,10 +280,11 @@
 
   function showNodeEvidence(data) {
     ui.selectedTitle.textContent = data.label || data.id;
-    setBadge(ui.selectedKind, data.kind || "node", data.status === "degraded" ? "warn" : "neutral");
+    const kindLabel = data.kind === "claimed_host" ? "Claimed device name" : data.kind || "node";
+    setBadge(ui.selectedKind, kindLabel, data.kind === "claimed_host" || data.status === "degraded" ? "warn" : "neutral");
     const facts = [
       ["Node id", data.id],
-      ["Kind", data.kind || "unknown"],
+      ["Kind", kindLabel],
       ["Status", data.status || "unknown"],
     ];
     if (data.host_id) facts.push(["Heartbeat ID", data.host_id]);

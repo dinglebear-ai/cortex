@@ -1,4 +1,5 @@
 use super::*;
+use crate::db::HostSourceKind;
 
 fn forwarded_entry(host: &str, peer: &str, second: u32) -> LogBatchEntry {
     let mut entry = make_entry(
@@ -60,14 +61,12 @@ fn shared_credential_and_peer_do_not_merge_device_host_views() {
             .log_count,
         1
     );
-    assert_eq!(
-        hosts
-            .iter()
-            .find(|row| row.hostname == "agent-shared_bearer")
-            .unwrap()
-            .log_count,
-        1
-    );
+    let principal = hosts
+        .iter()
+        .find(|row| row.hostname == "agent-shared_bearer")
+        .unwrap();
+    assert_eq!(principal.log_count, 4);
+    assert_eq!(principal.source_kind, HostSourceKind::ForwardingPrincipal);
     let conn = pool.get().unwrap();
     let raw_count: i64 = conn
         .query_row(
@@ -79,6 +78,17 @@ fn shared_credential_and_peer_do_not_merge_device_host_views() {
     assert_eq!(
         raw_count, 4,
         "attribution must preserve raw source identity"
+    );
+    let (first_seen, last_seen): (String, String) = conn
+        .query_row(
+            "SELECT first_seen,last_seen FROM hosts WHERE hostname='agent-shared_bearer'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (principal.first_seen.as_str(), principal.last_seen.as_str()),
+        (first_seen.as_str(), last_seen.as_str())
     );
 }
 
@@ -203,7 +213,7 @@ fn attributed_host_lookup_is_an_indexed_bounded_probe() {
 }
 
 #[test]
-fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
+fn claimed_hosts_do_not_link_to_heartbeat_ids() {
     let (pool, _dir) = test_pool();
     insert_logs_batch(
         &pool,
@@ -211,6 +221,12 @@ fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
             forwarded_entry("workstation.local", "10.0.0.8", 1),
             forwarded_entry("serverhost", "10.0.0.8", 2),
             forwarded_entry("unknown", "10.0.0.8", 3),
+            make_entry(
+                "2026-09-30T12:00:04Z",
+                "direct-box",
+                "info",
+                "direct evidence",
+            ),
         ],
     )
     .unwrap();
@@ -218,6 +234,7 @@ fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
     for (id, name) in [
         ("stable-workstation", "workstation.local"),
         ("stable-serverhost", "serverhost"),
+        ("stable-direct", "direct-box"),
     ] {
         conn.execute("INSERT INTO host_heartbeats
             (host_id,hostname,source_ip,sampled_at,received_at,boot_id,uptime_secs,sequence,collection_ms,partial,agent_version,os,architecture,metadata_json)
@@ -225,23 +242,22 @@ fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
     }
     drop(conn);
     let hosts = list_hosts(&pool).unwrap();
+    for name in ["workstation.local", "serverhost"] {
+        let claim = hosts.iter().find(|h| h.hostname == name).unwrap();
+        assert_eq!(claim.source_kind, HostSourceKind::ClaimedHost);
+        assert!(
+            claim.host_id.is_none(),
+            "a claim must not bind heartbeat identity"
+        );
+    }
     assert_eq!(
         hosts
             .iter()
-            .find(|h| h.hostname == "workstation.local")
+            .find(|h| h.hostname == "direct-box")
             .unwrap()
             .host_id
             .as_deref(),
-        Some("stable-workstation")
-    );
-    assert_eq!(
-        hosts
-            .iter()
-            .find(|h| h.hostname == "serverhost")
-            .unwrap()
-            .host_id
-            .as_deref(),
-        Some("stable-serverhost")
+        Some("stable-direct")
     );
     assert!(
         hosts
@@ -251,19 +267,46 @@ fn attributed_hosts_link_only_unambiguous_stable_device_ids() {
             .host_id
             .is_none()
     );
+
+    // Direct evidence still requires an unambiguous stable identity.
     let conn = pool.get().unwrap();
     conn.execute("INSERT INTO host_heartbeats
         (host_id,hostname,source_ip,sampled_at,received_at,boot_id,uptime_secs,sequence,collection_ms,partial,agent_version,os,architecture,metadata_json)
-        VALUES ('other-workstation','workstation.local','10.0.0.8:41001','2026-09-30T12:00:01Z','2026-09-30T12:00:01Z','boot-b',60,1,5,0,'3.17.0','linux','x86_64','{}')", []).unwrap();
+        VALUES ('other-direct','direct-box','10.0.0.8:41001','2026-09-30T12:00:01Z','2026-09-30T12:00:01Z','boot-b',60,1,5,0,'3.17.0','linux','x86_64','{}')", []).unwrap();
     drop(conn);
     assert!(
         list_hosts(&pool)
             .unwrap()
             .iter()
-            .find(|h| h.hostname == "workstation.local")
+            .find(|h| h.hostname == "direct-box")
             .unwrap()
             .host_id
-            .is_none(),
-        "shared names cannot merge distinct stable IDs"
+            .is_none()
     );
+}
+
+#[test]
+fn direct_and_claimed_rows_with_same_name_keep_claim_trust() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[
+            make_entry("2026-09-30T12:00:00Z", "tootie", "info", "direct"),
+            forwarded_entry("tootie", "10.0.0.8", 1),
+        ],
+    )
+    .unwrap();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO host_heartbeats
+        (host_id,hostname,source_ip,sampled_at,received_at,boot_id,uptime_secs,sequence,collection_ms,partial,agent_version,os,architecture,metadata_json)
+        VALUES ('stable-tootie','tootie','10.0.0.8:41000','2026-09-30T12:00:00Z','2026-09-30T12:00:00Z','boot-a',60,1,5,0,'3.17.0','linux','x86_64','{}')", []).unwrap();
+    drop(conn);
+    let host = list_hosts(&pool)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.hostname == "tootie")
+        .unwrap();
+    assert_eq!(host.log_count, 2);
+    assert_eq!(host.source_kind, HostSourceKind::ClaimedHost);
+    assert!(host.host_id.is_none());
 }

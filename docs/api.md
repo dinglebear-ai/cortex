@@ -44,7 +44,7 @@ to them by default.
 | GET | `/api/feed` | read | query: `after_id?` (i64), `host?`, `limit?` (u32, max 1000) | `FeedLogsResponse { logs: [LogEntryWithRaw], next_after_id: i64, has_more: bool }` | 200, 400, 401, 503, 500 | Y | Ascending cursor feed for external consumers. Omit `after_id` to start at the current high-water mark; pass `after_id=0` to replay retained history. |
 | GET | `/api/tail` | read | query: `host?`, `source?`, `app?`, `severity_min?`, `n?` (u32) | `SearchLogsResponse { count: usize, logs: [LogEntry] }` (tail order) | 200, 400, 401, 503, 500 | Y | `severity_min` honoured per RFC severity ordering. |
 | GET | `/api/errors` | read | query: `from?`, `to?`, `group_by?` (`app_name` only) | `GetErrorsResponse { summary: [ErrorSummaryEntry] }` | 200, 400, 401, 503, 500 | Y | Counts by host (and optional secondary key). |
-| GET | `/api/hosts` | read | (none) | `ListHostsResponse { hosts: [HostEntry] }` | 200, 401, 503, 500 | Y | Device/source inventory with `aliases`, optional stable heartbeat `host_id`, and `source_kind` (`host`, `forwarding_principal`, `unattributed`). Validated forwarding provenance assigns records to claimed devices; unresolved records remain under the forwarding principal. Case/trailing-dot variants and unambiguous `.local`/tailnet aliases combine. See Host identity and filters. |
+| GET | `/api/hosts` | read | (none) | `ListHostsResponse { hosts: [HostEntry] }` | 200, 401, 503, 500 | Y | Device/source inventory with `aliases`, optional stable heartbeat `host_id`, and `source_kind` (`host`, `claimed_host`, `forwarding_principal`, `unattributed`). Forwarded records appear under a claimed device name and their original forwarding principal; those source and claim totals overlap. Case/trailing-dot variants and unambiguous `.local`/tailnet aliases combine. See Host identity and filters. |
 | GET | `/api/host-metrics` | read | query: `hostname` and `metric_name` (REQUIRED), `service_name?`, `minutes?` (1–1440), `limit?` (1–500), `before_time_unix_nano?` and `before_id?` (together) | `ListHostMetricsResponse { points, next_cursor?, truncated, queried_at }` | 200, 400, 401, 503, 500 | Y | Recent OTLP points for one host and metric, newest source timestamp first. Each point carries value, attributes, source timestamp, and received time. Use `next_cursor` for the next page. |
 | GET | `/api/metric-hosts` | read | — | `ListMetricHostsResponse { hosts, queried_at }` | 200, 401, 503, 500 | Y | Up to 100 hosts with memory utilization samples in the past 24 hours, ordered by latest source timestamp. |
 | GET | `/api/correlate` | read | query: `reference_time` (REQUIRED, RFC 3339), `window_minutes?` (u32), `severity_min?`, `hostname?`, `source_ip?`, `query?`, `limit?` (u32) | `CorrelateEventsResponse { reference_time, window_minutes, window_from, window_to, severity_min, total_events, truncated, hosts_count, hosts: [CorrelatedHost] }` | 200, 400, 401, 503, 500 | Y | **Distinct from `/api/sessions/correlate`** — see disambiguation below. |
@@ -81,9 +81,17 @@ labels do not rewrite raw log/authentication identity, receipt namespaces or
 fingerprints, or stored session identities; rendered-session selectors continue
 to use their exact session identity.
 
-`host_id` is populated only when the device hostname resolves to one stable
-heartbeat identity. No matching heartbeat or multiple matching IDs leaves it
-`null`; a shared principal is not assigned a device ID. Device state lookups
+The host inventory keeps the forwarding principal's raw count and receipt-time
+bounds for every row it sent. Claimed device entries are a second view of some
+of those rows, so their counts must not be summed with principal counts. A
+group containing forwarded claims has `source_kind: "claimed_host"`, including
+when direct logs share its name. The UI labels that group as a claimed device
+name and does not present a stable heartbeat ID for it.
+
+`host_id` is populated only for a direct host with no merged forwarded claims
+whose hostname resolves to one stable heartbeat identity. A claimed name,
+missing heartbeat, or multiple matching IDs leaves it `null`; a shared
+principal is not assigned a device ID. Device state lookups
 should use the returned `host_id`, or resolve a unique hostname. Ambiguous names
 require an explicit stable ID rather than choosing the freshest matching device.
 

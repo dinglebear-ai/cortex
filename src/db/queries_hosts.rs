@@ -79,6 +79,9 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
         match merged.get_mut(&canonical) {
             Some(acc) => {
                 acc.log_count += entry.log_count;
+                if entry.source_kind == HostSourceKind::ClaimedHost {
+                    acc.source_kind = HostSourceKind::ClaimedHost;
+                }
                 acc.aliases.push(entry.hostname.clone());
                 if entry.first_seen < acc.first_seen {
                     acc.first_seen = entry.first_seen.clone();
@@ -98,7 +101,11 @@ pub(super) fn dedupe_hosts(rows: Vec<HostEntry>) -> Vec<HostEntry> {
                         last_seen: entry.last_seen.clone(),
                         log_count: entry.log_count,
                         aliases: vec![entry.hostname.clone()],
-                        source_kind: super::models::HostSourceKind::for_hostname(&canonical),
+                        source_kind: if entry.source_kind == HostSourceKind::ClaimedHost {
+                            HostSourceKind::ClaimedHost
+                        } else {
+                            HostSourceKind::for_hostname(&canonical)
+                        },
                     },
                 );
             }
@@ -140,15 +147,10 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     })?;
 
     let mut rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    // The raw registry remains an authentication/source record. Attribute only
-    // the logs whose preserved provenance identifies a subject hostname.
+    // Raw source totals remain intact: source-level filters include every row
+    // received under that principal, including rows also shown by claimed
+    // device name. These two views overlap rather than partitioning evidence.
     for attributed in super::host_attribution::list_forwarded_host_counts(&conn)? {
-        if let Some(source) = rows
-            .iter_mut()
-            .find(|row| row.hostname == attributed.original_hostname)
-        {
-            source.log_count = source.log_count.saturating_sub(attributed.log_count).max(0);
-        }
         rows.push(HostEntry {
             hostname: attributed.hostname,
             host_id: None,
@@ -156,7 +158,7 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
             last_seen: attributed.last_seen,
             log_count: attributed.log_count,
             aliases: Vec::new(),
-            source_kind: HostSourceKind::Host,
+            source_kind: HostSourceKind::ClaimedHost,
         });
     }
     rows.retain(|row| row.log_count > 0);
