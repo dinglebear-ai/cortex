@@ -329,7 +329,6 @@ fn age_retention_reconciles_raw_and_forwarded_hosts_after_reopen() {
         .iter()
         .find(|host| host.hostname == "agent-shared_bearer")
         .unwrap();
-    assert_eq!(principal.log_count, 1);
     assert_eq!(
         principal.source_kind,
         crate::db::HostSourceKind::ForwardingPrincipal
@@ -341,6 +340,14 @@ fn age_retention_reconciles_raw_and_forwarded_hosts_after_reopen() {
             .unwrap()
             .log_count,
         2
+    );
+    assert_eq!(
+        hosts
+            .iter()
+            .find(|h| h.hostname == "agent-shared_bearer")
+            .unwrap()
+            .log_count,
+        1 // The principal retains its raw row alongside the device claim.
     );
     assert_eq!(
         hosts
