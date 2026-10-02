@@ -17,6 +17,9 @@ use getrandom::fill as random_fill;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod native;
+
 pub const DEFAULT_INTERVAL_SECS: u64 = 30;
 pub const DEFAULT_PROBE_DEADLINE_MS: u64 = 2_000;
 pub const DEFAULT_COLLECTION_DEADLINE_MS: u64 = 5_000;
@@ -397,6 +400,8 @@ pub struct HeartbeatContainers {
 }
 
 pub enum ProbeOutput {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    Resources(native::ResourceSnapshot),
     Cpu(HeartbeatCpu),
     Memory(HeartbeatMemory),
     Disk(HeartbeatDisk),
@@ -468,9 +473,11 @@ impl HeartbeatCollector {
         if os == "linux" {
             return Self::linux();
         }
-        // Current resource probes are Linux-specific. A host-only heartbeat is
-        // more accurate on Windows than reporting unsupported /proc probes as
-        // collection failures.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if os == std::env::consts::OS {
+            return Self::with_probes(vec![Box::new(native::NativeResourceProbe::new())]);
+        }
+        // Unknown platforms retain host-only heartbeats.
         Self {
             probes: Vec::new(),
             started: Instant::now(),
@@ -513,6 +520,15 @@ impl HeartbeatCollector {
             let deadline = probe_deadline.min(remaining);
             match timeout(deadline, probe.collect()).await {
                 Ok(Ok(output)) => match output {
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    ProbeOutput::Resources(value) => {
+                        cpu = Some(value.cpu);
+                        memory = Some(value.memory);
+                        disks = value.disks;
+                        networks = value.networks;
+                        processes = Some(value.processes);
+                        probe_errors.extend(value.errors);
+                    }
                     ProbeOutput::Cpu(value) => cpu = Some(value),
                     ProbeOutput::Memory(value) => memory = Some(value),
                     ProbeOutput::Disk(value) if disks.len() < 16 => disks.push(value),
