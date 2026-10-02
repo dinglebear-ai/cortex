@@ -1094,3 +1094,24 @@ esac
     assert_eq!(missing_env.status, SetupStatus::Error);
     assert!(missing_env.detail.contains("missing.env"));
 }
+
+#[test]
+fn managed_env_repair_preserves_decoded_credentials_and_existing_entries() {
+    let existing = r#"CORTEX_TOKEN='literal $DOLLAR # apostrophe \' quote'
+CORTEX_API_TOKEN="double\"quote \\slash \$DOLLAR"
+CUSTOM_SETTING=' keep this # value '
+"#;
+    let original = parse_env(existing);
+    let repaired = render_env(&original);
+    assert_eq!(parse_env(&repaired), original);
+    assert_eq!(render_env(&parse_env(&repaired)), repaired);
+    assert_eq!(
+        original["CORTEX_TOKEN"],
+        "literal $DOLLAR # apostrophe ' quote"
+    );
+    assert_eq!(
+        original["CORTEX_API_TOKEN"],
+        "double\"quote \\slash $DOLLAR"
+    );
+    assert_eq!(original["CUSTOM_SETTING"], " keep this # value ");
+}

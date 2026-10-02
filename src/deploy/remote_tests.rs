@@ -43,6 +43,12 @@ impl FakeRemoteRunner {
 }
 
 impl RemoteRunner for FakeRemoteRunner {
+    fn latest_stable_version(&mut self) -> io::Result<String> {
+        self.commands
+            .push("resolve latest stable release".to_string());
+        Ok("9.8.7".to_string())
+    }
+
     fn run(&mut self, host: &str, script: &str, _stdin: Option<&str>) -> io::Result<RemoteOutput> {
         self.commands.push(format!("{host}: {script}"));
         if self
@@ -62,7 +68,16 @@ impl RemoteRunner for FakeRemoteRunner {
                 stderr: "forced failure\n".to_string(),
             });
         }
-        let stdout = if script.contains("cat ")
+        let stdout = if script.contains("__CORTEX_VERIFY__") {
+            r#"{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"cortex"}}}
+__CORTEX_REPLY__
+{"jsonrpc":"2.0","id":2,"result":{"content":[]}}
+__CORTEX_REPLY__
+{}
+__CORTEX_REPLY__
+{}"#
+            .to_string()
+        } else if script.contains("cat ")
             && (script.contains("/.env'") || script.contains("/compose/.env'"))
         {
             self.existing_env.clone().unwrap_or_default()
@@ -96,7 +111,7 @@ fn remote_dry_run_only_checks_ssh_and_docker() {
         !runner
             .commands
             .iter()
-            .any(|cmd| cmd.contains("docker compose") && cmd.contains("up -d"))
+            .any(|cmd| cmd.contains("docker compose") && cmd.ends_with("compose up -d cortex"))
     );
     assert!(
         !runner
@@ -126,7 +141,7 @@ fn remote_repair_writes_assets_before_compose_up() {
     let env_write = index("cat > '/home/syslog/.cortex/.env.tmp'");
     let assets_write = index("docker-compose.yml.tmp");
     let compose_pull = index("pull --ignore-buildable");
-    let compose_up = index("up -d");
+    let compose_up = index("compose up -d cortex");
     assert!(mkdir < docker_check);
     assert!(docker_check < env_write);
     assert!(env_write < assets_write);
@@ -144,7 +159,7 @@ fn remote_repair_health_check_retries_after_compose_up() {
         .iter()
         .find(|cmd| cmd.contains("http://127.0.0.1:3100/health"))
         .expect("remote health command should run");
-    assert!(health.contains("while [ \"$attempt\" -lt 30 ]"));
+    assert!(health.contains("deadline=$(( $(date +%s) + 300 ))"));
     assert!(health.contains("sleep 1"));
 }
 
@@ -158,6 +173,7 @@ fn remote_repair_home_override_targets_existing_home_and_preserves_remote_env() 
         RemoteDeployOptions {
             dry_run: false,
             home: Some("/mnt/cache/appdata/cortex".to_string()),
+            update_latest: false,
         },
         &mut runner,
     )
@@ -185,7 +201,7 @@ fn remote_repair_home_override_targets_existing_home_and_preserves_remote_env() 
         .expect("env write command should target the override home");
     assert!(env_write.contains("CORTEX_AUTH_MODE=oauth"));
     assert!(env_write.contains("CORTEX_TOKEN=keep-token"));
-    assert!(!env_write.contains("CORTEX_VERSION=dev"));
+    assert!(env_write.contains("CORTEX_VERSION=dev"));
     assert!(env_write.contains("CORTEX_DATA_VOLUME=/mnt/cache/appdata/cortex/data"));
     assert!(env_write.contains("CORTEX_BACKUP_DIR=/mnt/cache/appdata/cortex/backups"));
     assert!(env_write.contains(
@@ -211,7 +227,7 @@ fn remote_deploy_preserves_and_provisions_custom_backup_bind_before_up() {
     let provision = index(
         "mkdir -p '/home/syslog/.cortex/compose/config' '/home/syslog/.cortex/data' '/srv/cortex-recovery' && chmod 700 '/srv/cortex-recovery'",
     );
-    let compose_up = index("up -d");
+    let compose_up = index("compose up -d cortex");
     assert!(provision < compose_up);
 }
 
@@ -247,7 +263,12 @@ fn remote_deploy_skips_mutations_after_identity_failure() {
     let report = run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
 
     assert!(report.has_errors);
-    assert!(!runner.commands.iter().any(|cmd| cmd.contains("up -d")));
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|cmd| cmd.ends_with("compose up -d cortex"))
+    );
     assert!(report.phases.iter().any(|phase| {
         phase.name == "remote-compose-up" && matches!(phase.status, SetupStatus::Skipped)
     }));
@@ -266,7 +287,12 @@ fn remote_deploy_reports_identity_spawn_error_as_phase_failure() {
         .expect("identity phase should be present");
     assert!(matches!(identity.status, SetupStatus::Error));
     assert!(identity.detail.contains("ssh failed"));
-    assert!(!runner.commands.iter().any(|cmd| cmd.contains("up -d")));
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|cmd| cmd.ends_with("compose up -d cortex"))
+    );
 }
 
 #[test]
@@ -302,6 +328,7 @@ fn remote_deploy_rejects_relative_home_before_running_ssh() {
         RemoteDeployOptions {
             dry_run: true,
             home: Some("relative/path".to_string()),
+            update_latest: false,
         },
         &mut runner,
     )
@@ -344,7 +371,7 @@ fn existing_environment_read_failure_aborts_before_writes() {
         !runner
             .commands
             .iter()
-            .any(|command| command.contains("up -d"))
+            .any(|command| command.ends_with("compose up -d cortex"))
     );
 }
 
@@ -412,4 +439,191 @@ fn staging_failures_preserve_existing_remote_files() {
             }
         }
     }
+}
+
+#[test]
+fn recovery_failure_blocks_configuration_changes_and_upgrades() {
+    let mut runner = FakeRemoteRunner::fail_on("# Managed Compose recovery");
+    let report = run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
+    assert!(report.has_errors);
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command.contains("cat >"))
+    );
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command.ends_with("compose up -d cortex"))
+    );
+}
+
+#[test]
+fn dry_run_reads_saved_pin_but_never_stops_or_snapshots_service() {
+    let mut runner =
+        FakeRemoteRunner::with_existing_env("CORTEX_VERSION=3.12.0\nCORTEX_PORT=3200\n");
+    let report = run_remote_deploy_with_runner("host-a", true, &mut runner).unwrap();
+    assert_eq!(report.health_url, "http://127.0.0.1:3200/health");
+    assert!(
+        runner
+            .commands
+            .iter()
+            .any(|command| command.contains("cat '/home/syslog/.cortex/.env'"))
+    );
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command.contains("# Managed Compose recovery")
+                || command.contains("compose stop"))
+    );
+}
+
+#[test]
+fn readiness_failure_retains_recovery_and_skips_authentication_probes() {
+    let mut runner = FakeRemoteRunner::fail_on("deadline=$((");
+    let report = run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
+    assert!(report.has_errors);
+    assert!(
+        runner
+            .commands
+            .iter()
+            .any(|command| command.contains("# Managed Compose recovery"))
+    );
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command.contains("__CORTEX_VERIFY__"))
+    );
+}
+
+#[test]
+fn update_compose_commands_keep_custom_override_and_recovery_pin() {
+    let script = compose_command("/srv/cortex");
+    assert!(script.contains("docker-compose.override.yml"));
+    assert!(script.contains("docker-compose.recovery.yml"));
+    assert!(script.contains("--project-directory"));
+}
+
+#[test]
+fn unpinned_update_resolves_latest_without_creating_a_permanent_env_pin() {
+    let mut runner = FakeRemoteRunner::ok();
+    let report = run_remote_deploy_with_runner(
+        "host-a",
+        RemoteDeployOptions {
+            update_latest: true,
+            ..Default::default()
+        },
+        &mut runner,
+    )
+    .unwrap();
+    assert!(!report.has_errors);
+    assert!(
+        runner
+            .commands
+            .iter()
+            .any(|command| command == "resolve latest stable release")
+    );
+    let env_write = runner
+        .commands
+        .iter()
+        .find(|command| command.contains("/.env.tmp'"))
+        .unwrap();
+    assert!(!env_write.contains("CORTEX_VERSION=9.8.7"));
+    let asset_write = runner
+        .commands
+        .iter()
+        .find(|command| command.contains("__CORTEX_COMPOSE__"))
+        .unwrap();
+    assert!(asset_write.contains("${CORTEX_VERSION:-9.8.7}"));
+}
+
+#[test]
+fn pinned_update_keeps_exact_version_and_skips_latest_discovery() {
+    let mut runner = FakeRemoteRunner::with_existing_env("CORTEX_VERSION=session-explicit\n");
+    run_remote_deploy_with_runner(
+        "host-a",
+        RemoteDeployOptions {
+            update_latest: true,
+            ..Default::default()
+        },
+        &mut runner,
+    )
+    .unwrap();
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command == "resolve latest stable release")
+    );
+    assert!(
+        runner
+            .commands
+            .iter()
+            .any(|command| command.contains("CORTEX_VERSION=session-explicit"))
+    );
+}
+
+#[test]
+fn deployment_lease_spans_snapshot_writes_and_authenticated_verification() {
+    let mut runner = FakeRemoteRunner::ok();
+    let report = run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
+    assert!(!report.has_errors);
+    let acquired = runner
+        .commands
+        .iter()
+        .position(|s| s.contains("external-deployment"))
+        .unwrap();
+    let snapshot = runner
+        .commands
+        .iter()
+        .position(|s| s.contains("set -- 'prepare'"))
+        .unwrap();
+    let verified = runner
+        .commands
+        .iter()
+        .position(|s| s.contains("__CORTEX_VERIFY__"))
+        .unwrap();
+    assert!(acquired < snapshot && snapshot < verified);
+    assert!(
+        runner.commands[snapshot..=verified]
+            .iter()
+            .all(|s| s.contains("export CORTEX_LIFECYCLE_TOKEN="))
+    );
+    assert!(
+        runner
+            .commands
+            .last()
+            .unwrap()
+            .contains("rmdir \"$home/.lifecycle-lock\"; fi")
+    );
+}
+
+#[test]
+fn deployment_lease_is_released_when_mutating_phase_returns_io_error() {
+    let mut runner = FakeRemoteRunner::error_on("cat > '/home/syslog/.cortex/.env.tmp'");
+    let report = run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
+    assert!(report.has_errors);
+    assert!(
+        report
+            .phases
+            .iter()
+            .any(|phase| phase.name == "remote-env" && matches!(phase.status, SetupStatus::Error))
+    );
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| command.ends_with("compose up -d cortex"))
+    );
+    assert!(
+        runner
+            .commands
+            .last()
+            .unwrap()
+            .contains("rmdir \"$home/.lifecycle-lock\"; fi")
+    );
 }

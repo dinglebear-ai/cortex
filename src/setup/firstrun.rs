@@ -8,6 +8,12 @@ use super::{
     check_file_phase, setup_report,
 };
 
+#[path = "firstrun_commands.rs"]
+mod commands;
+#[cfg(test)]
+pub(crate) use commands::health_phase;
+pub(crate) use commands::{command_phase, ensure_network_phase, run_compose_phase};
+
 pub async fn run_setup(mode: SetupMode) -> io::Result<SetupReport> {
     let started = Instant::now();
     let home = super::cortex_home_dir()?;
@@ -15,7 +21,61 @@ pub async fn run_setup(mode: SetupMode) -> io::Result<SetupReport> {
     let compose_dir = home.join("compose");
     let data_dir = home.join("data");
     let mut phases = Vec::new();
+    phases.push(command_phase("docker", ["--version"]));
+    phases.push(command_phase("docker compose", ["compose", "version"]));
+    if mode.mutates() && super::phases_have_errors(&phases) {
+        return Ok(setup_report(
+            SetupReportInput {
+                mode: mode.as_str(),
+                elapsed_ms: started.elapsed().as_millis(),
+                home,
+                env_path,
+                compose_dir,
+                data_dir,
+                health_url: "not started".into(),
+                mcp_url: "not started".into(),
+            },
+            phases,
+        ));
+    }
+    let lifecycle = if mode.mutates() {
+        Some(crate::deploy::lifecycle_lock::LocalLifecycleLock::acquire(
+            &home,
+        )?)
+    } else {
+        None
+    };
 
+    let configuration_changed = if mode.mutates() && env_path.is_file() {
+        let current = parse_env(&std::fs::read_to_string(&env_path)?);
+        let mut planned = current.clone();
+        populate_env_defaults(&mut planned, &data_dir)?;
+        current != planned
+            || std::fs::read_to_string(compose_dir.join("docker-compose.yml"))
+                .ok()
+                .as_deref()
+                != Some(installed_compose_asset().as_str())
+    } else {
+        false
+    };
+    if mode.mutates()
+        && configuration_changed
+        && compose_dir.join("docker-compose.yml").is_file()
+        && env_path.is_file()
+    {
+        let timer = PhaseTimer::start("upgrade-snapshot");
+        match crate::update::lifecycle::prepare_local_upgrade_locked(
+            &home,
+            lifecycle.as_ref().unwrap().token(),
+        ) {
+            Ok(detail) => phases.push(timer.finish(SetupStatus::Ok, detail)),
+            Err(err) => {
+                return Err(io::Error::other(format!(
+                    "pre-upgrade snapshot failed before configuration changes: {err}"
+                )));
+            }
+        }
+    }
     phases.push(filesystem_phase(mode, &home, &data_dir, &compose_dir)?);
     let env = if mode.mutates() {
         let env_result = ensure_env_file(&env_path, &data_dir)?;
@@ -32,8 +92,6 @@ pub async fn run_setup(mode: SetupMode) -> io::Result<SetupReport> {
         None
     };
 
-    phases.push(command_phase("docker", ["--version"]));
-    phases.push(command_phase("docker compose", ["compose", "version"]));
     if mode.mutates() {
         let systemd_dir = super::user_home_dir()?.join(".config/systemd/user");
         phases.push(super::managed_units::rewrite_stale_managed_unit_commands(
@@ -47,18 +105,24 @@ pub async fn run_setup(mode: SetupMode) -> io::Result<SetupReport> {
         .any(|phase| matches!(phase.status, SetupStatus::Error));
     if mode.mutates() && !prereq_failed {
         ensure_network_phase(&mut phases, env.as_ref());
-        phases.push(run_compose_phase(
-            &compose_dir,
-            &env_path,
-            &["pull", "--ignore-buildable"],
-        ));
+        if !super::phases_have_errors(&phases) {
+            phases.push(run_compose_phase(
+                &compose_dir,
+                &env_path,
+                &["pull", "--ignore-buildable"],
+            ));
+        }
         let up_args: &[&str] = if compose_dir.join("docker-compose.override.yml").exists() {
             &["up", "-d", "--build"]
         } else {
             &["up", "-d"]
         };
-        phases.push(run_compose_phase(&compose_dir, &env_path, up_args));
-        phases.push(health_phase(&env));
+        if !super::phases_have_errors(&phases) {
+            phases.push(run_compose_phase(&compose_dir, &env_path, up_args));
+        }
+        if !super::phases_have_errors(&phases) {
+            phases.extend(super::verification::verify_managed_server(env.as_ref().unwrap()).await);
+        }
     } else {
         phases.push(SetupPhase {
             name: "compose-up",
@@ -71,6 +135,12 @@ pub async fn run_setup(mode: SetupMode) -> io::Result<SetupReport> {
             },
             elapsed_ms: 0,
         });
+    }
+
+    if mode.mutates() && !super::phases_have_errors(&phases) {
+        let timer = PhaseTimer::start("saved-deployment-profile");
+        crate::update::configure_local_server_profile(None, &home)?;
+        phases.push(timer.finish(SetupStatus::Ok, "local deployment saved for cortex update"));
     }
 
     let elapsed_ms = started.elapsed().as_millis();
@@ -101,7 +171,12 @@ pub(crate) fn filesystem_phase(
     compose_dir: &Path,
 ) -> io::Result<SetupPhase> {
     let timer = PhaseTimer::start("filesystem");
-    let backup_dir = crate::env::var_os("CORTEX_BACKUP_DIR")
+    let backup_dir = crate::config::config_env_var("CORTEX_BACKUP_DIR")
+        .or_else(|| {
+            std::fs::read_to_string(home.join(".env"))
+                .ok()
+                .and_then(|raw| parse_env(&raw).get("CORTEX_BACKUP_DIR").cloned())
+        })
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join("backups"));
     if mode.mutates() {
@@ -168,7 +243,10 @@ pub(crate) fn default_env_for_data_dir(data_dir: &Path) -> io::Result<BTreeMap<S
     Ok(env)
 }
 
-fn populate_env_defaults(env: &mut BTreeMap<String, String>, data_dir: &Path) -> io::Result<()> {
+pub(crate) fn populate_env_defaults(
+    env: &mut BTreeMap<String, String>,
+    data_dir: &Path,
+) -> io::Result<()> {
     insert_process_or_default(env, "CORTEX_RECEIVER_HOST", "0.0.0.0");
     insert_process_or_default(env, "CORTEX_RECEIVER_PORT", "1514");
     insert_process_or_default(env, "CORTEX_RECEIVER_HOST_PORT", "1514");
@@ -184,7 +262,7 @@ fn populate_env_defaults(env: &mut BTreeMap<String, String>, data_dir: &Path) ->
     insert_process_or_default(env, "CORTEX_WRITE_CHANNEL_CAPACITY", "10000");
     insert_process_or_default(env, "CORTEX_DOCKER_INGEST_ENABLED", "false");
     insert_process_or_default(env, "RUST_LOG", "info");
-    insert_process_or_default(env, "COMPOSE_PROJECT_NAME", "syslog-jmagar-lab");
+    insert_process_or_default(env, "COMPOSE_PROJECT_NAME", "cortex");
     insert_process_or_default(env, "DOCKER_NETWORK", "cortex");
     insert_process_optional(env, "CORTEX_DOCKER_HOSTS");
     insert_process_optional(env, "CORTEX_PUBLIC_URL");
@@ -193,6 +271,8 @@ fn populate_env_defaults(env: &mut BTreeMap<String, String>, data_dir: &Path) ->
     insert_process_optional(env, "CORTEX_AUTH_ADMIN_EMAIL");
     insert_process_optional(env, "CORTEX_AUTH_ALLOWED_REDIRECT_URIS");
     insert_process_optional(env, "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH");
+
+    super::managed_config::capture_process_settings(env)?;
 
     let (uid, gid) = current_uid_gid();
     env.entry("CORTEX_UID".to_string()).or_insert(uid);
@@ -248,30 +328,21 @@ fn insert_process_optional(env: &mut BTreeMap<String, String>, key: &str) {
 }
 
 fn process_env_value(key: &str) -> Option<String> {
-    crate::env::var(key)
-        .ok()
+    crate::config::config_env_var(key)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty() && !value.contains(['\n', '\r']))
 }
 
 pub(crate) fn parse_env(raw: &str) -> BTreeMap<String, String> {
-    raw.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let (key, value) = line.split_once('=')?;
-            Some((key.trim().to_string(), value.trim().to_string()))
-        })
-        .collect()
+    super::dotenv::parse(raw)
 }
 
 pub(crate) fn write_env(path: &Path, env: &BTreeMap<String, String>) -> io::Result<()> {
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
 
-    let out = render_env(env);
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let out = super::dotenv::render_preserving(&existing, env);
 
     // Atomic write: temp file in the same directory (so rename(2) stays on
     // the same filesystem), fsync, then rename over the target. A kill
@@ -340,6 +411,7 @@ pub(crate) fn write_env(path: &Path, env: &BTreeMap<String, String>) -> io::Resu
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn render_env(env: &BTreeMap<String, String>) -> String {
     let mut out = String::new();
     out.push_str("# cortex runtime environment.\n");
@@ -347,7 +419,7 @@ pub(crate) fn render_env(env: &BTreeMap<String, String>) -> String {
     for (key, value) in env {
         out.push_str(key);
         out.push('=');
-        out.push_str(value);
+        out.push_str(&super::dotenv::encode(value));
         out.push('\n');
     }
     out
@@ -386,144 +458,6 @@ pub(crate) fn installed_compose_asset() -> String {
 
 pub(crate) fn dockerfile_asset() -> &'static str {
     super::DOCKERFILE_ASSET
-}
-
-pub(crate) fn command_phase<const N: usize>(name: &'static str, args: [&str; N]) -> SetupPhase {
-    let timer = PhaseTimer::start(name);
-    let program = if name == "docker compose" {
-        "docker"
-    } else {
-        name
-    };
-    match crate::env::command(program).args(args).output() {
-        Ok(output) if output.status.success() => timer.finish(
-            SetupStatus::Ok,
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .unwrap_or("available")
-                .to_string(),
-        ),
-        Ok(output) => timer.finish(
-            SetupStatus::Error,
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .next()
-                .unwrap_or("command failed")
-                .to_string(),
-        ),
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            timer.finish(SetupStatus::Error, "not found on PATH")
-        }
-        Err(err) => timer.finish(SetupStatus::Error, err.to_string()),
-    }
-}
-
-pub(crate) fn ensure_network_phase(
-    phases: &mut Vec<SetupPhase>,
-    env: Option<&BTreeMap<String, String>>,
-) {
-    let timer = PhaseTimer::start("docker-network");
-    let network = env
-        .and_then(|env| env.get("DOCKER_NETWORK"))
-        .map(String::as_str)
-        .unwrap_or("cortex");
-    let inspect = crate::env::command("docker")
-        .args(["network", "inspect", network])
-        .output();
-    if inspect.as_ref().is_ok_and(|output| output.status.success()) {
-        phases.push(timer.finish(SetupStatus::Ok, format!("{network} exists")));
-        return;
-    }
-    match crate::env::command("docker")
-        .args(["network", "create", network])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            phases.push(timer.finish(SetupStatus::Ok, format!("created {network}")))
-        }
-        Ok(output) => phases.push(
-            timer.finish(
-                SetupStatus::Error,
-                String::from_utf8_lossy(&output.stderr)
-                    .lines()
-                    .next()
-                    .unwrap_or("docker network create failed"),
-            ),
-        ),
-        Err(err) => phases.push(timer.finish(SetupStatus::Error, err.to_string())),
-    }
-}
-
-pub(crate) fn run_compose_phase(compose_dir: &Path, env_path: &Path, args: &[&str]) -> SetupPhase {
-    let timer = PhaseTimer::start(if args.first() == Some(&"pull") {
-        "compose-pull"
-    } else {
-        "compose-up"
-    });
-    let mut command = crate::env::command("docker");
-    command
-        .arg("compose")
-        .arg("--env-file")
-        .arg(env_path)
-        .arg("-f")
-        .arg(compose_dir.join("docker-compose.yml"));
-    let override_path = compose_dir.join("docker-compose.override.yml");
-    if override_path.exists() {
-        command.arg("-f").arg(override_path);
-    }
-    command
-        .args(args)
-        .current_dir(compose_dir)
-        .env("PWD", compose_dir);
-    match command.output() {
-        Ok(output) if output.status.success() => timer.finish(
-            SetupStatus::Ok,
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .last()
-                .unwrap_or("ok")
-                .to_string(),
-        ),
-        Ok(output) => timer.finish(
-            SetupStatus::Error,
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .last()
-                .unwrap_or("docker compose failed")
-                .to_string(),
-        ),
-        Err(err) => timer.finish(SetupStatus::Error, err.to_string()),
-    }
-}
-
-pub(crate) fn health_phase(env: &Option<BTreeMap<String, String>>) -> SetupPhase {
-    let timer = PhaseTimer::start("health");
-    let port = env
-        .as_ref()
-        .and_then(|env| env.get("CORTEX_PORT"))
-        .map(String::as_str)
-        .unwrap_or("3100");
-    let url = format!("http://127.0.0.1:{port}/health");
-    match crate::env::command("curl")
-        .args(["-fsS", "--max-time", "5", &url])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            timer.finish(SetupStatus::Ok, format!("{url} ready"))
-        }
-        Ok(output) => timer.finish(
-            SetupStatus::Error,
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .next()
-                .unwrap_or("health check failed"),
-        ),
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            timer.finish(SetupStatus::Error, "curl not found; skipped health check")
-        }
-        Err(err) => timer.finish(SetupStatus::Error, err.to_string()),
-    }
 }
 
 pub(super) fn current_uid_gid() -> (String, String) {

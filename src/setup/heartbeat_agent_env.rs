@@ -136,22 +136,73 @@ pub fn parse_agent_env(raw: &str) -> io::Result<BTreeMap<String, String>> {
     Ok(values)
 }
 
-fn parse_value(raw: &str) -> Result<String, &'static str> {
+pub(crate) fn parse_value(raw: &str) -> Result<String, &'static str> {
     if raw.starts_with('"') || raw.starts_with('\'') {
         let quote = raw.as_bytes()[0] as char;
         if raw.len() < 2 || !raw.ends_with(quote) {
             return Err("malformed quoting");
         }
         let inner = &raw[1..raw.len() - 1];
-        if inner.contains(quote) {
-            return Err("embedded quote is unsupported");
+        if quote == '\'' {
+            if inner.contains(quote) {
+                return Err("embedded quote is unsupported");
+            }
+            return Ok(inner.to_string());
         }
-        Ok(inner.to_string())
+        let mut value = String::new();
+        let mut chars = inner.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' => return Err("unescaped embedded quote"),
+                '\\' if chars.peek().is_some_and(|next| matches!(next, '\\' | '"')) => {
+                    value.push(chars.next().unwrap());
+                }
+                _ => value.push(ch),
+            }
+        }
+        Ok(value)
     } else if raw.contains('"') || raw.contains('\'') {
         Err("malformed quoting")
     } else {
         Ok(raw.trim().to_string())
     }
+}
+
+pub(crate) fn render_agent_value(value: &str) -> io::Result<String> {
+    if value.chars().any(char::is_control) {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "heartbeat environment value contains control characters",
+        ));
+    }
+    if value.trim() != value || value.contains(['\'', '"']) {
+        Ok(format!(
+            "\"{}\"",
+            value.replace('\\', "\\\\").replace('"', "\\\"")
+        ))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+pub fn write_private_agent_env(path: &Path, values: &BTreeMap<String, String>) -> io::Result<()> {
+    let mut body = String::new();
+    for (key, value) in values {
+        if !RECOGNIZED_KEYS.contains(&key.as_str()) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("unsupported heartbeat environment key {key}"),
+            ));
+        }
+        body.push_str(&format!("{key}={}\n", render_agent_value(value)?));
+    }
+    if parse_agent_env(&body)? != *values {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "heartbeat environment does not round trip",
+        ));
+    }
+    atomic_private_write(path, body.as_bytes(), 0o600)
 }
 
 fn invalid(index: usize, why: &str) -> io::Error {
@@ -318,5 +369,28 @@ mod tests {
             Some(value) => crate::env::set_test_var("CORTEX_HOME", value),
             None => crate::env::remove_test_var("CORTEX_HOME"),
         }
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    #[test]
+    fn private_env_round_trips_quoted_credentials_and_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.env");
+        let values = BTreeMap::from([
+            ("CORTEX_HEARTBEAT_TOKEN".into(), " token'\"\\suffix ".into()),
+            (
+                "CORTEX_AGENT_COMMAND_SPOOL".into(),
+                r"C:\Users\agent\events.jsonl".into(),
+            ),
+        ]);
+        write_private_agent_env(&path, &values).unwrap();
+        assert_eq!(load_private_agent_env(&path).unwrap(), values);
+        let mut invalid = values.clone();
+        invalid.insert("CORTEX_HEARTBEAT_TOKEN".into(), "invalid\nsecret".into());
+        assert!(write_private_agent_env(&path, &invalid).is_err());
+        assert_eq!(load_private_agent_env(&path).unwrap(), values);
     }
 }

@@ -8,10 +8,23 @@ use crate::heartbeat_agent;
 
 use super::firstrun::parse_env;
 use super::heartbeat_agent_env::{atomic_private_write, load_private_agent_env};
-use super::systemd::{systemctl_user_named_phase, systemctl_user_state};
+use super::systemd::{
+    systemctl_user_named_phase, systemctl_user_required_named_phase, systemctl_user_state,
+};
 use super::{
     HeartbeatAgentAction, PhaseTimer, SetupPhase, SetupReport, SetupStatus, check_file_phase,
     host_local_report_input, setup_path_value, setup_report, write_private_file,
+};
+
+#[path = "agent_capabilities.rs"]
+mod capabilities;
+#[path = "heartbeat_agent_compose.rs"]
+mod compose_sources;
+#[path = "heartbeat_agent_windows.rs"]
+mod windows;
+pub(crate) use capabilities::discover_with_overrides;
+pub use capabilities::{
+    AgentCapability, CapabilityStatus, configure_agent_capabilities, discover_agent_capabilities,
 };
 
 const UNIT_NAME: &str = "cortex-heartbeat-agent.service";
@@ -22,6 +35,7 @@ pub(crate) enum ServiceBackend {
     Systemd,
     Launchd,
     Compose,
+    WindowsTask,
     Unsupported,
 }
 
@@ -31,7 +45,9 @@ pub(crate) fn select_backend(
     gui: bool,
     compose_supported: bool,
 ) -> ServiceBackend {
-    if os == "macos" && gui {
+    if os == "windows" {
+        ServiceBackend::WindowsTask
+    } else if os == "macos" && gui {
         ServiceBackend::Launchd
     } else if os == "linux" && systemd {
         ServiceBackend::Systemd
@@ -57,13 +73,17 @@ pub async fn run_heartbeat_agent_setup(action: HeartbeatAgentAction) -> io::Resu
     let started = Instant::now();
     let home = super::cortex_home_dir()?;
     let env_path = home.join("heartbeat-agent.env");
-    let compose_dir = home.join("compose");
+    let compose_dir = compose_sources::compose_dir(&home);
     let data_dir = home.join("data");
     let user_home = super::user_home_dir()?;
     let unit_dir = user_home.join(".config/systemd/user");
     let unit_path = unit_dir.join(UNIT_NAME);
     let host_id_path = home.join("heartbeat-host-id");
-    let managed_bin = user_home.join(".local/lib/cortex/heartbeat-agent/cortex");
+    let managed_bin = user_home.join(if cfg!(target_os = "windows") {
+        ".local/lib/cortex/heartbeat-agent/cortex.exe"
+    } else {
+        ".local/lib/cortex/heartbeat-agent/cortex"
+    });
     let _lifecycle_lock = if matches!(
         action,
         HeartbeatAgentAction::Install | HeartbeatAgentAction::Remove
@@ -78,48 +98,79 @@ pub async fn run_heartbeat_agent_setup(action: HeartbeatAgentAction) -> io::Resu
     match action {
         HeartbeatAgentAction::Install => {
             let source_bin = super::resolve_cortex_binary()?;
-            let cortex_bin = install_managed_binary(&source_bin, &managed_bin)?;
-            phases.push(write_heartbeat_agent_env(&env_path)?);
-            if backend == ServiceBackend::Systemd {
-                std::fs::create_dir_all(&unit_dir)?;
-                phases.push(write_heartbeat_agent_unit(
-                    &unit_path,
-                    &cortex_bin,
+            if backend == ServiceBackend::WindowsTask {
+                let (staging, env_phase) =
+                    stage_windows_upgrade(&source_bin, &managed_bin, &env_path)?;
+                phases.push(env_phase);
+                phases.extend(windows::upgrade(
+                    &staging.binary,
+                    &managed_bin,
+                    &staging.env,
                     &env_path,
                     &host_id_path,
                 )?);
-                phases.push(systemctl_user_named_phase(
-                    "heartbeat-agent-daemon-reload",
-                    &["daemon-reload"],
-                ));
-                phases.push(systemctl_user_named_phase(
-                    "heartbeat-agent-enabled",
-                    &["enable", "--now", UNIT_NAME],
-                ));
-            } else if backend == ServiceBackend::Launchd {
-                phases.extend(install_launchd(
-                    &home,
-                    &user_home,
-                    &cortex_bin,
-                    &env_path,
-                    &host_id_path,
-                )?);
-            } else if backend == ServiceBackend::Compose {
-                // No systemd (e.g. Unraid) — install as a Docker Compose service.
-                let compose_dir = home.join("compose");
-                std::fs::create_dir_all(&compose_dir)?;
-                phases.push(write_heartbeat_agent_compose(
-                    &compose_dir,
-                    &cortex_bin,
-                    &env_path,
-                    &host_id_path,
-                )?);
-                phases.push(docker_compose_up_phase(&compose_dir));
             } else {
-                return Err(io::Error::new(
-                    ErrorKind::Unsupported,
-                    "no supported heartbeat-agent service backend",
-                ));
+                let cortex_bin = install_managed_binary(&source_bin, &managed_bin)?;
+                phases.push(write_heartbeat_agent_env(&env_path)?);
+                if backend == ServiceBackend::Systemd {
+                    std::fs::create_dir_all(&unit_dir)?;
+                    phases.push(write_heartbeat_agent_unit(
+                        &unit_path,
+                        &cortex_bin,
+                        &env_path,
+                        &host_id_path,
+                    )?);
+                    phases.push(systemctl_user_required_named_phase(
+                        "heartbeat-agent-daemon-reload",
+                        &["daemon-reload"],
+                    ));
+                    phases.push(systemctl_user_required_named_phase(
+                        "heartbeat-agent-enabled",
+                        &["enable", "--now", UNIT_NAME],
+                    ));
+                    // enable --now leaves an already-running process on the old
+                    // executable inode after an atomic managed binary replacement.
+                    if !super::phases_have_errors(&phases) {
+                        phases.push(systemctl_user_required_named_phase(
+                            "heartbeat-agent-restarted",
+                            &["restart", UNIT_NAME],
+                        ));
+                    }
+                } else if backend == ServiceBackend::Launchd {
+                    phases.extend(install_launchd(
+                        &home,
+                        &user_home,
+                        &cortex_bin,
+                        &env_path,
+                        &host_id_path,
+                    )?);
+                } else if backend == ServiceBackend::Compose {
+                    // No systemd (e.g. Unraid) — install as a Docker Compose service.
+                    let compose_dir = compose_sources::compose_dir(&home);
+                    std::fs::create_dir_all(&compose_dir)?;
+                    phases.push(write_heartbeat_agent_compose(
+                        &compose_dir,
+                        &cortex_bin,
+                        &env_path,
+                        &host_id_path,
+                    )?);
+                    let values = load_private_agent_env(&env_path)?;
+                    if enabled(&values, "CORTEX_AGENT_JOURNALD") {
+                        phases.push(compose_journalctl_preflight(&compose_dir));
+                    }
+                    if !super::phases_have_errors(&phases) {
+                        phases.push(docker_compose_up_phase(&compose_dir));
+                    }
+                    if !super::phases_have_errors(&phases) {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        phases.push(docker_compose_active_phase(&compose_dir));
+                    }
+                } else {
+                    return Err(io::Error::new(
+                        ErrorKind::Unsupported,
+                        "no supported heartbeat-agent service backend",
+                    ));
+                }
             }
         }
         HeartbeatAgentAction::Remove => {
@@ -142,6 +193,9 @@ pub async fn run_heartbeat_agent_setup(action: HeartbeatAgentAction) -> io::Resu
                     "heartbeat-agent-daemon-reload",
                     &["daemon-reload"],
                 ));
+            }
+            if backend == ServiceBackend::WindowsTask {
+                windows::remove()?;
             }
             phases.push(remove_file_phase(
                 "heartbeat-agent-managed-binary",
@@ -183,6 +237,9 @@ pub async fn run_heartbeat_agent_setup(action: HeartbeatAgentAction) -> io::Resu
                     &compose_dir.join("docker-compose.yml"),
                     "run cortex setup heartbeatagent install",
                 ));
+                phases.push(docker_compose_active_phase(&compose_dir));
+            } else if backend == ServiceBackend::WindowsTask {
+                phases.push(windows::check());
             } else {
                 phases.push(
                     PhaseTimer::start("heartbeat-agent-backend")
@@ -229,7 +286,10 @@ fn check_capabilities_and_delivery(env_path: &Path, backend: ServiceBackend) -> 
             "disabled"
         }
     };
-    let journald = if backend == ServiceBackend::Launchd {
+    let journald = if matches!(
+        backend,
+        ServiceBackend::Launchd | ServiceBackend::WindowsTask
+    ) {
         "n/a"
     } else {
         state("CORTEX_AGENT_JOURNALD")
@@ -260,6 +320,29 @@ fn check_capabilities_and_delivery(env_path: &Path, backend: ServiceBackend) -> 
     );
     let mut phases =
         vec![PhaseTimer::start("heartbeat-agent-capabilities").finish(SetupStatus::Ok, ledger)];
+    match capabilities::discover_from(env_path) {
+        Ok(capabilities) => {
+            let detail = capabilities
+                .iter()
+                .map(|c| format!("{}={:?}", c.id, c.status))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let status = if capabilities.iter().any(|c| {
+                c.status == CapabilityStatus::NeedsConfiguration && enabled(&values, &c.env_key)
+            }) {
+                SetupStatus::Warn
+            } else {
+                SetupStatus::Ok
+            };
+            phases.push(
+                PhaseTimer::start("heartbeat-agent-capability-discovery").finish(status, detail),
+            );
+        }
+        Err(error) => phases.push(
+            PhaseTimer::start("heartbeat-agent-capability-discovery")
+                .finish(SetupStatus::Warn, format!("discovery unavailable: {error}")),
+        ),
+    }
     if enabled(&values, heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV) {
         let checkpoint = values
             .get("CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT")
@@ -461,8 +544,8 @@ fn heartbeat_agent_enabled_phase() -> SetupPhase {
     let timer = PhaseTimer::start("heartbeat-agent-enabled");
     match systemctl_user_state("is-enabled", UNIT_NAME).as_deref() {
         Some("enabled") => timer.finish(SetupStatus::Ok, "enabled"),
-        Some(state) => timer.finish(SetupStatus::Warn, state),
-        None => timer.finish(SetupStatus::Warn, "unknown"),
+        Some(state) => timer.finish(SetupStatus::Error, state),
+        None => timer.finish(SetupStatus::Error, "unknown"),
     }
 }
 
@@ -470,8 +553,8 @@ fn heartbeat_agent_active_phase() -> SetupPhase {
     let timer = PhaseTimer::start("heartbeat-agent-active");
     match systemctl_user_state("is-active", UNIT_NAME).as_deref() {
         Some("active") => timer.finish(SetupStatus::Ok, "active"),
-        Some(state) => timer.finish(SetupStatus::Warn, state),
-        None => timer.finish(SetupStatus::Warn, "unknown"),
+        Some(state) => timer.finish(SetupStatus::Error, state),
+        None => timer.finish(SetupStatus::Error, "unknown"),
     }
 }
 
@@ -501,12 +584,22 @@ fn heartbeat_agent_unit(
     // without this, `ProtectHome=read-only` blocks it from ever opening the
     // spool for the truncate-after-forward step.
     let mut read_write_paths_set = vec![read_write_dir.clone(), read_write_bin_dir.clone()];
-    if let Ok(spool_path) = super::default_agent_command_spool_path()
-        && let Some(spool_dir) = spool_path.parent()
-        && let Ok(spool_dir) = setup_path_value(spool_dir)
-        && !read_write_paths_set.contains(&spool_dir)
-    {
-        read_write_paths_set.push(spool_dir);
+    let values = if env_path.is_file() {
+        load_private_agent_env(env_path)?
+    } else {
+        Default::default()
+    };
+    if enabled(&values, "CORTEX_AGENT_COMMAND_FORWARD") {
+        let spool_path = values
+            .get("CORTEX_AGENT_COMMAND_SPOOL")
+            .map(PathBuf::from)
+            .unwrap_or(super::default_agent_command_spool_path()?);
+        if let Some(spool_dir) = spool_path.parent() {
+            let spool_dir = setup_path_value(spool_dir)?;
+            if !read_write_paths_set.contains(&spool_dir) {
+                read_write_paths_set.push(spool_dir);
+            }
+        }
     }
     let read_write_paths = read_write_paths_set.join(" ");
     let cortex_bin = setup_path_value(cortex_bin)?;
@@ -543,20 +636,68 @@ fn write_heartbeat_agent_compose(
 fn docker_compose_up_phase(compose_dir: &Path) -> SetupPhase {
     let timer = PhaseTimer::start("heartbeat-agent-docker-up");
     let result = crate::env::command("docker")
-        .args(["compose", "up", "-d", "--remove-orphans"])
+        .args(["compose", "up", "-d", "cortex-heartbeat-agent"])
         .current_dir(compose_dir)
         .output();
     match result {
         Ok(out) if out.status.success() => timer.finish(SetupStatus::Ok, "container started"),
         Ok(out) => timer.finish(
-            SetupStatus::Warn,
+            SetupStatus::Error,
             String::from_utf8_lossy(&out.stderr)
                 .lines()
                 .next()
                 .unwrap_or("docker compose up failed")
                 .to_string(),
         ),
-        Err(e) => timer.finish(SetupStatus::Warn, e.to_string()),
+        Err(e) => timer.finish(SetupStatus::Error, e.to_string()),
+    }
+}
+
+fn compose_journalctl_preflight(compose_dir: &Path) -> SetupPhase {
+    let timer = PhaseTimer::start("heartbeat-agent-journald-preflight");
+    let result = crate::env::command("docker")
+        .args([
+            "compose",
+            "run",
+            "--rm",
+            "--no-deps",
+            "--pull",
+            "never",
+            "--entrypoint",
+            "journalctl",
+            "cortex-heartbeat-agent",
+            "--version",
+        ])
+        .current_dir(compose_dir)
+        .output();
+    match result {
+        Ok(out) if out.status.success() => timer.finish(SetupStatus::Ok,"custom agent image provides journalctl; delivery checked separately"),
+        _ => timer.finish(SetupStatus::Error,"custom heartbeat agent image cannot run journalctl; provide it in the image or use the native systemd agent; selected sources retained"),
+    }
+}
+
+fn docker_compose_active_phase(compose_dir: &Path) -> SetupPhase {
+    let timer = PhaseTimer::start("heartbeat-agent-active");
+    let result = crate::env::command("docker")
+        .args(["compose", "ps", "--status", "running", "--services"])
+        .current_dir(compose_dir)
+        .output();
+    match result {
+        Ok(out)
+            if out.status.success()
+                && String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .any(|l| l.trim() == "cortex-heartbeat-agent") =>
+        {
+            timer.finish(
+                SetupStatus::Ok,
+                "container process running; delivery is verified separately",
+            )
+        }
+        _ => timer.finish(
+            SetupStatus::Error,
+            "heartbeat agent container is absent or inactive; inspect docker compose logs",
+        ),
     }
 }
 
@@ -573,11 +714,12 @@ fn heartbeat_agent_compose(
     // unprivileged server user (the agent reads root-owned host files), and the
     // image's server health probe is disabled (the agent runs no HTTP server).
     let image = format!("ghcr.io/dinglebear-ai/cortex:{}", env!("CARGO_PKG_VERSION"));
+    let sources = compose_sources::collection_mounts(env_path)?;
     let env_path = setup_path_value(env_path)?;
     let host_id_path = setup_path_value(host_id_path)?;
     let data_dir = setup_path_value(data_dir)?;
     Ok(format!(
-        "services:\n  cortex-heartbeat-agent:\n    image: {image}\n    restart: unless-stopped\n    network_mode: host\n    user: \"0:0\"\n    healthcheck:\n      disable: true\n    volumes:\n      - {data_dir}:{data_dir}\n    command:\n      - cortex\n      - heartbeat\n      - agent\n      - --env-file\n      - {env_path}\n      - --host-id-path\n      - {host_id_path}\n"
+        "services:\n  cortex-heartbeat-agent:\n    image: {image}\n    restart: unless-stopped\n    network_mode: host\n    user: \"0:0\"\n    healthcheck:\n      disable: true\n    volumes:\n      - {data_dir}:{data_dir}\n{sources}    command:\n      - cortex\n      - heartbeat\n      - agent\n      - --env-file\n      - {env_path}\n      - --host-id-path\n      - {host_id_path}\n"
     ))
 }
 
@@ -590,6 +732,36 @@ fn effective_uid() -> u32 {
     {
         0
     }
+}
+
+struct WindowsUpgradeStaging {
+    binary: PathBuf,
+    env: PathBuf,
+}
+impl Drop for WindowsUpgradeStaging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.binary);
+        let _ = std::fs::remove_file(&self.env);
+    }
+}
+
+fn stage_windows_upgrade(
+    source: &Path,
+    managed: &Path,
+    env: &Path,
+) -> io::Result<(WindowsUpgradeStaging, SetupPhase)> {
+    let staging = WindowsUpgradeStaging {
+        binary: managed.with_file_name("cortex.candidate.exe"),
+        env: env.with_extension("candidate.env"),
+    };
+    install_managed_binary(source, &staging.binary)?;
+    if env.exists() {
+        load_private_agent_env(env)?;
+        atomic_private_write(&staging.env, &std::fs::read(env)?, 0o600)?;
+    }
+    let phase = write_heartbeat_agent_env(&staging.env)?;
+    load_private_agent_env(&staging.env)?;
+    Ok((staging, phase))
 }
 
 fn install_managed_binary(source: &Path, destination: &Path) -> io::Result<PathBuf> {
@@ -694,7 +866,15 @@ fn check_launchd(user_home: &Path, binary: &Path, env: &Path, host_id: &Path) ->
     let canonical = super::launchd::print(uid, super::launchd::LABEL);
     let legacy = super::launchd::print(uid, super::launchd::LEGACY_LABEL);
     let (status, detail) = match (canonical, legacy) {
-        (Ok(Some(_)), Ok(None)) => (SetupStatus::Ok, "canonical loaded".to_string()),
+        (Ok(Some(state)), Ok(None))
+            if state.contains("pid =") || state.contains("state = running") =>
+        {
+            (SetupStatus::Ok, "canonical loaded".to_string())
+        }
+        (Ok(Some(_)), Ok(None)) => (
+            SetupStatus::Error,
+            "canonical loaded but no running process".to_string(),
+        ),
         (Ok(Some(_)), Ok(Some(_))) => (
             SetupStatus::Error,
             "critical: canonical and exact legacy jobs both loaded".to_string(),
@@ -770,7 +950,13 @@ fn check_lifecycle_state(home: &Path, backend: ServiceBackend) -> SetupPhase {
 fn docker_compose_down_phase(compose_dir: &Path) -> SetupPhase {
     let timer = PhaseTimer::start("heartbeat-agent-docker-down");
     match crate::env::command("docker")
-        .args(["compose", "down", "--remove-orphans"])
+        .args([
+            "compose",
+            "rm",
+            "--stop",
+            "--force",
+            "cortex-heartbeat-agent",
+        ])
         .current_dir(compose_dir)
         .output()
     {
@@ -793,16 +979,7 @@ fn read_setup_env_value(key: &str) -> Option<String> {
 }
 
 fn shell_safe_value(value: &str) -> io::Result<String> {
-    if value
-        .chars()
-        .any(|ch| ch.is_control() || ch == '\n' || ch == '\r')
-    {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "heartbeat environment value contains unsupported characters",
-        ));
-    }
-    Ok(value.to_string())
+    super::heartbeat_agent_env::render_agent_value(value)
 }
 
 #[cfg(test)]

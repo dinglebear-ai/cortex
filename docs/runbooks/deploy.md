@@ -1,10 +1,113 @@
 ---
 title: "Deploy Runbook — cortex"
 created: 2026-03-30
-updated: 2026-07-30
+updated: 2026-10-01
 ---
 
 # Deploy Runbook — cortex
+
+## Managed deployment and updates
+
+For end-user installation, use the [managed setup guide](../SETUP.md). A
+repository checkout and manual Compose startup are unnecessary:
+
+```sh
+cortex setup start --role server
+cortex setup effective --json
+cortex setup verify --json
+cortex update
+```
+
+Setup records deployment settings so updates can reuse the same managed home.
+Explicitly configured update profiles remain available for fleets and remote
+hosts. An unpinned update resolves the latest stable GitHub release without creating a
+permanent version pin. A saved `CORTEX_VERSION` pin stays authoritative; changing versions is a
+separate deliberate choice. Source-built development stacks remain an advanced
+workflow below; a published image does not establish that a running server has
+been upgraded.
+
+Managed updates run preflight and preserve a verified recovery snapshot before
+replacing the server. Recovery includes the stopped data volume, private
+configuration, and original image identity, keeping schema and runtime paired.
+Snapshots also capture SQLite/auth key stores in the managed home and record
+actual writable mount identities. Unrecognized additional writable mounts require
+manual backup coverage before setup will stop the service; restore rejects a
+different mount layout. Concurrent lifecycle operations are locked.
+Snapshot creation briefly stops the service to keep database, auth state, keys,
+and checkpoints consistent. Budget an ingest maintenance window; senders need
+buffering where loss is unacceptable. Readiness waits are bounded and report
+startup/migration progress; a failed readiness check leaves recovery evidence
+for explicit repair rather than silently reversing a database migration.
+
+Authenticated verification and actual ingestion remain separate checks. Run
+`cortex setup verify --json`, reopen configured clients, and prove recent data
+from each selected source after an upgrade. A process launch, Docker health
+badge, or successful `/health` request alone does not prove that work.
+
+## Managed backup and schema-compatible recovery
+
+These commands operate on the managed Compose deployment. They do not replace
+native/manual database administration or restore an arbitrary remote server.
+Windows operators run managed Compose recovery on the Linux server or WSL;
+native Windows agent support is independent of this server-backup limitation.
+
+```sh
+cortex setup backup create
+cortex setup backup schedule install
+cortex setup backup schedule check
+cortex setup backup schedule remove
+```
+
+Scheduling requires an installed Cortex executable and a functioning user cron
+service. It is unavailable where `crontab` is absent; use your service manager for
+an explicit backup schedule there. Development binaries in a build-cache path
+cannot be scheduled. The schedule runs every six hours and keeps unrelated cron
+entries. Store or replicate backups away from the live data device; scheduling
+does not provide off-host replication. Managed snapshots retain the newest 16
+verified bundles by default. Set `CORTEX_BACKUP_RETAIN_COUNT` (minimum 1) in the
+scheduler/service environment to tune this. A `PROTECTED` file inside a bundle
+pins it against pruning; restore automatically protects its selected bundle.
+Protected bundles can exceed the retention count and need deliberate operator
+review. Pruning runs only after a new verified snapshot; a failed replacement
+never removes the last good recovery point. Failed current bundles are removed,
+and abandoned incomplete bundles older than one day are cleaned after success.
+
+Before stopping the service, setup checks space for two full data copies plus a
+1 GiB reserve. Tune the reserve with `CORTEX_BACKUP_MIN_FREE_MB`. Insufficient
+space fails before downtime. Backups and restore staging on the default managed
+paths are excluded from the size estimate. Lifecycle ownership spans the entire
+upgrade or restore, including authenticated verification; competing backup,
+restore, or update operations fail closed. An interrupted remote operation can
+leave `.lifecycle-lock`; inspect its owner and running processes before manually
+removing a stale lock.
+
+A successful snapshot reports its recovery stamp and location. It requires the
+primary database to have a safe path under managed `/data`; the bundle records
+that path and verifies copied SQLite databases and bundle checksums. Preserve the previous Docker image locally; an image identity in a
+manifest is not a downloadable copy of that image.
+
+Restore and rollback require the exact stamp and an explicit destructive-action
+acknowledgement:
+
+```sh
+cortex setup backup restore STAMP --yes
+# Or restore the same schema/runtime pair as rollback:
+cortex setup backup rollback STAMP --yes
+```
+
+Both restore the verified snapshot together with its managed-home auth stores,
+original configuration and
+image; neither performs an image-only rollback against a migrated database.
+Recovery verifies the bundle, retains current data before replacement, restores
+volume ownership, and starts the matched image. The recovery image remains
+pinned in `docker-compose.recovery.yml`; remove that pin deliberately before the
+next upgrade. Inspect the result and verify authentication and fresh ingestion.
+Do not restart a partially restored or integrity-failing database.
+
+## Advanced: source and manual deployment
+
+The following procedures retain direct control for source-built or otherwise
+unmanaged installations. They are alternatives to the managed lifecycle above.
 
 ## Rolling Update
 
@@ -33,7 +136,7 @@ cortex compose logs --tail 20
 
 ## Automatic Local Deploy
 
-The active devhost deployment is the local source-built Compose stack
+A source-built development deployment uses the local Compose stack
 (`docker-compose.yml`, image `cortex-cortex`). GitHub publishes GHCR images, but
 that does not update this local stack by itself. Install the user timer below to
 keep the server aligned with `origin/main`:
@@ -52,9 +155,11 @@ checkouts, fast-forwards from `origin/main`, rebuilds the local image, recreates
 the `cortex` service, waits for `/health`, and verifies the in-container
 `cortex --version` matches `Cargo.toml`.
 
-## Rollback
+## Manual rollback
 
-Which rollback path applies depends on the compose file in use:
+Always restore the compatible database snapshot when an upgrade changed the schema.
+An image-only rollback is sufficient only when schema compatibility is established.
+Which runtime rollback path applies depends on the Compose file in use:
 
 - **`docker-compose.yml` (default)** builds the image from source — rolling
   back means checking out the previous commit/tag and rebuilding.
@@ -238,5 +343,5 @@ sudo systemctl enable --now cortex-backup.timer
 Keep backups on a different disk or host than the live database — a full-disk
 or dead-drive event otherwise takes the backups with it. A simple pattern is
 an rsync step after the timer fires (e.g. `rsync -a ~/.cortex/backups/
-backup-host:/backups/cortex/`, in this homelab: replicate to `backuphost`), or
+backup-host:/backups/cortex/`), or
 point `BACKUP_DIR` at a mount that is itself replicated.

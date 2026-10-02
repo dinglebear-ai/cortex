@@ -73,7 +73,7 @@ Intentionally not mounted:
 | `CORTEX_GOOGLE_CLIENT_SECRET` | yes | From Google Console |
 | `CORTEX_AUTH_ADMIN_EMAIL` | yes | Bootstrap allowed Google account |
 | `CORTEX_AUTH_ALLOWED_REDIRECT_URIS` | no | Comma-separated non-loopback OAuth client callbacks, such as a Codex callback URL |
-| `CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH` | no | Defaults to `true`; set `false` to keep `CORTEX_TOKEN` working while OAuth is active |
+| `CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH` | no | Defaults to `true`; managed setup requires an explicit `false` choice to retain static MCP bearer access alongside OAuth. Ingest credentials remain a separate policy |
 
 ### config.toml `[mcp.auth]` fields
 

@@ -9,9 +9,9 @@ function targetFor(platform = process.platform, arch = process.arch) {
   if (platform === "win32" && arch === "x64") return { asset: "cortex-windows-x86_64.zip", binary: "cortex.exe", archiveType: "zip" };
   throw new Error(`Unsupported platform ${platform}/${arch}. Supported targets: linux/x64, linux/arm64, darwin/arm64, win32/x64.`);
 }
-function releaseVersion(env = process.env) { const raw = env.CORTEX_RMCP_BINARY_VERSION || env.CORTEX_RMCP_VERSION || binaryVersion(); return raw.startsWith("v") ? raw : `v${raw}`; }
+function releaseVersion(env = process.env) { const raw = env.CORTEX_RMCP_BINARY_VERSION || env.CORTEX_RMCP_VERSION || binaryVersion(); return raw === "latest" || raw.startsWith("v") ? raw : `v${raw}`; }
 function releaseBaseUrl(env = process.env) { const repo = env.CORTEX_RMCP_REPO || "dinglebear-ai/cortex"; return env.CORTEX_RMCP_RELEASE_BASE_URL || `https://github.com/${repo}/releases/download`; }
-function downloadUrl(target, env = process.env) { return `${releaseBaseUrl(env)}/${releaseVersion(env)}/${target.asset}`; }
+function downloadUrl(target, env = process.env) { const version = releaseVersion(env); const base = releaseBaseUrl(env).replace(/\/$/, ""); return version === "latest" && !env.CORTEX_RMCP_RELEASE_BASE_URL ? `${base.replace(/\/download$/, "")}/latest/download/${target.asset}` : `${base}/${version}/${target.asset}`; }
 function installRoot() { return path.resolve(__dirname, "..", "vendor"); }
 function binaryPath(platform = process.platform, arch = process.arch) { const target = targetFor(platform, arch); return path.join(installRoot(), target.binary); }
 module.exports = { binaryPath, binaryVersion, downloadUrl, releaseBaseUrl, installRoot, packageVersion, releaseVersion, targetFor };

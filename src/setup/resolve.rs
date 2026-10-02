@@ -36,8 +36,7 @@ pub fn cortex_home_dir() -> io::Result<PathBuf> {
             return validate_absolute_home(PathBuf::from(trimmed));
         }
     }
-    let home = crate::env::var("HOME")
-        .map_err(|_| io::Error::new(ErrorKind::NotFound, "HOME is unset"))?;
+    let home = user_home_value()?;
     let home_candidate = PathBuf::from(home).join(".cortex");
     if home_candidate.join(".env").is_file() || home_candidate.is_dir() {
         return validate_absolute_home(home_candidate);
@@ -65,9 +64,26 @@ pub fn default_agent_command_spool_path() -> io::Result<PathBuf> {
         .join("agent-command.jsonl"))
 }
 
-pub(crate) fn user_home_dir() -> io::Result<PathBuf> {
+fn user_home_value() -> io::Result<String> {
     let home = crate::env::var("HOME")
-        .map_err(|_| io::Error::new(ErrorKind::NotFound, "HOME is unset"))?;
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    #[cfg(windows)]
+    let home = home.or_else(|| {
+        crate::env::var("USERPROFILE")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+    });
+    home.ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::NotFound,
+            "user home is unset (HOME; USERPROFILE on Windows)",
+        )
+    })
+}
+
+pub(crate) fn user_home_dir() -> io::Result<PathBuf> {
+    let home = user_home_value()?;
     let home = PathBuf::from(home);
     setup_path_value(&home)?;
     Ok(home)

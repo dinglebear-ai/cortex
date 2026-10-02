@@ -19,7 +19,7 @@
 #   $env:CORTEX_INSTALL_SKIP_SETUP='1'; irm .../install.ps1 | iex
 
 [CmdletBinding()]
-param()
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$SetupArguments)
 $ErrorActionPreference = 'Stop'
 
 $Repo      = if ($env:CORTEX_INSTALL_REPO)   { $env:CORTEX_INSTALL_REPO }   else { 'dinglebear-ai/cortex' }
@@ -35,12 +35,16 @@ function Fail { param([string]$Msg) Write-Error "cortex install: $Msg"; exit 1 }
 
 function Get-AssetUrl {
     param([string]$Target, [string]$Ext)
-    if ($Version -eq 'latest') {
+    $Tag = if ($Version -eq 'latest' -or $Version.StartsWith('v')) { $Version } else { "v$Version" }
+    if ($Tag -eq 'latest') {
         "https://github.com/$Repo/releases/latest/download/cortex-$Target.$Ext"
     } else {
-        "https://github.com/$Repo/releases/download/$Version/cortex-$Target.$Ext"
+        "https://github.com/$Repo/releases/download/$Tag/cortex-$Target.$Ext"
     }
 }
+
+if (-not $IsWindows -and $PSVersionTable.PSEdition -eq 'Core') { Fail 'Use install.sh on Linux or macOS' }
+if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') { Fail 'unsupported Windows architecture; supported: X64' }
 
 if ($DryRun) {
     Say "Dry run OK: target=windows-x86_64 prefix=$Prefix repo=$Repo version=$Version"
@@ -48,8 +52,8 @@ if ($DryRun) {
 }
 
 $Target    = 'windows-x86_64'
-$ZipUrl    = Get-AssetUrl $Target 'zip'
-$Sha256Url = "$ZipUrl.sha256"
+$ZipUrl    = if ($env:CORTEX_INSTALL_BIN_URL) { $env:CORTEX_INSTALL_BIN_URL } else { Get-AssetUrl $Target 'zip' }
+$Sha256Url = if ($env:CORTEX_INSTALL_SHA256_URL) { $env:CORTEX_INSTALL_SHA256_URL } else { "$ZipUrl.sha256" }
 
 $TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "cortex-install-$(Get-Random)"
 New-Item -ItemType Directory -Path $TmpDir | Out-Null
@@ -65,7 +69,7 @@ try {
 
     # Verify checksum (release.yml writes lowercase hex; Get-FileHash returns uppercase)
     $Expected = ((Get-Content $Sha256Path -Raw).Trim() -split '\s+')[0].ToLower()
-    if ([string]::IsNullOrEmpty($Expected)) { Fail 'checksum file is empty' }
+    if ($Expected -notmatch '^[a-f0-9]{64}$') { Fail 'invalid checksum' }
     $Actual = (Get-FileHash $ZipPath -Algorithm SHA256).Hash.ToLower()
     if ($Expected -ne $Actual) { Fail "checksum mismatch — expected $Expected, got $Actual" }
 
@@ -76,25 +80,35 @@ try {
 
     # Install
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-    Copy-Item -Path $ExtractedExe -Destination $Exe -Force
+    $Stage = Join-Path $BinDir ".cortex-install-$([Guid]::NewGuid()).exe"
+    Copy-Item -Path $ExtractedExe -Destination $Stage
+    if (Test-Path $Exe) {
+        [System.IO.File]::Replace($Stage, $Exe, $null)
+    } else {
+        [System.IO.File]::Move($Stage, $Exe)
+    }
     Say "Installed $Exe"
 
     # Add BinDir to user PATH if not already present
     $UserPath  = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (-not $UserPath) { $UserPath = '' }
     $PathParts = $UserPath -split ';' | Where-Object { $_ -ne '' }
-    if ($BinDir -notin $PathParts) {
+    if ($BinDir -notin $PathParts -and $env:CORTEX_INSTALL_UPDATE_PATH -ne '0') {
         $NewPath = ($PathParts + $BinDir) -join ';'
         [Environment]::SetEnvironmentVariable('Path', $NewPath, 'User')
         Say "Added $BinDir to your user PATH (restart your shell to pick it up)"
         $env:Path = "$env:Path;$BinDir"
     }
 
+    if ($BinDir -notin ($env:Path -split ';')) { $env:Path = "$env:Path;$BinDir" }
+
     if (-not $SkipSetup) {
         Say ''
         Say 'Running cortex setup...'
-        & $Exe setup repair
+        & $Exe setup start @SetupArguments
+        if ($LASTEXITCODE -ne 0) { throw "cortex setup failed with exit code $LASTEXITCODE" }
     }
 } finally {
+    if ($Stage -and (Test-Path $Stage)) { Remove-Item -Force $Stage -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
 }

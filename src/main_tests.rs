@@ -1409,3 +1409,30 @@ fn resolve_shell_agent_index_dispatch_server_and_token_together_is_remote() {
         ShellAgentIndexDispatch::Remote("https://cortex.example.test".to_string())
     );
 }
+
+#[test]
+fn setup_lifecycle_owns_server_options_before_query_flag_extraction() {
+    let mode = Mode::parse(
+        [
+            "setup",
+            "start",
+            "--role",
+            "client",
+            "--server",
+            "https://example.test",
+            "--json",
+        ]
+        .map(String::from)
+        .to_vec(),
+    )
+    .unwrap();
+    let Mode::Setup(super::SetupCommand {
+        kind:
+            super::SetupCommandKind::Lifecycle(super::onboarding_cli::Command::Start(options, true)),
+        ..
+    }) = mode
+    else {
+        panic!("expected setup lifecycle")
+    };
+    assert_eq!(options.server.as_deref(), Some("https://example.test"));
+}
