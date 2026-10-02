@@ -8,13 +8,18 @@ use std::time::Instant;
 const COMPOSE_ASSET: &str = include_str!("../docker-compose.prod.yml");
 const DOCKERFILE_ASSET: &str = include_str!("../config/Dockerfile");
 
+mod auth_policy;
+pub mod client_config;
 mod debug_wrapper;
 mod doctor;
+pub mod dotenv;
 mod firstrun;
 mod heartbeat_agent;
 pub mod heartbeat_agent_env;
 mod launchd;
+pub mod managed_config;
 mod managed_units;
+pub mod onboarding;
 mod resolve;
 mod sessions_index;
 mod sessions_watch;
@@ -24,14 +29,18 @@ mod shell_agent;
 mod shell_completions;
 mod systemd;
 mod transcript_roots;
+pub mod verification;
 
 pub use debug_wrapper::{run_debug_compose_setup, run_debug_wrapper_setup};
 pub use doctor::run_setup_doctor;
 pub use firstrun::run_setup;
 pub(crate) use firstrun::{
-    default_env_for_data_dir, dockerfile_asset, installed_compose_asset, parse_env, render_env,
+    default_env_for_data_dir, dockerfile_asset, installed_compose_asset, parse_env,
 };
-pub use heartbeat_agent::run_heartbeat_agent_setup;
+pub use heartbeat_agent::{
+    AgentCapability, CapabilityStatus, configure_agent_capabilities, discover_agent_capabilities,
+    run_heartbeat_agent_setup,
+};
 pub use sessions_index::run_sessions_index_timer_setup;
 pub use sessions_watch::run_sessions_watch_service_setup;
 pub use shell_agent::run_shell_agent_setup;
@@ -46,7 +55,7 @@ pub(crate) use debug_wrapper::{
 #[cfg(test)]
 pub(crate) use firstrun::{
     command_phase, ensure_env_file, ensure_network_phase, filesystem_phase, health_phase,
-    run_compose_phase, write_compose_assets, write_env,
+    render_env, run_compose_phase, write_compose_assets, write_env,
 };
 #[cfg(test)]
 pub(crate) use managed_units::{cleanup_legacy_systemd, rewrite_stale_managed_unit_commands};

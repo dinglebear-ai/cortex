@@ -1932,29 +1932,12 @@ fn load_setup_env_file() -> HashMap<String, String> {
         return HashMap::new();
     };
     let mut entries = Vec::new();
-    for (line_no, line) in raw.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            tracing::trace!(
-                line_no = line_no + 1,
-                "load_setup_env_file: skipped line without delimiter"
-            );
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        if key.is_empty() || key.contains(['\0']) || value.contains(['\0']) {
-            tracing::trace!(key, "load_setup_env_file: skipped invalid env entry");
-            continue;
-        }
-        if !is_supported_setup_env_key(key) {
+    for (key, value) in crate::setup::dotenv::entries(&raw) {
+        if !is_supported_setup_env_key(&key) {
             tracing::trace!(key, "load_setup_env_file: skipped unsupported env key");
             continue;
         }
-        entries.push((key.to_string(), value.to_string()));
+        entries.push((key, value));
     }
 
     let data_volume = entries
@@ -2118,6 +2101,15 @@ fn env_override_auth_mode(key: &str, target: &mut AuthMode) -> anyhow::Result<()
     Ok(())
 }
 
+/// The boolean spelling contract shared by runtime and setup.
+pub(crate) fn parse_env_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "y" | "on" => Some(true),
+        "false" | "0" | "no" | "n" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 fn env_override_bool(key: &str, target: &mut bool) -> anyhow::Result<()> {
     let Some(v) = config_env_var(key) else {
         return Ok(());
@@ -2126,15 +2118,9 @@ fn env_override_bool(key: &str, target: &mut bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    *target = match v.to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" | "y" | "on" => true,
-        "false" | "0" | "no" | "n" | "off" => false,
-        _ => {
-            return Err(anyhow::anyhow!(
-                "Invalid value for {key}={v}: expected true/false/1/0/yes/no/on/off"
-            ));
-        }
-    };
+    *target = parse_env_bool(&v).ok_or_else(|| {
+        anyhow::anyhow!("Invalid value for {key}={v}: expected true/false/1/0/yes/no/on/off")
+    })?;
     Ok(())
 }
 

@@ -247,6 +247,7 @@ fn deploy_agent_to_linux_host_runs_install_sequence_with_env_prefix() {
         r#"#!/bin/sh
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
   *) exit 0 ;;
@@ -275,7 +276,8 @@ esac
     assert_eq!(result.host, "linux-host");
     let log = std::fs::read_to_string(log).unwrap();
     assert!(log.contains("mkdir -p ~/.local/bin"));
-    assert!(log.contains("linux-host:.local/bin/cortex.new"));
+    assert!(log.contains("cortex-linux-x86_64.tar.gz.sha256"));
+    assert!(!log.contains("scp "));
     assert!(log.contains("mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex"));
     assert!(!log.contains("heartbeat token"));
     assert!(log.contains("~/.local/bin/cortex setup heartbeatagent install"));
@@ -304,6 +306,7 @@ fn deploy_agent_to_linux_host_preserves_persisted_env_without_token_profile() {
         r#"#!/bin/sh
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
 	  *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
 	  *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
 	  *"heartbeat-agent.env"*)
@@ -353,6 +356,7 @@ fn deploy_agent_to_linux_host_fails_when_existing_env_read_fails() {
         &dir.path().join("ssh"),
         r#"#!/bin/sh
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"heartbeat-agent.env"*) exit 13 ;;
   *) exit 0 ;;
@@ -378,6 +382,7 @@ fn deploy_agent_requires_token_when_requested() {
         &dir.path().join("ssh"),
         r#"#!/bin/sh
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *) exit 0 ;;
 esac
@@ -436,6 +441,7 @@ fn deploy_agent_reports_first_remote_failure() {
         &dir.path().join("ssh"),
         r#"#!/bin/sh
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"mkdir -p"*) exit 42 ;;
   *) exit 0 ;;
@@ -465,6 +471,7 @@ fn deploy_agent_redacts_secret_envs_from_failure_detail() {
         &dir.path().join("ssh"),
         r#"#!/bin/sh
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"cat >"*) cat > /dev/null; exit 0 ;;
   *"setup heartbeatagent install"*) exit 42 ;;
@@ -566,6 +573,7 @@ fn deploy_agent_install_failure_leaves_new_env_ready_without_restart() {
         r#"#!/bin/sh
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
   *"setup heartbeatagent install"*) exit 42 ;;
@@ -612,6 +620,7 @@ fn deploy_agent_env_install_failure_never_starts_service() {
         r#"#!/bin/sh
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"cat > ~/.cortex/heartbeat-agent.env.new"*) cat > /dev/null; exit 42 ;;
   *) exit 0 ;;
@@ -664,6 +673,7 @@ fn deploy_agent_to_unraid_writes_persistent_env_and_docker_container() {
         r#"#!/bin/sh
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
+  *"uname -s"*) printf 'Linux\nx86_64\n'; exit 0 ;;
   *"/etc/unraid-version"*) printf 'yes\n'; exit 0 ;;
   *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
   *) exit 0 ;;
@@ -853,7 +863,7 @@ fn resolve_linux_agent_env_stays_empty_for_first_flagless_deploy() {
 
 #[test]
 fn parse_env_file_splits_on_first_equals_and_skips_blanks_and_comments() {
-    let parsed = parse_env_file("A=1\n\n# comment\nB=x=y z\nBAD-KEY=nope\n9BAD=nope\n");
+    let parsed = parse_env_file("A=1\n\n# comment\nB=x=y z\nBAD-KEY=nope\n9BAD=nope\n").unwrap();
     assert_eq!(
         parsed,
         vec![
@@ -864,24 +874,24 @@ fn parse_env_file_splits_on_first_equals_and_skips_blanks_and_comments() {
 }
 
 #[test]
-fn render_env_file_rejects_values_with_cross_parser_ambiguity() {
-    for value in [
-        " leading",
-        "trailing ",
-        "a\\b",
-        "a\"b",
-        "a'b",
-        "a#b",
-        "a\nb",
-        "a\tb",
-        "a\0b",
-    ] {
-        let error = render_env_file(&[("TOKEN".into(), value.into())]).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+fn fleet_env_round_trips_private_quoted_credentials() {
+    for value in [" leading", "trailing ", "a\\b", "a\"b", "a'b", "a#b", "a$b"] {
+        let pairs = vec![("CORTEX_HEARTBEAT_TOKEN".into(), value.into())];
+        let rendered = render_env_file(&pairs).unwrap();
+        assert_eq!(parse_env_file(&rendered).unwrap(), pairs);
+        assert_eq!(
+            crate::setup::heartbeat_agent_env::parse_agent_env(&rendered).unwrap()["CORTEX_HEARTBEAT_TOKEN"],
+            value
+        );
+        assert!(render_docker_process_env(&pairs).unwrap().is_empty());
     }
+    for value in ["a\nb", "a\tb", "a\0b"] {
+        assert!(render_env_file(&[("CORTEX_HEARTBEAT_TOKEN".into(), value.into())]).is_err());
+    }
+    let advanced = vec![("CUSTOM_VALUE".into(), "a'\"\\b#c$literal".into())];
     assert_eq!(
-        render_env_file(&[("TOKEN".into(), "spaces inside = are okay".into())]).unwrap(),
-        "TOKEN=spaces inside = are okay\n"
+        render_docker_process_env(&advanced).unwrap(),
+        "CUSTOM_VALUE=a'\"\\b#c$literal\n"
     );
 }
 
@@ -904,5 +914,175 @@ fn preserved_custom_mount_flags_keeps_only_nonstandard_mounts() {
 #[test]
 fn preserved_custom_mount_flags_empty_on_first_deploy() {
     assert!(preserved_custom_mount_flags("").is_empty());
-    assert!(parse_env_file("").is_empty());
+    assert!(parse_env_file("").unwrap().is_empty());
+}
+
+#[test]
+fn fleet_release_selection_matches_target_not_deployer() {
+    use platform::Platform;
+    assert_eq!(
+        Platform::parse("Linux", "aarch64").unwrap().asset(),
+        "cortex-linux-aarch64.tar.gz"
+    );
+    assert_eq!(
+        Platform::parse("Darwin", "arm64").unwrap().asset(),
+        "cortex-macos-arm64"
+    );
+    assert_eq!(
+        Platform::parse("windows", "X64").unwrap().asset(),
+        "cortex-windows-x86_64.exe"
+    );
+    assert!(Platform::parse("Darwin", "x86_64").is_err());
+    assert!(Platform::parse("FreeBSD", "x86_64").is_err());
+}
+
+#[test]
+fn fleet_artifact_verification_precedes_binary_replacement() {
+    let script = platform::stage_posix(platform::Platform::LinuxArm64);
+    let verify = script.find("test \"$expected\" = \"$actual\"").unwrap();
+    let replace = script.find("mv -f ~/.local/bin/cortex.new").unwrap();
+    assert!(verify < replace);
+    assert!(script.contains("cortex.previous"));
+    assert!(script.contains("--max-time 180"));
+    assert!(script.contains("--proto '=https'"));
+}
+
+#[test]
+#[serial]
+fn unsupported_fleet_target_leaves_binary_and_configuration_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log");
+    write_executable(
+        &dir.path().join("ssh"),
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
+case "$*" in
+*"/etc/unraid-version"*) echo no;;
+*"uname -s"*) printf 'Darwin\nx86_64\n';;
+esac
+"#,
+    );
+    let _path = prepend_path(dir.path());
+    let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+    let result = deploy_agent_to_host(
+        "test-host",
+        &write_local_binary(dir.path()),
+        &AgentDeployConfig::default(),
+    );
+    assert!(!result.ok);
+    assert!(result.detail.contains("unsupported agent target"));
+    let commands = std::fs::read_to_string(log).unwrap();
+    assert!(!commands.contains("curl "));
+    assert!(!commands.contains("cat >"));
+}
+
+#[test]
+fn checksum_mismatch_execution_preserves_installed_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let installed = dir.path().join(".local/bin/cortex");
+    std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    std::fs::write(&installed, b"original agent").unwrap();
+    write_executable(
+        &tools.join("curl"),
+        r#"#!/bin/sh
+checksum=no
+output=
+while test $# -gt 0; do
+case "$1" in
+*.sha256) checksum=yes;;
+-o) shift; output=$1;;
+esac
+shift
+done
+if test "$checksum" = yes; then
+printf '%064d  cortex\n' 0 > "$output"
+else
+printf 'corrupted artifact' > "$output"
+fi
+"#,
+    );
+    let result = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(platform::stage_posix(platform::Platform::MacArm64))
+        .env("HOME", dir.path())
+        .env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert_eq!(std::fs::read(&installed).unwrap(), b"original agent");
+    assert!(!installed.with_file_name("cortex.new").exists());
+    assert!(!installed.with_file_name("cortex.previous").exists());
+}
+
+#[test]
+fn windows_commands_do_not_depend_on_remote_default_shell() {
+    assert_eq!(platform::shell_safe_command("echo linux"), "echo linux");
+    assert_eq!(
+        platform::shell_safe_command("powershell -NoProfile -NonInteractive -Command \"Hi\""),
+        "powershell -NoProfile -NonInteractive -EncodedCommand SABpAA=="
+    );
+    let encoded = platform::shell_safe_command(
+        "powershell -NoProfile -NonInteractive -Command \"$env:HOME=$HOME; Write-Output 'quoted value'\"",
+    );
+    assert!(!encoded.contains('$'));
+    assert!(!encoded.contains('\''));
+}
+
+#[test]
+#[serial]
+fn windows_probe_is_available_to_interactive_fleet_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    write_executable(
+        &dir.path().join("ssh"),
+        r#"#!/bin/sh
+case "$*" in
+*"-EncodedCommand"*) printf 'cortex 3.22.0\nactive\n'; exit 0;;
+*) exit 127;;
+esac
+"#,
+    );
+    let _path = prepend_path(dir.path());
+    let probe = probe_one("windows-fixture");
+    assert!(probe.reachable);
+    assert_eq!(probe.agent_active, Some(true));
+    assert_eq!(probe.cortex_version.as_deref(), Some("3.22.0"));
+}
+
+#[test]
+fn native_fleet_normalizes_legacy_transcript_consent_with_canonical_precedence() {
+    let legacy = vec![(
+        crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV.into(),
+        "true".into(),
+    )];
+    let env = resolve_linux_agent_env(&legacy, &AgentDeployConfig::default());
+    assert_eq!(
+        env_get(&env, crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV),
+        Some("true")
+    );
+    assert_eq!(
+        env_get(
+            &env,
+            crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV
+        ),
+        None
+    );
+    let mut both = legacy;
+    both.push((
+        crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV.into(),
+        "false".into(),
+    ));
+    let env = resolve_linux_agent_env(&both, &AgentDeployConfig::default());
+    assert_eq!(
+        env_get(&env, crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_ENV),
+        Some("false")
+    );
+    assert_eq!(
+        env_get(
+            &env,
+            crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV
+        ),
+        None
+    );
 }

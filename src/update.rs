@@ -1,3 +1,6 @@
+pub(crate) mod lifecycle;
+pub use lifecycle::{BackupAction, prepare_local_upgrade, run_backup_action};
+
 use std::io::{self, ErrorKind};
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
@@ -30,6 +33,8 @@ pub struct UpdateOptions {
 pub struct ServerUpdateProfile {
     pub host: String,
     pub home: String,
+    #[serde(default)]
+    pub local: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -95,6 +100,23 @@ pub fn configure_server_profile(
     profile.server = Some(ServerUpdateProfile {
         host: validate_host(host)?,
         home: validate_remote_home(home)?,
+        local: false,
+    });
+    write_profile(&path, &profile)?;
+    Ok(profile)
+}
+
+/// Remember a completed local installation without changing fleet clients.
+pub fn configure_local_server_profile(
+    path: Option<&Path>,
+    home: &Path,
+) -> io::Result<UpdateProfile> {
+    let path = resolve_profile_path(path)?;
+    let mut profile = load_profile(&path)?;
+    profile.server = Some(ServerUpdateProfile {
+        host: "localhost".to_string(),
+        home: validate_remote_home(&home.to_string_lossy())?,
+        local: true,
     });
     write_profile(&path, &profile)?;
     Ok(profile)
@@ -150,6 +172,14 @@ trait UpdateRunner {
         host: &str,
         options: RemoteDeployOptions,
     ) -> io::Result<RemoteDeployReport>;
+
+    fn run_local_server(
+        &mut self,
+        home: &str,
+        options: RemoteDeployOptions,
+    ) -> io::Result<RemoteDeployReport> {
+        crate::deploy::run_local_deploy(home, options)
+    }
 
     fn deploy_client(
         &mut self,
@@ -223,13 +253,16 @@ fn run_update_with_runner(
                 ),
             )
         })?;
-        let report = runner.run_server(
-            &target.host,
-            RemoteDeployOptions {
-                dry_run: options.dry_run,
-                home: Some(target.home.clone()),
-            },
-        )?;
+        let deploy_options = RemoteDeployOptions {
+            dry_run: options.dry_run,
+            home: Some(target.home.clone()),
+            update_latest: true,
+        };
+        let report = if target.local {
+            runner.run_local_server(&target.home, deploy_options)?
+        } else {
+            runner.run_server(&target.host, deploy_options)?
+        };
         let failed = report.has_errors;
         server = Some(report);
         if failed && matches!(scope, UpdateScope::All) {
@@ -436,7 +469,11 @@ fn validate_client_target(target: &str) -> io::Result<String> {
 fn validate_remote_home(home: &str) -> io::Result<String> {
     let trimmed = home.trim();
     let path = Path::new(trimmed);
-    if trimmed.is_empty() || !path.is_absolute() {
+    if trimmed.is_empty()
+        || trimmed.contains(['\0', '\n', '\r'])
+        || trimmed == "/"
+        || !path.is_absolute()
+    {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
             "server home must be a non-empty absolute path",

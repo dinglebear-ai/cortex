@@ -11,7 +11,7 @@ class InstallCortexContractTest(unittest.TestCase):
     def test_install_and_security_contract(self):
         text = SKILL.read_text() + REF.read_text()
         required = [
-            "cortex setup repair", "CORTEX_ALLOWED_SOURCE_CIDRS",
+            "cortex setup start", "cortex setup verify", "cortex setup effective", "CORTEX_ALLOWED_SOURCE_CIDRS",
             "CORTEX_TOKEN", "CORTEX_API_TOKEN", "auth/google/callback",
             "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH=false",
             "CORTEX_LLM=codex", "Codex app-server", "restart: unless-stopped",
@@ -31,10 +31,10 @@ class InstallCortexContractTest(unittest.TestCase):
             self.assertIn(expected, text)
             self.assertNotIn(insecure, text)
 
-    def test_canonical_installer_delegates_to_setup_repair(self):
+    def test_canonical_installer_delegates_to_role_aware_setup(self):
         text = (ROOT / "install.sh").read_text()
         self.assertIn("dinglebear-ai/cortex", text)
-        self.assertIn("setup repair", text)
+        self.assertIn('"$BIN" setup start "$@"', text)
         self.assertIn("checksum mismatch", text)
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ use rmcp::{ServiceExt, transport::stdio};
 use tracing::info;
 
 mod cli;
+mod onboarding_cli;
 
 #[tokio::main]
 async fn main() {
@@ -254,7 +255,11 @@ async fn run_deploy(command: DeployCommand) -> Result<()> {
         } => {
             let report = cortex::deploy::run_remote_deploy(
                 &host,
-                cortex::deploy::RemoteDeployOptions { dry_run, home },
+                cortex::deploy::RemoteDeployOptions {
+                    dry_run,
+                    home,
+                    ..Default::default()
+                },
             )?;
             if command.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -487,6 +492,7 @@ fn print_update_report(report: &cortex::update::UpdateReport) {
 
 async fn run_setup(command: SetupCommand) -> Result<()> {
     let report = match command.kind {
+        SetupCommandKind::Lifecycle(command) => return onboarding_cli::run(command).await,
         SetupCommandKind::Main(mode) => cortex::setup::run_setup(mode).await?,
         SetupCommandKind::SessionsIndexTimer(action) => {
             cortex::setup::run_sessions_index_timer_setup(action).await?
@@ -806,6 +812,7 @@ enum DeployCommandKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SetupCommandKind {
+    Lifecycle(onboarding_cli::Command),
     Main(cortex::setup::SetupMode),
     SessionsIndexTimer(cortex::setup::SessionsIndexTimerAction),
     SessionsWatchService(cortex::setup::SessionsWatchServiceAction),
@@ -839,6 +846,16 @@ impl Mode {
             if first == "--version" || first == "-V" || first == "version" {
                 return Ok(Self::Version);
             }
+        }
+
+        // Lifecycle owns --server; query-global extraction must not steal it.
+        if args.first().map(String::as_str) == Some("setup")
+            && matches!(
+                args.get(1).map(String::as_str),
+                Some("start" | "effective" | "verify" | "backup")
+            )
+        {
+            return Ok(Self::Setup(parse_setup_command(&args[1..])?));
         }
 
         // Strip CLI-only global flags (`--http`, `--server`, `--token`) from
@@ -938,6 +955,15 @@ impl Mode {
 }
 
 fn parse_setup_command(args: &[String]) -> Result<SetupCommand> {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("start" | "effective" | "verify" | "backup")
+    ) {
+        return Ok(SetupCommand {
+            kind: SetupCommandKind::Lifecycle(onboarding_cli::parse(args)?),
+            json: false,
+        });
+    }
     let mut mode = cortex::setup::SetupMode::FirstRun;
     let mut json = false;
     let mut iter = args.iter();

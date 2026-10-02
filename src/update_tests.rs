@@ -84,6 +84,7 @@ fn update_profile_round_trips_server_and_clients() {
         server: Some(ServerUpdateProfile {
             host: SERVER_HOST.to_string(),
             home: SERVER_HOME.to_string(),
+            local: false,
         }),
         clients: ClientsUpdateProfile {
             hosts: client_hosts(),
@@ -194,6 +195,7 @@ fn configure_clients_profile_rejects_invalid_target() {
 #[derive(Default)]
 struct FakeUpdateRunner {
     server_calls: Vec<(String, RemoteDeployOptions)>,
+    local_calls: Vec<String>,
     client_calls: Vec<String>,
     probe_calls: Vec<Vec<String>>,
     probes: Vec<crate::agent_deploy::HostProbe>,
@@ -202,6 +204,15 @@ struct FakeUpdateRunner {
 }
 
 impl UpdateRunner for FakeUpdateRunner {
+    fn run_local_server(
+        &mut self,
+        home: &str,
+        options: RemoteDeployOptions,
+    ) -> io::Result<RemoteDeployReport> {
+        self.local_calls.push(home.to_string());
+        self.run_server("localhost", options)
+    }
+
     fn run_server(
         &mut self,
         host: &str,
@@ -505,4 +516,67 @@ fn update_all_runs_server_then_clients_when_server_succeeds() {
     assert!(!report.has_errors);
     assert_eq!(runner.server_calls.len(), 1);
     assert_eq!(runner.client_calls, client_hosts());
+}
+
+#[test]
+fn local_install_profile_preserves_fleet_and_round_trips_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = profile_path(&dir);
+    configure_test_clients_profile(&path, client_hosts());
+    configure_local_server_profile(Some(&path), dir.path()).unwrap();
+    let profile = load_profile(&path).unwrap();
+    let server = profile.server.unwrap();
+    assert!(server.local);
+    assert_eq!(server.host, "localhost");
+    assert_eq!(server.home, dir.path().to_string_lossy());
+    assert_eq!(profile.clients.hosts, client_hosts());
+}
+
+#[test]
+fn legacy_remote_profiles_default_to_remote_without_migration() {
+    let profile: UpdateProfile =
+        toml::from_str("[server]\nhost='nas'\nhome='/srv/cortex'\n").unwrap();
+    assert!(!profile.server.unwrap().local);
+}
+
+#[test]
+fn profile_rejects_root_and_multiline_deployment_homes() {
+    let dir = tempfile::tempdir().unwrap();
+    for home in ["/", "/srv/cortex\nother"] {
+        assert!(configure_server_profile(Some(&profile_path(&dir)), "nas", home).is_err());
+    }
+}
+
+#[test]
+fn recovery_rejects_unsafe_timestamps_before_filesystem_or_docker_operations() {
+    for stamp in [
+        "",
+        "..",
+        "../escape",
+        "snapshot\ncommand",
+        "snapshot;command",
+    ] {
+        let error = run_backup_action(
+            BackupAction::Restore,
+            Some(Path::new("/missing/home")),
+            Some(stamp),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+}
+
+#[test]
+fn update_local_server_uses_saved_local_target_without_ssh() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = profile_path(&dir);
+    configure_local_server_profile(Some(&path), dir.path()).unwrap();
+    let mut runner = FakeUpdateRunner::default();
+    let report = run_test_update(UpdateScope::Server, path, true, &mut runner).unwrap();
+    assert!(!report.has_errors);
+    assert_eq!(
+        runner.local_calls,
+        vec![dir.path().to_string_lossy().to_string()]
+    );
+    assert!(runner.server_calls[0].1.update_latest);
 }

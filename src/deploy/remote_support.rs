@@ -1,5 +1,6 @@
 use std::io::{self, Write as _};
 use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::setup::{PhaseTimer, SetupPhase, SetupStatus};
 
@@ -13,6 +14,10 @@ pub(super) struct RemoteOutput {
 }
 
 pub(super) trait RemoteRunner {
+    fn latest_stable_version(&mut self) -> io::Result<String> {
+        super::release::latest_stable_version()
+    }
+
     fn run(&mut self, host: &str, script: &str, stdin: Option<&str>) -> io::Result<RemoteOutput>;
 }
 
@@ -25,8 +30,34 @@ impl RemoteRunner for SshRemoteRunner {
         )
         .ssh_args(host, "sh -s")
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-        let child = crate::env::command("ssh")
+        let mut command = crate::env::command("ssh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let child = command
             .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        feed_and_reap(host, child, script, stdin)
+    }
+}
+
+pub(super) struct LocalRemoteRunner;
+
+impl RemoteRunner for LocalRemoteRunner {
+    fn run(&mut self, host: &str, script: &str, stdin: Option<&str>) -> io::Result<RemoteOutput> {
+        let mut command = crate::env::command("sh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let child = command
+            .args(["-s"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -62,27 +93,69 @@ fn feed_and_reap(
             "failed to open ssh stdin",
         ));
     };
-    let (written, output) = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || -> io::Result<()> {
-            child_stdin.write_all(script.as_bytes())?;
-            if let Some(input) = stdin {
-                child_stdin.write_all(input.as_bytes())?;
-            }
-            Ok(())
-            // `child_stdin` drops here, closing the pipe so the remote sees EOF.
-        });
-        let output = child.wait_with_output();
-        let written = writer
-            .join()
-            .unwrap_or_else(|_| Err(io::Error::other("ssh stdin writer panicked")));
-        (written, output)
-    });
-    let output = output?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("deployment stdout unavailable"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("deployment stderr unavailable"))?;
+    let (written, status, stdout, stderr, timed_out) =
+        std::thread::scope(|scope| -> io::Result<_> {
+            let writer = scope.spawn(move || -> io::Result<()> {
+                child_stdin.write_all(script.as_bytes())?;
+                if let Some(input) = stdin {
+                    child_stdin.write_all(input.as_bytes())?;
+                }
+                Ok(())
+            });
+            let stdout_reader = scope.spawn(move || bounded_output(&mut stdout));
+            let stderr_reader = scope.spawn(move || bounded_output(&mut stderr));
+            let deadline = Instant::now() + Duration::from_secs(900);
+            let mut timed_out = false;
+            let status = loop {
+                if let Some(status) = child.try_wait()? {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    timed_out = true;
+                    // Both runners create their own process group. Kill only this
+                    // operation, allowing cleanup traps a bounded grace period.
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGTERM);
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    }
+                    let _ = child.kill();
+                    break child.wait()?;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            };
+            let written = writer
+                .join()
+                .unwrap_or_else(|_| Err(io::Error::other("deployment stdin writer panicked")));
+            let stdout = stdout_reader
+                .join()
+                .map_err(|_| io::Error::other("deployment stdout reader panicked"))??;
+            let stderr = stderr_reader
+                .join()
+                .map_err(|_| io::Error::other("deployment stderr reader panicked"))??;
+            Ok((written, status, stdout, stderr, timed_out))
+        })?;
     let remote = RemoteOutput {
-        status_success: output.status.success(),
-        exit_code: output.status.code(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status_success: status.success() && !timed_out,
+        exit_code: status.code(),
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: if timed_out {
+            "deployment operation exceeded its 15-minute deadline; inspect the owned target and retained recovery snapshot before retrying".to_string()
+        } else {
+            String::from_utf8_lossy(&stderr).to_string()
+        },
     };
     match written {
         _ if !remote.status_success => Ok(remote),
@@ -98,6 +171,21 @@ fn feed_and_reap(
                 ),
             ))
         }
+    }
+}
+
+fn bounded_output(reader: &mut impl std::io::Read) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            return Ok(output);
+        }
+        // Continue draining after reaching the cap so a verbose subprocess
+        // cannot deadlock or exhaust the deployment client's memory.
+        let remaining = 2_097_152usize.saturating_sub(output.len());
+        output.extend_from_slice(&buffer[..count.min(remaining)]);
     }
 }
 

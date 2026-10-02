@@ -50,7 +50,7 @@ pub(super) fn prepare_plugin_hook_env() -> Result<HookPrep> {
     prepare_oauth_env(&mut mapped)?;
 
     if is_server != "true" {
-        validate_client();
+        validate_client(&mapped)?;
         return Ok(HookPrep::Client);
     }
 
@@ -65,6 +65,7 @@ fn apply_plugin_options() -> Result<HashMap<String, String>> {
     const MAPPINGS: &[(&str, &str)] = &[
         ("CORTEX_TOKEN", "CLAUDE_PLUGIN_OPTION_API_TOKEN"),
         ("CORTEX_SERVER_URL", "CLAUDE_PLUGIN_OPTION_SERVER_URL"),
+        ("CORTEX_API_TOKEN", "CLAUDE_PLUGIN_OPTION_REST_API_TOKEN"),
         ("CORTEX_AUTH_MODE", "CLAUDE_PLUGIN_OPTION_AUTH_MODE"),
         ("CORTEX_PUBLIC_URL", "CLAUDE_PLUGIN_OPTION_PUBLIC_URL"),
         (
@@ -224,7 +225,7 @@ fn prepare_oauth_env(mapped: &mut HashMap<String, String>) -> Result<()> {
 
     let disable_static = prepared_value(mapped, "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "false".to_string());
+        .unwrap_or_else(|| "true".to_string());
     mapped.insert(
         "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH".to_string(),
         disable_static,
@@ -258,57 +259,51 @@ fn codex_oauth_callback_url() -> Option<String> {
     None
 }
 
-/// Mirror of bash `validate_client`: GET `${server_url%/mcp}/health` with a 2s
-/// connect / 5s total timeout and print a connected/warning line. Reads the RAW
-/// option `CLAUDE_PLUGIN_OPTION_SERVER_URL`, defaulting to
-/// `http://localhost:3100`.
-///
-/// `run_plugin_hook` is a sync fn called from within `#[tokio::main]`, so we
-/// cannot `block_on` the ambient multi-thread runtime (it would panic), and the
-/// `reqwest` blocking feature isn't enabled. Run the async GET on a dedicated
-/// thread with its own current-thread runtime.
-fn validate_client() {
-    let server_url = crate::env::var("CLAUDE_PLUGIN_OPTION_SERVER_URL")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "http://localhost:3100".to_string());
-    let base = strip_trailing_mcp_path(&server_url);
-    let health_url = format!("{base}/health");
-
-    let reachable = std::thread::scope(|scope| {
+/// Verify MCP initialization/status and separately configured REST credentials.
+/// A dedicated runtime keeps this synchronous plugin hook safe within main's
+/// Tokio runtime. OAuth login remains explicitly pending in the selected client.
+fn validate_client(mapped: &HashMap<String, String>) -> Result<()> {
+    let base = prepared_value(mapped, "CORTEX_SERVER_URL")
+        .unwrap_or_else(|| "http://localhost:3100".into());
+    let mut token = prepared_value(mapped, "CORTEX_TOKEN");
+    let api_token = prepared_value(mapped, "CORTEX_API_TOKEN");
+    let oauth = prepared_value(mapped, "CORTEX_AUTH_MODE").is_some_and(|v| v == "oauth");
+    if oauth
+        && prepared_value(mapped, "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
+            .is_none_or(|value| value != "false")
+    {
+        token = None;
+    }
+    let phases = std::thread::scope(|scope| {
         scope
-            .spawn(|| {
-                let runtime = match tokio::runtime::Builder::new_current_thread()
+            .spawn(|| -> Result<_> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(_) => return false,
-                };
-                runtime.block_on(async {
-                    let client = match reqwest::Client::builder()
-                        .connect_timeout(Duration::from_secs(2))
-                        .timeout(Duration::from_secs(5))
-                        .build()
-                    {
-                        Ok(c) => c,
-                        Err(_) => return false,
-                    };
-                    match client.get(&health_url).send().await {
-                        Ok(resp) => resp.status().is_success(),
-                        Err(_) => false,
-                    }
-                })
+                    .build()?;
+                Ok(
+                    runtime.block_on(cortex::setup::verification::verify_connection(
+                        &base,
+                        token.as_deref(),
+                        api_token.as_deref(),
+                        oauth,
+                        Duration::from_secs(5),
+                    )),
+                )
             })
             .join()
-            .unwrap_or(false)
-    });
-
-    if reachable {
-        println!("cortex: connected to {base}");
-    } else {
-        eprintln!("WARNING: cortex server at {base} is not reachable");
+            .map_err(|_| anyhow::anyhow!("client verification thread failed"))?
+    })?;
+    for phase in &phases {
+        eprintln!("{:?} {}: {}", phase.status, phase.name, phase.detail);
     }
+    if phases
+        .iter()
+        .any(|p| p.status != cortex::setup::SetupStatus::Ok)
+    {
+        bail!("Cortex client connection is not verified; resolve the reported phase");
+    }
+    println!("cortex: authenticated connection verified");
+    Ok(())
 }
 
 #[cfg(test)]
