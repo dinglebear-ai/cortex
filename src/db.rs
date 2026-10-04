@@ -17,6 +17,7 @@ mod heartbeat;
 mod hook_events;
 mod hook_incident_evidence;
 mod hook_incidents;
+mod incident_anchors;
 mod ingest;
 pub(crate) use ingest::{TRANSIENT_SQLITE_RETRY_DELAYS_MS, is_transient_sqlite_lock};
 pub mod host_attribution;

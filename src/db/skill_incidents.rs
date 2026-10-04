@@ -18,6 +18,7 @@ use crate::app::skill_signal_detectors::{
     detect_tool_failure, detect_user_correction, transcript_event_is_user,
 };
 
+use super::incident_anchors::{AnchorWindow, load_anchors};
 use super::pool::DbPool;
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ pub struct SkillSignalCounts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillIncident {
     /// Stable synthetic ID: hash of skill name/plugin + tool/project/session/
-    /// hostname + sorted anchor log ids + sorted skill event ids.
+    /// hostname + sorted skill event ids.
     pub incident_id: String,
     pub skill_name: String,
     pub skill_plugin: Option<String>,
@@ -78,6 +79,9 @@ pub struct SkillIncident {
     pub skill_event_ids: Vec<i64>,
     /// Sorted `logs.id` values backing the anchor signals in this group.
     pub anchor_log_ids: Vec<i64>,
+    /// Anchor sampling hit the per-window cap or shared request budget.
+    #[serde(default)]
+    pub anchor_window_truncated: bool,
     pub signal_counts: SkillSignalCounts,
     /// Sorted distinct signal category names present in this incident.
     pub signals_present: Vec<String>,
@@ -219,6 +223,21 @@ pub fn search_ai_skill_incidents(
 
     // ── For each group, fetch nearby transcript logs in the session/window to
     // detect anchor signals, then score ───────────────────────────────────────
+    let anchors = load_anchors(
+        &conn,
+        groups.iter().map(|(key, events)| {
+            AnchorWindow::new(
+                &key.4,
+                &key.3,
+                &key.2,
+                &key.5,
+                &events.first().expect("nonempty group").timestamp,
+                &events.last().expect("nonempty group").timestamp,
+                window_secs,
+            )
+        }),
+    )?;
+    let anchor_windows_truncated = anchors.truncated();
     let mut incidents: Vec<SkillIncident> = Vec::with_capacity(groups.len());
     for ((skill_name, skill_plugin, tool, project, session_id, hostname, _bucket), events) in groups
     {
@@ -240,37 +259,26 @@ pub fn search_ai_skill_incidents(
             (t1 - t0).max(0)
         };
 
-        // Window bounds for anchor detection: from first skill event to
-        // window_secs after the last one (anchors that follow the skill).
-        let win_from = first_seen.clone();
-        let win_to = chrono::DateTime::parse_from_rfc3339(&last_seen)
-            .map(|dt| {
-                (dt.with_timezone(&chrono::Utc) + chrono::Duration::seconds(window_secs))
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| last_seen.clone());
-
-        let mut anchor_stmt = conn.prepare(
-            "SELECT id, message, metadata_json FROM logs
-             WHERE ai_session_id = ?1 AND ai_project = ?2 AND ai_tool = ?3
-               AND timestamp >= ?4 AND timestamp <= ?5
-             ORDER BY timestamp ASC
-             LIMIT 500",
-        )?;
-        let anchor_rows: Vec<(i64, String, Option<String>)> = anchor_stmt
-            .query_map(
-                rusqlite::params![session_id, project, tool, win_from, win_to],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get(2)?)),
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let window = AnchorWindow::new(
+            &session_id,
+            &project,
+            &tool,
+            &hostname,
+            &first_seen,
+            &last_seen,
+            window_secs,
+        );
+        let window_anchors = anchors.get(&window);
+        let anchor_rows = &window_anchors.rows;
+        let anchor_window_truncated = window_anchors.truncated;
 
         let mut counts = SkillSignalCounts::default();
         let mut anchor_log_ids: Vec<i64> = Vec::new();
         let tool_call_rows = anchor_rows.len();
         let mut has_correction_or_frustration = false;
 
-        for (id, message, metadata_json) in &anchor_rows {
+        for row in anchor_rows {
+            let (id, message, metadata_json) = (&row.id, &row.message, &row.metadata_json);
             let mut hit = false;
             if transcript_event_is_user(metadata_json.as_deref()) && detect_user_correction(message)
             {
@@ -343,9 +351,8 @@ pub fn search_ai_skill_incidents(
         let mut skill_event_ids: Vec<i64> = events.iter().map(|e| e.id).collect();
         skill_event_ids.sort_unstable();
 
-        // ── Stable incident ID: same DefaultHasher pattern as
-        // search_ai_incidents (src/db/queries.rs), extended with skill
-        // name/plugin and sorted skill event ids.
+        // Identity follows the event group, not its sampled evidence. New
+        // anchors or request-wide sampling cutoffs must not invalidate an ID.
         let incident_id = {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
@@ -356,9 +363,6 @@ pub fn search_ai_skill_incidents(
             project.hash(&mut h);
             session_id.hash(&mut h);
             hostname.hash(&mut h);
-            for id in &anchor_log_ids {
-                id.hash(&mut h);
-            }
             for id in &skill_event_ids {
                 id.hash(&mut h);
             }
@@ -379,6 +383,7 @@ pub fn search_ai_skill_incidents(
             skill_event_count: events.len(),
             skill_event_ids,
             anchor_log_ids,
+            anchor_window_truncated,
             signal_counts: counts,
             signals_present,
             priority_score,
@@ -412,7 +417,8 @@ pub fn search_ai_skill_incidents(
     });
 
     let total_incidents = incidents.len();
-    let truncated = total_incidents > limit || candidate_window_truncated;
+    let truncated =
+        total_incidents > limit || candidate_window_truncated || anchor_windows_truncated;
     incidents.truncate(limit);
 
     Ok(AiSkillIncidentResult {

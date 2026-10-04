@@ -22,6 +22,8 @@ Usage: scripts/check-rust-module-size.sh [--limit N] [--self-test] [PATH ...]
 Reports non-test Rust production files with more than N non-comment/doc lines.
 Blank lines, line comments, doc comments, and block comments are ignored.
 When PATH values are provided, only those files/directories are checked.
+Exceptions use TSV: path, fixed ceiling, owning module, decomposition rationale.
+An exception never skips counting and fails if its fixed ceiling is exceeded.
 USAGE
       exit 0
       ;;
@@ -102,7 +104,54 @@ RUST
     echo "self-test failed: src/foo.rs should be included" >&2
     return 1
   fi
+  allowlist_file="$tmp/exceptions"
+  printf '%s\t4\ttest-module\tExisting fixture baseline\n' "$tmp/sample.rs" > "$allowlist_file"
+  validate_exceptions
+  if [[ "$(file_limit "$tmp/sample.rs")" != 4 ]]; then
+    echo "self-test failed: exception ceiling was not applied" >&2
+    return 1
+  fi
+  printf '\nfn three() {}\n' >> "$tmp/sample.rs"
+  if [[ "$(count_file "$tmp/sample.rs")" -le "$(file_limit "$tmp/sample.rs")" ]]; then
+    echo "self-test failed: exception allowed growth" >&2
+    return 1
+  fi
+  printf '%s\n' "$tmp/sample.rs" > "$allowlist_file"
+  if validate_exceptions 2>/dev/null; then
+    echo "self-test failed: unlimited legacy exception was accepted" >&2
+    return 1
+  fi
+  printf '%s\t5\t\tNo owner\n' "$tmp/sample.rs" > "$allowlist_file"
+  if validate_exceptions 2>/dev/null; then
+    echo "self-test failed: ownerless exception was accepted" >&2
+    return 1
+  fi
   echo "self-test ok"
+}
+
+validate_exceptions() {
+  [[ -f "$allowlist_file" ]] || return 0
+  local file ceiling owner rationale extra seen="|"
+  while IFS=$'\t' read -r file ceiling owner rationale extra || [[ -n "$file" ]]; do
+    [[ -z "$file" || "$file" == \#* ]] && continue
+    if [[ ! "$ceiling" =~ ^[1-9][0-9]*$ || -z "$owner" || -z "$rationale" || -n "$extra" ]]; then
+      echo "invalid size exception (requires path, ceiling, owner, rationale): $file" >&2
+      return 2
+    fi
+    if [[ ! -f "$file" || "$seen" == *"|$file|"* ]]; then
+      echo "missing or duplicate size exception: $file" >&2
+      return 2
+    fi
+    seen="$seen$file|"
+  done < "$allowlist_file"
+}
+
+file_limit() {
+  local ceiling=""
+  if [[ -f "$allowlist_file" ]]; then
+    ceiling="$(awk -F '\t' -v path="$1" '$1 == path { print $2; exit }' "$allowlist_file")"
+  fi
+  printf '%s\n' "${ceiling:-$limit}"
 }
 
 if [[ "$self_test" -eq 1 ]]; then
@@ -129,19 +178,15 @@ tracked_files() {
   done | sort -u
 }
 
+validate_exceptions
 status=0
-is_allowlisted() {
-  local file="$1"
-  [[ -f "$allowlist_file" ]] || return 1
-  grep -Fxq -- "$file" "$allowlist_file"
-}
 
 while IFS= read -r file; do
   is_prod_rust_file "$file" || continue
-  is_allowlisted "$file" && continue
+  ceiling="$(file_limit "$file")"
   count="$(count_file "$file")"
-  if (( count > limit )); then
-    printf '%s\t%s\n' "$count" "$file"
+  if (( count > ceiling )); then
+    printf '%s\t%s\tceiling=%s\n' "$count" "$file" "$ceiling"
     status=1
   fi
 done < <(tracked_files "$@")

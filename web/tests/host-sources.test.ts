@@ -80,7 +80,7 @@ describe("host source graph", () => {
     const snippet = source.slice(source.indexOf("  function showNodeEvidence"), source.indexOf("  function renderTimeline"))
     const showNodeEvidence = runInNewContext(`${snippet}; showNodeEvidence`, {
       ui: { selectedTitle: {}, selectedKind: {}, evidenceList: { append: (item: { children: { textContent: string }[] }) => evidence.push(item) } },
-      latestLogs: [], setBadge: () => {}, clear: () => {},
+      latestLogs: [], latestHosts: [], normalizeHostSources, setBadge: () => {}, clear: () => {},
       text: (_tag: string, _className: string, textContent: string) => ({ textContent, children: [] as unknown[], append(...children: unknown[]) { this.children.push(...children) } }),
     })
     showNodeEvidence({ id: "source:heartbeat:device-1", label: "serverhost", kind: "host", host_id: "device-1" })

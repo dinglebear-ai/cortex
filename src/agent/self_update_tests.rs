@@ -410,8 +410,8 @@ async fn download_binary_times_out_when_stream_stalls() {
 }
 
 #[cfg(unix)]
-#[test]
-fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
+#[tokio::test]
+async fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let fake = dir.path().join("fake-cortex");
@@ -420,8 +420,8 @@ fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&fake, perms).unwrap();
 
-    assert!(validate_binary(&fake, "9.9.9").is_ok());
-    assert!(validate_binary(&fake, "1.2.3").is_err());
+    assert!(validate_binary(&fake, "9.9.9").await.is_ok());
+    assert!(validate_binary(&fake, "1.2.3").await.is_err());
 }
 
 #[test]
@@ -628,4 +628,44 @@ async fn maybe_update_refuses_a_rejected_version_without_downloading() {
         })
         .count();
     assert_eq!(backups, 3);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn validate_binary_kills_and_reaps_hung_version_child() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("hung-cortex");
+    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = tokio::process::Command::new(&fake);
+    command
+        .process_group(0)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = command.spawn().unwrap();
+    // Capture the OS-owned PID at spawn. A short deadline may legitimately kill
+    // the process before a script gets scheduled to write its own PID file.
+    let pid = child.id().unwrap() as i32;
+    let started = std::time::Instant::now();
+    let error = read_version_child(child, Duration::from_millis(150))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("exceeded"));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    // A reaped child has no PID left to signal.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn validate_binary_rejects_excessive_output() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("noisy-cortex");
+    std::fs::write(&fake, "#!/bin/sh\nexec head -c 32768 /dev/zero\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = validate_binary(&fake, "9.9.9").await.unwrap_err();
+    assert!(format!("{error:#}").contains("output exceeded limit"));
 }

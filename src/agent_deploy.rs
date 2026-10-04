@@ -1,3 +1,5 @@
+mod unraid;
+
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -291,10 +293,10 @@ pub fn deploy_agent_to_host(
         };
     }
     match run_deploy(host, local_binary, config) {
-        Ok(()) => DeployResult {
+        Ok(detail) => DeployResult {
             host: host.to_string(),
             ok: true,
-            detail: "installed and enabled".to_string(),
+            detail: detail.to_string(),
             elapsed_ms: started.elapsed().as_millis(),
         },
         Err(e) => DeployResult {
@@ -326,10 +328,15 @@ fn is_unraid(host: &str) -> bool {
     matches!(out, Ok(o) if String::from_utf8_lossy(&o.stdout).trim() == "yes")
 }
 
-fn run_deploy(host: &str, local_binary: &Path, config: &AgentDeployConfig) -> io::Result<()> {
+fn run_deploy(
+    host: &str,
+    local_binary: &Path,
+    config: &AgentDeployConfig,
+) -> io::Result<&'static str> {
     validate_ssh_host(host)?;
     if is_unraid(host) {
-        return run_deploy_unraid(host, local_binary, config);
+        run_deploy_unraid(host, local_binary, config)?;
+        return Ok("agent version and sustained process health validated; delivery unverified");
     }
 
     let env_pairs = resolve_linux_agent_env(
@@ -365,7 +372,8 @@ fn run_deploy(host: &str, local_binary: &Path, config: &AgentDeployConfig) -> io
     ssh_run(
         host,
         "systemctl --user restart cortex-heartbeat-agent.service",
-    )
+    )?;
+    Ok("installed and enabled")
 }
 
 // Unraid: root fs is a RAM disk — nothing in /root survives reboot.
@@ -417,44 +425,41 @@ fn run_deploy_unraid(
     .concat();
 
     let env_body = render_env_file(&env_pairs)?;
+    let staged_env = format!(
+        "{UNRAID_ENV}.new-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
     ssh_run_with_stdin(
         host,
         &format!(
-            "umask 077; cat > {UNRAID_ENV}.new && chmod 600 {UNRAID_ENV}.new && mv -f {UNRAID_ENV}.new {UNRAID_ENV}"
+            "umask 077; cat > {staged} && chmod 600 {staged}",
+            staged = shell_quote(&staged_env)
         ),
         env_body.as_bytes(),
     )?;
-
-    // Remove any previous container then start fresh with docker run.
-    // --restart unless-stopped is stored in Docker's state (not a file),
-    // so it survives the Unraid RAM-disk wipe on reboot.
-    //
-    // The image bakes in the binary and ca-certificates, so the only mounts are
-    // host *data* the agent reads/writes: the Docker socket, the host syslog
-    // file, and the appdata dir (host-id + reference env file). --user 0:0
-    // overrides the image's unprivileged server user because the agent must read
-    // root-owned host files (docker.sock, /var/log/syslog). --no-healthcheck
-    // disables the image's server health probe (the agent runs no HTTP server).
-    ssh_run(
-        host,
-        &format!(
-            "docker rm -f {UNRAID_CONTAINER} 2>/dev/null; \
-             docker run -d \
-               --name {UNRAID_CONTAINER} \
-               --restart unless-stopped \
-               --network host \
-               --user 0:0 \
-               --no-healthcheck \
-               --env-file {UNRAID_ENV} \
-               -v {UNRAID_APPDATA}:{UNRAID_APPDATA} \
-               -v /var/run/docker.sock:/var/run/docker.sock \
-               -v {UNRAID_HOST_SYSLOG}:{UNRAID_CONTAINER_SYSLOG}:ro \
-               {custom_mounts}\
-               {image} \
-               cortex heartbeat agent \
-                 --host-id-path {UNRAID_HOST_ID}"
-        ),
-    )
+    let run = format!(
+        "docker run -d --name {UNRAID_CONTAINER} --restart unless-stopped \\\n         --network host --user 0:0 --no-healthcheck --env-file {UNRAID_ENV} \\\n         -v {UNRAID_APPDATA}:{UNRAID_APPDATA} -v /var/run/docker.sock:/var/run/docker.sock \\\n         -v {UNRAID_HOST_SYSLOG}:{UNRAID_CONTAINER_SYSLOG}:ro {custom_mounts}{image} \\\n         cortex heartbeat agent --host-id-path {UNRAID_HOST_ID}"
+    );
+    let script = unraid::replacement_script(
+        UNRAID_CONTAINER,
+        UNRAID_ENV,
+        &staged_env,
+        &run,
+        env!("CARGO_PKG_VERSION"),
+    );
+    use crate::deploy::remote_support::{RemoteRunner, SshRemoteRunner};
+    let output = SshRemoteRunner.run(host, &script, None)?;
+    if !output.status_success {
+        return Err(io::Error::other(format!(
+            "Unraid agent replacement failed on {host}; previous container/config restoration attempted; inspect {UNRAID_ENV}.deploy-lock and retained .rollback-* files if recovery failed (exit {:?})",
+            output.exit_code
+        )));
+    }
+    Ok(())
 }
 
 fn deploy_syslog_target(heartbeat_target: Option<&str>) -> Option<String> {

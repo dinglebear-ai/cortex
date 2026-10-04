@@ -205,6 +205,31 @@ and `path_basename`; full paths are visible only through the admin management
 surface. The runtime reconciles enabled sources periodically and after
 CLI/REST/MCP mutations.
 
+### Host-agent file tails
+
+`CORTEX_AGENT_FILE_TAILS` configures host-agent HTTP forwarding separately from
+managed server file tails. Each `PATH:TAG` source starts at EOF on its first
+installation. Subsequent restarts restore a durable cursor and a bounded
+one-record outbox from `file-tail-<source-hash>.json`, beside the configured
+syslog-forward spool. Preserve that directory across agent redeployments.
+The source hash includes the hostname, target URL, source path, and tag;
+changing those values creates a separate delivery identity and state file.
+
+The agent persists pending evidence before POSTing it and preserves its
+idempotency key until a durable acknowledgement is received. It retries
+transient failures, recovers an available rotated inode from a bounded sibling
+search, and forwards an explicit gap record when the previous source cannot be
+recovered or truncation is detected. Prefix and cursor-boundary guards detect
+common rewrites; they do not hash the entire historical file.
+
+Invalid identities are rejected before forwarding. Permanent HTTP rejections
+stop that source with `file_tail_delivery_operator_action_required`, retaining
+its pending evidence. Repair the source or server configuration and restart
+the agent to resume. Corrupt checkpoints are preserved for operator recovery
+rather than being treated as a fresh installation. File-tail records and
+partial-line buffers are bounded at 64 KiB; oversized records become an explicit
+omission record.
+
 ### MCP server (`CORTEX_*`)
 
 | Variable | Required | Default | Sensitive | Description |

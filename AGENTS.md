@@ -4,17 +4,17 @@ Cortex is a Rust observability service that combines syslog, OTLP telemetry, hos
 
 ## Where changes belong
 
-Shared query behavior belongs in `CortexService` under `src/app/`; persistence, migrations, and evidence projections belong in `src/db/`. Runtime wiring is in `src/runtime*`. The [architecture guide](docs/architecture.md) maps the remaining subsystems.
+Queries belong in `CortexService` under `src/app/`; persistence, migrations, and projections in `src/db/`. Runtime wiring is in `src/runtime*`. The [architecture guide](docs/architecture.md) maps the remaining subsystems.
 
 `ACTION_SPECS` in [src/mcp/actions.rs](src/mcp/actions.rs) owns MCP action names, scopes, flags, and handlers. The public tool is `cortex`, dispatched by `action`. CLI/REST paths and aliases also use `src/surfaces/`; the surfaces are related, not identical. See [MCP tools](docs/mcp/TOOLS.md) and [API contracts](docs/api.md) when changing an exposed operation.
 
 Transcript formats and evidence lanes are described by `src/scanner/providers.rs`; parsing remains provider-local. Adapter support is not proof of observed delivery, and unknown coverage is not zero events. Use [Adding sources](docs/ADDING_SOURCES.md) before extending collection. The host-local cortex agent is the preferred Docker-log path; `src/docker_ingest/` retains legacy central pull compatibility.
 
-The investigation graph and Agent Observatory are evidence-derived projections, not separate event-history authorities. LLM-backed assessments remain explicit CLI operations; MCP investigations return deterministic evidence.
+The graph and Agent Observatory project evidence. LLM assessments are explicit CLI operations; MCP investigations return deterministic evidence.
 
 ## Implementation constraints
 
-Rust modules use sibling `foo.rs` plus `foo/`, with module-local tests in sidecar `*_tests.rs` files. Keep the existing test hooks; module-size exceptions are listed in `scripts/rust-module-size.allow`.
+Rust modules use sibling `foo.rs` plus `foo/` and sidecar `*_tests.rs`. Preserve test hooks. Exceptions in `scripts/rust-module-size.allow` require fixed production-line ceilings, owners, and decomposition reasons; growth fails. Extract responsibilities instead of raising ceilings.
 
 Use the service's `run_db` helper and heavy-read limiter for SQL work. `PoolBudget` reserves multiple connection lanes, not just one writer slot. Cancellation must not release heavy admission while SQLite still runs. Keep adapter filtering, time normalization, and result bounds consistent. FTS5 has its own grammar: quote hyphenated terms such as `"smoke-test"`; SQL parameters do not validate FTS syntax.
 
@@ -26,7 +26,7 @@ Advance delivery checkpoints only after durable acknowledgement. Preserve conten
 
 ## Build and checks
 
-The Cargo workspace contains the `cortex` library/binary and `xtask`. `rust-toolchain.toml` selects the compiler; `Cargo.toml` pins the MCP SDK and auth dependency. Cargo output defaults to `.cache/cargo/`, not `target/`.
+The Cargo workspace contains `cortex` and `xtask`. `rust-toolchain.toml` selects the compiler; `Cargo.toml` pins the MCP SDK and auth dependency. Cargo output defaults to `.cache/cargo/`, not `target/`.
 
 ```bash
 cargo build --locked
@@ -37,7 +37,7 @@ cargo xtask pre-push
 
 `Justfile` loads `.env` for every recipe. Its test/coverage recipes remove ambient auth variables deliberately; preserve that behavior when adding test commands. `just release` also runs `link-bin`: use `cargo build --release --locked` for a build that should not replace the installed CLI. Full gates and coverage commands are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-The browser package is `web/`, with its package manager pinned in `web/package.json`. Its `lint`, `typecheck`, `test`, and `build` scripts are invoked with `pnpm --dir web`; `web/out/` is the generated static export served by `src/web_app.rs`. Live profiles have separate prerequisites and target grants: [LIVE_QUALIFICATION.md](docs/LIVE_QUALIFICATION.md).
+The `web/package.json` pins pnpm. Run `lint`, `typecheck`, `test`, and `build` with `pnpm --dir web`. `src/web_app.rs` embeds `web/app/index.html`, `app.js`, and `app.css`. `web/out/` is a separate Next scaffold export, not the served investigation workspace. Playwright tests served assets through an isolated Rust router and intercepted API fixtures. Live qualification requires separate prerequisites and target grants: [LIVE_QUALIFICATION.md](docs/LIVE_QUALIFICATION.md).
 
 For registry or guide changes, run:
 
@@ -47,7 +47,7 @@ env -u CORTEX_API_TOKEN -u NO_AUTH cargo test --lib --locked public_action_refer
 bash scripts/check-agent-memory-symlinks.sh
 ```
 
-The public-action test checks references and skill guidance. REST route counts are separately tested in `src/api_tests.rs`.
+The public-action test checks guide references; `src/api_tests.rs` checks REST route counts.
 
 ## Runtime distinctions
 

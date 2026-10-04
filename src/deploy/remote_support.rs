@@ -1,10 +1,11 @@
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::setup::{PhaseTimer, SetupPhase, SetupStatus};
 
 #[derive(Debug, Clone)]
-pub(super) struct RemoteOutput {
+pub(crate) struct RemoteOutput {
     pub status_success: bool,
     /// The remote exit code; `None` when the ssh process was killed by a signal.
     pub exit_code: Option<i32>,
@@ -12,11 +13,11 @@ pub(super) struct RemoteOutput {
     pub stderr: String,
 }
 
-pub(super) trait RemoteRunner {
+pub(crate) trait RemoteRunner {
     fn run(&mut self, host: &str, script: &str, stdin: Option<&str>) -> io::Result<RemoteOutput>;
 }
 
-pub(super) struct SshRemoteRunner;
+pub(crate) struct SshRemoteRunner;
 
 impl RemoteRunner for SshRemoteRunner {
     fn run(&mut self, host: &str, script: &str, stdin: Option<&str>) -> io::Result<RemoteOutput> {
@@ -25,13 +26,24 @@ impl RemoteRunner for SshRemoteRunner {
         )
         .ssh_args(host, "sh -s")
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-        let child = crate::env::command("ssh")
+        let mut command = crate::env::command("ssh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let child = command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        feed_and_reap(host, child, script, stdin)
+        let deadline = if script.contains("/health") {
+            Duration::from_secs(180)
+        } else {
+            Duration::from_secs(300)
+        };
+        feed_and_reap(host, child, script, stdin, deadline)
     }
 }
 
@@ -53,6 +65,7 @@ fn feed_and_reap(
     mut child: Child,
     script: &str,
     stdin: Option<&str>,
+    deadline: Duration,
 ) -> io::Result<RemoteOutput> {
     let Some(mut child_stdin) = child.stdin.take() else {
         let _ = child.kill();
@@ -62,22 +75,72 @@ fn feed_and_reap(
             "failed to open ssh stdin",
         ));
     };
-    let (written, output) = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || -> io::Result<()> {
-            child_stdin.write_all(script.as_bytes())?;
-            if let Some(input) = stdin {
-                child_stdin.write_all(input.as_bytes())?;
-            }
-            Ok(())
-            // `child_stdin` drops here, closing the pipe so the remote sees EOF.
-        });
-        let output = child.wait_with_output();
-        let written = writer
-            .join()
-            .unwrap_or_else(|_| Err(io::Error::other("ssh stdin writer panicked")));
-        (written, output)
+    let stdout = child.stdout.take().expect("piped ssh stdout");
+    let stderr = child.stderr.take().expect("piped ssh stderr");
+    // Owned threads allow the deadline to cover pipe drain as well as process
+    // exit: a descendant can keep a pipe open after ssh itself has exited.
+    let script = script.to_owned();
+    let input = stdin.map(str::to_owned);
+    let writer = std::thread::spawn(move || -> io::Result<()> {
+        child_stdin.write_all(script.as_bytes())?;
+        if let Some(input) = input {
+            child_stdin.write_all(input.as_bytes())?;
+        }
+        Ok(())
     });
-    let output = output?;
+    let drain = |mut reader: Box<dyn io::Read + Send>| {
+        let mut bytes = Vec::new();
+        reader.by_ref().take(1024 * 1024).read_to_end(&mut bytes)?;
+        io::copy(&mut reader, &mut io::sink())?;
+        Ok::<_, io::Error>(bytes)
+    };
+    let out_reader = std::thread::spawn(move || drain(Box::new(stdout)));
+    let err_reader = std::thread::spawn(move || drain(Box::new(stderr)));
+    let started = Instant::now();
+    let mut status = None;
+    loop {
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(result) => status = result,
+                Err(error) => {
+                    terminate_remote_child(&mut child);
+                    return Err(error);
+                }
+            }
+        }
+        if status.is_some()
+            && writer.is_finished()
+            && out_reader.is_finished()
+            && err_reader.is_finished()
+        {
+            break;
+        }
+        if started.elapsed() >= deadline {
+            terminate_remote_child(&mut child);
+            // Do not join an unfinished pipe thread: even an escaped descendant
+            // must not extend the caller's deadline. Its owned handles will close
+            // when it eventually exits; normal ssh descendants die with the group.
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("ssh {host}: remote phase exceeded {deadline:?}"),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let written = writer
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("ssh stdin writer panicked")));
+    let stdout = out_reader
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("ssh stdout reader panicked")))?;
+    let stderr = err_reader
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("ssh stderr reader panicked")))?;
+    let output = std::process::Output {
+        status: status.expect("observed child exit"),
+        stdout,
+        stderr,
+    };
     let remote = RemoteOutput {
         status_success: output.status.success(),
         exit_code: output.status.code(),
@@ -99,6 +162,18 @@ fn feed_and_reap(
             ))
         }
     }
+}
+
+fn terminate_remote_child(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // ssh owns a fresh process group; kill descendants holding its pipes too.
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 pub(super) struct RemoteIdentityPhase {

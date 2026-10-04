@@ -171,3 +171,19 @@ async fn graph_dependency_is_pinned_and_documented() {
             .contains("Permission is hereby granted")
     );
 }
+
+// Playwright starts the actual production router and embedded assets. API fixtures
+// are provided by the browser tests; this server has no collectors or database.
+#[tokio::test]
+#[ignore = "explicitly launched by the browser test runner"]
+async fn browser_workspace_server() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:4173")
+        .await
+        .expect("bind isolated browser workspace server");
+    axum::serve(listener, router())
+        .with_graceful_shutdown(async {
+            tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+        })
+        .await
+        .expect("serve browser workspace");
+}

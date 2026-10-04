@@ -3354,3 +3354,27 @@ async fn ai_session_public_scan_reads_respect_heavy_admission() {
             .is_ok()
     );
 }
+
+#[tokio::test]
+async fn incident_lists_obey_heavy_read_admission() {
+    let (mut service, _pool, _dir) = test_service();
+    service.acquire_timeout = std::time::Duration::from_millis(10);
+    let _held = service
+        .heavy_read_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .unwrap();
+    assert!(
+        matches!(service.list_ai_skill_incidents(AiSkillIncidentRequest::default()).await,
+        Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+    assert!(
+        matches!(service.list_ai_mcp_incidents(AiMcpIncidentRequest::default()).await,
+        Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+    assert!(
+        matches!(service.list_ai_hook_incidents(AiHookIncidentRequest::default()).await,
+        Err(ServiceError::Busy(message)) if message == "heavy_read_limited")
+    );
+}

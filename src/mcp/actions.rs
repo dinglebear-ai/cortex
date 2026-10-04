@@ -669,7 +669,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         "skill_incidents",
         Read,
         "List detected skill-usage incidents (negative signals after a skill loaded)",
-        Moderate,
+        Expensive,
         SkillIncidents,
         flags: SKILL_INCIDENT_FLAGS,
         examples: &[
@@ -709,7 +709,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         "mcp_incidents",
         Read,
         "List detected MCP-usage incidents (negative signals after a tool call)",
-        Moderate,
+        Expensive,
         McpIncidents,
         flags: MCP_INCIDENT_FLAGS,
         examples: &[
@@ -749,7 +749,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         "hook_incidents",
         Read,
         "List detected hook-usage incidents (failures, timeouts, and other negative signals)",
-        Moderate,
+        Expensive,
         HookIncidents,
         flags: HOOK_INCIDENT_FLAGS,
         examples: &[

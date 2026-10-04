@@ -427,7 +427,7 @@ async fn maybe_update_for_exe(
 
     // 4. Pre-swap validation: the new binary must run and self-report the
     //    advertised version. Guards against corrupt/incompatible downloads.
-    if let Err(error) = validate_binary(&tmp, &directive.version) {
+    if let Err(error) = validate_binary(&tmp, &directive.version).await {
         let _ = std::fs::remove_file(&tmp);
         return Err(error.context("staged agent binary failed validation; not installed"));
     }
@@ -699,15 +699,30 @@ pub fn confirm_update_success() -> bool {
     }
 }
 
-fn validate_binary(path: &Path, expected_version: &str) -> Result<()> {
-    let output = crate::env::command(path)
+async fn validate_binary(path: &Path, expected_version: &str) -> Result<()> {
+    validate_binary_with_deadline(path, expected_version, Duration::from_secs(10)).await
+}
+
+async fn validate_binary_with_deadline(
+    path: &Path,
+    expected_version: &str,
+    deadline: Duration,
+) -> Result<()> {
+    let mut process = crate::env::command(path);
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut process, 0);
+    let mut command = tokio::process::Command::from(process);
+    command
         .arg("--version")
-        .output()
-        .context("run --version on staged binary")?;
-    if !output.status.success() {
-        bail!("staged binary --version exited with {}", output.status);
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = command.spawn().context("run --version on staged binary")?;
+    let (status, stdout, _) = read_version_child(child, deadline).await?;
+    if !status.success() {
+        bail!("staged binary --version exited with {status}");
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout);
     if stdout.split_whitespace().last() != Some(expected_version) {
         bail!(
             "staged binary reported '{}', expected version {expected_version}",
@@ -715,6 +730,61 @@ fn validate_binary(path: &Path, expected_version: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+async fn read_version_child(
+    mut child: tokio::process::Child,
+    deadline: Duration,
+) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+    use tokio::io::AsyncReadExt;
+    const OUTPUT_LIMIT: u64 = 16 * 1024;
+    #[cfg(unix)]
+    let process_group = child.id();
+    let stdout = child
+        .stdout
+        .take()
+        .context("capture staged binary stdout")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("capture staged binary stderr")?;
+    let bounded_read = |reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>| async move {
+        let mut bytes = Vec::new();
+        reader
+            .take(OUTPUT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        if bytes.len() as u64 > OUTPUT_LIMIT {
+            return Err(std::io::Error::other(
+                "staged binary version output exceeded limit",
+            ));
+        }
+        Ok(bytes)
+    };
+    let result = timeout(deadline, async {
+        tokio::try_join!(
+            child.wait(),
+            bounded_read(Box::new(stdout)),
+            bounded_read(Box::new(stderr))
+        )
+    })
+    .await;
+    if !matches!(result, Ok(Ok(_))) {
+        // Kill AND reap explicitly; cancellation of the outer update future
+        // still terminates the child through kill_on_drop.
+        #[cfg(unix)]
+        if let Some(pid) = process_group {
+            // The staged command owns a fresh group; terminate descendants too.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+    result
+        .with_context(|| format!("staged binary --version exceeded {deadline:?}"))?
+        .context("read staged binary version")
 }
 
 #[cfg(unix)]

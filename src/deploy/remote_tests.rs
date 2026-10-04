@@ -146,6 +146,7 @@ fn remote_repair_health_check_retries_after_compose_up() {
         .expect("remote health command should run");
     assert!(health.contains("while [ \"$attempt\" -lt 30 ]"));
     assert!(health.contains("sleep 1"));
+    assert!(health.contains("--connect-timeout 2 --max-time 3"));
 }
 
 #[test]
