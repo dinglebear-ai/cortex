@@ -11,8 +11,8 @@ use rmcp::{
         Annotations, CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult,
         ContentBlock, EmbeddedResource, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
         Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, MetaObject,
-        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-        Resource, ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+        ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
     transport::streamable_http_server::{

@@ -1328,6 +1328,8 @@ async fn mounted_policy_with_auth_context_permits_schema_resources() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["result"]["ttlMs"], 60_000, "{response}");
+    assert_eq!(response["result"]["cacheScope"], "private", "{response}");
     let resources = response["result"]["resources"].as_array().unwrap();
     let uris: Vec<&str> = resources
         .iter()
@@ -1421,6 +1423,8 @@ async fn mounted_policy_with_auth_context_permits_prompts() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["result"]["ttlMs"], 60_000, "{response}");
+    assert_eq!(response["result"]["cacheScope"], "private", "{response}");
     assert!(
         response["result"]["prompts"]
             .as_array()
