@@ -221,3 +221,16 @@ async fn durable_cursor_detects_regrown_rewrite_with_unchanged_initial_prefix() 
         replacement.trim_end()
     );
 }
+
+#[test]
+fn boundary_snapshot_preserves_shared_file_position() {
+    use std::io::{Seek, SeekFrom};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.log");
+    std::fs::write(&path, b"first\nsecond\nthird\n").unwrap();
+    let mut file = std::fs::File::open(path).unwrap();
+    file.seek(SeekFrom::Start(19)).unwrap();
+    let clone = file.try_clone().unwrap();
+    assert_eq!(read_boundary(&clone, 6).unwrap(), b"first\n");
+    assert_eq!(file.stream_position().unwrap(), 19);
+}

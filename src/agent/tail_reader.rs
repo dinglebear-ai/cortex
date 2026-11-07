@@ -256,6 +256,22 @@ async fn boundary_matches(file: &std::fs::File, position: u64, expected: &[u8]) 
 }
 
 fn read_boundary(file: &std::fs::File, position: u64) -> Result<Vec<u8>> {
+    // Windows seek_read changes the shared cursor, including on try_clone handles.
+    // This caller exclusively owns the reader while taking its checkpoint.
+    #[cfg(windows)]
+    {
+        use std::io::{Seek, SeekFrom};
+        let mut handle = file;
+        let original = handle.stream_position()?;
+        let result = read_boundary_bytes(file, position);
+        handle.seek(SeekFrom::Start(original))?;
+        return result;
+    }
+    #[cfg(not(windows))]
+    read_boundary_bytes(file, position)
+}
+
+fn read_boundary_bytes(file: &std::fs::File, position: u64) -> Result<Vec<u8>> {
     let length = position.min(256) as usize;
     let mut bytes = vec![0; length];
     let start = position.saturating_sub(length as u64);
