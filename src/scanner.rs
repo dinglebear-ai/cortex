@@ -32,6 +32,8 @@ use crate::scanner::skill_events::{
 
 pub(crate) mod antigravity;
 mod checkpoint;
+mod discovery;
+use discovery::collect_supported_files_bounded;
 mod claude;
 pub(crate) mod codex;
 pub(crate) mod gemini;
@@ -1902,96 +1904,6 @@ fn discover_root_bounded(
                 capped: true,
                 ..Default::default()
             })
-        }
-    }
-}
-
-fn collect_supported_files_bounded(
-    path: &Path,
-    result: &mut DiscoveryResult,
-    entries: &mut usize,
-    path_bytes: &mut usize,
-    start_after: Option<&Path>,
-    budget: &DiscoveryBudget,
-    started: Instant,
-) {
-    if result.capped || started.elapsed() >= budget.deadline {
-        result.capped = true;
-        return;
-    }
-    if let Err(error) = validate_path(path) {
-        classify_path_error(&error, &mut result.diagnostics);
-        record_file_error(&mut result.diagnostics, path, &error);
-        return;
-    }
-    if path.is_file() {
-        if supported_discovered_file(path) {
-            result.files.push(path.to_path_buf());
-        } else {
-            result.diagnostics.unsupported_files += 1;
-        }
-        return;
-    }
-    if !should_descend_transcript_dir(path) {
-        return;
-    }
-    let read_dir = match fs::read_dir(path) {
-        Ok(read_dir) => read_dir,
-        Err(error) => {
-            record_discovered_path_error(&mut result.diagnostics, path, &error.into());
-            return;
-        }
-    };
-    let mut children = Vec::new();
-    for entry in read_dir {
-        if result.capped || started.elapsed() >= budget.deadline {
-            result.capped = true;
-            break;
-        }
-        if *entries >= budget.max_entries || *path_bytes >= budget.max_path_bytes {
-            result.capped = true;
-            break;
-        }
-        match entry {
-            Ok(entry) => {
-                let child = entry.path();
-                if start_after.is_some_and(|cursor| child <= cursor && !cursor.starts_with(&child))
-                {
-                    continue;
-                }
-                *entries += 1;
-                *path_bytes = path_bytes.saturating_add(child.as_os_str().len());
-                if *path_bytes > budget.max_path_bytes {
-                    result.capped = true;
-                    break;
-                }
-                result.next_cursor = Some(child.clone());
-                children.push(child);
-            }
-            Err(error) => {
-                record_discovered_path_error(&mut result.diagnostics, path, &error.into())
-            }
-        }
-    }
-    children.sort();
-    for child in children {
-        if result.capped {
-            break;
-        }
-        if child.is_dir() {
-            collect_supported_files_bounded(
-                &child,
-                result,
-                entries,
-                path_bytes,
-                start_after,
-                budget,
-                started,
-            );
-        } else if supported_discovered_file(&child) {
-            result.files.push(child);
-        } else {
-            result.diagnostics.unsupported_files += 1;
         }
     }
 }
