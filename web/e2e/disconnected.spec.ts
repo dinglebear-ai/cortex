@@ -39,10 +39,11 @@ async function selectNode(page: Page, id: string) {
   const position = await page.locator("#graph-canvas").evaluate((element, nodeId) => {
     const canvas = element as HTMLElement & { _cyreg: { cy: { getElementById: (id: string) => { renderedPosition: () => { x: number; y: number } } } } }
     const position = canvas._cyreg.cy.getElementById(nodeId).renderedPosition()
-    const bounds = canvas.getBoundingClientRect()
-    return { x: bounds.left + position.x, y: bounds.top + position.y }
+    return position
   }, id)
-  await page.mouse.click(position.x, position.y)
+  // Locator click waits for a stable, actionable canvas after scrolling.
+  // Raw mouse coordinates can race the canvas scroll/paint update.
+  await page.locator("#graph-canvas").click({ position })
 }
 
 test("serves the production disconnected workspace accessibly", async ({ page }) => {
