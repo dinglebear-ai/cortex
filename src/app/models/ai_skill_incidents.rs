@@ -54,6 +54,9 @@ pub struct SkillIncident {
     pub skill_event_count: usize,
     pub skill_event_ids: Vec<i64>,
     pub anchor_log_ids: Vec<i64>,
+    /// Signals are incomplete because anchor sampling reached a bound.
+    #[serde(default)]
+    pub anchor_window_truncated: bool,
     pub signal_counts: SkillSignalCounts,
     pub signals_present: Vec<String>,
     pub priority_score: f64,
@@ -77,6 +80,7 @@ impl From<db::SkillIncident> for SkillIncident {
             skill_event_count: v.skill_event_count,
             skill_event_ids: v.skill_event_ids,
             anchor_log_ids: v.anchor_log_ids,
+            anchor_window_truncated: v.anchor_window_truncated,
             signal_counts: v.signal_counts.into(),
             signals_present: v.signals_present,
             priority_score: v.priority_score,

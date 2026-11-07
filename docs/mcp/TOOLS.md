@@ -359,6 +359,8 @@ Required arguments: `action = "artifact_evidence_record"`, `schemaVersion`, `eve
 
 Optional bounded evidence dimensions: `requestId`, `correlationId`, `causationId`, `targetId`, `targetKind`, `loadoutId`, `shareGrantId`, `capabilityLeaseId`, `deploymentPlanId`, `runtimeId`, `pluginId`, `operationRef`, `outcome`, `metadata`.
 
+Skill, MCP, and hook incident queries scope transcript anchors by hostname, session, project, tool, and time. Identical windows share batched anchor retrieval. Each window samples the earliest 500 rows (timestamp then ID), with overflow detection; each request has a shared 50,000-row retrieval budget. An incident with incomplete sampling reports `anchor_window_truncated: true`; the enclosing list/investigation also reports `truncated: true`, even when incompleteness affects a filtered-out candidate. Scores and absent signals in incomplete windows are provisional. Expensive incident listing uses heavy-read admission. Investigation transcript context retains the same host boundary. Incident IDs derive from host, domain/session identity, and grouped event IDs; sampled transcript anchors do not change identity. This replaces the previous anchor-dependent hashes, so saved IDs from earlier versions must be resolved again through listing.
+
 ## cortex skill_incidents
 
 Groups `ai_skill_events` rows into incident candidates by `(skill_name,

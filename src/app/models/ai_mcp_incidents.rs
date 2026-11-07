@@ -58,6 +58,9 @@ pub struct McpIncident {
     pub error_count: usize,
     pub mcp_event_ids: Vec<i64>,
     pub anchor_log_ids: Vec<i64>,
+    /// Signals are incomplete because anchor sampling reached a bound.
+    #[serde(default)]
+    pub anchor_window_truncated: bool,
     pub signal_counts: McpSignalCounts,
     pub signals_present: Vec<String>,
     pub priority_score: f64,
@@ -82,6 +85,7 @@ impl From<db::McpIncident> for McpIncident {
             error_count: v.error_count,
             mcp_event_ids: v.mcp_event_ids,
             anchor_log_ids: v.anchor_log_ids,
+            anchor_window_truncated: v.anchor_window_truncated,
             signal_counts: v.signal_counts.into(),
             signals_present: v.signals_present,
             priority_score: v.priority_score,

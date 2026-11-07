@@ -341,7 +341,7 @@ fn run_remote_deploy_with_runner(
         host,
         "remote-health",
         &format!(
-            "attempt=0\nwhile [ \"$attempt\" -lt 30 ]; do\n  if curl -fsS {health_url}; then\n    exit 0\n  fi\n  attempt=$((attempt + 1))\n  if [ \"$attempt\" -lt 30 ]; then\n    sleep 1\n  fi\ndone\nexit 1",
+            "attempt=0\nwhile [ \"$attempt\" -lt 30 ]; do\n  if curl -fsS --connect-timeout 2 --max-time 3 {health_url}; then\n    exit 0\n  fi\n  attempt=$((attempt + 1))\n  if [ \"$attempt\" -lt 30 ]; then\n    sleep 1\n  fi\ndone\nexit 1",
             health_url = shell_quote(&format!("http://127.0.0.1:{mcp_port}/health"))
         ),
         None,

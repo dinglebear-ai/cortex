@@ -1726,3 +1726,54 @@ fn host_heartbeats_id_is_autoincrement_so_orphan_rowids_stay_orphans() {
          DELETE ... WHERE NOT EXISTS. Schema was: {schema}"
     );
 }
+
+#[test]
+fn err_floor_separates_ipv6_and_uri_sources_but_groups_ephemeral_ipv4_ports() {
+    let (pool, dir) = test_pool();
+    let now = chrono::Utc::now();
+    let old =
+        (now - chrono::TimeDelta::seconds(10)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let new = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    for (index, (first, second)) in [
+        ("[2001:db8::1]:5100", "[2001:db8::1]:5200"),
+        ("[2001:db8::2]:5100", "[2001:db8::2]:5200"),
+        ("agent-syslog://10.0.0.1", "agent-syslog://10.0.0.1"),
+        ("agent-syslog://10.0.0.2", "agent-syslog://10.0.0.2"),
+        ("10.0.0.3:5100", "10.0.0.3:5200"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let older = format!("old-{index}");
+        let newer = format!("new-{index}");
+        insert_logs_batch(
+            &pool,
+            &[
+                make_entry_from(&old, "host", "err", first, &older),
+                make_entry_from(&new, "host", "err", second, &newer),
+            ],
+        )
+        .unwrap();
+        update_received_at(&pool, &older, &old);
+        update_received_at(&pool, &newer, &new);
+    }
+    let mut config = test_storage_config(dir.path().join("test.db"));
+    config.err_floor_window_hours = 24;
+    config.err_floor_per_source_cap = 1;
+    assert_eq!(
+        delete_oldest_logs_chunk(&pool, 20, &config)
+            .unwrap()
+            .deleted_rows,
+        5
+    );
+    let remaining = tail_logs(&pool, None, None, None, None, 20).unwrap();
+    assert_eq!(remaining.len(), 5);
+    for index in 0..5 {
+        assert!(
+            remaining
+                .iter()
+                .any(|row| row.message == format!("new-{index}")),
+            "each source keeps its own newest error"
+        );
+    }
+}

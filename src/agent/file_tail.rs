@@ -14,6 +14,10 @@ use crate::agent_file_tail_ingest::{AgentFileTailIngestRequest, AgentFileTailRec
 
 use super::syslog_file::FileTailSource;
 
+mod state;
+pub use state::checkpoint_path;
+use state::{State, Store};
+
 const EOF_SLEEP_MS: u64 = 500;
 static DELIVERY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -23,6 +27,7 @@ pub struct FileTailForwardConfig {
     pub target: String,
     pub token: Option<String>,
     pub hostname: String,
+    pub checkpoint_path: std::path::PathBuf,
 }
 
 pub async fn run(config: FileTailForwardConfig) -> Result<()> {
@@ -30,23 +35,94 @@ pub async fn run(config: FileTailForwardConfig) -> Result<()> {
         .timeout(Duration::from_secs(30))
         .build()
         .context("failed to build file-tail forwarder client")?;
-    let mut reader = super::tail_reader::TailReader::open(&config.source.path).await?;
-    loop {
-        let Some(line) = reader.next_line().await? else {
-            tokio::time::sleep(Duration::from_millis(EOF_SLEEP_MS)).await;
-            continue;
+    validate_config(&config)?;
+    // Keep a single owner for this bounded outbox throughout delivery.
+    let (store, saved) = Store::open(&config.checkpoint_path).await?;
+    let (mut reader, mut state) = if let Some(saved) = saved {
+        // Deliver the persisted outbox even if the source disappeared meanwhile.
+        (None, saved)
+    } else {
+        let mut reader = super::tail_reader::TailReader::open_durable(&config.source.path).await?;
+        let state = State {
+            cursor: reader.cursor().await?,
+            pending: None,
         };
-        let raw = line.trim_end_matches(['\r', '\n']);
-        if raw.is_empty() {
+        (Some(reader), state)
+    };
+    store.save(&state).await?;
+    loop {
+        if let Some(record) = &state.pending {
+            match send_record(&client, &config, record).await {
+                Ok(()) => {
+                    state.pending = None;
+                    // An acknowledgement that cannot be persisted is retried with
+                    // the identical saved key on restart, not silently discarded.
+                    store.save(&state).await?;
+                }
+                Err(error) if error.downcast_ref::<PermanentRejection>().is_some() => {
+                    tracing::error!(error = %error, path = %config.source.path.display(),
+                        reason_code = "file_tail_delivery_operator_action_required",
+                        "file-tail forwarding stopped; pending evidence retained until configuration or server rejection is repaired and agent restarted");
+                    std::future::pending::<()>().await;
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, path = %config.source.path.display(), "agent file-tail delivery failed; retrying durable current line");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
             continue;
         }
-        let record = build_record(&config, raw);
-        while let Err(error) = send_record(&client, &config, &record).await {
-            tracing::warn!(error = %error, path = %config.source.path.display(), "agent file-tail delivery failed; retrying current line");
-            tokio::time::sleep(Duration::from_secs(5)).await;
+        if reader.is_none() {
+            reader = Some(
+                super::tail_reader::TailReader::restore(&config.source.path, state.cursor.clone())
+                    .await?,
+            );
+        }
+        let active_reader = reader.as_mut().unwrap();
+        let line = active_reader.next_line().await?;
+        state.cursor = active_reader.cursor().await?;
+        state.pending = line
+            .as_deref()
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| build_record(&config, raw));
+        // Cursor and pending evidence commit together before any network attempt.
+        store.save(&state).await?;
+        if state.pending.is_none() {
+            tokio::time::sleep(Duration::from_millis(EOF_SLEEP_MS)).await;
         }
     }
 }
+
+fn validate_config(config: &FileTailForwardConfig) -> Result<()> {
+    anyhow::ensure!(
+        !config.hostname.is_empty()
+            && config.hostname.len() <= 255
+            && config
+                .hostname
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)),
+        "invalid file-tail hostname; operator action required"
+    );
+    let tag = config.source.tag.as_deref().unwrap_or("file-tail");
+    anyhow::ensure!(
+        !tag.trim().is_empty() && tag.len() <= 255,
+        "invalid file-tail tag: expected 1..255 bytes; operator action required"
+    );
+    let basename = config
+        .source
+        .path
+        .file_name()
+        .and_then(|name| name.to_str());
+    anyhow::ensure!(
+        basename.is_some_and(|name| !name.trim().is_empty() && name.len() <= 255),
+        "invalid file-tail path basename; operator action required"
+    );
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("permanent file-tail rejection: {0}; operator action required")]
+struct PermanentRejection(reqwest::StatusCode);
 
 fn build_record(config: &FileTailForwardConfig, line: &str) -> AgentFileTailRecord {
     let now = Utc::now();
@@ -116,13 +192,28 @@ async fn send_record(
         .send()
         .await
         .context("agent file-tail POST failed")?;
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "agent file-tail forward rejected: {} {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        );
+    let status = response.status();
+    if status.is_client_error()
+        && status != reqwest::StatusCode::REQUEST_TIMEOUT
+        && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+    {
+        return Err(PermanentRejection(status).into());
     }
+    if !status.is_success() {
+        anyhow::bail!("agent file-tail forward rejected: {status}");
+    }
+    // The endpoint counts newly inserted rows; zero is a durable duplicate.
+    let receipt: serde_json::Value = response
+        .json()
+        .await
+        .context("file-tail response was not a durable receipt")?;
+    anyhow::ensure!(
+        receipt
+            .get("accepted")
+            .and_then(|accepted| accepted.as_u64())
+            .is_some_and(|accepted| accepted <= 1),
+        "file-tail returned incomplete durable acknowledgement"
+    );
     Ok(())
 }
 

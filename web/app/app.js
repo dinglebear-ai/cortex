@@ -275,7 +275,7 @@
         },
       }];
     });
-    return nodes.length ? { nodes, edges } : seed;
+    return { nodes, edges };
   }
 
   function showNodeEvidence(data) {
@@ -288,10 +288,19 @@
       ["Status", data.status || "unknown"],
     ];
     if (data.host_id) facts.push(["Heartbeat ID", data.host_id]);
+    const aliases = Array.isArray(data.aliases) ? data.aliases : [data.label];
+    const sources = normalizeHostSources(latestHosts);
+    let ambiguousRows = 0;
     const related = latestLogs.filter((row) => {
-      const host = row.hostname || row.host || "";
-      const aliases = Array.isArray(data.aliases) ? data.aliases : [data.label];
-      return aliases.some((alias) => alias === String(host));
+      if (row.host_id) return Boolean(data.host_id) && row.host_id === data.host_id;
+      const host = String(row.hostname || row.host || "");
+      if (!aliases.includes(host)) return false;
+      const matchingSources = sources.filter((source) => source.aliases.includes(host));
+      if (matchingSources.length > 1) {
+        ambiguousRows += 1;
+        return false;
+      }
+      return true;
     }).slice(0, 4);
     clear(ui.evidenceList);
     facts.forEach(([label, value]) => {
@@ -300,12 +309,39 @@
       item.append(text("p", null, value));
       ui.evidenceList.append(item);
     });
+    if (ambiguousRows) {
+      ui.evidenceList.append(text("p", "muted", `${ambiguousRows} hostname-only log rows were omitted because the name matches multiple sources.`));
+    }
     related.forEach((row) => {
       const item = text("article", "evidence-item", "");
-      item.append(text("span", "meta-label", row.severity || "log"));
+      const identity = row.host_id ? "" : " · hostname only; device identity unverified";
+      item.append(text("span", "meta-label", `${row.severity || "log"}${identity}`));
       item.append(text("p", null, row.message || row.raw || "No message"));
       ui.evidenceList.append(item);
     });
+  }
+
+  function resetEvidenceInspector() {
+    ui.selectedTitle.textContent = "Nothing selected";
+    setBadge(ui.selectedKind, "Idle", "neutral");
+    clear(ui.evidenceList);
+    ui.evidenceList.append(text("p", "muted", "Select a graph node to inspect related facts and latest log context."));
+  }
+
+  function resetWorkspace() {
+    ui.answerStack.dataset.askState = "idle";
+    ui.serverVersion.textContent = "--";
+    ui.schemaVersion.textContent = "Schema --";
+    ui.hostCount.textContent = "--";
+    ui.logCount.textContent = "--";
+    latestHosts = [];
+    latestLogs = [];
+    resetEvidenceInspector();
+    updateGraph({ nodes: [], edges: [] });
+    renderTimeline([]);
+    setBadge(ui.logStatus, "Disconnected", "neutral");
+    setV1State("Disconnected", "Enter a bearer token to check /api/v1", "warn");
+    renderAnswer("Workspace disconnected", "Connect to load live evidence.", "warn");
   }
 
   function renderTimeline(rows) {
@@ -377,6 +413,8 @@
 
   async function refresh() {
     const generation = ++requestGeneration;
+    ui.answerStack.dataset.askState = "idle";
+    resetEvidenceInspector();
     if (!bearerToken) {
       renderAnswer("Bearer token required", "Enter CORTEX_API_TOKEN to load live API data.", "warn");
       return;
@@ -393,6 +431,7 @@
       ]);
 
       if (generation !== requestGeneration) return;
+      resetEvidenceInspector();
       latestHosts = hosts.hosts || hosts.items || [];
       latestLogs = tail.logs || tail.entries || tail.items || [];
       ui.serverVersion.textContent = version.version || "Unknown";
@@ -418,14 +457,20 @@
       return;
     }
     const generation = ++requestGeneration;
+    resetEvidenceInspector();
     ui.answerStack.dataset.askState = "pending";
     try {
       const envelope = await apiPost("/api/v1/investigations/ask", { prompt: query });
       if (generation !== requestGeneration) return;
+      resetEvidenceInspector();
       latestLogs = envelope.result?.logs || [];
       renderClaims(query, envelope);
       renderTimeline(latestLogs);
-      updateGraph(graphFromInvestigation(envelope.result?.graph));
+      const graph = graphFromInvestigation(envelope.result?.graph);
+      updateGraph(graph);
+      if (!graph.nodes.length) {
+        ui.evidenceList.append(text("p", "muted", "No graph entities returned for this investigation."));
+      }
       if (envelope.metadata?.partial) {
         setBadge(ui.logStatus, "Partial", "warn");
       } else {
@@ -442,24 +487,15 @@
   ui.tokenForm.addEventListener("submit", (event) => {
     event.preventDefault();
     bearerToken = new FormData(ui.tokenForm).get("token")?.toString().trim() || "";
+    resetWorkspace();
     refresh();
   });
 
   ui.clearToken.addEventListener("click", () => {
     ++requestGeneration;
-    ui.answerStack.dataset.askState = "idle";
-    ui.serverVersion.textContent = "--";
-    ui.schemaVersion.textContent = "Schema --";
-    ui.hostCount.textContent = "--";
-    ui.logCount.textContent = "--";
     bearerToken = "";
     ui.tokenForm.reset();
-    latestHosts = [];
-    latestLogs = [];
-    updateGraph(seed);
-    renderTimeline([]);
-    setBadge(ui.logStatus, "Preview", "neutral");
-    setV1State("Disconnected", "Enter a bearer token to check /api/v1", "warn");
+    resetWorkspace();
     renderAnswer("Bearer token cleared", "The token was removed from memory.", "warn");
   });
 

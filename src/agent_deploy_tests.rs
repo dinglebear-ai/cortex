@@ -249,6 +249,7 @@ printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
+  *"sh -s"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"; exit 0 ;;
   *) exit 0 ;;
 esac
 "#,
@@ -306,6 +307,7 @@ printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
 	  *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
 	  *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
+  *"sh -s"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"; exit 0 ;;
 	  *"heartbeat-agent.env"*)
 	    printf 'CORTEX_HEARTBEAT_TARGET=https://old.example\n'
 	    printf 'CORTEX_HEARTBEAT_TOKEN=preserved-token\n'
@@ -568,6 +570,7 @@ printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
   *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
+  *"sh -s"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"; exit 0 ;;
   *"setup heartbeatagent install"*) exit 42 ;;
   *) exit 0 ;;
 esac
@@ -666,6 +669,7 @@ printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
   *"/etc/unraid-version"*) printf 'yes\n'; exit 0 ;;
   *"cat >"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_STDIN"; exit 0 ;;
+  *"sh -s"*) cat >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"; exit 0 ;;
   *) exit 0 ;;
 esac
 "#,
@@ -698,7 +702,8 @@ esac
     assert!(stdin.contains("CORTEX_AGENT_DOCKER=false"));
     assert!(stdin.contains("CORTEX_AGENT_JOURNALD=false"));
     assert!(log.contains("--env-file /mnt/user/appdata/cortex/heartbeat-agent.env"));
-    assert!(log.contains("docker rm -f cortex-heartbeat-agent"));
+    assert!(log.contains("docker rename \"$container\" \"$previous\""));
+    assert!(log.contains("agent version and sustained process health validated"));
     assert!(log.contains("--restart unless-stopped"));
     assert!(log.contains("-v /var/run/docker.sock:/var/run/docker.sock"));
     // Containerized agents run the published image with the binary baked in:

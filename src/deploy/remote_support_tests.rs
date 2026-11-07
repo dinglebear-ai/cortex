@@ -196,3 +196,41 @@ fn remote_killed_by_signal_reports_signal_and_no_exit_code() {
     assert!(matches!(phase.status, SetupStatus::Error));
     assert_eq!(phase.detail, "terminated by signal: going down");
 }
+
+#[test]
+fn remote_phase_deadline_kills_and_reaps_stalled_child() {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", "sleep 30"])
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = command.spawn().unwrap();
+    let pid = child.id() as i32;
+    let started = Instant::now();
+    let error =
+        feed_and_reap("test", child, "true\n", None, Duration::from_millis(100)).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+}
+
+#[test]
+fn remote_phase_deadline_also_bounds_descendant_pipe_after_parent_exit() {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", "sleep 30 & exit 0"])
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = command.spawn().unwrap();
+    let started = Instant::now();
+    let error =
+        feed_and_reap("test", child, "true\n", None, Duration::from_millis(100)).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(started.elapsed() < Duration::from_secs(2));
+}

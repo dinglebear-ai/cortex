@@ -368,3 +368,77 @@ fn search_ai_skill_incidents_min_score_and_signals_filters() {
     .unwrap();
     assert!(filtered_by_signal.incidents.is_empty());
 }
+
+#[test]
+fn incident_anchors_exclude_colliding_foreign_host_and_report_overflow() {
+    let (pool, _dir) = test_pool();
+    let ts = "2026-10-04T00:00:00.000Z";
+    insert_logs_batch(
+        &pool,
+        &[make_ai_entry(
+            ts,
+            "host-a",
+            "codex",
+            "project",
+            "session",
+            "ordinary event",
+        )],
+    )
+    .unwrap();
+    let id: i64 = pool
+        .get()
+        .unwrap()
+        .query_row("SELECT id FROM logs", [], |row| row.get(0))
+        .unwrap();
+    insert_skill_event(
+        &pool,
+        id,
+        "codex",
+        "project",
+        "session",
+        "host-a",
+        ts,
+        "test-skill",
+        None,
+    );
+    insert_logs_batch(
+        &pool,
+        &[make_ai_entry(
+            "2026-10-04T00:00:01.000Z",
+            "host-b",
+            "codex",
+            "project",
+            "session",
+            "no, that's wrong; permission denied; stop ignoring instructions",
+        )],
+    )
+    .unwrap();
+    let result = search_ai_skill_incidents(&pool, &AiSkillIncidentParams::default()).unwrap();
+    assert_eq!(result.incidents.len(), 1);
+    assert!(result.incidents[0].anchor_log_ids.is_empty());
+    assert!(!result.incidents[0].anchor_window_truncated);
+    assert!(!result.truncated);
+    let incident_id = result.incidents[0].incident_id.clone();
+    let logs: Vec<_> = (0..501)
+        .map(|index| {
+            make_ai_entry(
+                "2026-10-04T00:00:02.000Z",
+                "host-a",
+                "codex",
+                "project",
+                "session",
+                if index == 0 {
+                    "no, that's wrong; permission denied"
+                } else {
+                    "ordinary event"
+                },
+            )
+        })
+        .collect();
+    insert_logs_batch(&pool, &logs).unwrap();
+    let result = search_ai_skill_incidents(&pool, &AiSkillIncidentParams::default()).unwrap();
+    assert!(result.truncated);
+    assert!(result.incidents[0].anchor_window_truncated);
+    assert!(!result.incidents[0].anchor_log_ids.is_empty());
+    assert_eq!(result.incidents[0].incident_id, incident_id);
+}
