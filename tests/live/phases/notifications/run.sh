@@ -47,7 +47,7 @@ notification_phase_run() {
     ($r|length)==2 and $r[0].mode=="500" and $r[1].mode=="202" and
     $r[1].ordinal>$r[0].ordinal and ($r[1].at_ns-$r[0].at_ns)>=500000000 and
     all(["202","400","503","malformed","timeout","redirect"][];
-      . as $mode | any($records[]; .mode==$mode and .payload.title=="Test Notification" and .payload.body==("notify-"+$mode+"-"+$run) and .payload.type=="info" and .payload.format=="markdown"))
+      . as $mode | any($records[]; .mode==$mode and .payload.title=="🧪 Cortex test notification" and .payload.body==("notify-"+$mode+"-"+$run) and .payload.type=="info" and .payload.format=="text"))
   ' "$dir/capture-retry.json" >/dev/null
   # A repeat within the outage/dedup key must not deliver again.
   printf '<11>1 %s %s kernel - - - Out of memory: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$host" "$marker" | nc -w 2 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
@@ -58,7 +58,7 @@ notification_phase_run() {
   live_wait_until 30 apprise-capture-restarted _notification_capture_ready
   notification_test_case 207 pass "$dir/test-after-restart.json"
   notification_capture >"$dir/capture-final.json"; after="$(jq -r .requests_total "$dir/capture-final.json")"
-  jq -e '.external_canary==0 and (.records|length)<=128 and all(.records[];.path=="/notify/" and (.payload.urls==["json://run-owned.invalid"]) and .payload.format=="markdown")' "$dir/capture-final.json" >/dev/null
+  jq -e '.external_canary==0 and (.records|length)<=128 and all(.records[];.path=="/notify/" and (.payload.urls==["json://run-owned.invalid"]) and .payload.format=="text")' "$dir/capture-final.json" >/dev/null
   (( after > before ))
   jq -cn --argjson before "$before" --argjson after "$after" --arg host "$host" '{schema:"cortex-live-notification-lifecycle-v1",before:$before,after:$after,retry_host:$host,cases:["2xx","4xx","5xx","timeout","malformed","redirect","retry","dedup","restart"],external_egress_requests:0,queue_bound:128,body_bound:65536}' >"$dir/result.json"
   live_terminal_disposition notifications pass artifacts/notifications/result.json

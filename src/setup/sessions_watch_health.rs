@@ -28,7 +28,10 @@ pub(crate) fn sessions_watch_health_conditions() -> Vec<HealthCondition> {
     vec![HealthCondition {
         name: "sessions-watch-service-failed",
         unhealthy: is_failed,
-        detail: format!("cortex-sessions-watch.service is-active={active:?}"),
+        detail: format!(
+            "Session collection service status: {}",
+            active.as_deref().unwrap_or("unavailable")
+        ),
     }]
 }
 
@@ -71,7 +74,7 @@ pub(crate) async fn run_sessions_watch_health_check_and_notify(
         if let Err(error) = client
             .notify(
                 apprise_urls,
-                "cortex sessions-watch unhealthy",
+                "⚠️ Cortex session collection needs attention",
                 &body,
                 crate::notifications::apprise::NotifyType::Warning,
             )
