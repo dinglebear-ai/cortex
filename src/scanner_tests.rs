@@ -272,6 +272,7 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
 }
 
 #[test]
+#[cfg(unix)]
 fn validate_path_rejects_symlinks() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("target");
@@ -2439,6 +2440,7 @@ impl Drop for CurrentDirGuard {
 }
 
 #[test]
+#[cfg(unix)]
 fn index_roots_reports_file_errors_with_paths() {
     let (pool, dir) = test_pool();
     let target = dir.path().join("target.jsonl");
@@ -2455,6 +2457,7 @@ fn index_roots_reports_file_errors_with_paths() {
 }
 
 #[test]
+#[cfg(unix)]
 fn index_roots_skips_unreadable_directories_and_continues() {
     use std::os::unix::fs::PermissionsExt;
 

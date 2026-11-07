@@ -1,3 +1,6 @@
+// These fixtures execute POSIX shell scripts with Unix executable permissions.
+#![cfg(unix)]
+
 use super::*;
 
 use std::os::unix::fs::PermissionsExt;

@@ -66,6 +66,7 @@ fn env_allowed_root_rejects_unreadable_file_before_registry_commit() {
 
 #[test]
 #[serial]
+#[cfg(unix)]
 fn symlink_allowed_root_is_canonicalized() {
     let temp = tempfile::tempdir().unwrap();
     let real_root = temp.path().join("real");
