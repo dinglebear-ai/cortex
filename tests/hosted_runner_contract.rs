@@ -28,6 +28,19 @@ fn all_workflow_runner_selectors_are_github_hosted() {
                         .map(str::trim)
                         .collect::<Vec<_>>();
                     assert_eq!(runners, ["ubuntu-24.04", "ubuntu-24.04-arm"]);
+                } else if selector.trim() == "${{ matrix.os }}" {
+                    assert_eq!(
+                        path.file_name().and_then(|name| name.to_str()),
+                        Some("ci.yml"),
+                        "{} uses an unaudited desktop runner matrix",
+                        path.display()
+                    );
+                    let runners = workflow
+                        .lines()
+                        .filter_map(|line| line.trim().strip_prefix("os:"))
+                        .map(str::trim)
+                        .collect::<Vec<_>>();
+                    assert_eq!(runners, ["[macos-15, windows-latest]"]);
                 } else {
                     assert!(
                         matches!(

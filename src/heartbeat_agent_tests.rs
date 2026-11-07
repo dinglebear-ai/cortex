@@ -98,7 +98,7 @@ async fn fake_collector_emits_valid_v1_payload_defaults() {
 
 #[tokio::test]
 async fn unsupported_platform_emits_complete_host_only_heartbeat() {
-    let collector = HeartbeatCollector::for_platform("windows");
+    let collector = HeartbeatCollector::for_platform("unsupported");
     let payload = collector
         .collect(
             "windows-host".to_string(),
