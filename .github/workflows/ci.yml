@@ -433,6 +433,35 @@ jobs:
       - name: Verify Docker env-file parser compatibility
         run: bash scripts/test-agent-env-file.sh cortex:ci-release-smoke
 
+  native-heartbeat:
+    name: Native heartbeat (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    needs: [changes]
+    if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.workflow == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.97.1"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: native-heartbeat-${{ matrix.os }}
+          cache-directories: .cache/cargo
+      - name: Test native resources and checkpoint replacement
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CORTEX_API_TOKEN NO_AUTH
+          cargo test --lib --locked heartbeat_agent::native::tests
+          cargo test --lib --locked setup::heartbeat_agent_env::tests::checkpoint_replacement_preserves_previous_content
+
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-24.04
@@ -453,6 +482,7 @@ jobs:
       - deployment-contract
       - npm
       - session-query-benchmark
+      - native-heartbeat
     steps:
       - name: Verify required jobs passed or were intentionally skipped
         run: |
@@ -478,6 +508,7 @@ jobs:
           require_success_or_skipped mcp-integration "${{ needs.mcp-integration.result }}"
           require_success_or_skipped deployment-contract "${{ needs.deployment-contract.result }}"
           require_success_or_skipped npm "${{ needs.npm.result }}"
+          require_success_or_skipped native-heartbeat "${{ needs.native-heartbeat.result }}"
           require_success_or_skipped session-query-benchmark "${{ needs.session-query-benchmark.result }}"
 
   npm:
