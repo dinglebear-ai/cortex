@@ -53,6 +53,7 @@ fn install_agent_command_files_hardens_existing_spool_permissions() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     std::fs::create_dir(&state_dir).unwrap();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let spool = state_dir.join("agent-command.jsonl");
     std::fs::write(&spool, "keep\n").unwrap();
     std::fs::set_permissions(&spool, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -65,6 +66,98 @@ fn install_agent_command_files_hardens_existing_spool_permissions() {
     assert_eq!(std::fs::read_to_string(&spool).unwrap(), "keep\n");
     let mode = std::fs::metadata(&spool).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn install_agent_command_files_rejects_shared_parent_without_mutation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for mode in [0o755, 0o1777] {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("shared");
+        std::fs::create_dir(&state_dir).unwrap();
+        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        let spool = state_dir.join("events.jsonl");
+        let wrapper = dir.path().join("bin/wrapper");
+
+        let result =
+            install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh"));
+
+        assert!(result.is_err(), "shared parent {mode:o} must be rejected");
+        assert_eq!(
+            std::fs::metadata(&state_dir).unwrap().permissions().mode() & 0o7777,
+            mode
+        );
+        assert!(!spool.exists());
+        assert!(!wrapper.parent().unwrap().exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn install_agent_command_files_rejects_symlink_parent_without_mutation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let state_dir = dir.path().join("linked");
+    std::os::unix::fs::symlink(&target, &state_dir).unwrap();
+    let spool = state_dir.join("events.jsonl");
+    let wrapper = dir.path().join("bin/wrapper");
+
+    assert!(
+        install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh")).is_err()
+    );
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert!(!spool.exists());
+    assert!(!wrapper.parent().unwrap().exists());
+}
+
+#[test]
+fn install_agent_command_files_rejects_non_directory_parent_without_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("file");
+    std::fs::write(&state_dir, "keep").unwrap();
+    let spool = state_dir.join("events.jsonl");
+    let wrapper = dir.path().join("bin/wrapper");
+
+    assert!(
+        install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh")).is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&state_dir).unwrap(), "keep");
+    assert!(!wrapper.parent().unwrap().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn install_agent_command_files_creates_private_parent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("new/nested/state");
+    let spool = state_dir.join("events.jsonl");
+    let wrapper = dir.path().join("bin/wrapper");
+
+    install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh")).unwrap();
+
+    assert_eq!(
+        std::fs::metadata(&state_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(&spool).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        agent_command_state_phase(&state_dir, &spool).status,
+        SetupStatus::Ok
+    );
 }
 
 #[cfg(unix)]

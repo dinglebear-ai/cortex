@@ -2,7 +2,6 @@ use std::io::{self, ErrorKind};
 use std::path::Path;
 use std::time::Instant;
 
-use super::firstrun::ensure_private_dir;
 use super::{
     PhaseTimer, SetupPhase, SetupReport, SetupStatus, ShellAgentAction, check_file_phase,
     host_local_report_input, setup_report, write_executable_file, write_private_file,
@@ -109,7 +108,7 @@ fn install_agent_command_files(
     cortex_bin: &Path,
 ) -> io::Result<SetupPhase> {
     let timer = PhaseTimer::start("agent-command-files");
-    ensure_private_dir(state_dir)?;
+    ensure_agent_command_state_dir(state_dir)?;
     if let Some(parent) = wrapper_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -122,6 +121,39 @@ fn install_agent_command_files(
         SetupStatus::Ok,
         format!("wrote {}, {}", wrapper_path.display(), spool_path.display()),
     ))
+}
+
+fn ensure_agent_command_state_dir(state_dir: &Path) -> io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    // Creation mode applies only to new directories, including during creation races.
+    builder.create(state_dir)?;
+    let metadata = std::fs::symlink_metadata(state_dir)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("{} must be a real directory", state_dir.display()),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "{} must be a dedicated private directory without group or other permissions",
+                    state_dir.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn ensure_agent_command_spool_file(spool_path: &Path) -> io::Result<()> {
