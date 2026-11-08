@@ -25,21 +25,7 @@ pub(crate) fn readable_text(input: &str) -> String {
     let mut input_chars = input.chars();
     let bounded: String = input_chars.by_ref().take(MAX_INPUT_CHARS).collect();
     let was_truncated = input_chars.next().is_some();
-    // Older outbox entries can already contain multiple HTML-escape layers.
-    // Delivery uses text format, so the characters must remain literal.
     let mut decoded = bounded;
-    for _ in 0..6 {
-        let next = decoded
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&amp;", "&");
-        if next == decoded {
-            break;
-        }
-        decoded = next;
-    }
     if decoded.lines().any(|line| line.starts_with("Signature: "))
         && decoded.lines().any(|line| line.starts_with("Sample: "))
     {
@@ -55,6 +41,22 @@ pub(crate) fn readable_text(input: &str) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n");
+    }
+    // Parse JSON before decoding quotes within its strings. Try one entity
+    // layer between formatting passes for already-escaped legacy messages.
+    for _ in 0..6 {
+        let formatted = render_text(&decoded, 0);
+        let next = formatted
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&");
+        if next == formatted {
+            decoded = formatted;
+            break;
+        }
+        decoded = next;
     }
     let formatted = render_text(&decoded, 0);
     let literal: String = formatted
@@ -115,14 +117,9 @@ fn json_start(input: &str) -> Option<usize> {
         let next = after.chars().next();
         let candidate = match c {
             '{' => matches!(next, None | Some('"' | '}' | '\'')) || after.starts_with("\\\""),
-            '[' if after
-                .split_once(']')
-                .is_some_and(|(address, _)| address.parse::<std::net::Ipv6Addr>().is_ok()) =>
-            {
-                false
-            }
             '[' => {
-                matches!(next, None | Some('"' | '{' | '[' | ']' | '-' | '0'..='9'))
+                matches!(next, None | Some('"' | '{' | '[' | ']'))
+                    || (matches!(next, Some('-' | '0'..='9')) && looks_like_json_number(after))
                     || after.starts_with("true")
                     || after.starts_with("false")
                     || after.starts_with("null")
@@ -132,6 +129,32 @@ fn json_start(input: &str) -> Option<usize> {
         };
         candidate.then_some(index)
     })
+}
+
+fn looks_like_json_number(input: &str) -> bool {
+    let token = input
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | ']'))
+        .next()
+        .unwrap_or_default();
+    let mut bytes = token.bytes().peekable();
+    let _ = bytes.next_if_eq(&b'-');
+    let mut saw_digit = false;
+    while bytes.next_if(u8::is_ascii_digit).is_some() {
+        saw_digit = true;
+    }
+    if !saw_digit {
+        return bytes.peek().is_none();
+    }
+    if bytes.next_if_eq(&b'.').is_some() {
+        while bytes.next_if(u8::is_ascii_digit).is_some() {}
+    }
+    if bytes.next_if(|c| matches!(c, b'e' | b'E')).is_some() {
+        let _ = bytes.next_if(|c| matches!(c, b'+' | b'-'));
+        while bytes.next_if(u8::is_ascii_digit).is_some() {}
+    }
+    // Check syntax, not numeric range: overflowing or truncated JSON arrays
+    // still need omission, while timestamps and IPv6 addresses remain literal.
+    bytes.next().is_none()
 }
 
 fn render_fragments(input: &str, depth: usize) -> String {

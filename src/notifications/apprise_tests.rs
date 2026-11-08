@@ -78,6 +78,8 @@ async fn delivery_hides_malformed_structured_payloads() {
     for message in [
         "Export failed {\"resource\":{\"service.instance.id\":\"unfinished",
         "Export failed [\"unfinished",
+        "Export failed [1e9999,2]",
+        "Export failed [01,2]",
     ] {
         let payload = delivered_payload(message).await;
         let body = payload["body"].as_str().unwrap();
@@ -144,6 +146,51 @@ async fn delivery_preserves_bracketed_ipv6_destinations_and_the_error_cause() {
             "IPv6 destination and cause lost: {body}"
         );
         assert!(!body.contains("Additional details are available in Cortex."));
+    }
+}
+
+#[tokio::test]
+async fn delivery_preserves_bracketed_timestamps_and_the_error_cause() {
+    for timestamp in [
+        "2026-11-08T10:00:00Z",
+        "2026-11-08 10:00:00",
+        "2026-11-08",
+        "10:00:00",
+    ] {
+        let failure = format!("[{timestamp}] database connection refused");
+        for message in [
+            failure.clone(),
+            serde_json::json!({ "error": failure }).to_string(),
+        ] {
+            let payload = delivered_payload(&message).await;
+            let body = payload["body"].as_str().unwrap();
+            assert!(body.contains(&failure), "Timestamp and cause lost: {body}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn delivery_parses_structured_logs_before_decoding_string_entities() {
+    let structured = serde_json::json!({
+        "message": "Invalid &quot;Authorization&quot; header",
+        "error": "unauthorized",
+    })
+    .to_string();
+    let legacy = structured.replace('&', "&amp;").replace('"', "&quot;");
+    for message in [
+        structured.clone(),
+        format!("Collector failed {structured}"),
+        legacy,
+    ] {
+        let payload = delivered_payload(&message).await;
+        let body = payload["body"].as_str().unwrap();
+        assert!(
+            body.contains("Problem: Invalid \"Authorization\" header"),
+            "Problem lost: {body}"
+        );
+        assert!(body.contains("Cause: unauthorized"), "Cause lost: {body}");
+        assert!(!body.contains("&quot;") && !body.contains("&amp;"));
+        assert!(!body.contains('{') && !body.contains('}'));
     }
 }
 
