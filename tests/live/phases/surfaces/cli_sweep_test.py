@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[4]
 spec = importlib.util.spec_from_file_location("cli_sweep", Path(__file__).with_name("cli_sweep.py"))
 sweep = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sweep)
+backup_spec = importlib.util.spec_from_file_location("backup_sweep", Path(__file__).with_name("backup_sweep.py"))
+backup = importlib.util.module_from_spec(backup_spec)
+backup_spec.loader.exec_module(backup)
 
 
 class SweepSetupTests(unittest.TestCase):
@@ -58,6 +61,115 @@ class SweepSetupTests(unittest.TestCase):
         self.assertTrue(result["timeout"])
         self.assertIn("phase starteddiagnostic", result["terminal"])
         self.assertIn("setup repair exceeded the 20s", result["terminal"])
+
+    def test_backup_arguments_match_normal_entrypoint(self):
+        self.assertEqual(backup.backup_args("setup backup"), ["create"])
+        self.assertEqual(backup.backup_args("setup backup schedule"), ["schedule", "install"])
+        for operation in ("restore", "rollback"):
+            self.assertEqual(backup.backup_args(f"setup backup {operation}", "saved-1"),
+                             [operation, "saved-1", "--yes"])
+            with self.assertRaisesRegex(ValueError, "verified recovery timestamp"):
+                backup.backup_args(f"setup backup {operation}")
+        for operation in ("install", "check", "remove"):
+            self.assertEqual(backup.backup_args(f"setup backup schedule {operation}"),
+                             ["schedule", operation])
+
+    def test_backup_stamp_requires_real_verified_creation_output(self):
+        self.assertEqual(backup.recovery_stamp(
+            "verified recovery snapshot: /private/backups/recovery-saved-1 (restore with cortex)"), "saved-1")
+        with self.assertRaisesRegex(ValueError, "verified recovery snapshot"):
+            backup.recovery_stamp("backup started")
+
+    def test_backup_marker_uses_owned_container_database(self):
+        os.environ.update(LIVE_DOCKER_BIN="/fixture/docker", LIVE_RUN_ID="owned-run")
+        replies = [subprocess.CompletedProcess([], 0, "owned-run\n", ""),
+                   subprocess.CompletedProcess([], 0, "1\n", "")]
+        with patch.object(backup.subprocess, "run", side_effect=replies) as observed:
+            self.assertEqual(backup.marker(1), 1)
+        command = observed.call_args.args[0]
+        self.assertEqual(command[:7], ["/fixture/docker", "exec", "--user", "0:0", "cortex", "sqlite3", "/data/cortex.db"])
+        self.assertIn("BEGIN IMMEDIATE", command[7])
+        with patch.object(backup.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "foreign-run", "")) as observed:
+            with self.assertRaisesRegex(RuntimeError, "ownership changed"):
+                backup.marker()
+            self.assertEqual(observed.call_count, 1)
+
+    def test_backup_topology_renders_owned_managed_contract_without_starting_services(self):
+        tools = self.home / "tools"
+        tools.mkdir()
+        docker = tools / "docker"
+        docker.write_text('#!/bin/sh\ncase "$1" in info|ps) exit 0;; compose) exit 42;; *) exit 64;; esac\n')
+        docker.chmod(0o700)
+        os.environ.update(PATH=f"{tools}:/usr/bin:/bin", LIVE_PROJECT_ROOT=str(ROOT),
+                          LIVE_RUN_ROOT=str(self.home), LIVE_COMPOSE_PROJECT="owned-live",
+                          LIVE_RUN_ID="owned-run", LIVE_CLI_FIXTURE_BIN=str(ROOT / "tests/live/fixtures/surfaces/bin"),
+                          LIVE_CURSOR_SIGNING_KEY="fixture-signing-key", LIVE_SERVER_INSTANCE_ID="fixture-server")
+        script = ('set -eu; source "$1"; surface_cli_resource_register() { :; }; live_timeout_process_tree() { shift; "$@"; }; '
+                  'surface_backup_topology_run /unused/cortex cortex:fixture')
+        result = subprocess.run(["/bin/bash", "-c", script, "_", str(ROOT / "tests/live/phases/surfaces/backup-topology.sh")],
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 42, result.stderr)
+        home = self.home / "backup-home/.cortex"
+        config = json.loads((home / "compose/docker-compose.yml").read_text())
+        self.assertEqual(config["name"], "owned-live-surface-backup")
+        service = config["services"]["cortex"]
+        self.assertEqual(service["container_name"], "cortex")
+        self.assertEqual(service["labels"], {"cortex.live.run_id": "owned-run"})
+        self.assertEqual(service["volumes"], [f"{home}/data:/data", f"{home}/backups:/backups", f"{home}:/cortex-home"])
+        self.assertRegex(service["ports"][0], r"^127[.]0[.]0[.]1:[1-9][0-9]*:3100/tcp$")
+        self.assertEqual(service["environment"]["CORTEX_HOST"], "0.0.0.0")
+        self.assertEqual(service["environment"]["CORTEX_PORT"], "3100")
+        self.assertEqual(service["env_file"], [str(home / ".env")])
+        self.assertNotIn("fixture-rest-token", json.dumps(config))
+
+    def test_backup_crontab_fixture_preserves_install_check_remove_state(self):
+        fixture = ROOT / "tests/live/fixtures/surfaces/bin/crontab"
+        env = {"PATH": "/usr/bin:/bin", "TMPDIR": str(self.home)}
+        absent = subprocess.run([str(fixture), "-l"], capture_output=True, timeout=5, env=env)
+        self.assertEqual(absent.returncode, 1)
+        self.assertIn(b"no crontab", absent.stderr)
+        schedule = self.home / "schedule"
+        schedule.write_text("0 */6 * * * /private/cortex setup backup create # cortex-backup-1\n")
+        subprocess.run([str(fixture), str(schedule)], check=True, timeout=5, env=env)
+        installed = subprocess.run([str(fixture), "-l"], check=True, capture_output=True, timeout=5, env=env)
+        self.assertEqual(installed.stdout.decode(), schedule.read_text())
+        schedule.write_text("")
+        subprocess.run([str(fixture), str(schedule)], check=True, timeout=5, env=env)
+        removed = subprocess.run([str(fixture), "-l"], check=True, capture_output=True, timeout=5, env=env)
+        self.assertEqual(removed.stdout, b"")
+
+    def test_setup_start_supplies_explicit_role(self):
+        tail, _, execute = sweep.semantic_args({"spelling": "setup start", "mutation": "local"}, False)
+        self.assertTrue(execute)
+        self.assertIn("--role", tail)
+        self.assertEqual(tail[tail.index("--role") + 1], "client")
+
+    def test_ssh_fixture_reports_platform_from_command_argument(self):
+        fixture = ROOT / "tests/live/fixtures/surfaces/bin/ssh"
+        result = subprocess.run([str(fixture), "--", "cortex-live.invalid", "uname -s && uname -m"],
+                                input=b"", capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"Linux\nx86_64\n")
+
+    @unittest.skipUnless(BINARY, "set CORTEX_SWEEP_CORTEX_BIN for compiled deployment integration")
+    def test_compiled_agent_deployment_uses_isolated_ssh_fixture(self):
+        fixtures = ROOT / "tests/live/fixtures/surfaces/bin"
+        os.environ["LIVE_SETUP_CLI_PATH"] = f"{fixtures}:/usr/bin:/bin"
+        result = sweep.run(BINARY, "setup deploy agent", ["--hosts", "cortex-live.invalid", "--json"])
+        self.assertEqual(result["exit"], 0, result)
+        self.assertIn("deploying", result["terminal"])
+
+    @unittest.skipUnless(BINARY, "set CORTEX_SWEEP_CORTEX_BIN for compiled watch integration")
+    def test_smokewatch_observes_real_watcher_ingestion_and_checkpoint_pruning(self):
+        (self.home / ".claude/projects").mkdir(parents=True)
+        os.environ.update(LIVE_CURSOR_SIGNING_KEY="fixture-cursor-signing-key",
+                          LIVE_SERVER_INSTANCE_ID="fixture-instance")
+        result = sweep.run_long_lived(BINARY, "sessions smokewatch")
+        self.assertEqual(result["exit"], 0, result)
+        report = json.loads(result["terminal"])
+        self.assertTrue(report["ingested"])
+        self.assertTrue(report["pruned_missing_checkpoint"])
+        self.assertTrue(result["terminated_for_cleanup"])
 
     def test_non_loopback_candidate_is_rejected(self):
         os.environ["LIVE_CORTEX_URL"] = "http://remote.invalid:3100"

@@ -97,6 +97,12 @@ printf '%s\n' \
 chmod 600 "$compose_cli_dir/compose.yaml"
 export COMPOSE_PROJECT_NAME="${LIVE_COMPOSE_PROJECT}-surface-cli" COMPOSE_FILE="$compose_cli_dir/compose.yaml"
 live_event phase_progress '{"phase":"surfaces","stage":"cli-fixture-ready"}'
+# Managed recovery runs before the secondary CLI project claims container_name
+# cortex. Its distinct home and ledger key keep setup fixture writes separate.
+# shellcheck disable=SC1091
+source "$surface_dir/backup-topology.sh"
+surface_backup_topology_run "$binary" "$compose_cli_image"
+
 
 # Register this secondary project before creation so EXIT cleanup owns it.
 surface_cli_resource_register "$COMPOSE_PROJECT_NAME" "$COMPOSE_FILE"
@@ -176,6 +182,10 @@ rm -f "$generated_source" "$generated_cli" "$mcporter_config"
 live_event generated_cli "$(jq -cn --argjson bytes "$generated_bytes" --arg sha256 "$generated_sha" \
   --arg source_sha256 "$source_sha" '{schema:"cortex-live-generated-cli-v1",result:"pass",transport:"http",bytes:$bytes,sha256:$sha256,source_sha256:$source_sha256,executed_live:true,ephemeral_source_removed:true,bundle_removed:true}')"
 
+# Preserve reviewable observations with registered secrets masked before events
+# are emitted or the global persisted-output audit sees the completed phase.
+live_artifact_write surfaces/cli.json 5242880 <"$artifact_dir/cli.json"
+
 # The registry-derived CLI sweep above is now the sole semantic CLI adapter.
 # Historical `scripts/live-cli-sweep.sh` remains only as a compatibility entry
 # point and must not be invoked recursively from the canonical runner.
@@ -196,10 +206,9 @@ stdio_binary="$(cargo test --test stdio_mcp --no-run --message-format=json 2>"$a
 live_run_bounded 180 "$artifact_dir/stdio-mcp.log" "$artifact_dir/stdio-mcp.stderr" \
   "$stdio_binary" --nocapture
 
-# Setup/doctor qualification intentionally writes deploy assets containing the
-# run's disposable tokens. They are execution state, not evidence, and must not
-# survive into the global persisted-artifact secret audit.
-rm -f "$LIVE_RUN_HOME/.cortex/compose/compose.yaml"
+# Setup/doctor generated private credentials are disposable execution state.
+# Keep the redacted observations and require both ledger teardowns first.
+surface_cli_runtime_cleanup
 
 jq -e --argjson rest "$(jq '[.entries[]|select(.kind=="rest")]|length' "$LIVE_SURFACE_CONTRACT")" \
   --argjson cli "$(jq '[.entries[]|select(.kind=="cli")]|length' "$LIVE_SURFACE_CONTRACT")" \

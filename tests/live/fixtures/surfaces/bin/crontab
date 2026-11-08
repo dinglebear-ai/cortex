@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run-owned user-cron boundary. Never contacts the host scheduler.
+set -eu
+state=${TMPDIR:?}/backup-crontab
+case "$#:$*" in
+  1:-l)
+    if test -f "$state"; then cat "$state"; else echo 'no crontab for fixture' >&2; exit 1; fi ;;
+  1:*) cat "$1" > "$state"; chmod 600 "$state" ;;
+  *) echo 'unsupported fixture crontab invocation' >&2; exit 64 ;;
+esac
