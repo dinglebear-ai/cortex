@@ -22,7 +22,9 @@ mod capabilities;
 mod compose_sources;
 #[path = "heartbeat_agent_configuration.rs"]
 mod configuration;
-use configuration::{check_capabilities_and_delivery, write_heartbeat_agent_env};
+use configuration::check_capabilities_and_delivery;
+#[cfg(test)]
+use configuration::write_heartbeat_agent_env;
 #[path = "heartbeat_agent_windows.rs"]
 mod windows;
 pub(crate) use capabilities::discover_with_overrides;
@@ -73,6 +75,17 @@ fn detected_backend() -> ServiceBackend {
 }
 
 pub async fn run_heartbeat_agent_setup(action: HeartbeatAgentAction) -> io::Result<SetupReport> {
+    run_heartbeat_agent_setup_with_env(action, false).await
+}
+
+pub(super) async fn install_preconfigured_heartbeat_agent() -> io::Result<SetupReport> {
+    run_heartbeat_agent_setup_with_env(HeartbeatAgentAction::Install, true).await
+}
+
+async fn run_heartbeat_agent_setup_with_env(
+    action: HeartbeatAgentAction,
+    preserve_env: bool,
+) -> io::Result<SetupReport> {
     let started = Instant::now();
     let home = super::cortex_home_dir()?;
     let env_path = home.join("heartbeat-agent.env");
@@ -103,7 +116,7 @@ pub async fn run_heartbeat_agent_setup(action: HeartbeatAgentAction) -> io::Resu
             let source_bin = super::resolve_cortex_binary()?;
             if backend == ServiceBackend::WindowsTask {
                 let (staging, env_phase) =
-                    stage_windows_upgrade(&source_bin, &managed_bin, &env_path)?;
+                    stage_windows_upgrade(&source_bin, &managed_bin, &env_path, preserve_env)?;
                 phases.push(env_phase);
                 phases.extend(windows::upgrade(
                     &staging.binary,
@@ -114,7 +127,7 @@ pub async fn run_heartbeat_agent_setup(action: HeartbeatAgentAction) -> io::Resu
                 )?);
             } else {
                 let cortex_bin = install_managed_binary(&source_bin, &managed_bin)?;
-                phases.push(write_heartbeat_agent_env(&env_path)?);
+                phases.push(configuration::prepare_agent_env(&env_path, preserve_env)?);
                 if backend == ServiceBackend::Systemd {
                     std::fs::create_dir_all(&unit_dir)?;
                     phases.push(write_heartbeat_agent_unit(
@@ -526,6 +539,7 @@ fn stage_windows_upgrade(
     source: &Path,
     managed: &Path,
     env: &Path,
+    preserve_env: bool,
 ) -> io::Result<(WindowsUpgradeStaging, SetupPhase)> {
     let staging = WindowsUpgradeStaging {
         binary: managed.with_file_name("cortex.candidate.exe"),
@@ -536,7 +550,7 @@ fn stage_windows_upgrade(
         load_private_agent_env(env)?;
         atomic_private_write(&staging.env, &std::fs::read(env)?, 0o600)?;
     }
-    let phase = write_heartbeat_agent_env(&staging.env)?;
+    let phase = configuration::prepare_agent_env(&staging.env, preserve_env)?;
     load_private_agent_env(&staging.env)?;
     Ok((staging, phase))
 }

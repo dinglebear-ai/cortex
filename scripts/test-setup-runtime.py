@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -198,6 +199,67 @@ class SetupRuntimeTests(unittest.TestCase):
         self.assertNotEqual(failure.returncode, 0)
         self.assertTrue(any(p['name'] == 'credential-transport' and p['status'] == 'error'
                             for p in json.loads(failure.stdout)))
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'systemd fixture requires Linux')
+    def test_agent_activation_preserves_preflighted_consent_and_credentials(self) -> None:
+        fake_bin = self.home / 'fake-bin'
+        fake_bin.mkdir()
+        systemctl = fake_bin / 'systemctl'
+        systemctl.write_text(
+            f'#!{sys.executable}\n'
+            'import json, os, pathlib, sys\n'
+            'home = pathlib.Path(os.environ["CORTEX_HOME"])\n'
+            'if "enable" in sys.argv or "restart" in sys.argv:\n'
+            '    (home / "activation.env").write_bytes((home / "heartbeat-agent.env").read_bytes())\n'
+            '    unit = pathlib.Path(os.environ["HOME"]) / ".config/systemd/user/cortex-heartbeat-agent.service"\n'
+            '    (home / "activation.unit").write_bytes(unit.read_bytes())\n'
+            'with (home / "systemctl.jsonl").open("a") as out:\n'
+            '    out.write(json.dumps(sys.argv[1:]) + "\\n")\n')
+        systemctl.chmod(0o700)
+        self.env['PATH'] = str(fake_bin) + os.pathsep + self.env.get('PATH', '')
+        self.env.update(CORTEX_AI_WATCH_ALLOW_DEBUG_BINARY='true',
+                        CORTEX_HEARTBEAT_TOKEN='inherited-private-token',
+                        CORTEX_HEARTBEAT_TARGET='https://inherited.invalid',
+                        CORTEX_AGENT_DOCKER_URL='http://127.0.0.1:2375')
+        (self.home / '.codex/sessions').mkdir(parents=True)
+        (self.home / '.zsh_history').write_text('fixture command\n')
+        for selected in (False, True):
+            with self.subTest(selected=selected):
+                # Exercise both ambient true vs decline and ambient false vs selection.
+                ambient = 'false' if selected else 'true'
+                for key in ('CORTEX_AGENT_DOCKER', 'CORTEX_AGENT_AI_TRANSCRIPT_FORWARD',
+                            'CORTEX_AGENT_SHELL_HISTORY_FORWARD', 'CORTEX_AGENT_COMMAND_FORWARD'):
+                    self.env[key] = ambient
+                capabilities = 'docker,transcripts,shell_history' if selected else 'none'
+                result = self.run_cli('setup', 'start', '--role', 'agent', '--server', self.url,
+                                      '--token-file', self.mcp, '--clients', 'none',
+                                      '--capabilities', capabilities, '--json')
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                report = json.loads(result.stdout)
+                self.assertFalse(report['has_errors'])
+                self.assertTrue(any(p['name'] == 'agent-delivery' and p['status'] == 'ok'
+                                    for p in report['phases']))
+                managed = self.home / '.cortex'
+                final = (managed / 'heartbeat-agent.env').read_bytes()
+                self.assertEqual((managed / 'activation.env').read_bytes(), final)
+                values = dict(line.split('=', 1) for line in final.decode().splitlines())
+                for key in ('CORTEX_AGENT_DOCKER', 'CORTEX_AGENT_AI_TRANSCRIPT_FORWARD',
+                            'CORTEX_AGENT_SHELL_HISTORY_FORWARD'):
+                    self.assertEqual(values[key], str(selected).lower())
+                self.assertEqual(values['CORTEX_AGENT_COMMAND_FORWARD'], 'false')
+                self.assertEqual(values['CORTEX_AGENT_JOURNALD'], 'false')
+                self.assertEqual(values['CORTEX_AGENT_FILE_TAILS'], '')
+                self.assertEqual(values['CORTEX_AGENT_SYSLOG_FILE'], '')
+                self.assertEqual(values['CORTEX_HEARTBEAT_TARGET'], self.url)
+                self.assertEqual(values['CORTEX_HEARTBEAT_TOKEN'], 'setup-runtime-mcp')
+                unit = (managed / 'activation.unit').read_text()
+                self.assertIn(f'--env-file {managed}/heartbeat-agent.env', unit)
+                self.assertIn(' heartbeat agent ', unit)
+                calls = [json.loads(line) for line in (managed / 'systemctl.jsonl').read_text().splitlines()]
+                self.assertTrue(any('enable' in call for call in calls))
+                self.assertTrue(any('restart' in call for call in calls))
+                for secret in ('setup-runtime-mcp', 'inherited-private-token'):
+                    self.assertNotIn(secret, result.stdout + result.stderr)
 
     def test_existing_agent_enrollment_preview_reuses_saved_token(self) -> None:
         managed = self.home / '.cortex'

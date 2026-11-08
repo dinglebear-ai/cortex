@@ -427,7 +427,7 @@ pub async fn run_start(mut options: StartOptions) -> io::Result<StartReport> {
         }
         if !super::phases_have_errors(&phases) {
             phases.extend(
-                super::run_heartbeat_agent_setup(super::HeartbeatAgentAction::Install)
+                super::heartbeat_agent::install_preconfigured_heartbeat_agent()
                     .await?
                     .phases,
             );

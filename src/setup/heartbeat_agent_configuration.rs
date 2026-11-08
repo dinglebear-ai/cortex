@@ -112,6 +112,19 @@ pub(super) fn check_capabilities_and_delivery(
     phases
 }
 
+pub(super) fn prepare_agent_env(env_path: &Path, preserve: bool) -> io::Result<SetupPhase> {
+    if preserve {
+        // Onboarding already resolved credentials and committed collection consent.
+        // Validate that file, but do not merge the process environment again.
+        load_private_agent_env(env_path)?;
+        return Ok(PhaseTimer::start("heartbeat-agent-env").finish(
+            SetupStatus::Ok,
+            "preserved preflighted collector environment",
+        ));
+    }
+    write_heartbeat_agent_env(env_path)
+}
+
 pub(super) fn write_heartbeat_agent_env(env_path: &Path) -> io::Result<SetupPhase> {
     let timer = PhaseTimer::start("heartbeat-agent-env");
     if let Some(parent) = env_path.parent() {

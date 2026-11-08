@@ -894,7 +894,7 @@ fn windows_upgrade_stages_env_without_touching_previous_state_and_cleans_credent
     let original = b"CORTEX_HEARTBEAT_TOKEN='previous-secret'\nCORTEX_AGENT_AUTO_UPDATE=true\n";
     atomic_private_write(&env, original, 0o600).unwrap();
     let _preserve = EnvGuard::set(PRESERVE_ENV, "1");
-    let (staged, _) = stage_windows_upgrade(&source, &managed, &env).unwrap();
+    let (staged, _) = stage_windows_upgrade(&source, &managed, &env, false).unwrap();
     assert_eq!(std::fs::read(&staged.env).unwrap(), original);
     assert_eq!(std::fs::read(&env).unwrap(), original);
     assert_eq!(std::fs::read(&managed).unwrap(), b"previous binary");
@@ -920,9 +920,29 @@ fn windows_upgrade_env_preflight_failure_preserves_old_files() {
     atomic_private_write(&env, original, 0o600).unwrap();
     let _preserve = EnvGuard::remove(PRESERVE_ENV);
     let _token = EnvGuard::set("CORTEX_HEARTBEAT_TOKEN", "invalid\nsecret");
-    assert!(stage_windows_upgrade(&source, &managed, &env).is_err());
+    assert!(stage_windows_upgrade(&source, &managed, &env, false).is_err());
     assert_eq!(std::fs::read(&env).unwrap(), original);
     assert_eq!(std::fs::read(&managed).unwrap(), b"old binary");
     assert!(!env.with_extension("candidate.env").exists());
     assert!(!managed.with_file_name("cortex.candidate.exe").exists());
+}
+
+#[test]
+#[serial]
+fn windows_preconfigured_upgrade_preserves_consent_without_ambient_resolution() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.exe");
+    let managed = temp.path().join("managed/cortex.exe");
+    let env = temp.path().join("state/heartbeat-agent.env");
+    std::fs::write(&source, b"new candidate").unwrap();
+    let original = b"CORTEX_HEARTBEAT_TOKEN=preflighted-token\nCORTEX_AGENT_DOCKER=false\n";
+    atomic_private_write(&env, original, 0o600).unwrap();
+    let _preserve = EnvGuard::remove(PRESERVE_ENV);
+    let _token = EnvGuard::set("CORTEX_HEARTBEAT_TOKEN", "inherited-token");
+    let _docker = EnvGuard::set("CORTEX_AGENT_DOCKER", "true");
+    let (staged, _) = stage_windows_upgrade(&source, &managed, &env, true).unwrap();
+    assert_eq!(std::fs::read(&staged.env).unwrap(), original);
+    assert_eq!(std::fs::read(&env).unwrap(), original);
+    drop(staged);
+    assert!(!env.with_extension("candidate.env").exists());
 }
