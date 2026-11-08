@@ -8,7 +8,8 @@ use std::time::Instant;
 const COMPOSE_ASSET: &str = include_str!("../docker-compose.prod.yml");
 const DOCKERFILE_ASSET: &str = include_str!("../config/Dockerfile");
 
-mod auth_policy;
+pub(crate) mod auth_policy;
+pub use auth_policy::disable_static_token_with_oauth;
 pub mod client_config;
 mod debug_wrapper;
 mod doctor;

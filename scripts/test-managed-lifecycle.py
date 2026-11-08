@@ -447,4 +447,16 @@ else: print('{}')
         self.assertEqual((self.home / 'crontab').read_text(), original)
         self.assertNotEqual(self.run_helper('schedule-check').returncode, 0)
 
+    def test_schedule_marker_prefix_cannot_claim_or_remove_another_home(self) -> None:
+        checksum = self.home / 'bin' / 'cksum'
+        checksum.write_text('#!/bin/sh\ncat >/dev/null\nprintf "123 0\\n"\n')
+        checksum.chmod(0o700)
+        other = '0 */6 * * * /other/cortex setup backup create # cortex-backup-1234\n'
+        (self.home / 'crontab').write_text(other)
+        self.assertNotEqual(self.run_helper('schedule-check').returncode, 0)
+        self.assertEqual(self.run_helper('schedule-install').returncode, 0)
+        self.assertIn(other, (self.home / 'crontab').read_text())
+        self.assertEqual(self.run_helper('schedule-remove').returncode, 0)
+        self.assertEqual((self.home / 'crontab').read_text(), other)
+
 if __name__ == '__main__': unittest.main()

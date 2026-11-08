@@ -39,6 +39,8 @@ impl HostProbe {
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentDeployConfig {
+    /// Explicit --binary chooses this artifact instead of a platform release.
+    pub binary_override: bool,
     pub target: Option<String>,
     pub token: Option<String>,
     /// Require an effective heartbeat token after flag/persisted-env resolution.
@@ -346,7 +348,7 @@ fn run_deploy(host: &str, local_binary: &Path, config: &AgentDeployConfig) -> io
 
     let platform = platform::detect(host)?;
     if platform == platform::Platform::WindowsX64 {
-        return run_deploy_windows(host, config);
+        return run_deploy_windows(host, local_binary, config);
     }
     let env_pairs = resolve_linux_agent_env(
         &parse_env_file(&read_optional_remote_file(
@@ -359,7 +361,11 @@ fn run_deploy(host: &str, local_binary: &Path, config: &AgentDeployConfig) -> io
 
     let env_body = render_env_file(&env_pairs)?;
     ssh_run(host, platform::service_preflight(platform))?;
-    ssh_run(host, &platform::stage_posix(platform))?;
+    if config.binary_override {
+        stage_binary_override(host, local_binary, platform)?;
+    } else {
+        ssh_run(host, &platform::stage_posix(platform))?;
+    }
     ssh_run_with_stdin(
         host,
         "umask 077; mkdir -p ~/.cortex; cat > ~/.cortex/heartbeat-agent.env.new && chmod 600 ~/.cortex/heartbeat-agent.env.new && mv -f ~/.cortex/heartbeat-agent.env.new ~/.cortex/heartbeat-agent.env",
@@ -375,7 +381,50 @@ fn run_deploy(host: &str, local_binary: &Path, config: &AgentDeployConfig) -> io
     ssh_run(host, "~/.local/bin/cortex setup heartbeatagent check")
 }
 
-fn run_deploy_windows(host: &str, config: &AgentDeployConfig) -> io::Result<()> {
+/// Upload an explicitly selected artifact, then validate it on the target before
+/// replacement. Never substitute a released binary for a caller's custom build.
+fn stage_binary_override(host: &str, local: &Path, platform: platform::Platform) -> io::Result<()> {
+    let windows = platform == platform::Platform::WindowsX64;
+    let (prepare, remote_path, activate) = if windows {
+        (
+            "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force (Join-Path $HOME '.local/bin') | Out-Null\"",
+            ".local/bin/cortex.new.exe",
+            "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $bin=Join-Path $HOME '.local/bin/cortex.exe'; $new=Join-Path $HOME '.local/bin/cortex.new.exe'; & $new --version; if ($LASTEXITCODE -ne 0) {throw 'Selected binary cannot run on target'}; if (Test-Path $bin) {Copy-Item $bin ($bin+'.previous') -Force}; Move-Item $new $bin -Force\"",
+        )
+    } else {
+        (
+            "set -eu; mkdir -p ~/.local/bin",
+            ".local/bin/cortex.new",
+            "set -eu; chmod +x ~/.local/bin/cortex.new; ~/.local/bin/cortex.new --version; if test -f ~/.local/bin/cortex; then cp -p ~/.local/bin/cortex ~/.local/bin/cortex.previous; fi; mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex",
+        )
+    };
+    ssh_run(host, prepare)?;
+    let status = crate::env::command("scp")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "--",
+        ])
+        .arg(local)
+        .arg(format!("{host}:{remote_path}"))
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(
+            "explicit agent binary upload failed; installed binary unchanged",
+        ));
+    }
+    ssh_run(host, activate)
+}
+
+fn run_deploy_windows(
+    host: &str,
+    local_binary: &Path,
+    config: &AgentDeployConfig,
+) -> io::Result<()> {
     let persisted = ssh_capture(
         host,
         "powershell -NoProfile -NonInteractive -Command \"$p=Join-Path $HOME '.cortex/heartbeat-agent.env'; if (Test-Path $p) {Get-Content $p}\"",
@@ -387,7 +436,11 @@ fn run_deploy_windows(host: &str, config: &AgentDeployConfig) -> io::Result<()> 
         host,
         platform::service_preflight(platform::Platform::WindowsX64),
     )?;
-    ssh_run(host, &platform::windows_stage())?;
+    if config.binary_override {
+        stage_binary_override(host, local_binary, platform::Platform::WindowsX64)?;
+    } else {
+        ssh_run(host, &platform::windows_stage())?;
+    }
     ssh_run_with_stdin(
         host,
         "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.cortex'; New-Item -ItemType Directory -Force $d | Out-Null; $p=Join-Path $d 'heartbeat-agent.env'; [IO.File]::WriteAllText(($p+'.new'), [Console]::In.ReadToEnd()); Move-Item ($p+'.new') $p -Force\"",

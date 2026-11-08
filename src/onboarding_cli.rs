@@ -239,9 +239,7 @@ pub async fn run(command: Command) -> Result<()> {
                 });
             let oauth = env.get("CORTEX_AUTH_MODE").is_some_and(|v| v == "oauth");
             let mcp_token = if oauth
-                && env
-                    .get("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
-                    .is_none_or(|v| v != "false")
+                && cortex::setup::disable_static_token_with_oauth(&env)?
                 && options.token_file.is_none()
             {
                 None

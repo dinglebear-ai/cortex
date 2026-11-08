@@ -187,3 +187,29 @@ fn fresh_heartbeat_ack_rejects_empty_or_duplicate_receipts() {
         &json!({"accepted":1,"heartbeat_id":1,"received_at":"2026-10-02T00:00:00Z"})
     ));
 }
+
+#[tokio::test]
+async fn managed_oauth_false_spellings_verify_static_credentials() {
+    let (url, task) = fixture(true).await;
+    let port = url.rsplit(':').next().unwrap();
+    for value in ["false", "FALSE", "0", "no", "N", "off"] {
+        let env = BTreeMap::from([
+            ("CORTEX_PORT".into(), port.into()),
+            ("CORTEX_AUTH_MODE".into(), "oauth".into()),
+            (
+                "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH".into(),
+                value.into(),
+            ),
+            ("CORTEX_TOKEN".into(), "machine".into()),
+            ("CORTEX_API_TOKEN".into(), "rest".into()),
+        ]);
+        let phases = verify_managed_server(&env).await;
+        assert!(
+            phases
+                .iter()
+                .any(|p| p.name == "mcp-auth" && p.status == SetupStatus::Ok),
+            "{value}"
+        );
+    }
+    task.abort();
+}

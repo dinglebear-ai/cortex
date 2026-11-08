@@ -101,10 +101,14 @@ try {{
     )
 }
 
+fn removal_script() -> String {
+    format!(
+        "$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName '{TASK}' -TaskPath '\\' -ErrorAction SilentlyContinue; if ($t) {{ $owner=$t.Principal.UserId; $identity=[System.Security.Principal.WindowsIdentity]::GetCurrent(); if ($owner -ne $identity.Name -and $owner -ne $identity.User.Value) {{ throw 'Existing task belongs to another user' }}; Stop-ScheduledTask -TaskName '{TASK}' -TaskPath '\\'; Unregister-ScheduledTask -TaskName '{TASK}' -TaskPath '\\' -Confirm:$false }}"
+    )
+}
+
 pub(super) fn remove() -> io::Result<()> {
-    run(&format!(
-        "$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName '{TASK}' -ErrorAction SilentlyContinue; if ($t) {{ Stop-ScheduledTask -TaskName '{TASK}'; Unregister-ScheduledTask -TaskName '{TASK}' -Confirm:$false }}"
-    ))?;
+    run(&removal_script())?;
     Ok(())
 }
 pub(super) fn check() -> SetupPhase {
@@ -124,6 +128,18 @@ pub(super) fn check() -> SetupPhase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn removal_checks_task_owner_before_stopping_or_unregistering() {
+        let script = removal_script();
+        let owner = script
+            .find("Existing task belongs to another user")
+            .unwrap();
+        assert!(owner < script.find("Stop-ScheduledTask").unwrap());
+        assert!(owner < script.find("Unregister-ScheduledTask").unwrap());
+        assert!(script.contains("$owner -ne $identity.Name -and $owner -ne $identity.User.Value"));
+        assert_eq!(script.matches("-TaskPath").count(), 3);
+    }
+
     #[test]
     fn upgrade_validates_before_stop_and_compensates_task_registration_failure() {
         let script = upgrade_script(

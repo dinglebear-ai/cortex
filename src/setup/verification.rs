@@ -208,9 +208,14 @@ pub(crate) async fn verify_requested_connection(
 pub async fn verify_managed_server(env: &BTreeMap<String, String>) -> Vec<SetupPhase> {
     let port = env.get("CORTEX_PORT").map(String::as_str).unwrap_or("3100");
     let oauth = env.get("CORTEX_AUTH_MODE").is_some_and(|v| v == "oauth");
-    let disable_static = env
-        .get("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
-        .is_none_or(|v| v != "false");
+    let disable_static = match super::auth_policy::disable_static_token_with_oauth(env) {
+        Ok(value) => value,
+        Err(error) => {
+            return vec![
+                PhaseTimer::start("auth-policy").finish(SetupStatus::Error, error.to_string()),
+            ];
+        }
+    };
     let mcp_token = if oauth && disable_static {
         None
     } else {

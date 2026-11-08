@@ -264,6 +264,7 @@ esac
         "linux-host",
         &local_binary,
         &AgentDeployConfig {
+            binary_override: false,
             target: Some("https://cortex.example.test:3100".to_string()),
             token: Some("heartbeat token".to_string()),
             require_token: false,
@@ -395,6 +396,7 @@ esac
         "linux-host",
         &local_binary,
         &AgentDeployConfig {
+            binary_override: false,
             require_token: true,
             ..AgentDeployConfig::default()
         },
@@ -486,6 +488,7 @@ esac
         "linux-host",
         &local_binary,
         &AgentDeployConfig {
+            binary_override: false,
             target: Some("https://cortex.example.test".to_string()),
             token: Some("super secret token".to_string()),
             require_token: false,
@@ -590,6 +593,7 @@ esac
         "linux-host",
         &local_binary,
         &AgentDeployConfig {
+            binary_override: false,
             target: Some("https://new.example.test:3100".to_string()),
             token: Some("new-token".to_string()),
             ..AgentDeployConfig::default()
@@ -635,6 +639,7 @@ esac
         "linux-host",
         &local_binary,
         &AgentDeployConfig {
+            binary_override: false,
             target: Some("https://new.example.test:3100".to_string()),
             token: Some("new-token".to_string()),
             ..AgentDeployConfig::default()
@@ -689,6 +694,7 @@ esac
         "unraid-host",
         &local_binary,
         &AgentDeployConfig {
+            binary_override: false,
             target: Some("https://cortex.example.test".to_string()),
             token: Some("secret".to_string()),
             require_token: false,
@@ -782,6 +788,7 @@ fn resolve_agent_env_flags_override_persisted() {
         ("CORTEX_AGENT_DOCKER".into(), "true".into()),
     ];
     let cfg = AgentDeployConfig {
+        binary_override: false,
         target: Some("https://new.example".into()),
         token: Some("new-token".into()),
         require_token: false,
@@ -1085,4 +1092,42 @@ fn native_fleet_normalizes_legacy_transcript_consent_with_canonical_precedence()
         ),
         None
     );
+}
+
+#[test]
+#[serial]
+fn explicit_binary_upload_does_not_substitute_release_and_stops_on_upload_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log");
+    write_executable(
+        &dir.path().join("ssh"),
+        r#"#!/bin/sh
+printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
+"#,
+    );
+    write_executable(
+        &dir.path().join("scp"),
+        r#"#!/bin/sh
+printf 'scp %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
+exit "${CORTEX_TEST_SCP_FAILURE:-0}"
+"#,
+    );
+    let _path = prepend_path(dir.path());
+    let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+    let binary = write_local_binary(dir.path());
+    stage_binary_override("fixture", &binary, platform::Platform::LinuxX64).unwrap();
+    let commands = std::fs::read_to_string(&log).unwrap();
+    assert!(commands.contains(&format!(
+        "{} fixture:.local/bin/cortex.new",
+        binary.display()
+    )));
+    assert!(commands.contains("cortex.new --version"));
+    assert!(commands.contains("cortex.previous"));
+    assert!(!commands.contains("curl"));
+    std::fs::write(&log, "").unwrap();
+    let _failure = EnvGuard::set("CORTEX_TEST_SCP_FAILURE", "1");
+    assert!(stage_binary_override("fixture", &binary, platform::Platform::LinuxX64).is_err());
+    let commands = std::fs::read_to_string(&log).unwrap();
+    assert!(!commands.contains("mv -f"));
+    assert!(!commands.contains("--version"));
 }

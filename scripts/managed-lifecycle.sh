@@ -449,10 +449,11 @@ RESTORE
       if grep -qi 'no crontab' "$schedule.new"; then : > "$schedule"; else cat "$schedule.new" >&2; exit 1; fi
     fi
     if test "$action" = schedule-check; then
-      if grep -F "# $marker" "$schedule"; then exit 0; fi
+      if awk -v marker="# $marker" 'substr($0,length($0)-length(marker)+1)==marker {print; found=1} END {exit !found}' "$schedule"; then exit 0; fi
       echo 'backup schedule is not installed' >&2; exit 1
     fi
-    awk -v marker="# $marker" 'index($0,marker)==0' "$schedule" > "$schedule.new"
+    # Match the complete terminal ownership marker, not another home's prefix.
+    awk -v marker="# $marker" 'substr($0,length($0)-length(marker)+1)!=marker' "$schedule" > "$schedule.new"
     if test "$action" = schedule-install; then
       # Cron treats % specially even inside quotes, so reject it in paths.
       case "$bin$home" in *%*|*"'"*|*'

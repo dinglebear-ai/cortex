@@ -307,6 +307,7 @@ fn run_update_with_runner(
         } else {
             let binary = resolve_agent_binary(&options, runner)?;
             let config = AgentDeployConfig {
+                binary_override: options.binary.is_some(),
                 target: profile.clients.target.clone(),
                 token: None,
                 require_token: true,

@@ -368,6 +368,7 @@ fn run_deploy_agent(
     }
 
     let config = AgentDeployConfig {
+        binary_override: binary.is_some(),
         target,
         token,
         require_token: false,

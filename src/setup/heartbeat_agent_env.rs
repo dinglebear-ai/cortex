@@ -298,7 +298,11 @@ pub fn atomic_private_write(path: &Path, content: &[u8], mode: u32) -> io::Resul
         file.sync_all()?;
         drop(file);
         fs::rename(&tmp, path)?;
-        fs::File::open(parent)?.sync_all()
+        // Windows cannot open directories through File::open; the file itself
+        // was synced before its atomic replacement. Directory fsync is Unix-only.
+        #[cfg(unix)]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
@@ -375,6 +379,16 @@ mod tests {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+    #[test]
+    fn checkpoint_replacement_reports_success_and_retains_previous_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cursor.json");
+        atomic_checkpoint_write(&path, b"first").unwrap();
+        atomic_checkpoint_write(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert_eq!(fs::read(path.with_extension("json.bak")).unwrap(), b"first");
+    }
+
     #[test]
     fn private_env_round_trips_quoted_credentials_and_paths() {
         let directory = tempfile::tempdir().unwrap();

@@ -268,10 +268,11 @@ fn validate_client(mapped: &HashMap<String, String>) -> Result<()> {
     let mut token = prepared_value(mapped, "CORTEX_TOKEN");
     let api_token = prepared_value(mapped, "CORTEX_API_TOKEN");
     let oauth = prepared_value(mapped, "CORTEX_AUTH_MODE").is_some_and(|v| v == "oauth");
-    if oauth
-        && prepared_value(mapped, "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
-            .is_none_or(|value| value != "false")
-    {
+    let static_policy = prepared_value(mapped, "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
+        .map(|value| ("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH".into(), value))
+        .into_iter()
+        .collect();
+    if oauth && cortex::setup::disable_static_token_with_oauth(&static_policy)? {
         token = None;
     }
     let phases = std::thread::scope(|scope| {

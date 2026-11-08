@@ -203,7 +203,7 @@ docker inspect --format='{{.State.Health.Status}}' cortex
 
 ## Database Backup Before Deploy
 
-The image does not ship a `sqlite3` binary — use the built-in `cortex db
+The image includes `sqlite3`; prefer the built-in `cortex db
 backup` command (WAL-safe, no downtime):
 
 ```bash
@@ -229,7 +229,7 @@ Use this path when release notes, startup logs, or `docs/CONFIG.md` indicate a h
 # 1. Confirm current database size and baseline counts.
 docker compose exec cortex cortex db status --json
 
-# 2. Take a WAL-safe backup (no sqlite3 in the image — use the built-in command).
+# 2. Take a WAL-safe backup with the built-in command.
 docker compose exec cortex cortex db backup --output /data/syslog-pre-heavy-migration.db
 
 # 3. Build or pull the new version, then start it.
@@ -345,3 +345,5 @@ or dead-drive event otherwise takes the backups with it. A simple pattern is
 an rsync step after the timer fires (e.g. `rsync -a ~/.cortex/backups/
 backup-host:/backups/cortex/`), or
 point `BACKUP_DIR` at a mount that is itself replicated.
+
+Explicit `--binary PATH` on agent deployment or update uploads that artifact and checks it runs on the target before replacing the installed CLI. Without the override, deployment selects a release artifact for the target OS and architecture.

@@ -36,9 +36,7 @@ pub(super) fn verify_remote_server(
     let oauth_only = env
         .get("CORTEX_AUTH_MODE")
         .is_some_and(|value| value == "oauth")
-        && env
-            .get("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
-            .is_none_or(|value| value != "false");
+        && crate::setup::auth_policy::disable_static_token_with_oauth(env)?;
     let script = format!(
         r#"{}
 compose exec -T cortex sh -s <<'__CORTEX_VERIFY__'
@@ -61,7 +59,12 @@ request() {{
   fi
   curl --config "$config" --fail --silent --show-error --connect-timeout 2 --max-time 10 "$@"
 }}
-if test "${{CORTEX_AUTH_MODE:-token}}" = oauth && test "${{CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH:-true}}" != false; then
+case "$(printf %s "${{CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH:-true}}" | tr "[:upper:]" "[:lower:]")" in
+  true|1|yes|y|on) disable_static=true;;
+  false|0|no|n|off) disable_static=false;;
+  *) echo "CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH requires a boolean value" >&2; exit 65;;
+esac
+if test "${{CORTEX_AUTH_MODE:-token}}" = oauth && test "$disable_static" = true; then
   printf 'null\n__CORTEX_REPLY__\nnull\n__CORTEX_REPLY__\n'
 else
   request "${{CORTEX_TOKEN:-}}" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data '{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-03-26","capabilities":{{}},"clientInfo":{{"name":"cortex-deploy","version":"1"}}}}}}' http://127.0.0.1:3100/mcp

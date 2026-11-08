@@ -188,11 +188,7 @@ pub async fn run_start(mut options: StartOptions) -> io::Result<StartReport> {
         &mut values,
     )?;
     let user_home = super::user_home_dir()?;
-    let mcp_token = if oauth
-        && values
-            .get("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
-            .is_none_or(|v| v != "false")
-    {
+    let mcp_token = if oauth && super::auth_policy::disable_static_token_with_oauth(&values)? {
         None
     } else {
         values.get("CORTEX_TOKEN").map(String::as_str)
@@ -438,10 +434,7 @@ pub async fn run_start(mut options: StartOptions) -> io::Result<StartReport> {
         }
     }
     let installed = load_env(&home.join(".env"))?;
-    let static_disabled = oauth
-        && installed
-            .get("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
-            .is_none_or(|v| v != "false");
+    let static_disabled = oauth && super::auth_policy::disable_static_token_with_oauth(&installed)?;
     if !super::phases_have_errors(&phases) {
         super::client_config::configure_clients(
             &user_home,
