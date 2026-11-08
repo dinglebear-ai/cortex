@@ -77,6 +77,29 @@ fn malformed_server_only_compose_does_not_claim_a_collector_installation() {
     assert!(managed_compose_exists(home.path()).is_err());
 }
 
+#[test]
+fn compose_inspection_keeps_merge_keys_literal_and_parse_errors_secret_safe() {
+    let home = tempfile::tempdir().unwrap();
+    let legacy = home.path().join("compose/docker-compose.yml");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(
+        &legacy,
+        "collector: &collector\n  cortex-heartbeat-agent:\n    image: fixture\nservices:\n  <<: *collector\n",
+    )
+    .unwrap();
+    // A merge key was not expanded by the previous Value parser either.
+    assert!(!managed_compose_exists(home.path()).unwrap());
+    std::fs::write(
+        &legacy,
+        "services:\n  cortex-heartbeat-agent:\n    environment: [PRIVATE_TOKEN=fixture-secret",
+    )
+    .unwrap();
+    let error = managed_compose_exists(home.path()).unwrap_err().to_string();
+    assert!(error.contains("cannot inspect managed Compose configuration"));
+    assert!(!error.contains("fixture-secret"));
+    assert!(!error.contains("PRIVATE_TOKEN"));
+}
+
 #[cfg(unix)]
 fn shell(script: &str) -> Command {
     let mut command = Command::new("/bin/sh");

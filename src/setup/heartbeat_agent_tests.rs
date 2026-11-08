@@ -705,13 +705,20 @@ fn container_agent_mounts_selected_collection_sources_and_keeps_spool_writable()
         &dir.path().join(".cortex/host-id"),
     )
     .unwrap();
-    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).unwrap();
+    let yaml: serde_json::Value = serde_saphyr::from_str_with_options(
+        &raw,
+        serde_saphyr::options! {
+            with_snippet: false,
+            merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+        },
+    )
+    .unwrap();
     let service = &yaml["services"]["cortex-heartbeat-agent"];
     assert_eq!(
         service["environment"]["HOME"].as_str(),
         Some(dir.path().to_str().unwrap())
     );
-    let mounts = service["volumes"].as_sequence().unwrap();
+    let mounts = service["volumes"].as_array().unwrap();
     assert!(
         mounts
             .iter()

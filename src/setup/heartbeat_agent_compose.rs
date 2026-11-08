@@ -14,8 +14,14 @@ pub(super) fn compose_dir(home: &Path) -> PathBuf {
     }
     let legacy = home.join("compose");
     if let Ok(raw) = std::fs::read_to_string(legacy.join("docker-compose.yml"))
-        && let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&raw)
-        && let Some(services) = doc["services"].as_mapping()
+        && let Ok(doc) = serde_saphyr::from_str_with_options::<serde_json::Value>(
+            &raw,
+            serde_saphyr::options! {
+                with_snippet: false,
+                merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+            },
+        )
+        && let Some(services) = doc["services"].as_object()
         && services.len() == 1
         && services.contains_key("cortex-heartbeat-agent")
     {
@@ -28,7 +34,13 @@ pub(super) fn custom_journal_image(compose_dir: &Path) -> bool {
     let Ok(raw) = std::fs::read_to_string(compose_dir.join("docker-compose.override.yml")) else {
         return false;
     };
-    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&raw) else {
+    let Ok(doc) = serde_saphyr::from_str_with_options::<serde_json::Value>(
+        &raw,
+        serde_saphyr::options! {
+            with_snippet: false,
+            merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+        },
+    ) else {
         return false;
     };
     let service = &doc["services"]["cortex-heartbeat-agent"];

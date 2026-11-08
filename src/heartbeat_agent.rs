@@ -20,6 +20,11 @@ use tokio::time::timeout;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native;
 
+mod identity;
+pub use identity::load_or_create_host_id;
+#[cfg(test)]
+use identity::{hex_bytes, validate_host_id};
+
 pub const DEFAULT_INTERVAL_SECS: u64 = 30;
 pub const DEFAULT_PROBE_DEADLINE_MS: u64 = 2_000;
 pub const DEFAULT_COLLECTION_DEADLINE_MS: u64 = 5_000;
@@ -1854,62 +1859,6 @@ fn heartbeat_url(target: &str) -> Result<String> {
         return Ok(format!("{trimmed}/v1/heartbeats"));
     }
     bail!("heartbeat target must start with http:// or https://");
-}
-
-pub fn load_or_create_host_id(path: &Path) -> Result<String> {
-    match std::fs::read_to_string(path) {
-        Ok(existing) => {
-            let host_id = existing.trim();
-            validate_host_id(host_id)?;
-            Ok(host_id.to_string())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let host_id = generate_host_id()?;
-            write_private(path, &format!("{host_id}\n"))?;
-            Ok(host_id)
-        }
-        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
-    }
-}
-
-fn validate_host_id(host_id: &str) -> Result<()> {
-    if host_id.len() < 16
-        || !host_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        bail!("invalid heartbeat host_id in config");
-    }
-    Ok(())
-}
-
-fn generate_host_id() -> Result<String> {
-    let mut bytes = [0u8; 16];
-    random_fill(&mut bytes).context("generate heartbeat host id")?;
-    Ok(format!("syslog_{}", hex_bytes(&bytes)))
-}
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-fn write_private(path: &Path, content: &str) -> Result<()> {
-    std::fs::write(path, content)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
 }
 
 fn bounded_probe_error(name: &str, error: &anyhow::Error) -> String {

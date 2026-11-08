@@ -35,13 +35,19 @@ fn managed_compose_exists(home: &Path) -> io::Result<bool> {
     let legacy = home.join("compose/docker-compose.yml");
     match std::fs::read_to_string(legacy) {
         Ok(raw) => {
-            let doc: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&raw) {
+            let doc: serde_json::Value = match serde_saphyr::from_str_with_options(
+                &raw,
+                serde_saphyr::options! {
+                    with_snippet: false,
+                    merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+                },
+            ) {
                 Ok(doc) => doc,
                 Err(_) if !raw.contains("cortex-heartbeat-agent") => return Ok(false),
                 Err(_) => return Err(inspection_error("managed Compose configuration")),
             };
             Ok(doc["services"]
-                .as_mapping()
+                .as_object()
                 .is_some_and(|services| services.contains_key("cortex-heartbeat-agent")))
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
