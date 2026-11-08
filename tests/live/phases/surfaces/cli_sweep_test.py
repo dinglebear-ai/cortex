@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import unittest
 from unittest.mock import patch
@@ -61,6 +62,88 @@ class SweepSetupTests(unittest.TestCase):
         self.assertTrue(result["timeout"])
         self.assertIn("phase starteddiagnostic", result["terminal"])
         self.assertIn("setup repair exceeded the 20s", result["terminal"])
+
+    def test_backup_timeout_stops_separate_process_group_before_return(self):
+        cli = self.home / "synthetic-cortex"
+        cli.write_text("""#!/usr/bin/python3
+import json, os, pathlib, signal, subprocess, sys, time
+root = pathlib.Path(os.environ['HOME'])
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], preexec_fn=os.setpgrp)
+def finish(_signal, _frame):
+    child.wait(timeout=3)
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, finish)
+identities = [{'pid': pid, 'sid': os.getsid(pid), 'group': os.getpgid(pid),
+               'started': subprocess.check_output(['ps', '-p', str(pid), '-o', 'lstart='], text=True).strip()}
+              for pid in (os.getpid(), child.pid)]
+(root / 'owned-pids').write_text(json.dumps(identities))
+print('before timeout', flush=True)
+time.sleep(60)
+""")
+        cli.chmod(0o700)
+        original_popen = subprocess.Popen
+        created = []
+        def ready_process(argv, **kwargs):
+            process = original_popen(argv, **kwargs)
+            if argv[0] != str(cli):
+                return process
+            created.append(process)
+            deadline = time.monotonic() + 5
+            ready = False
+            while time.monotonic() < deadline:
+                try:
+                    ready = len(json.loads((self.home / "owned-pids").read_text())) == 2
+                except (OSError, ValueError):
+                    pass
+                if ready:
+                    break
+                if process.poll() is not None:
+                    self.fail("synthetic CLI exited before its readiness receipt")
+                time.sleep(0.01)
+            self.assertTrue(ready, "synthetic child readiness exceeded 5s")
+            return process
+        self.addCleanup(self.stop_synthetic_processes, created)
+        with patch.object(backup.subprocess, "Popen", side_effect=ready_process), \
+                patch.object(backup, "bounded_timeout", return_value=0.2):
+            with self.assertRaisesRegex(RuntimeError, "timed out.*recovery state retained"):
+                backup.run(str(cli), ["create"], {"HOME": str(self.home), "PATH": "/usr/bin:/bin"})
+        identities = json.loads((self.home / "owned-pids").read_text())
+        self.assertEqual(identities[0]["sid"], identities[1]["sid"])
+        self.assertNotEqual(identities[0]["group"], identities[1]["group"])
+        for identity in identities:
+            with self.assertRaises(ProcessLookupError):
+                os.kill(identity["pid"], 0)
+        self.assertIsNotNone(created[0].returncode)
+
+    def stop_synthetic_processes(self, created):
+        receipt = self.home / "owned-pids"
+        if receipt.exists():
+            for identity in json.loads(receipt.read_text()):
+                pid = identity["pid"]
+                try:
+                    if os.getsid(pid) != identity["sid"]:
+                        continue
+                    started = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
+                                             capture_output=True, timeout=2, text=True).stdout.strip()
+                    if started == identity["started"]:
+                        os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+        for process in created:
+            if process.poll() is None:
+                # A missing receipt still leaves this new Popen session owned.
+                backup.stop_session(process)
+            process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
+    def test_backup_subprocess_preserves_normal_output(self):
+        cli = self.home / "synthetic-cortex"
+        cli.write_text("#!/bin/sh\nprintf 'verified recovery snapshot: /private/recovery-saved-1 (restore)\\n'\n")
+        cli.chmod(0o700)
+        observation = backup.run(str(cli), ["create"], {"PATH": "/usr/bin:/bin"})
+        self.assertEqual(observation["exit"], 0)
+        self.assertEqual(backup.recovery_stamp(observation["terminal"]), "saved-1")
 
     def test_backup_arguments_match_normal_entrypoint(self):
         self.assertEqual(backup.backup_args("setup backup"), ["create"])
@@ -121,6 +204,49 @@ class SweepSetupTests(unittest.TestCase):
         self.assertEqual(service["environment"]["CORTEX_PORT"], "3100")
         self.assertEqual(service["env_file"], [str(home / ".env")])
         self.assertNotIn("fixture-rest-token", json.dumps(config))
+
+    def test_backup_topology_failure_stops_target_and_retains_recovery_files(self):
+        tools = self.home / "tools"
+        tools.mkdir()
+        project_root = self.home / "fixture-project"
+        runner = project_root / "tests/live/phases/surfaces/backup_sweep.py"
+        runner.parent.mkdir(parents=True)
+        runner.write_text("import os, pathlib\nhome=pathlib.Path(os.environ['LIVE_BACKUP_HOME'])\n(home/'backups'/'preserve').write_text('recovery evidence')\nraise SystemExit(124)\n")
+        docker = tools / "docker"
+        docker.write_text("""#!/bin/sh
+case "$1:$*" in
+  info:*|ps:*) exit 0 ;;
+  inspect:*project.config_files*) printf '%s\n' "$LIVE_RUN_ROOT/backup-home/.cortex/compose/docker-compose.yml" ;;
+  inspect:*compose.project*) printf '%s\n' owned-live-surface-backup ;;
+  inspect:*cortex.live.run_id*) printf '%s\n' owned-run ;;
+  compose:*'ps -q cortex'*) printf '%s\n' owned-container ;;
+  compose:*'port cortex 3100'*) printf '%s\n' 127.0.0.1:32123 ;;
+  compose:*'stop -t 10 cortex'*) printf '%s\n' stop >> "$LIVE_RUN_ROOT/operations" ;;
+  compose:*down*) printf '%s\n' down >> "$LIVE_RUN_ROOT/operations" ;;
+  compose:*) exit 0 ;;
+  exec:*) printf '%s\n' DELETE >> "$LIVE_RUN_ROOT/operations" ;;
+  *) exit 64 ;;
+esac
+""")
+        docker.chmod(0o700)
+        os.environ.update(PATH=f"{tools}:/usr/bin:/bin", LIVE_PROJECT_ROOT=str(project_root),
+                          LIVE_RUN_ROOT=str(self.home), LIVE_COMPOSE_PROJECT="owned-live",
+                          LIVE_RUN_ID="owned-run", LIVE_SURFACE_CONTRACT="/unused/contract",
+                          LIVE_CURSOR_SIGNING_KEY="fixture-key", LIVE_SERVER_INSTANCE_ID="fixture-server",
+                          LIVE_CLI_FIXTURE_BIN=str(ROOT / "tests/live/fixtures/surfaces/bin"))
+        script = ('set -eu; source "$1"; surface_cli_resource_register() { :; }; '
+                  'surface_cli_resource_created() { :; }; '
+                  'surface_cli_resource_verified_removed() { echo verified >> "$LIVE_RUN_ROOT/operations"; }; '
+                  'live_timeout_process_tree() { shift; "$@"; }; '
+                  'surface_backup_topology_run /unused/cortex cortex:fixture')
+        result = subprocess.run(["/bin/bash", "-c", script, "_", str(ROOT / "tests/live/phases/surfaces/backup-topology.sh")],
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        home = self.home / "backup-home/.cortex"
+        self.assertEqual((home / "backups/preserve").read_text(), "recovery evidence")
+        self.assertIn("fixture-rest-token", (home / ".env").read_text())
+        self.assertEqual((self.home / "operations").read_text().splitlines(), ["stop", "down", "verified"])
+        self.assertIn(b"retained private recovery state", result.stderr)
 
     def test_backup_crontab_fixture_preserves_install_check_remove_state(self):
         fixture = ROOT / "tests/live/fixtures/surfaces/bin/crontab"

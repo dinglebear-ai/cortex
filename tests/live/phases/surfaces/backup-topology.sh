@@ -55,6 +55,16 @@ PY
   [[ -n "$container" ]]
   [[ "$(live_timeout_process_tree 10 docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$container")" == "$project" ]]
   [[ "$(live_timeout_process_tree 10 docker inspect -f '{{ index .Config.Labels "cortex.live.run_id" }}' "$container")" == "$LIVE_RUN_ID" ]]
+  if ((status != 0)); then
+    # A timed-out Docker client may leave its daemon-side exec running. Stop
+    # the exact owned target before teardown and preserve every recovery bind.
+    live_timeout_process_tree 30 docker compose -f "$compose" -p "$project" stop -t 10 cortex
+    live_timeout_process_tree 60 docker compose -f "$compose" -p "$project" down -v --remove-orphans
+    [[ -z "$(live_timeout_process_tree 10 docker ps -aq --filter "label=com.docker.compose.project=$project")" ]]
+    surface_cli_resource_verified_removed "$project"
+    printf 'live-e2e: managed backup sweep failed; stopped target and retained private recovery state at %s\n' "$home" >&2
+    return "$status"
+  fi
   # These task-created bundles contain copies of the disposable credentials.
   # Delete them inside the owned container to preserve normal root/0700 backup
   # permissions, then leave the immutable Compose file available to the ledger.

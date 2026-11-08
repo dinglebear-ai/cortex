@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -73,20 +74,82 @@ def verify_bundle(stamp, protect=False):
         container_command(["touch", f"{bundle}/PROTECTED"])
 
 
-def run(binary, tail, env):
+def session_members(session_id):
+    # A lifecycle shell creates its own process group while retaining this SID.
+    # Exclude zombies, which cannot execute or mutate recovery state.
+    observed = subprocess.run(["ps", "-e", "-o", "pid=,stat="], capture_output=True,
+                              check=True, timeout=2, text=True, env={"PATH": "/usr/bin:/bin"})
+    if len(observed.stdout) > 1048576:
+        raise RuntimeError("owned-session process inventory exceeded its output budget")
+    members = []
+    for line in observed.stdout.splitlines():
+        pid_text, state = line.split(maxsplit=1)
+        if state.startswith("Z"):
+            continue
+        pid = int(pid_text)
+        try:
+            if os.getsid(pid) == session_id:
+                members.append(pid)
+        except ProcessLookupError:
+            pass
+    return members
+
+
+def stop_session(process):
+    # Signal only the newly-created CLI session, across all of its groups.
+    # Check SID again immediately before each signal to reject stale PID data.
     try:
-        process = subprocess.run([binary, "setup", "backup", *tail], env=env,
-                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=bounded_timeout(120))
-        output = (process.stdout + process.stderr)[:65536]
-        return {"exit": process.returncode, "bytes": len(output),
-                "sha256": hashlib.sha256(output).hexdigest(),
-                "mentions_usage": b"Usage" in output,
-                "terminal": output.decode("utf-8", "replace")[-8192:]}
-    except subprocess.TimeoutExpired as error:
-        output = ((error.stdout or b"") + (error.stderr or b""))[:65536]
-        return {"exit": 124, "timeout": True, "bytes": len(output),
-                "sha256": hashlib.sha256(output).hexdigest(), "mentions_usage": False,
-                "terminal": output.decode("utf-8", "replace")[-8192:]}
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            deadline = time.monotonic() + 2
+            while True:
+                members = session_members(process.pid)
+                if not members:
+                    return
+                for pid in sorted(members, key=lambda pid: pid == process.pid):
+                    try:
+                        if os.getsid(pid) == process.pid:
+                            os.kill(pid, signum)
+                    except ProcessLookupError:
+                        pass
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+        if session_members(process.pid):
+            raise RuntimeError("owned backup CLI session cancellation is ambiguous; recovery state retained")
+    finally:
+        # Only this direct child belongs to Popen and can be reaped here.
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+
+
+def run(binary, tail, env):
+    timeout = bounded_timeout(120)
+    process = subprocess.Popen([binary, "setup", "backup", *tail], env=env,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        if session_members(process.pid):
+            raise RuntimeError("backup CLI exited with live session descendants; recovery state retained")
+    except BaseException as error:
+        try:
+            stop_session(process)
+        except Exception as cancellation_error:
+            raise RuntimeError("owned backup CLI cancellation is ambiguous; recovery state retained") from cancellation_error
+        if isinstance(error, subprocess.TimeoutExpired):
+            output = ((error.stdout or b"") + (error.stderr or b""))[:65536]
+            detail = output.decode("utf-8", "replace")[-1024:]
+            raise RuntimeError(f"backup CLI timed out; owned session stopped; recovery state retained; {detail}") from error
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    output = (stdout + stderr)[:65536]
+    return {"exit": process.returncode, "bytes": len(output),
+            "sha256": hashlib.sha256(output).hexdigest(),
+            "mentions_usage": b"Usage" in output,
+            "terminal": output.decode("utf-8", "replace")[-8192:]}
 
 
 def main():
