@@ -34,6 +34,7 @@ const topology = loadSnippet("cortex-topology", async (id, params) => {
     return { hosts: [{ hostname: "macpoo", last_seen: "2026-09-27T00:00:00Z", log_count: 12 }] };
   }
   if (params.action === "apps") {
+    assert.equal(params.host, params.host.trim(), "app lookup uses the normalized host");
     return { apps: [{ app_name: "app", log_count: 3, last_seen: "2026-09-27T00:00:00Z" }], total: 1 };
   }
   throw Error("unexpected action");
@@ -48,6 +49,8 @@ assert.deepEqual(knownHost.apps.map((app) => app.name), ["app"]);
 assert.deepEqual(calls, [{ action: "hosts" }, { action: "apps", host: "macpoo", since: "1h", limit: 20 }]);
 assert.match(knownHost.coverage, /neither running-service status nor graph-backed dependencies/);
 assert.equal((await topology({ host: "missing" })).ok, false);
+assert.equal((await topology({ host: " macpoo " })).ok, true);
+assert.equal((await topology({ host: "MACPOO" })).ok, false, "host lookup matches the exact SQL hostname filter");
 
 let searchParams;
 const search = loadSnippet("cortex-searching-sessions", async (id, params) => {
