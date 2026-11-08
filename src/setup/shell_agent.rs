@@ -5,8 +5,7 @@ use std::time::Instant;
 use super::firstrun::ensure_private_dir;
 use super::{
     PhaseTimer, SetupPhase, SetupReport, SetupStatus, ShellAgentAction, check_file_phase,
-    host_local_report_input, setup_path_value, setup_report, write_executable_file,
-    write_private_file,
+    host_local_report_input, setup_report, write_executable_file, write_private_file,
 };
 
 pub async fn run_shell_agent_setup(action: ShellAgentAction) -> io::Result<SetupReport> {
@@ -16,8 +15,11 @@ pub async fn run_shell_agent_setup(action: ShellAgentAction) -> io::Result<Setup
     let compose_dir = home.join("compose");
     let data_dir = home.join("data");
     let user_home = super::user_home_dir()?;
-    let state_dir = user_home.join(".local/state/cortex");
-    let spool_path = state_dir.join("agent-command.jsonl");
+    let spool_path = resolved_agent_command_spool_path()?;
+    let state_dir = spool_path
+        .parent()
+        .ok_or_else(|| io::Error::other("agent command spool parent missing"))?
+        .to_path_buf();
     let wrapper_path = user_home.join(".local/bin/cortex-agent-command-wrapper");
     let mut phases = Vec::new();
 
@@ -65,6 +67,39 @@ pub async fn run_shell_agent_setup(action: ShellAgentAction) -> io::Result<Setup
         ),
         phases,
     ))
+}
+
+pub fn resolved_agent_command_spool_path() -> io::Result<std::path::PathBuf> {
+    let configured = crate::config::config_env_var("CORTEX_AGENT_COMMAND_SPOOL");
+    let path = if let Some(value) = configured {
+        std::path::PathBuf::from(value)
+    } else {
+        let env = super::cortex_home_dir()?.join("heartbeat-agent.env");
+        let values = if env.exists() {
+            super::heartbeat_agent_env::load_private_agent_env(&env)?
+        } else {
+            Default::default()
+        };
+        values
+            .get("CORTEX_AGENT_COMMAND_SPOOL")
+            .map(std::path::PathBuf::from)
+            .unwrap_or(super::default_agent_command_spool_path()?)
+    };
+    if path
+        .to_str()
+        .is_none_or(|value| value.chars().any(char::is_control))
+        || !path.is_absolute()
+        || path.parent().is_none_or(|p| p == Path::new("/"))
+        || path
+            .components()
+            .any(|p| matches!(p, std::path::Component::ParentDir))
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "agent command spool requires an absolute path inside a dedicated directory",
+        ));
+    }
+    Ok(path)
 }
 
 fn install_agent_command_files(
@@ -254,8 +289,19 @@ fn agent_command_env_phase(wrapper_path: &Path, user_home: &Path) -> SetupPhase 
 }
 
 fn agent_command_wrapper_script(cortex_bin: &Path, spool_path: &Path) -> String {
-    let cortex_bin = setup_path_value(cortex_bin).expect("validated cortex binary path");
-    let spool_path = setup_path_value(spool_path).expect("validated agent command spool path");
+    let quote = |path: &Path| {
+        let value = path.to_string_lossy();
+        if value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_-./".contains(c))
+        {
+            value.into_owned()
+        } else {
+            format!("'{}'", value.replace('\'', "'\"'\"'"))
+        }
+    };
+    let cortex_bin = quote(cortex_bin);
+    let spool_path = quote(spool_path);
     format!(
         r#"#!/usr/bin/env sh
 # Best-effort agent-command logging. The probe confirms `ingest shell agent

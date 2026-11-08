@@ -18,14 +18,13 @@ expected={version}
 lock="$env_path.deploy-lock"
 previous="$container.previous-$$"
 backup="$env_path.rollback-$$"
-had_env=0
 had_container=0
 was_running=false
 renamed=0
 replaced=0
 committed=0
 if ! mkdir "$lock"; then
-  rm -f "$staged"
+  rm -f "$staged" "$staged.agent" "$staged.docker"
   echo 'agent deployment already in progress; inspect retained deployment lock' >&2
   exit 1
 fi
@@ -43,11 +42,13 @@ finish() {{
       else
         recovery_failed=1
       fi
-      if [ "$had_env" = 1 ]; then
-        cp -p "$backup" "$env_path" || recovery_failed=1
-      else
-        rm -f "$env_path" || recovery_failed=1
-      fi
+      for suffix in '' .agent .docker; do
+        if [ -f "$backup$suffix" ]; then
+          cp -p "$backup$suffix" "$env_path$suffix" || recovery_failed=1
+        else
+          rm -f "$env_path$suffix" || recovery_failed=1
+        fi
+      done
     fi
     if [ "$renamed" = 1 ]; then
       if saved=$(timeout 15 docker container ls -a --filter "name=^/$previous$" --format '{{{{.Names}}}}'); then
@@ -72,16 +73,17 @@ finish() {{
       timeout 15 docker rm -f "$previous" >/dev/null || echo "retained old container $previous" >&2
     fi
   fi
-  rm -f "$staged" "$backup"
+  rm -f "$staged" "$staged.agent" "$staged.docker" "$backup" "$backup.agent" "$backup.docker"
   rmdir "$lock"
   exit "$status"
 }}
 trap finish EXIT
 trap 'exit 1' HUP INT TERM
-if [ -f "$env_path" ]; then
-  cp -p "$env_path" "$backup"
-  had_env=1
-fi
+for suffix in '' .agent .docker; do
+  if [ -f "$env_path$suffix" ]; then
+    cp -p "$env_path$suffix" "$backup$suffix"
+  fi
+done
 existing=$(timeout 15 docker container ls -a --filter "name=^/$container$" --format '{{{{.Names}}}}')
 if [ "$existing" = "$container" ]; then
   had_container=1
@@ -92,7 +94,9 @@ if [ "$existing" = "$container" ]; then
 fi
 # Mark the live environment as changed before attempting its replacement.
 replaced=1
-mv "$staged" "$env_path"
+for suffix in '' .agent .docker; do
+  mv "$staged$suffix" "$env_path$suffix"
+done
 timeout 15 {run}
 # Explicit process health: correct binary and sustained Running state.
 # This is not a delivery receipt from the authoritative server.

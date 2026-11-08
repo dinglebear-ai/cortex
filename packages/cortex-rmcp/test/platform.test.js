@@ -19,3 +19,6 @@ test("allows release tag and repo overrides", () => {
   assert.equal(releaseBaseUrl(env), "https://github.com/example/cortex/releases/download");
   assert.equal(downloadUrl(targetFor("linux", "x64"), env), "https://github.com/example/cortex/releases/download/v9.9.9/cortex-linux-x86_64.tar.gz");
 });
+test("latest release uses the GitHub latest asset endpoint", () => {
+  assert.equal(downloadUrl(targetFor("darwin", "arm64"), { CORTEX_RMCP_VERSION: "latest" }), "https://github.com/dinglebear-ai/cortex/releases/latest/download/cortex-macos-arm64");
+});

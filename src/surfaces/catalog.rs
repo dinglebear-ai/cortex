@@ -76,6 +76,10 @@ pub const CLI_CHILDREN: &[(&str, &[&str])] = &[
     (
         "setup",
         &[
+            "start",
+            "effective",
+            "verify",
+            "backup",
             "check",
             "repair",
             "install",
@@ -91,6 +95,11 @@ pub const CLI_CHILDREN: &[(&str, &[&str])] = &[
             "doctor",
         ],
     ),
+    (
+        "setup backup",
+        &["create", "schedule", "restore", "rollback"],
+    ),
+    ("setup backup schedule", &["install", "check", "remove"]),
     ("setup shell", &["agent", "completions"]),
     ("setup shell agent", &["install", "remove", "check"]),
     ("setup shell completions", &["install", "remove", "check"]),

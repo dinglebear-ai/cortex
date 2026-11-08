@@ -182,7 +182,7 @@ fn prepare_oauth_env_derives_public_url_and_redirects_once() {
         mapped
             .get("CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH")
             .map(String::as_str),
-        Some("false")
+        Some("true")
     );
 }
 

@@ -5,19 +5,21 @@ description: Use when installing or repairing Cortex; provisioning its server, c
 
 # Install Cortex
 
-Configure one server or a client-only connection; let Cortex own setup.
+Configure a server, client-only connection, or host agent; let Cortex own setup.
 
 ## Rules
 
 - Inspect role, Cortex/data, ports, Docker, disk/retention, sender networks, clients, and public URL.
-- Server asks syslog bind/CIDRs, HTTP bind, separate MCP/REST credentials, OAuth, storage, LLM, and persistence. Syslog has no token auth. Client-only hosts start no receiver/database.
+- Server asks syslog bind/CIDRs, HTTP bind, separate MCP/REST credentials, OAuth, storage, LLM, and persistence. Syslog has no token auth. Client-only and agent hosts start no server receiver/database.
 - OAuth requires public URL/Google credentials/admin email. Ask explicitly before retaining `CORTEX_TOKEN` with `CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH=false`.
 - Existing proxy/Tailscale/Compose edits require current official docs, verified backup/checksum, exact changes, and explicit approval.
 
 ## Workflow
 
-1. Follow [setup](references/setup.md): acquire/run canonical `install.sh` and let `cortex setup repair` own config.
+1. Follow [setup](references/setup.md): acquire/run canonical `install.sh` and let `cortex setup start` own role selection, config, services, and verification.
 2. Server: configure tokens/storage; keep HTTP loopback unless needed; restrict syslog with `CORTEX_ALLOWED_SOURCE_CIDRS` and network controls.
-3. Start managed Compose and prove `restart: unless-stopped` persistence. Remote HTTPS keeps Cortex auth behind the proxy.
+3. Let server setup start managed Compose; prove `restart: unless-stopped` persistence. Remote HTTPS keeps Cortex auth behind the proxy.
 4. Optional `CORTEX_LLM=codex[/MODEL]` uses Codex app-server; verify Codex auth first.
-5. Configure selected agent MCP clients, reload them, and prove read-only `status` from a fresh session. Run setup check/doctor/health and report paths/URLs/service state/evidence without secrets.
+5. Select capabilities explicitly; report selected, declined, unavailable, and unconfigured capabilities. Detecting private transcripts, shell history, command logs, or file tails is not consent to capture them.
+6. Configure selected MCP clients, reload them, and prove read-only `status` from a fresh session. Run `cortex setup effective --json` and `cortex setup verify --json`; report service state and each selected source delivery separately, without secrets.
+7. Use saved deployment settings for updates, respect version pins, and consult the deployment runbook for verified backups and schema-compatible recovery.

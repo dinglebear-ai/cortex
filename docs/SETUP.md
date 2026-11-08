@@ -1,12 +1,109 @@
 ---
 title: "Setup Guide -- cortex"
 created: 2026-04-04
-updated: 2026-09-27
+updated: 2026-10-01
 ---
 
 # Setup Guide -- cortex
 
 Step-by-step instructions to get cortex running locally, in Docker, or as a Claude Code plugin.
+
+## Managed installation (recommended)
+
+You do not need Rust, a repository checkout, `just`, or hand-generated tokens to
+install a release. Run the bootstrap once; it verifies the native release and
+hands off to `cortex setup start`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.sh | sh
+```
+
+Windows x64:
+
+```powershell
+irm https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.ps1 | iex
+```
+
+Supported releases: Linux x64/ARM64, macOS ARM64, and Windows x64. The installer
+adds the CLI directory to your shell configuration or Windows user PATH. Set
+`CORTEX_INSTALL_UPDATE_PATH=0` to manage PATH yourself, or
+`CORTEX_INSTALL_SKIP_SETUP=1` to acquire only the executable.
+
+First-run setup asks for a role: **server**, **client**, or **agent**. Later runs
+reuse the saved role. A first noninteractive run requires `--role`; provide
+credentials through files instead of command arguments:
+
+```sh
+cortex setup start --role server --clients codex,claude,gemini
+cortex setup start --role client --server https://cortex.example.com \
+  --token-file /private/mcp-token --api-token-file /private/rest-token \
+  --clients codex,claude
+cortex setup start --role agent --server https://cortex.example.com \
+  --token-file /private/ingest-token --capabilities docker,transcripts
+```
+
+For an agent that also configures MCP clients, pass
+`--secret-file CORTEX_TOKEN=/private/mcp-token` alongside its ingestion token.
+Use `--api-token-file` for CLI REST access. Setup reports missing credentials
+and verifies each supplied credential before writing client configuration.
+
+Server setup prepares managed configuration, distinct MCP/REST tokens, storage,
+Compose assets, deployment settings, and readiness checks. A server needs Docker
+and Compose; client and agent roles do not install a server or database. Agent
+setup uses the platform's supported service lifecycle and reports prerequisites
+that need attention. Docker-backed agents use the separate managed directory
+`~/.cortex/heartbeat-agent-compose`; agent configuration/removal is scoped to the
+agent service and does not recreate or remove the server Compose stack. Legacy
+Compose directories are reused only when their YAML is exactly the agent-only
+service layout. For macOS GUI-login requirements, see the
+[heartbeat agent contract](#10-macos-heartbeat-agent).
+
+The setup plan reports each collection capability as selected, declined,
+unavailable, or needing configuration. Transcripts, shell history, command
+capture, and file tails require an explicit selection; detected files and sockets
+are suggestions, never permission to collect. Selecting a capability that cannot
+run produces an actionable failure instead of silently dropping it. Available
+selectors are `docker`, `transcripts`, `journald`, `shell_history`,
+`agent_commands`, `file_tails`, and `syslog_file`; platform support and file paths still apply.
+
+Advanced settings remain available. Supply ordinary configuration with repeated
+`--set KEY=VALUE` and sensitive values with `--secret-file KEY=PATH`. Setup
+persists the recognized configuration without replacing existing secrets unless
+you explicitly provide replacements. For example:
+
+```sh
+cortex setup start --role server --set CORTEX_RETENTION_DAYS=90 \
+  --set CORTEX_ALLOWED_SOURCE_CIDRS=192.168.1.0/24 --dry-run --json
+cortex setup effective --json
+cortex setup verify --json
+```
+
+`--dry-run` previews setup without installing services. Effective configuration
+redacts secrets and reports where values came from. Verification checks MCP
+initialization and read-only `status`, plus REST when a REST credential is
+configured. A successful `/health` request alone does not establish authenticated
+access or delivered telemetry. Reopen configured MCP clients and confirm `status`
+from a fresh client session; verify each selected source's delivery separately.
+
+Existing reverse proxies, firewall rules, DNS, OAuth providers, and remote syslog
+senders remain external boundaries. Choose exposure and credentials deliberately;
+setup does not grant authority to change unrelated services. OAuth requires the
+Google client credentials and admin email described in [OAuth](OAUTH.md). Static
+MCP bearer access with OAuth is an explicit dual-mode choice. Interactive first
+server setup asks for authentication mode and exposure, then the required OAuth
+inputs when OAuth is selected; supply credentials through private secret files.
+It also offers a six-hour backup schedule. Automate that decision with
+`--backup-schedule` or `--no-backup-schedule`; the selected policy is saved.
+Scheduling requires the installed executable and a working user cron service.
+
+Use `cortex update` for installations with saved deployment settings; version
+pins remain authoritative. Backup scheduling, snapshots, restore, rollback, and
+manual deployment procedures are in the [deployment runbook](runbooks/deploy.md).
+
+## Advanced: source development and manual deployment
+
+The following workflows retain direct control for contributors and operators.
+They are alternatives to managed setup, not additional installation steps.
 
 ## Prerequisites
 
@@ -192,14 +289,16 @@ curl -s -X POST http://localhost:3100/mcp \
 See the [MCP Apps query widget](../README.md#mcp-apps-query-widget) section for
 what the widget does and how non-UI hosts are unaffected.
 
-## 8. Install as Claude Code plugin
+## 8. Install the guided agent skill
 
-```bash
-/plugin marketplace add jmagar/claude-homelab
-/plugin install cortex @jmagar-claude-homelab
+```sh
+npx skills add dinglebear-ai/cortex --skill install-cortex
 ```
 
-Configure the plugin with your MCP URL and optional API token when prompted.
+Start a fresh task and invoke `$install-cortex`. It delegates to the same managed
+setup commands above. The `plugins/install-cortex` package owns onboarding; the
+separate `plugins/cortex` package provides investigation skills. Neither installs
+automatic lifecycle hooks.
 
 ## 9. Configure syslog sources
 

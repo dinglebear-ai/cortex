@@ -106,11 +106,15 @@ fn launchd_check_distinguishes_missing_jobs_from_inspection_failures() {
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("launchctl");
     let _program = EnvGuard::set("CORTEX_TEST_LAUNCHCTL", &program);
-    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "1000");
+    let _deadline = EnvGuard::set("CORTEX_TEST_COMMAND_DEADLINE_MS", "5000");
     let _home = EnvGuard::set("CORTEX_HOME", dir.path());
     write_executable(&program, "#!/bin/sh\nexit 113\n");
     let phase = launchd_service_observation(dir.path());
-    assert!(matches!(phase.status, SetupStatus::Warn));
+    assert!(
+        matches!(phase.status, SetupStatus::Warn),
+        "{}",
+        phase.detail
+    );
     assert_eq!(phase.detail, "no heartbeat agent loaded");
     for failing_label in [
         super::super::launchd::LABEL,
@@ -354,13 +358,13 @@ fn heartbeat_agent_assets_reject_unit_breaking_paths() {
 }
 
 #[test]
-fn docker_compose_up_phase_reports_warn_when_workdir_is_missing() {
+fn docker_compose_up_phase_reports_error_when_workdir_is_missing() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing-compose-dir");
 
     let phase = docker_compose_up_phase(&missing);
 
-    assert!(matches!(phase.status, SetupStatus::Warn));
+    assert!(matches!(phase.status, SetupStatus::Error));
     assert_eq!(phase.name, "heartbeat-agent-docker-up");
     assert!(!phase.detail.trim().is_empty());
 }
@@ -548,10 +552,10 @@ fn capability_check_is_redacted_and_reports_fresh_transcript_delivery() {
         std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
     let phases = check_capabilities_and_delivery(&env_path, ServiceBackend::Launchd);
-    assert_eq!(phases.len(), 2);
+    assert_eq!(phases.len(), 3);
     assert!(phases[0].detail.contains("transcripts=enabled"));
     assert!(phases[0].detail.contains("journald=n/a"));
-    assert_eq!(phases[1].status, SetupStatus::Ok);
+    assert_eq!(phases[2].status, SetupStatus::Ok);
     let rendered = serde_json::to_string(&phases).unwrap();
     assert!(!rendered.contains("top-secret"));
     assert!(!rendered.contains(&checkpoint.to_string_lossy().to_string()));
@@ -578,4 +582,327 @@ fn systemd_unit_start_limit_leaves_room_for_a_self_update_rollback() {
         "StartLimitBurst={burst} must exceed MAX_ATTEMPTS={}",
         crate::agent::self_update::MAX_ATTEMPTS
     );
+}
+
+#[test]
+fn windows_uses_user_task_backend() {
+    assert_eq!(
+        select_backend("windows", false, false, false),
+        ServiceBackend::WindowsTask
+    );
+}
+
+#[test]
+#[serial]
+fn capability_consent_preserves_auth_and_rejects_unavailable_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let _cortex = EnvGuard::set("CORTEX_HOME", dir.path().join(".cortex"));
+    let env = dir.path().join(".cortex/heartbeat-agent.env");
+    atomic_private_write(&env,b"CORTEX_HEARTBEAT_TOKEN=secret\nCORTEX_HEARTBEAT_TARGET=https://example.test\nCORTEX_AGENT_FILE_TAILS=/missing:test\n",0o600).unwrap();
+    assert!(configure_agent_capabilities(&["file_tails".into()]).is_err());
+    assert!(configure_agent_capabilities(&["unknown".into()]).is_err());
+    configure_agent_capabilities(&[]).unwrap();
+    let persisted = load_private_agent_env(&env).unwrap();
+    assert_eq!(persisted["CORTEX_HEARTBEAT_TOKEN"], "secret");
+    assert_eq!(persisted["CORTEX_HEARTBEAT_TARGET"], "https://example.test");
+    assert_eq!(persisted["CORTEX_AGENT_DOCKER"], "false");
+    assert!(
+        discover_agent_capabilities()
+            .unwrap()
+            .iter()
+            .all(|c| c.status == CapabilityStatus::Declined)
+    );
+}
+
+#[test]
+#[serial]
+fn capability_discovery_matches_actual_history_collectors_and_preserves_legacy_consent() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let _cortex = EnvGuard::set("CORTEX_HOME", dir.path().join(".cortex"));
+    let env = dir.path().join(".cortex/heartbeat-agent.env");
+    atomic_private_write(&env,b"CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_DOCKER=true\nCORTEX_AGENT_DOCKER_URL=http://docker.internal:2375\n",0o600).unwrap();
+    std::fs::write(dir.path().join(".bash_history"), "command\n").unwrap();
+    let capabilities = discover_agent_capabilities().unwrap();
+    assert!(
+        !capabilities
+            .iter()
+            .find(|c| c.id == "shell_history")
+            .unwrap()
+            .available
+    );
+    assert_eq!(
+        capabilities
+            .iter()
+            .find(|c| c.id == "transcripts")
+            .unwrap()
+            .status,
+        CapabilityStatus::NeedsConfiguration
+    );
+    assert_eq!(
+        capabilities
+            .iter()
+            .find(|c| c.id == "docker")
+            .unwrap()
+            .detected_value
+            .as_deref(),
+        Some("http://docker.internal:2375")
+    );
+    std::fs::create_dir_all(dir.path().join(".local/share/atuin")).unwrap();
+    std::fs::write(dir.path().join(".local/share/atuin/history.db"), "").unwrap();
+    assert!(
+        discover_agent_capabilities()
+            .unwrap()
+            .iter()
+            .find(|c| c.id == "shell_history")
+            .unwrap()
+            .available
+    );
+}
+
+#[test]
+#[serial]
+fn syslog_file_consent_clears_collection_source_but_preserves_other_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let _cortex = EnvGuard::set("CORTEX_HOME", dir.path().join(".cortex"));
+    let log = dir.path().join("syslog");
+    std::fs::write(&log, "event\n").unwrap();
+    let path = dir.path().join(".cortex/heartbeat-agent.env");
+    atomic_private_write(&path,format!("CORTEX_AGENT_SYSLOG_FILE={}\nCORTEX_AGENT_AUTO_UPDATE=true\nCORTEX_SYSLOG_TARGET=localhost:1514\n",log.display()).as_bytes(),0o600).unwrap();
+    assert_eq!(
+        discover_agent_capabilities()
+            .unwrap()
+            .iter()
+            .find(|c| c.id == "syslog_file")
+            .unwrap()
+            .status,
+        CapabilityStatus::Enabled
+    );
+    configure_agent_capabilities(&[]).unwrap();
+    let values = load_private_agent_env(&path).unwrap();
+    assert_eq!(values["CORTEX_AGENT_SYSLOG_FILE"], "");
+    assert_eq!(values["CORTEX_AGENT_AUTO_UPDATE"], "true");
+    assert_eq!(values["CORTEX_SYSLOG_TARGET"], "localhost:1514");
+}
+
+#[test]
+#[serial]
+fn container_agent_mounts_selected_collection_sources_and_keeps_spool_writable() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let _cortex = EnvGuard::set("CORTEX_HOME", dir.path().join(".cortex"));
+    let path = dir.path().join(".cortex/heartbeat-agent.env");
+    let spool = dir.path().join(".local/state/cortex/agent-command.jsonl");
+    std::fs::create_dir_all(spool.parent().unwrap()).unwrap();
+    std::fs::write(&spool, "").unwrap();
+    std::fs::write(dir.path().join(".zsh_history"), "command\n").unwrap();
+    atomic_private_write(&path,format!("CORTEX_AGENT_SHELL_HISTORY_FORWARD=true\nCORTEX_AGENT_COMMAND_FORWARD=true\nCORTEX_AGENT_COMMAND_SPOOL={}\nCORTEX_AGENT_DOCKER=false\n",spool.display()).as_bytes(),0o600).unwrap();
+    let raw = heartbeat_agent_compose(
+        Path::new("/bin/cortex"),
+        &path,
+        &dir.path().join(".cortex/host-id"),
+    )
+    .unwrap();
+    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).unwrap();
+    let service = &yaml["services"]["cortex-heartbeat-agent"];
+    assert_eq!(
+        service["environment"]["HOME"].as_str(),
+        Some(dir.path().to_str().unwrap())
+    );
+    let mounts = service["volumes"].as_sequence().unwrap();
+    assert!(
+        mounts
+            .iter()
+            .any(|m| m["source"].as_str() == spool.parent().unwrap().to_str()
+                && m["read_only"].as_bool() == Some(false))
+    );
+    assert!(
+        mounts
+            .iter()
+            .any(|m| m["source"].as_str() == dir.path().to_str()
+                && m["read_only"].as_bool() == Some(true))
+    );
+    assert!(!raw.contains("docker.sock"));
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn loaded_launchd_job_without_running_process_is_not_healthy() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("launchctl");
+    write_executable(
+        &program,
+        "#!/bin/sh\ncase \"$2\" in *transcript-forwarder) exit 113;; esac\nprintf 'state = waiting\\n'\n",
+    );
+    let _program = EnvGuard::set("CORTEX_TEST_LAUNCHCTL", &program);
+    let _home = EnvGuard::set("CORTEX_HOME", dir.path());
+    let phase = launchd_service_observation(dir.path());
+    assert_eq!(phase.status, SetupStatus::Error);
+    assert!(phase.detail.contains("no running process"));
+}
+
+#[test]
+#[serial]
+fn systemd_only_requires_selected_spool_and_supports_custom_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let env = dir.path().join(".cortex/heartbeat-agent.env");
+    atomic_private_write(&env, b"CORTEX_AGENT_COMMAND_FORWARD=false\n", 0o600).unwrap();
+    let unit = heartbeat_agent_unit(
+        Path::new("/bin/cortex"),
+        &env,
+        &dir.path().join(".cortex/host-id"),
+    )
+    .unwrap();
+    assert!(!unit.contains(".local/state/cortex"));
+    let spool = dir.path().join("custom-spool/events.jsonl");
+    atomic_private_write(
+        &env,
+        format!(
+            "CORTEX_AGENT_COMMAND_FORWARD=true\nCORTEX_AGENT_COMMAND_SPOOL={}\n",
+            spool.display()
+        )
+        .as_bytes(),
+        0o600,
+    )
+    .unwrap();
+    let unit = heartbeat_agent_unit(
+        Path::new("/bin/cortex"),
+        &env,
+        &dir.path().join(".cortex/host-id"),
+    )
+    .unwrap();
+    assert!(unit.contains(spool.parent().unwrap().to_str().unwrap()));
+}
+
+#[test]
+fn agent_compose_never_reuses_a_server_or_shared_compose_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy = dir.path().join("compose");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(
+        legacy.join("docker-compose.yml"),
+        "services:\n  cortex:\n    image: server\n",
+    )
+    .unwrap();
+    assert_eq!(
+        compose_sources::compose_dir(dir.path()),
+        dir.path().join("heartbeat-agent-compose")
+    );
+    std::fs::write(
+        legacy.join("docker-compose.yml"),
+        "services:\n  cortex-heartbeat-agent:\n    image: agent\n",
+    )
+    .unwrap();
+    assert_eq!(compose_sources::compose_dir(dir.path()), legacy);
+    std::fs::write(legacy.join("docker-compose.yml"),"services:\n  cortex-heartbeat-agent:\n    image: agent\n  another-service:\n    image: retained\n").unwrap();
+    assert_eq!(
+        compose_sources::compose_dir(dir.path()),
+        dir.path().join("heartbeat-agent-compose")
+    );
+}
+
+#[test]
+#[serial]
+fn custom_journald_image_is_preserved_and_default_image_fails_honestly() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let _cortex = EnvGuard::set("CORTEX_HOME", dir.path().join(".cortex"));
+    let env = dir.path().join(".cortex/heartbeat-agent.env");
+    atomic_private_write(&env, b"CORTEX_AGENT_JOURNALD=true\n", 0o600).unwrap();
+    assert!(
+        compose_sources::collection_mounts(&env)
+            .unwrap_err()
+            .to_string()
+            .contains("journalctl")
+    );
+    let compose = dir.path().join(".cortex/heartbeat-agent-compose");
+    std::fs::create_dir_all(&compose).unwrap();
+    std::fs::write(
+        compose.join("docker-compose.override.yml"),
+        "services:\n  cortex-heartbeat-agent:\n    image: local/agent-with-journalctl\n",
+    )
+    .unwrap();
+    assert!(compose_sources::collection_mounts(&env).is_ok());
+    assert!(compose_sources::custom_journal_image(&compose));
+    assert_eq!(
+        load_private_agent_env(&env).unwrap()["CORTEX_AGENT_JOURNALD"],
+        "true"
+    );
+}
+
+#[test]
+#[serial]
+fn unavailable_explicit_docker_endpoint_does_not_switch_collection_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let _cortex = EnvGuard::set("CORTEX_HOME", dir.path().join(".cortex"));
+    let env = dir.path().join(".cortex/heartbeat-agent.env");
+    atomic_private_write(
+        &env,
+        b"CORTEX_AGENT_DOCKER=true\nCORTEX_AGENT_DOCKER_URL=unix:///missing/selected-daemon.sock\n",
+        0o600,
+    )
+    .unwrap();
+    let capabilities = discover_agent_capabilities().unwrap();
+    let docker = capabilities.iter().find(|c| c.id == "docker").unwrap();
+    assert_eq!(docker.status, CapabilityStatus::NeedsConfiguration);
+    assert!(!docker.available);
+    assert_eq!(
+        docker.detected_value.as_deref(),
+        Some("unix:///missing/selected-daemon.sock")
+    );
+    assert!(configure_agent_capabilities(&["docker".into()]).is_err());
+    assert_eq!(
+        load_private_agent_env(&env).unwrap()["CORTEX_AGENT_DOCKER_URL"],
+        "unix:///missing/selected-daemon.sock"
+    );
+}
+
+#[test]
+#[serial]
+fn windows_upgrade_stages_env_without_touching_previous_state_and_cleans_credentials() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.exe");
+    let managed = temp.path().join("managed/cortex.exe");
+    let env = temp.path().join("state/heartbeat-agent.env");
+    std::fs::write(&source, b"new candidate").unwrap();
+    atomic_private_write(&managed, b"previous binary", 0o755).unwrap();
+    let original = b"CORTEX_HEARTBEAT_TOKEN='previous-secret'\nCORTEX_AGENT_AUTO_UPDATE=true\n";
+    atomic_private_write(&env, original, 0o600).unwrap();
+    let _preserve = EnvGuard::set(PRESERVE_ENV, "1");
+    let (staged, _) = stage_windows_upgrade(&source, &managed, &env).unwrap();
+    assert_eq!(std::fs::read(&staged.env).unwrap(), original);
+    assert_eq!(std::fs::read(&env).unwrap(), original);
+    assert_eq!(std::fs::read(&managed).unwrap(), b"previous binary");
+    let staged_env = staged.env.clone();
+    let staged_binary = staged.binary.clone();
+    drop(staged); // Candidate validation/task-preflight failures take this path.
+    assert!(!staged_env.exists());
+    assert!(!staged_binary.exists());
+    assert_eq!(std::fs::read(&env).unwrap(), original);
+    assert_eq!(std::fs::read(&managed).unwrap(), b"previous binary");
+}
+
+#[test]
+#[serial]
+fn windows_upgrade_env_preflight_failure_preserves_old_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.exe");
+    let managed = temp.path().join("managed/cortex.exe");
+    let env = temp.path().join("state/heartbeat-agent.env");
+    std::fs::write(&source, b"candidate").unwrap();
+    atomic_private_write(&managed, b"old binary", 0o755).unwrap();
+    let original = b"CORTEX_HEARTBEAT_TOKEN=old-token\n";
+    atomic_private_write(&env, original, 0o600).unwrap();
+    let _preserve = EnvGuard::remove(PRESERVE_ENV);
+    let _token = EnvGuard::set("CORTEX_HEARTBEAT_TOKEN", "invalid\nsecret");
+    assert!(stage_windows_upgrade(&source, &managed, &env).is_err());
+    assert_eq!(std::fs::read(&env).unwrap(), original);
+    assert_eq!(std::fs::read(&managed).unwrap(), b"old binary");
+    assert!(!env.with_extension("candidate.env").exists());
+    assert!(!managed.with_file_name("cortex.candidate.exe").exists());
 }

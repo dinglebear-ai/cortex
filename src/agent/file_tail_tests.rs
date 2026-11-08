@@ -184,6 +184,59 @@ async fn file_tail_invalid_config_fails_before_network_or_checkpoint() {
 }
 
 #[tokio::test]
+async fn file_tail_state_replaces_existing_checkpoint_and_reopens_latest_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path(), "http://cortex.test".into());
+    std::fs::write(&config.source.path, "history\n").unwrap();
+    let mut reader = super::super::tail_reader::TailReader::open_durable(&config.source.path)
+        .await
+        .unwrap();
+    let (store, initial) = Store::open(&config.checkpoint_path).await.unwrap();
+    assert!(initial.is_none());
+    store
+        .save(&State {
+            cursor: reader.cursor().await.unwrap(),
+            pending: None,
+        })
+        .await
+        .unwrap();
+    let initial_bytes = std::fs::read(&config.checkpoint_path).unwrap();
+    std::fs::write(&config.source.path, "history\nnew record\n").unwrap();
+    let record = build_record(&config, &reader.next_line().await.unwrap().unwrap());
+    let pending = State {
+        cursor: reader.cursor().await.unwrap(),
+        pending: Some(record),
+    };
+    store.save(&pending).await.unwrap();
+    assert_ne!(std::fs::read(&config.checkpoint_path).unwrap(), initial_bytes);
+    drop(store);
+    let (store, restored) = Store::open(&config.checkpoint_path).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(restored.unwrap()).unwrap(),
+        serde_json::to_value(&pending).unwrap()
+    );
+    let acknowledged = State {
+        cursor: pending.cursor,
+        pending: None,
+    };
+    store.save(&acknowledged).await.unwrap();
+    drop(store);
+    let (_store, restored) = Store::open(&config.checkpoint_path).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(restored.unwrap()).unwrap(),
+        serde_json::to_value(&acknowledged).unwrap()
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn file_tail_state_is_bounded_locked_and_corruption_is_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.json");

@@ -18,6 +18,20 @@ fn exercise(failure: &str, existing: bool) -> (tempfile::TempDir, std::process::
         std::fs::write(&env, "OLD=preserved\n").unwrap();
     }
     std::fs::write(&staged, "NEW=candidate\n").unwrap();
+    for suffix in [".agent", ".docker"] {
+        std::fs::write(
+            dir.path().join(format!("staged.env{suffix}")),
+            "NEW=companion\n",
+        )
+        .unwrap();
+        if existing {
+            std::fs::write(
+                dir.path().join(format!("agent.env{suffix}")),
+                "OLD=companion\n",
+            )
+            .unwrap();
+        }
+    }
     executable(
         &dir.path().join("timeout"),
         "#!/bin/sh\nshift\nexec \"$@\"\n",
@@ -167,6 +181,8 @@ fn rollback_failure_retains_configuration_backup_and_recovery_lock() {
                     .unwrap()
                     .to_string_lossy()
                     .contains("rollback-")
+                    && !path.to_string_lossy().ends_with(".agent")
+                    && !path.to_string_lossy().ends_with(".docker")
             })
             .unwrap();
         assert_eq!(std::fs::read_to_string(backup).unwrap(), "OLD=preserved\n");
@@ -186,4 +202,22 @@ fn uncertain_rename_failure_reconciles_names_and_restores_original_agent() {
         "true\n"
     );
     assert!(!dir.path().join("agent.env.deploy-lock").exists());
+}
+
+#[test]
+fn companion_environments_follow_transaction_commit_and_rollback() {
+    for (failure, existing) in [("create", true), ("version", false), ("", true)] {
+        let (dir, output) = exercise(failure, existing);
+        assert_eq!(output.status.success(), failure.is_empty());
+        for suffix in [".agent", ".docker"] {
+            let path = dir.path().join(format!("agent.env{suffix}"));
+            if failure.is_empty() {
+                assert_eq!(std::fs::read_to_string(path).unwrap(), "NEW=companion\n");
+            } else if existing {
+                assert_eq!(std::fs::read_to_string(path).unwrap(), "OLD=companion\n");
+            } else {
+                assert!(!path.exists());
+            }
+        }
+    }
 }

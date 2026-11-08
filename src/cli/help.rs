@@ -637,13 +637,41 @@ const NESTED_CATALOG: &[NestedCommandDoc] = &[
         ],
     },
     NestedCommandDoc {
+        path: "setup start",
+        summary: "Choose a role, configure clients and collection, and verify a managed installation",
+        usage: &[
+            "cortex setup start [--role server|client|agent] [--server URL] [--token-file PATH] [--api-token-file PATH] [--clients codex,claude,gemini] [--capabilities LIST] [--set KEY=VALUE] [--secret-file KEY=PATH] [--backup-schedule|--no-backup-schedule] [--dry-run] [--json]",
+        ],
+    },
+    NestedCommandDoc {
+        path: "setup effective",
+        summary: "Show redacted effective setup configuration with provenance",
+        usage: &["cortex setup effective [--json]"],
+    },
+    NestedCommandDoc {
+        path: "setup verify",
+        summary: "Verify readiness, MCP authentication and REST access",
+        usage: &[
+            "cortex setup verify [--server URL] [--token-file PATH] [--api-token-file PATH] [--json]",
+        ],
+    },
+    NestedCommandDoc {
+        path: "setup backup",
+        summary: "Create, schedule or restore verified managed snapshots",
+        usage: &[
+            "cortex setup backup create [--home PATH]",
+            "cortex setup backup schedule install|check|remove [--home PATH]",
+            "cortex setup backup restore|rollback STAMP --yes [--home PATH]",
+        ],
+    },
+    NestedCommandDoc {
         path: "setup check",
-        summary: "Audit plugin setup without changing files",
+        summary: "Audit managed setup without changing files",
         usage: &["cortex setup check [--json]"],
     },
     NestedCommandDoc {
         path: "setup repair",
-        summary: "Repair plugin setup idempotently",
+        summary: "Repair managed setup idempotently",
         usage: &["cortex setup repair [--json]"],
     },
     NestedCommandDoc {

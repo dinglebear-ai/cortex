@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 const PROBE_TIMEOUT_SECS: u64 = 5;
-const REMOTE_BIN_TMP: &str = ".local/bin/cortex.new";
+mod platform;
 
 // ── public types ─────────────────────────────────────────────────────────────
 
@@ -41,6 +41,8 @@ impl HostProbe {
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentDeployConfig {
+    /// Explicit --binary chooses this artifact instead of a platform release.
+    pub binary_override: bool,
     pub target: Option<String>,
     pub token: Option<String>,
     /// Require an effective heartbeat token after flag/persisted-env resolution.
@@ -136,24 +138,17 @@ pub fn probe_hosts(hosts: Vec<String>) -> Vec<HostProbe> {
 }
 
 fn probe_one(host: &str) -> HostProbe {
-    let script = "which cortex >/dev/null 2>&1 && cortex --version 2>/dev/null \
-                  || echo 'cortex:absent'; \
-                  systemctl --user is-active cortex-heartbeat-agent.service 2>/dev/null \
-                  || echo 'inactive'";
-    let out = crate::env::command("ssh")
-        .args([
-            "-o",
-            &format!("ConnectTimeout={PROBE_TIMEOUT_SECS}"),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "LogLevel=ERROR",
-            host,
-            script,
-        ])
-        .output();
+    let script = r#"binary=$(command -v cortex || true); if test -z "$binary" && test -x "$HOME/.local/bin/cortex"; then binary=$HOME/.local/bin/cortex; fi; if test -n "$binary"; then "$binary" --version 2>/dev/null; else echo 'cortex:absent'; fi; if test "$(uname -s)" = Darwin; then state=$(launchctl print gui/$(id -u)/ai.dinglebear.cortex-heartbeat-agent 2>/dev/null || true); case "$state" in *'state = running'*|*'pid ='*) echo active;; *) echo inactive;; esac; elif test -f /etc/unraid-version; then if test "$(docker inspect cortex-heartbeat-agent --format '{{.State.Running}}' 2>/dev/null)" = true; then echo active; else echo inactive; fi; else systemctl --user is-active cortex-heartbeat-agent.service 2>/dev/null || true; fi"#;
+    let out = probe_command(host, script);
+    let out = match out {
+        Ok(out) if out.status.success() => Ok(out),
+        _ => {
+            let command = platform::shell_safe_command(
+                "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $c=Get-Command cortex -ErrorAction SilentlyContinue; if ($c) { & $c --version } else { $p=Join-Path $HOME '.local/bin/cortex.exe'; if (Test-Path $p) { & $p --version } else { Write-Output 'cortex:absent' } }; $t=Get-ScheduledTask -TaskName 'CortexHeartbeatAgent' -ErrorAction SilentlyContinue; if ($t -and $t.State -eq 'Running') { Write-Output active } else { Write-Output inactive }\"",
+            );
+            probe_command(host, command.as_ref())
+        }
+    };
 
     let Ok(out) = out else {
         return HostProbe {
@@ -191,6 +186,25 @@ fn probe_one(host: &str) -> HostProbe {
         cortex_version,
         agent_active,
     }
+}
+
+fn probe_command(host: &str, script: &str) -> io::Result<std::process::Output> {
+    validate_ssh_host(host)?;
+    crate::env::command("ssh")
+        .args([
+            "-o",
+            "ConnectTimeout=3",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "LogLevel=ERROR",
+            "--",
+            host,
+            script,
+        ])
+        .output()
 }
 
 // ── interactive selection ────────────────────────────────────────────────────
@@ -339,24 +353,27 @@ fn run_deploy(
         return Ok("agent version and sustained process health validated; delivery unverified");
     }
 
+    let platform = platform::detect(host)?;
+    if platform == platform::Platform::WindowsX64 {
+        run_deploy_windows(host, local_binary, config)?;
+        return Ok("installed and enabled; delivery unverified");
+    }
     let env_pairs = resolve_linux_agent_env(
         &parse_env_file(&read_optional_remote_file(
             host,
             "$HOME/.cortex/heartbeat-agent.env",
-        )?),
+        )?)?,
         config,
     );
     require_token_if_requested(&env_pairs, config)?;
 
-    ssh_run(host, "mkdir -p ~/.local/bin")?;
-    // scp to a temp path then mv atomically — avoids ETXTBSY if the binary is
-    // currently running as a service on the remote host.
-    scp_file(local_binary, host, REMOTE_BIN_TMP)?;
-    ssh_run(
-        host,
-        "chmod +x ~/.local/bin/cortex.new && mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex",
-    )?;
     let env_body = render_env_file(&env_pairs)?;
+    ssh_run(host, platform::service_preflight(platform))?;
+    if config.binary_override {
+        stage_binary_override(host, local_binary, platform)?;
+    } else {
+        ssh_run(host, &platform::stage_posix(platform))?;
+    }
     ssh_run_with_stdin(
         host,
         "umask 077; mkdir -p ~/.cortex; cat > ~/.cortex/heartbeat-agent.env.new && chmod 600 ~/.cortex/heartbeat-agent.env.new && mv -f ~/.cortex/heartbeat-agent.env.new ~/.cortex/heartbeat-agent.env",
@@ -369,11 +386,79 @@ fn run_deploy(
         host,
         "CORTEX_SETUP_PRESERVE_HEARTBEAT_ENV=1 ~/.local/bin/cortex setup heartbeatagent install",
     )?;
+    ssh_run(host, "~/.local/bin/cortex setup heartbeatagent check")?;
+    Ok("installed and enabled; delivery unverified")
+}
+
+/// Upload an explicitly selected artifact, then validate it on the target before
+/// replacement. Never substitute a released binary for a caller's custom build.
+fn stage_binary_override(host: &str, local: &Path, platform: platform::Platform) -> io::Result<()> {
+    let windows = platform == platform::Platform::WindowsX64;
+    let (prepare, remote_path, activate) = if windows {
+        (
+            "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force (Join-Path $HOME '.local/bin') | Out-Null\"",
+            ".local/bin/cortex.new.exe",
+            "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $bin=Join-Path $HOME '.local/bin/cortex.exe'; $new=Join-Path $HOME '.local/bin/cortex.new.exe'; & $new --version; if ($LASTEXITCODE -ne 0) {throw 'Selected binary cannot run on target'}; if (Test-Path $bin) {Copy-Item $bin ($bin+'.previous') -Force}; Move-Item $new $bin -Force\"",
+        )
+    } else {
+        (
+            "set -eu; mkdir -p ~/.local/bin",
+            ".local/bin/cortex.new",
+            "set -eu; chmod +x ~/.local/bin/cortex.new; ~/.local/bin/cortex.new --version; if test -f ~/.local/bin/cortex; then cp -p ~/.local/bin/cortex ~/.local/bin/cortex.previous; fi; mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex",
+        )
+    };
+    ssh_run(host, prepare)?;
+    let status = crate::env::command("scp")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "--",
+        ])
+        .arg(local)
+        .arg(format!("{host}:{remote_path}"))
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(
+            "explicit agent binary upload failed; installed binary unchanged",
+        ));
+    }
+    ssh_run(host, activate)
+}
+
+fn run_deploy_windows(
+    host: &str,
+    local_binary: &Path,
+    config: &AgentDeployConfig,
+) -> io::Result<()> {
+    let persisted = ssh_capture(
+        host,
+        "powershell -NoProfile -NonInteractive -Command \"$p=Join-Path $HOME '.cortex/heartbeat-agent.env'; if (Test-Path $p) {Get-Content $p}\"",
+    )?;
+    let pairs = resolve_linux_agent_env(&parse_env_file(&persisted)?, config);
+    require_token_if_requested(&pairs, config)?;
+    let env_body = render_env_file(&pairs)?;
     ssh_run(
         host,
-        "systemctl --user restart cortex-heartbeat-agent.service",
+        platform::service_preflight(platform::Platform::WindowsX64),
     )?;
-    Ok("installed and enabled")
+    if config.binary_override {
+        stage_binary_override(host, local_binary, platform::Platform::WindowsX64)?;
+    } else {
+        ssh_run(host, &platform::windows_stage())?;
+    }
+    ssh_run_with_stdin(
+        host,
+        "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.cortex'; New-Item -ItemType Directory -Force $d | Out-Null; $p=Join-Path $d 'heartbeat-agent.env'; [IO.File]::WriteAllText(($p+'.new'), [Console]::In.ReadToEnd()); Move-Item ($p+'.new') $p -Force\"",
+        env_body.as_bytes(),
+    )?;
+    ssh_run(
+        host,
+        "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $env:HOME=$HOME; $env:CORTEX_SETUP_PRESERVE_HEARTBEAT_ENV='1'; & (Join-Path $HOME '.local/bin/cortex.exe') setup heartbeatagent install; if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}; & (Join-Path $HOME '.local/bin/cortex.exe') setup heartbeatagent check; exit $LASTEXITCODE\"",
+    )
 }
 
 // Unraid: root fs is a RAM disk — nothing in /root survives reboot.
@@ -410,7 +495,7 @@ fn run_deploy_unraid(
     // non-standard mounts (e.g. the host log dir a file-tail reads) from the
     // running container.
     let env_pairs = resolve_agent_env(
-        &parse_env_file(&read_optional_remote_file(host, UNRAID_ENV)?),
+        &parse_env_file(&read_optional_remote_file(host, UNRAID_ENV)?)?,
         config,
     );
     require_token_if_requested(&env_pairs, config)?;
@@ -433,16 +518,32 @@ fn run_deploy_unraid(
             .unwrap_or_default()
             .as_nanos()
     );
-    ssh_run_with_stdin(
-        host,
-        &format!(
-            "umask 077; cat > {staged} && chmod 600 {staged}",
-            staged = shell_quote(&staged_env)
-        ),
-        env_body.as_bytes(),
+    let docker_body = render_docker_process_env(&env_pairs)?;
+    let agent_body = render_env_file(
+        &env_pairs
+            .iter()
+            .filter(|(key, _)| {
+                crate::setup::heartbeat_agent_env::RECOGNIZED_KEYS.contains(&key.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>(),
     )?;
+    for (suffix, body) in [
+        ("", env_body),
+        (".agent", agent_body),
+        (".docker", docker_body),
+    ] {
+        ssh_run_with_stdin(
+            host,
+            &format!(
+                "umask 077; cat > {staged} && chmod 600 {staged}",
+                staged = shell_quote(&format!("{staged_env}{suffix}"))
+            ),
+            body.as_bytes(),
+        )?;
+    }
     let run = format!(
-        "docker run -d --name {UNRAID_CONTAINER} --restart unless-stopped \\\n         --network host --user 0:0 --no-healthcheck --env-file {UNRAID_ENV} \\\n         -v {UNRAID_APPDATA}:{UNRAID_APPDATA} -v /var/run/docker.sock:/var/run/docker.sock \\\n         -v {UNRAID_HOST_SYSLOG}:{UNRAID_CONTAINER_SYSLOG}:ro {custom_mounts}{image} \\\n         cortex heartbeat agent --host-id-path {UNRAID_HOST_ID}"
+        "docker run -d --name {UNRAID_CONTAINER} --restart unless-stopped \\\n         --network host --user 0:0 --no-healthcheck --env-file {UNRAID_ENV}.docker \\\n         -v {UNRAID_APPDATA}:{UNRAID_APPDATA} -v /var/run/docker.sock:/var/run/docker.sock \\\n         -v {UNRAID_HOST_SYSLOG}:{UNRAID_CONTAINER_SYSLOG}:ro {custom_mounts}{image} \\\n         cortex heartbeat agent --env-file {UNRAID_ENV}.agent --host-id-path {UNRAID_HOST_ID}"
     );
     let script = unraid::replacement_script(
         UNRAID_CONTAINER,
@@ -475,15 +576,28 @@ fn deploy_syslog_target(heartbeat_target: Option<&str>) -> Option<String> {
 /// Parse an existing `heartbeat-agent.env` into ordered `(key, value)` pairs.
 /// Splits on the first `=` so values containing `=`/spaces/`:` (file-tail specs)
 /// round-trip intact; blank lines and comments are skipped.
-fn parse_env_file(contents: &str) -> Vec<(String, String)> {
-    contents
+fn parse_env_file(contents: &str) -> io::Result<Vec<(String, String)>> {
+    let mut values = Vec::new();
+    for line in contents
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|line| line.split_once('='))
-        .map(|(k, v)| (k.trim().to_string(), v.to_string()))
-        .filter(|(k, _)| is_safe_env_key(k))
-        .collect()
+        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+    {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !is_safe_env_key(key.trim()) {
+            continue;
+        }
+        let value = crate::setup::heartbeat_agent_env::parse_value(value).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("malformed agent environment value for {}", key.trim()),
+            )
+        })?;
+        values.push((key.trim().to_string(), value));
+    }
+    Ok(values)
 }
 
 /// Resolve the host-local systemd agent env for a Linux (non-Unraid) deploy.
@@ -563,6 +677,17 @@ fn resolve_linux_agent_env(
     };
     if let Some(syslog_target) = syslog_target {
         out.push(("CORTEX_SYSLOG_TARGET".to_string(), syslog_target));
+    }
+    for key in crate::setup::heartbeat_agent_env::RECOGNIZED_KEYS {
+        // Legacy consent is normalized above; retain only the canonical key.
+        if *key == crate::heartbeat_agent::AI_TRANSCRIPT_FORWARD_LEGACY_ENV {
+            continue;
+        }
+        if !out.iter().any(|(present, _)| present == key)
+            && let Some(value) = prev_get(key)
+        {
+            out.push(((*key).into(), value));
+        }
     }
     out
 }
@@ -718,17 +843,24 @@ fn preserved_custom_mount_flags(inspect_mounts: &str) -> Vec<String> {
 /// ssh invocation itself succeeds and returns empty output.
 fn ssh_capture(host: &str, cmd: &str) -> io::Result<String> {
     validate_ssh_host(host)?;
+    let remote_command = platform::shell_safe_command(cmd);
     let out = crate::env::command("ssh")
         .args([
             "-o",
             "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
             "-o",
             "StrictHostKeyChecking=accept-new",
             "-o",
             "LogLevel=ERROR",
             "--",
             host,
-            cmd,
+            remote_command.as_ref(),
         ])
         .output()?;
     if !out.status.success() {
@@ -746,17 +878,24 @@ fn read_optional_remote_file(host: &str, remote_path_expr: &str) -> io::Result<S
 
 fn ssh_run(host: &str, cmd: &str) -> io::Result<()> {
     validate_ssh_host(host)?;
+    let remote_command = platform::shell_safe_command(cmd);
     let status = crate::env::command("ssh")
         .args([
             "-o",
             "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
             "-o",
             "StrictHostKeyChecking=accept-new",
             "-o",
             "LogLevel=ERROR",
             "--",
             host,
-            cmd,
+            remote_command.as_ref(),
         ])
         .status()?;
     if !status.success() {
@@ -780,17 +919,24 @@ fn ssh_run_with_stdin(host: &str, cmd: &str, input: &[u8]) -> io::Result<()> {
     use std::process::Stdio;
 
     validate_ssh_host(host)?;
+    let remote_command = platform::shell_safe_command(cmd);
     let mut child = crate::env::command("ssh")
         .args([
             "-o",
             "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
             "-o",
             "StrictHostKeyChecking=accept-new",
             "-o",
             "LogLevel=ERROR",
             "--",
             host,
-            cmd,
+            remote_command.as_ref(),
         ])
         .stdin(Stdio::piped())
         .spawn()?;
@@ -826,46 +972,39 @@ fn ssh_run_with_stdin(host: &str, cmd: &str, input: &[u8]) -> io::Result<()> {
 fn render_env_file(env_pairs: &[(String, String)]) -> io::Result<String> {
     let mut body = String::new();
     for (key, value) in env_pairs {
-        if value.chars().any(char::is_control)
-            || value.contains(['\'', '"', '\\', '#'])
-            || value.trim() != value
-        {
+        if !is_safe_env_key(key) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!(
-                    "agent environment value for {key} cannot be represented identically by systemd and Docker env-file parsers"
-                ),
+                "invalid agent environment key",
             ));
         }
-        body.push_str(key);
-        body.push('=');
-        body.push_str(value);
-        body.push('\n');
+        body.push_str(&format!(
+            "{key}={}\n",
+            crate::setup::heartbeat_agent_env::render_agent_value(value)?
+        ));
     }
     Ok(body)
 }
 
-fn scp_file(local: &Path, host: &str, remote_path: &str) -> io::Result<()> {
-    validate_ssh_host(host)?;
-    let dest = format!("{host}:{remote_path}");
-    let status = crate::env::command("scp")
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "--",
-        ])
-        .arg(local)
-        .arg(&dest)
-        .status()?;
-    if !status.success() {
-        return Err(io::Error::other(format!(
-            "scp {} → {dest} failed",
-            local.display()
-        )));
+fn render_docker_process_env(env_pairs: &[(String, String)]) -> io::Result<String> {
+    let mut body = String::new();
+    for (key, value) in env_pairs {
+        if key != "RUST_LOG"
+            && crate::setup::heartbeat_agent_env::RECOGNIZED_KEYS.contains(&key.as_str())
+        {
+            continue;
+        }
+        if value.chars().any(char::is_control) || value.trim() != value {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "advanced Docker process value for {key} must not contain control characters or boundary whitespace"
+                ),
+            ));
+        }
+        body.push_str(&format!("{key}={value}\n"));
     }
-    Ok(())
+    Ok(body)
 }
 
 fn validate_ssh_host(host: &str) -> io::Result<()> {

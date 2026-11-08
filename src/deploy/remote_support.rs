@@ -14,6 +14,10 @@ pub(crate) struct RemoteOutput {
 }
 
 pub(crate) trait RemoteRunner {
+    fn latest_stable_version(&mut self) -> io::Result<String> {
+        super::release::latest_stable_version()
+    }
+
     fn run(&mut self, host: &str, script: &str, stdin: Option<&str>) -> io::Result<RemoteOutput>;
 }
 
@@ -38,12 +42,30 @@ impl RemoteRunner for SshRemoteRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        let deadline = if script.contains("/health") {
-            Duration::from_secs(180)
-        } else {
-            Duration::from_secs(300)
-        };
+        // Readiness may allow ten minutes; keep one bounded budget for script
+        // execution, stdin delivery and output drain on both local and SSH paths.
+        let deadline = Duration::from_secs(900);
         feed_and_reap(host, child, script, stdin, deadline)
+    }
+}
+
+pub(super) struct LocalRemoteRunner;
+
+impl RemoteRunner for LocalRemoteRunner {
+    fn run(&mut self, host: &str, script: &str, stdin: Option<&str>) -> io::Result<RemoteOutput> {
+        let mut command = crate::env::command("sh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let child = command
+            .args(["-s"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        feed_and_reap(host, child, script, stdin, Duration::from_secs(900))
     }
 }
 
