@@ -115,6 +115,12 @@ fn json_start(input: &str) -> Option<usize> {
         let next = after.chars().next();
         let candidate = match c {
             '{' => matches!(next, None | Some('"' | '}' | '\'')) || after.starts_with("\\\""),
+            '[' if after
+                .split_once(']')
+                .is_some_and(|(address, _)| address.parse::<std::net::Ipv6Addr>().is_ok()) =>
+            {
+                false
+            }
             '[' => {
                 matches!(next, None | Some('"' | '{' | '[' | ']' | '-' | '0'..='9'))
                     || after.starts_with("true")

@@ -131,6 +131,23 @@ async fn delivery_formats_inline_boolean_arrays_without_altering_ipv6_or_severit
 }
 
 #[tokio::test]
+async fn delivery_preserves_bracketed_ipv6_destinations_and_the_error_cause() {
+    let failure = "Post http://[2001:db8::1]:4318/v1/metrics: connection refused";
+    for message in [
+        failure.to_string(),
+        serde_json::json!({ "error": failure }).to_string(),
+    ] {
+        let payload = delivered_payload(&message).await;
+        let body = payload["body"].as_str().unwrap();
+        assert!(
+            body.contains(failure),
+            "IPv6 destination and cause lost: {body}"
+        );
+        assert!(!body.contains("Additional details are available in Cortex."));
+    }
+}
+
+#[tokio::test]
 async fn delivery_does_not_expose_json_encoded_keys_or_escaped_fragments() {
     for input in [
         r#"{"{\"message\":\"encoded\"}":"failure"}"#,

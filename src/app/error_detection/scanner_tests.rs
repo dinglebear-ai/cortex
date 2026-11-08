@@ -119,7 +119,7 @@ fn recurring_collector_alert_has_readable_problem_and_cause() {
     {
         let conn = pool.get().unwrap();
         for _ in 0..6 {
-            let id = insert_log(&conn, message, "err", "tootie");
+            let id = insert_log(&conn, message, "err", "host-01");
             conn.execute("UPDATE logs SET app_name='collector' WHERE id=?1", [id])
                 .unwrap();
         }
@@ -131,7 +131,7 @@ fn recurring_collector_alert_has_readable_problem_and_cause() {
         [], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap();
     assert!(title.contains('🚨'));
-    assert!(body.contains("Host: tootie"));
+    assert!(body.contains("Host: host-01"));
     assert!(body.contains("Service: collector"));
     assert!(body.contains("Problem: Exporting failed. Dropping data."));
     assert!(body.contains("Cause: connection refused"));

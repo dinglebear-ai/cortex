@@ -159,9 +159,9 @@ showing raw JSON.
 For example, a recurring exporter failure produces this text:
 
 ```text
-🚨 Recurring error on tootie
+🚨 Recurring error on host-01
 
-Host: tootie
+Host: host-01
 Service: collector
 
 Problem: Exporting failed. Dropping data.
