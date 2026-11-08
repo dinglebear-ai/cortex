@@ -19,7 +19,7 @@ pub(super) fn readiness_phase(
         host,
         "remote-health",
         &format!(
-            "{}\ndeadline=$(( $(date +%s) + {} ))\nwhile [ \"$(date +%s)\" -lt \"$deadline\" ]; do\n  if compose exec -T cortex curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3100/health >/dev/null; then echo 'ready after startup and migrations'; exit 0; fi\n  sleep 1\ndone\necho 'Readiness deadline exceeded; inspect cortex compose logs for migration/startup progress. Verified recovery snapshot is retained.' >&2\nexit 1",
+            "{}\ndeadline=$(( $(date +%s) + {} ))\nwhile [ \"$(date +%s)\" -lt \"$deadline\" ]; do\n  if compose exec -T cortex curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:3100/health >/dev/null; then echo 'ready after startup and migrations'; exit 0; fi\n  sleep 1\ndone\necho 'Readiness deadline exceeded; inspect cortex compose logs for migration/startup progress. Verified recovery snapshot is retained.' >&2\nexit 1",
             compose_command(home),
             seconds.clamp(1, 600),
         ),
