@@ -620,6 +620,9 @@ fn capability_consent_preserves_auth_and_rejects_unavailable_selection() {
 fn capability_discovery_matches_actual_history_collectors_and_preserves_legacy_consent() {
     let dir = tempfile::tempdir().unwrap();
     let _home = EnvGuard::set("HOME", dir.path());
+    // CODEX_HOME is an independent provider root and can point outside HOME.
+    let codex_home = dir.path().join("codex-config");
+    let _codex = EnvGuard::set("CODEX_HOME", &codex_home);
     let _cortex = EnvGuard::set("CORTEX_HOME", dir.path().join(".cortex"));
     let env = dir.path().join(".cortex/heartbeat-agent.env");
     atomic_private_write(&env,b"CORTEX_AGENT_AI_TRANSCRIPTS=true\nCORTEX_AGENT_DOCKER=true\nCORTEX_AGENT_DOCKER_URL=http://docker.internal:2375\n",0o600).unwrap();
@@ -658,6 +661,16 @@ fn capability_discovery_matches_actual_history_collectors_and_preserves_legacy_c
             .find(|c| c.id == "shell_history")
             .unwrap()
             .available
+    );
+    std::fs::create_dir_all(codex_home.join("sessions")).unwrap();
+    assert_eq!(
+        discover_agent_capabilities()
+            .unwrap()
+            .iter()
+            .find(|c| c.id == "transcripts")
+            .unwrap()
+            .status,
+        CapabilityStatus::Enabled
     );
 }
 

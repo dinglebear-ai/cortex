@@ -2380,19 +2380,28 @@ fn set_mtime(path: &std::path::Path, secs: u64, nanos: u32) {
         .unwrap();
 }
 
-struct HomeOverride(Option<std::ffi::OsString>);
+// Default discovery also honors CODEX_HOME independently of HOME. Every
+// temporary-home fixture must isolate both, including scans without an explicit
+// root, so tests never discover the developer's transcript directories.
+struct HomeOverride {
+    previous_home: Option<std::ffi::OsString>,
+    _codex_home: EnvOverride,
+}
 
 impl HomeOverride {
     fn set(path: &std::path::Path) -> Self {
         let previous = crate::env::var_os("HOME");
         crate::env::set_test_var("HOME", path);
-        Self(previous)
+        Self {
+            previous_home: previous,
+            _codex_home: EnvOverride::remove("CODEX_HOME"),
+        }
     }
 }
 
 impl Drop for HomeOverride {
     fn drop(&mut self) {
-        if let Some(home) = &self.0 {
+        if let Some(home) = &self.previous_home {
             crate::env::set_test_var("HOME", home);
         } else {
             crate::env::remove_test_var("HOME");
@@ -3021,4 +3030,24 @@ fn bounded_discovery_single_entry_pages_resume_through_ancestors() {
         cursor = pass.next_cursor;
     }
     assert_eq!(found, vec![file]);
+}
+
+#[test]
+#[serial]
+fn temporary_home_discovery_excludes_ambient_codex_home_and_restores_it() {
+    let home = tempfile::tempdir().unwrap();
+    let unrelated = tempfile::tempdir().unwrap();
+    let _previous = EnvOverride::remove("CODEX_HOME");
+    crate::env::set_test_var("CODEX_HOME", unrelated.path());
+    {
+        let _home = HomeOverride::set(home.path());
+        let roots = providers::transcript_roots();
+        assert!(!roots.is_empty());
+        assert!(roots.iter().all(|root| root.starts_with(home.path())));
+        assert!(crate::env::var_os("CODEX_HOME").is_none());
+    }
+    assert_eq!(
+        crate::env::var_os("CODEX_HOME").as_deref(),
+        Some(unrelated.path().as_os_str())
+    );
 }
