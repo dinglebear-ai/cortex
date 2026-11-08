@@ -90,3 +90,4 @@ backups/
 
 # Local binary artifacts
 plugins/cortex/bin/
+worktrees/

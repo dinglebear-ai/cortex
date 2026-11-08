@@ -4,3 +4,4 @@ out/
 playwright-report/
 test-results/
 *.tsbuildinfo
+worktrees/
