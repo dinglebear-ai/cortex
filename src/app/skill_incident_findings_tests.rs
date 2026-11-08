@@ -36,6 +36,7 @@ fn incident(signals_present: Vec<&str>) -> SkillIncident {
         skill_event_count: 1,
         skill_event_ids: vec![1],
         anchor_log_ids: vec![2],
+        anchor_window_truncated: false,
         signal_counts: SkillSignalCounts::default(),
         signals_present: signals_present.into_iter().map(String::from).collect(),
         priority_score: 22.0,

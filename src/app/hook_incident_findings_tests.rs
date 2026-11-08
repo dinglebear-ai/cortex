@@ -81,6 +81,7 @@ fn incident(signal_counts: HookSignalCounts, has_runtime_evidence: bool) -> Hook
         hook_event_count: 1,
         hook_event_ids: vec![1],
         anchor_log_ids: vec![2],
+        anchor_window_truncated: false,
         signal_counts,
         signals_present,
         has_runtime_evidence,

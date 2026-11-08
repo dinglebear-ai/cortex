@@ -43,7 +43,7 @@ pnpm --dir web test
 pnpm --dir web build
 ```
 
-`pnpm --dir web test:e2e` uses `web/playwright.config.ts`; review its service requirements before running it. `web/out/` is the static export served by `src/web_app.rs`; do not hand-edit generated assets.
+`pnpm --dir web test:e2e` uses `web/playwright.config.ts`; review its service requirements before running it. The production router in `src/web_app.rs` embeds authored `web/app/index.html`, `app.js`, and `app.css`; `web/out/` is a separate Next scaffold export. Playwright starts an isolated Rust router harness and exercises the actual served workspace with intercepted API fixtures. That verifies browser behavior and asset wiring, not live API delivery. Do not hand-edit generated exports.
 
 ## Change the right layer
 

@@ -204,6 +204,8 @@ pub fn investigate_ai_skill_incidents(
             (out, truncated)
         };
 
+        let signal_anchors_truncated = signal_anchors_truncated || incident.anchor_window_truncated;
+
         // ── Transcript before/after (same pattern as investigate_ai_incidents) ──
         let (transcript_before, transcript_before_truncated) = {
             let mut stmt = conn.prepare(
@@ -212,7 +214,7 @@ pub fn investigate_ai_skill_incidents(
                         ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
                  FROM logs
                  WHERE ai_session_id = ?1 AND ai_project = ?2 AND ai_tool = ?3
-                   AND timestamp < ?4
+                   AND hostname = ?5 AND timestamp < ?4
                  ORDER BY timestamp DESC
                  LIMIT 21",
             )?;
@@ -223,6 +225,7 @@ pub fn investigate_ai_skill_incidents(
                         &incident.project,
                         &incident.tool,
                         &incident.first_seen,
+                        &incident.hostname,
                     ],
                     map_row,
                 )?
@@ -241,7 +244,7 @@ pub fn investigate_ai_skill_incidents(
                         ai_tool, ai_project, ai_session_id, ai_transcript_path, metadata_json
                  FROM logs
                  WHERE ai_session_id = ?1 AND ai_project = ?2 AND ai_tool = ?3
-                   AND timestamp > ?4
+                   AND hostname = ?5 AND timestamp > ?4
                  ORDER BY timestamp ASC
                  LIMIT 21",
             )?;
@@ -252,6 +255,7 @@ pub fn investigate_ai_skill_incidents(
                         &incident.project,
                         &incident.tool,
                         &incident.last_seen,
+                        &incident.hostname,
                     ],
                     map_row,
                 )?

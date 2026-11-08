@@ -343,6 +343,8 @@ Capabilities are explicit and default off unless stated otherwise:
 | journald | unavailable | macOS has no systemd journal; enabling `CORTEX_AGENT_JOURNALD` is rejected, not ignored |
 | Auto-update | limited | `CORTEX_AGENT_AUTO_UPDATE`; subject to the publication boundary below |
 
+Configured agent file tails persist a private, bounded cursor and one-record outbox beside the existing syslog spool, keyed by hostname, receiver, path, and tag. First installation follows from EOF; subsequent restarts resume the persisted cursor and retry pending delivery with the same idempotency key before reopening the source. Keep this state directory across collector replacement. Detected truncation or unavailable rotated history emits explicit gap evidence. Permanent HTTP rejection pauses that source with its pending record retained and an operator-action error; repair the configuration/server rejection and restart. Invalid tags (empty or over 255 bytes) fail validation before forwarding.
+
 Full Disk Access may be required for privacy-protected transcript, history, or
 tail paths. Grant it to the stable managed binary, not a transient terminal.
 Docker setup never weakens socket permissions or exposes unauthenticated TCP.

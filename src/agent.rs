@@ -173,14 +173,18 @@ pub async fn run_agent_streams(config: AgentStreamsConfig) -> Result<()> {
         let hostname = config.hostname.clone();
         let target = config.file_tail_target.clone();
         let token = config.file_tail_token.clone();
+        let checkpoint_base = config.syslog_forward_spool_path.clone();
         tasks.spawn(async move {
             loop {
-                let forward_config = file_tail::FileTailForwardConfig {
+                let mut forward_config = file_tail::FileTailForwardConfig {
                     source: source.clone(),
                     target: target.clone(),
                     token: token.clone(),
                     hostname: hostname.clone(),
+                    checkpoint_path: PathBuf::new(),
                 };
+                forward_config.checkpoint_path =
+                    file_tail::checkpoint_path(&checkpoint_base, &forward_config);
                 match file_tail::run(forward_config).await {
                     Ok(()) => return,
                     Err(e) => {

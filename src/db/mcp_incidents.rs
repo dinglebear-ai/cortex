@@ -20,6 +20,7 @@ use crate::app::mcp_signal_detectors::{
     detect_user_correction_after_tool_call,
 };
 
+use super::incident_anchors::{AnchorWindow, load_anchors};
 use super::pool::DbPool;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -62,7 +63,7 @@ pub struct McpSignalCounts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpIncident {
     /// Stable synthetic ID: hash of server/tool + tool/project/session/
-    /// hostname + sorted anchor log ids + sorted mcp event ids.
+    /// hostname + sorted mcp event ids.
     pub incident_id: String,
     pub mcp_server: String,
     pub mcp_tool: Option<String>,
@@ -79,6 +80,9 @@ pub struct McpIncident {
     pub mcp_event_ids: Vec<i64>,
     /// Sorted `logs.id` values backing the anchor signals in this group.
     pub anchor_log_ids: Vec<i64>,
+    /// Anchor sampling hit the per-window cap or shared request budget.
+    #[serde(default)]
+    pub anchor_window_truncated: bool,
     pub signal_counts: McpSignalCounts,
     /// Sorted distinct signal category names present in this incident.
     pub signals_present: Vec<String>,
@@ -226,6 +230,21 @@ pub fn search_ai_mcp_incidents(
         groups.entry(key).or_default().push(row);
     }
 
+    let anchors = load_anchors(
+        &conn,
+        groups.iter().map(|(key, events)| {
+            AnchorWindow::new(
+                &key.4,
+                &key.3,
+                &key.2,
+                &key.5,
+                &events.first().expect("nonempty group").timestamp,
+                &events.last().expect("nonempty group").timestamp,
+                window_secs,
+            )
+        }),
+    )?;
+    let anchor_windows_truncated = anchors.truncated();
     let mut incidents: Vec<McpIncident> = Vec::with_capacity(groups.len());
     for ((mcp_server, mcp_tool, tool, project, session_id, hostname, _bucket), events) in groups {
         let first_seen = events
@@ -247,35 +266,24 @@ pub fn search_ai_mcp_incidents(
         };
         let error_count = events.iter().filter(|e| e.is_error == Some(true)).count();
 
-        // Window bounds for anchor detection: from first event to
-        // window_secs after the last one.
-        let win_from = first_seen.clone();
-        let win_to = chrono::DateTime::parse_from_rfc3339(&last_seen)
-            .map(|dt| {
-                (dt.with_timezone(&chrono::Utc) + chrono::Duration::seconds(window_secs))
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| last_seen.clone());
-
-        let mut anchor_stmt = conn.prepare_cached(
-            "SELECT id, message FROM logs
-             WHERE ai_session_id = ?1 AND ai_project = ?2 AND ai_tool = ?3
-               AND timestamp >= ?4 AND timestamp <= ?5
-             ORDER BY timestamp ASC
-             LIMIT 500",
-        )?;
-        let anchor_rows: Vec<(i64, String)> = anchor_stmt
-            .query_map(
-                rusqlite::params![session_id, project, tool, win_from, win_to],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let window = AnchorWindow::new(
+            &session_id,
+            &project,
+            &tool,
+            &hostname,
+            &first_seen,
+            &last_seen,
+            window_secs,
+        );
+        let window_anchors = anchors.get(&window);
+        let anchor_rows = &window_anchors.rows;
+        let anchor_window_truncated = window_anchors.truncated;
 
         let mut counts = McpSignalCounts::default();
         let mut anchor_log_ids: Vec<i64> = Vec::new();
 
-        for (id, message) in &anchor_rows {
+        for row in anchor_rows {
+            let (id, message) = (&row.id, &row.message);
             let mut hit = false;
             if detect_timeout_or_rate_limit(message) {
                 counts.timeout_or_rate_limit += 1;
@@ -356,6 +364,8 @@ pub fn search_ai_mcp_incidents(
         let mut mcp_event_ids: Vec<i64> = events.iter().map(|e| e.id).collect();
         mcp_event_ids.sort_unstable();
 
+        // Identity follows the event group, not its sampled evidence. New
+        // anchors or request-wide sampling cutoffs must not invalidate an ID.
         let incident_id = {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
@@ -366,9 +376,6 @@ pub fn search_ai_mcp_incidents(
             project.hash(&mut h);
             session_id.hash(&mut h);
             hostname.hash(&mut h);
-            for id in &anchor_log_ids {
-                id.hash(&mut h);
-            }
             for id in &mcp_event_ids {
                 id.hash(&mut h);
             }
@@ -390,6 +397,7 @@ pub fn search_ai_mcp_incidents(
             error_count,
             mcp_event_ids,
             anchor_log_ids,
+            anchor_window_truncated,
             signal_counts: counts,
             signals_present,
             priority_score,
@@ -421,7 +429,8 @@ pub fn search_ai_mcp_incidents(
     });
 
     let total_incidents = incidents.len();
-    let truncated = total_incidents > limit || candidate_window_truncated;
+    let truncated =
+        total_incidents > limit || candidate_window_truncated || anchor_windows_truncated;
     incidents.truncate(limit);
 
     Ok(AiMcpIncidentResult {

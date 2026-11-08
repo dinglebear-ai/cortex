@@ -1088,7 +1088,9 @@ fn delete_oldest_logs_chunk(
     //
     // `source_ip` is stored as `ip:port`; we PARTITION on the IP portion only
     // (strip the ephemeral port) so all packets from one peer share a single
-    // per-source budget. Window functions require SQLite >= 3.25 and
+    // per-source budget. Preserve URI identities and parse bracketed IPv6
+    // separately: the first colon is not an IPv6 or URI host delimiter.
+    // Window functions require SQLite >= 3.25 and
     // RETURNING requires >= 3.35 (rusqlite `bundled` ships 3.4x).
     if floor_enabled {
         conn.execute_batch(
@@ -1099,10 +1101,13 @@ fn delete_oldest_logs_chunk(
             "INSERT INTO _err_floor_protected (id)
              SELECT id FROM (
                  SELECT id, ROW_NUMBER() OVER (
-                     PARTITION BY substr(source_ip, 1,
-                         CASE WHEN instr(source_ip, ':') > 0
-                              THEN instr(source_ip, ':') - 1
-                              ELSE length(source_ip) END)
+                     PARTITION BY CASE
+                         WHEN instr(source_ip, '://') > 0 THEN source_ip
+                         WHEN substr(source_ip, 1, 1) = '[' AND instr(source_ip, ']') > 0
+                              THEN substr(source_ip, 2, instr(source_ip, ']') - 2)
+                         WHEN length(source_ip) - length(replace(source_ip, ':', '')) = 1
+                              THEN substr(source_ip, 1, instr(source_ip, ':') - 1)
+                         ELSE source_ip END
                      ORDER BY received_at DESC, id DESC
                  ) AS rn
                  FROM logs

@@ -16,6 +16,7 @@ use crate::app::hook_signal_detectors::{
     is_hook_failure_status, is_hook_timeout,
 };
 
+use super::incident_anchors::{AnchorWindow, load_anchors};
 use super::pool::DbPool;
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ pub struct HookSignalCounts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookIncident {
     /// Stable synthetic ID: hash of hook event/name/source + tool/project/
-    /// session/hostname + sorted anchor log ids + sorted hook event ids.
+    /// session/hostname + sorted hook event ids.
     pub incident_id: String,
     pub hook_event: String,
     pub hook_name: Option<String>,
@@ -83,6 +84,9 @@ pub struct HookIncident {
     /// Sorted `logs.id` values backing the `user_correction_after_hook`
     /// anchor in this group.
     pub anchor_log_ids: Vec<i64>,
+    /// Anchor sampling hit the per-window cap or shared request budget.
+    #[serde(default)]
+    pub anchor_window_truncated: bool,
     pub signal_counts: HookSignalCounts,
     /// Sorted distinct signal category names present in this incident.
     pub signals_present: Vec<String>,
@@ -260,6 +264,21 @@ pub fn search_ai_hook_incidents(
         groups.entry(key).or_default().push(row);
     }
 
+    let anchors = load_anchors(
+        &conn,
+        groups.iter().map(|(key, events)| {
+            AnchorWindow::new(
+                &key.5,
+                &key.4,
+                &key.3,
+                &key.6,
+                &events.first().expect("nonempty group").timestamp,
+                &events.last().expect("nonempty group").timestamp,
+                window_secs,
+            )
+        }),
+    )?;
+    let anchor_windows_truncated = anchors.truncated();
     let mut incidents: Vec<HookIncident> = Vec::with_capacity(groups.len());
     for (
         (hook_event, hook_name, hook_source, tool, project, session_id, hostname, _bucket),
@@ -312,34 +331,22 @@ pub fn search_ai_hook_incidents(
             counts.hook_invoked_too_often = events.len();
         }
 
-        // ── user_correction_after_hook: scan nearby transcript logs in the
-        // session/window following the hook events, same anchor pattern as
-        // skill incidents ────────────────────────────────────────────────
-        let win_from = first_seen.clone();
-        let win_to = chrono::DateTime::parse_from_rfc3339(&last_seen)
-            .map(|dt| {
-                (dt.with_timezone(&chrono::Utc) + chrono::Duration::seconds(window_secs))
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| last_seen.clone());
-
-        let mut anchor_stmt = conn.prepare_cached(
-            "SELECT id, message FROM logs
-             WHERE ai_session_id = ?1 AND ai_project = ?2 AND ai_tool = ?3
-               AND timestamp >= ?4 AND timestamp <= ?5
-             ORDER BY timestamp ASC
-             LIMIT 500",
-        )?;
-        let anchor_rows: Vec<(i64, String)> = anchor_stmt
-            .query_map(
-                rusqlite::params![session_id, project, tool, win_from, win_to],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let window = AnchorWindow::new(
+            &session_id,
+            &project,
+            &tool,
+            &hostname,
+            &first_seen,
+            &last_seen,
+            window_secs,
+        );
+        let window_anchors = anchors.get(&window);
+        let anchor_rows = &window_anchors.rows;
+        let anchor_window_truncated = window_anchors.truncated;
 
         let mut anchor_log_ids: Vec<i64> = Vec::new();
-        for (id, message) in &anchor_rows {
+        for row in anchor_rows {
+            let (id, message) = (&row.id, &row.message);
             if detect_user_correction(message) {
                 counts.user_correction_after_hook += 1;
                 anchor_log_ids.push(*id);
@@ -391,6 +398,8 @@ pub fn search_ai_hook_incidents(
         let mut hook_event_ids: Vec<i64> = events.iter().map(|e| e.id).collect();
         hook_event_ids.sort_unstable();
 
+        // Identity follows the event group, not its sampled evidence. New
+        // anchors or request-wide sampling cutoffs must not invalidate an ID.
         let incident_id = {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
@@ -402,9 +411,6 @@ pub fn search_ai_hook_incidents(
             project.hash(&mut h);
             session_id.hash(&mut h);
             hostname.hash(&mut h);
-            for id in &anchor_log_ids {
-                id.hash(&mut h);
-            }
             for id in &hook_event_ids {
                 id.hash(&mut h);
             }
@@ -426,6 +432,7 @@ pub fn search_ai_hook_incidents(
             hook_event_count: events.len(),
             hook_event_ids,
             anchor_log_ids,
+            anchor_window_truncated,
             signal_counts: counts,
             signals_present,
             has_runtime_evidence,
@@ -459,7 +466,8 @@ pub fn search_ai_hook_incidents(
     });
 
     let total_incidents = incidents.len();
-    let truncated = total_incidents > limit || candidate_window_truncated;
+    let truncated =
+        total_incidents > limit || candidate_window_truncated || anchor_windows_truncated;
     incidents.truncate(limit);
 
     Ok(AiHookIncidentResult {

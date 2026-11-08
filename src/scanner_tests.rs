@@ -2957,3 +2957,68 @@ fn session_metadata_scrubbing_drops_control_only_labels() {
     assert!(metadata.title.is_none());
     assert!(metadata.title_provenance.is_none());
 }
+
+#[test]
+fn bounded_discovery_keeps_lexical_pages_and_nested_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    // Creation order deliberately opposes traversal order. Include an empty
+    // directory between nested sources so resumption cannot loop on it.
+    for name in ["z/session.jsonl", "m/session.jsonl", "a/session.jsonl"] {
+        let path = dir.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    std::fs::create_dir(dir.path().join("b-empty")).unwrap();
+    let mut cursor = None;
+    let mut found = std::collections::BTreeSet::new();
+    for _ in 0..12 {
+        let pass = discover_root_bounded(
+            dir.path().to_path_buf(),
+            cursor.as_deref(),
+            DiscoveryBudget {
+                max_entries: 3,
+                max_path_bytes: 4096,
+                deadline: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        found.extend(pass.files);
+        if !pass.capped {
+            break;
+        }
+        cursor = pass.next_cursor;
+    }
+    assert_eq!(
+        found.len(),
+        3,
+        "every nested source must survive page boundaries"
+    );
+}
+
+#[test]
+fn bounded_discovery_single_entry_pages_resume_through_ancestors() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a/b/c/session.jsonl");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{}\n").unwrap();
+    let mut cursor = None;
+    let mut found = Vec::new();
+    for _ in 0..8 {
+        let pass = discover_root_bounded(
+            dir.path().to_path_buf(),
+            cursor.as_deref(),
+            DiscoveryBudget {
+                max_entries: 1,
+                max_path_bytes: 4096,
+                deadline: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        found.extend(pass.files);
+        if !pass.capped {
+            break;
+        }
+        cursor = pass.next_cursor;
+    }
+    assert_eq!(found, vec![file]);
+}

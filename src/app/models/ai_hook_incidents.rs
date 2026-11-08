@@ -59,6 +59,9 @@ pub struct HookIncident {
     pub hook_event_count: usize,
     pub hook_event_ids: Vec<i64>,
     pub anchor_log_ids: Vec<i64>,
+    /// Signals are incomplete because anchor sampling reached a bound.
+    #[serde(default)]
+    pub anchor_window_truncated: bool,
     pub signal_counts: HookSignalCounts,
     pub signals_present: Vec<String>,
     pub has_runtime_evidence: bool,
@@ -84,6 +87,7 @@ impl From<db::HookIncident> for HookIncident {
             hook_event_count: v.hook_event_count,
             hook_event_ids: v.hook_event_ids,
             anchor_log_ids: v.anchor_log_ids,
+            anchor_window_truncated: v.anchor_window_truncated,
             signal_counts: v.signal_counts.into(),
             signals_present: v.signals_present,
             has_runtime_evidence: v.has_runtime_evidence,

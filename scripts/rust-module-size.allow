@@ -1,34 +1,36 @@
-src/agent/self_update.rs
-src/agent_deploy.rs
-src/api.rs
-src/app/llm_runner.rs
-src/app/services/graph.rs
-src/cli/dispatch_sessions.rs
-src/cli/help.rs
-src/cli/http_client.rs
-src/cli/parse_logs.rs
-src/command_log.rs
-src/compose/mutation.rs
-src/config.rs
-src/db/agent_observatory_read.rs
-src/db/analytics.rs
-src/db/graph.rs
-src/db/graph_inventory.rs
-src/db/heartbeat.rs
-src/db/maintenance.rs
-src/db/pool.rs
-src/db/queries.rs
-src/doctor.rs
-src/heartbeat.rs
-src/heartbeat_agent.rs
-src/main.rs
-src/mcp/actions.rs
-src/mcp/rmcp_server.rs
-src/mcp/schemas.rs
-src/receiver/writer.rs
-src/runtime.rs
-src/scanner.rs
-src/scanner/checkpoint.rs
-src/setup/heartbeat_agent.rs
-src/surfaces/contract.rs
-xtask/src/version.rs
+# Fixed production-line ceilings; no exception permits further growth.
+# TSV: path	ceiling	owner (module)	decomposition rationale
+src/agent/self_update.rs	791	agent::self_update	Existing module baseline; extract new responsibilities into sibling modules
+src/agent_deploy.rs	821	agent_deploy	Existing module baseline; extract new responsibilities into sibling modules
+src/api.rs	2314	api	Existing module baseline; extract new responsibilities into sibling modules
+src/app/llm_runner.rs	509	app::llm_runner	Existing module baseline; extract new responsibilities into sibling modules
+src/app/services/graph.rs	598	app::services::graph	Existing module baseline; extract new responsibilities into sibling modules
+src/cli/dispatch_sessions.rs	1349	cli::dispatch_sessions	Existing module baseline; extract new responsibilities into sibling modules
+src/cli/help.rs	964	cli::help	Existing module baseline; extract new responsibilities into sibling modules
+src/cli/http_client.rs	723	cli::http_client	Existing module baseline; extract new responsibilities into sibling modules
+src/cli/parse_logs.rs	524	cli::parse_logs	Existing module baseline; extract new responsibilities into sibling modules
+src/command_log.rs	1226	command_log	Existing module baseline; extract new responsibilities into sibling modules
+src/compose/mutation.rs	770	compose::mutation	Existing module baseline; extract new responsibilities into sibling modules
+src/config.rs	2209	config	Existing module baseline; extract new responsibilities into sibling modules
+src/db/agent_observatory_read.rs	694	db::agent_observatory_read	Existing module baseline; extract new responsibilities into sibling modules
+src/db/analytics.rs	1480	db::analytics	Existing module baseline; extract new responsibilities into sibling modules
+src/db/graph.rs	2837	db::graph	Existing module baseline; extract new responsibilities into sibling modules
+src/db/graph_inventory.rs	708	db::graph_inventory	Existing module baseline; extract new responsibilities into sibling modules
+src/db/heartbeat.rs	690	db::heartbeat	Existing module baseline; extract new responsibilities into sibling modules
+src/db/maintenance.rs	1142	db::maintenance	Existing module baseline; extract new responsibilities into sibling modules
+src/db/pool.rs	3723	db::pool	Existing module baseline; extract new responsibilities into sibling modules
+src/db/queries.rs	3588	db::queries	Existing module baseline; extract new responsibilities into sibling modules
+src/doctor.rs	1152	doctor	Existing module baseline; extract new responsibilities into sibling modules
+src/heartbeat.rs	1032	heartbeat	Existing module baseline; extract new responsibilities into sibling modules
+src/heartbeat_agent.rs	1765	heartbeat_agent	Existing module baseline; extract new responsibilities into sibling modules
+src/main.rs	1342	main	Existing module baseline; extract new responsibilities into sibling modules
+src/mcp/actions.rs	846	mcp::actions	Existing module baseline; extract new responsibilities into sibling modules
+src/mcp/rmcp_server.rs	675	mcp::rmcp_server	Existing module baseline; extract new responsibilities into sibling modules
+src/mcp/schemas.rs	733	mcp::schemas	Existing module baseline; extract new responsibilities into sibling modules
+src/receiver/writer.rs	521	receiver::writer	Existing module baseline; extract new responsibilities into sibling modules
+src/runtime.rs	1572	runtime	Existing module baseline; extract new responsibilities into sibling modules
+src/scanner.rs	2546	scanner	Existing module baseline; extract new responsibilities into sibling modules
+src/scanner/checkpoint.rs	714	scanner::checkpoint	Existing module baseline; extract new responsibilities into sibling modules
+src/setup/heartbeat_agent.rs	767	setup::heartbeat_agent	Existing module baseline; extract new responsibilities into sibling modules
+src/surfaces/contract.rs	516	surfaces::contract	Existing module baseline; extract new responsibilities into sibling modules
+xtask/src/version.rs	734	xtask::src::version	Existing module baseline; extract new responsibilities into sibling modules
