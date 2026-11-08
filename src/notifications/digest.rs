@@ -33,20 +33,26 @@ pub struct HostDigestEntry {
     pub top_app: Option<String>,
 }
 
-/// Build a markdown digest body from per-host entries.
+/// Build a phone-readable text digest with a bounded host breakdown.
 pub fn build_digest_body(entries: &[HostDigestEntry], window_hours: u32) -> String {
     if entries.is_empty() {
         return format!("No log activity in the last {window_hours}h.");
     }
 
-    let mut lines = vec![format!("## Daily Digest — last {window_hours}h\n")];
-    lines.push("| Host | Total | Errors | Warnings | Top App |".to_string());
-    lines.push("|------|-------|--------|----------|---------|".to_string());
+    let total_errors: i64 = entries.iter().map(|e| e.error_count).sum();
+    let total_warnings: i64 = entries.iter().map(|e| e.warning_count).sum();
+    let mut lines = vec![
+        format!("📊 Daily Digest — last {window_hours}h"),
+        format!(
+            "{} hosts · {total_errors} errors · {total_warnings} warnings",
+            entries.len()
+        ),
+    ];
 
-    for e in entries {
+    for e in entries.iter().take(5) {
         let app = e.top_app.as_deref().unwrap_or("—");
         lines.push(format!(
-            "| {} | {} | {} | {} | {} |",
+            "\nHost: {}\nLogs: {} · Errors: {} · Warnings: {}\nMost active: {}",
             escape_for_notification(&e.hostname),
             e.total_logs,
             e.error_count,
@@ -55,15 +61,12 @@ pub fn build_digest_body(entries: &[HostDigestEntry], window_hours: u32) -> Stri
         ));
     }
 
-    let total_errors: i64 = entries.iter().map(|e| e.error_count).sum();
-    let total_warnings: i64 = entries.iter().map(|e| e.warning_count).sum();
-    lines.push(String::new());
-    lines.push(format!(
-        "**{} hosts** — {} errors, {} warnings",
-        entries.len(),
-        total_errors,
-        total_warnings
-    ));
+    if entries.len() > 5 {
+        lines.push(format!(
+            "\nPlus {} other hosts. Open Cortex for the full breakdown.",
+            entries.len() - 5
+        ));
+    }
 
     lines.join("\n")
 }
@@ -153,7 +156,7 @@ pub(crate) async fn run_digest(
         let entries = fetch_host_stats(&conn, 24).map_err(anyhow::Error::from)?;
         let body = build_digest_body(&entries, 24);
         let title = format!(
-            "Daily Digest — {} hosts, {} total logs",
+            "📊 Daily Digest — {} hosts, {} total logs",
             entries.len(),
             entries.iter().map(|e| e.total_logs).sum::<i64>()
         );

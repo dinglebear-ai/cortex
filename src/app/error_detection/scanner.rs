@@ -290,19 +290,32 @@ pub(crate) fn process_chunk(
         };
 
         if should_notify {
+            let summary =
+                crate::notifications::apprise::escape_for_notification(&group.sample_message);
+            let problem = if summary.starts_with("Problem:") || summary.starts_with("Cause:") {
+                summary
+            } else {
+                format!("Problem: {summary}")
+            };
             let outbox_params = crate::db::notifications::OutboxInsertParams {
                 dedup_key: format!("error_sig:{hash}"),
                 rule_id: "unaddressed_error_signature".to_string(),
                 severity: group.severity.clone(),
                 hostname: group.sample_hostname.clone(),
                 title: format!(
-                    "[{}] Recurring error on {}",
-                    group.severity.to_uppercase(),
+                    "{} Recurring error on {}",
+                    crate::notifications::text::severity_icon(&group.severity),
                     group.sample_hostname
                 ),
                 body: format!(
-                    "Signature: {}\nSample: {}\nOccurrences: {}",
-                    group.template, group.sample_message, group.count
+                    "Host: {}\nService: {}\n\n{}\n\nOccurrences: {}\nLast seen: {}",
+                    crate::notifications::apprise::escape_for_notification(&group.sample_hostname),
+                    crate::notifications::apprise::escape_for_notification(
+                        group.sample_app_name.as_deref().unwrap_or("unknown")
+                    ),
+                    problem,
+                    group.count,
+                    group.last_ts
                 ),
                 apprise_urls_json: "[]".to_string(), // overridden by dispatcher config
                 next_attempt_at: chrono::Utc::now()

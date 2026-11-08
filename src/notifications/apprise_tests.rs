@@ -1,5 +1,228 @@
 use super::*;
 
+const COLLECTOR_LOG: &str = r#"2026-11-07T18:32:27.504Z	error	internal/queue_sender.go:62	Exporting failed. Dropping data.	{"resource":{"service.instance.id":"private-instance","service.name":"otelcol"},"otelcol.component.id":"otlp_http/cortex","otelcol.signal":"metrics","error":"Post http://127.0.0.1:3100/v1/metrics: connection refused","dropped_items":32}"#;
+
+async fn delivered_payload(body: &str) -> serde_json::Value {
+    use axum::{Json, Router, routing::post};
+    use tokio::net::TcpListener;
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let app = Router::new().route(
+        "/notify/",
+        post(move |Json(payload): Json<serde_json::Value>| {
+            let sender = sender.clone();
+            async move {
+                sender.send(payload).await.unwrap();
+                axum::http::StatusCode::OK
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    AppriseClient::new(format!("http://{address}"))
+        .notify(
+            &["test://".to_string()],
+            "⚠️ Cortex alert",
+            body,
+            NotifyType::Warning,
+        )
+        .await
+        .unwrap();
+    let payload = receiver.recv().await.unwrap();
+    server.abort();
+    let _ = server.await;
+    payload
+}
+
+#[tokio::test]
+async fn delivery_turns_collector_json_into_readable_text() {
+    let payload = delivered_payload(COLLECTOR_LOG).await;
+    assert_eq!(payload["format"], "text");
+    let body = payload["body"].as_str().unwrap();
+    assert!(body.contains("Exporting failed. Dropping data."));
+    assert!(body.contains("Cause: Post http://127.0.0.1:3100/v1/metrics: connection refused"));
+    assert!(body.contains("Dropped items: 32"));
+    assert!(!body.contains("service.instance.id"));
+    assert!(!body.contains("queue_sender.go"));
+    assert!(!body.contains('{') && !body.contains('}'));
+}
+
+#[tokio::test]
+async fn delivery_reformats_queued_legacy_recurring_alerts() {
+    let payload = delivered_payload(&format!(
+        "Signature: <n>-<n>-<n>T<n>:<n> {{\"resource\":\"normalized\"}}\nSample: {COLLECTOR_LOG}\nOccurrences: 6"
+    )).await;
+    let body = payload["body"].as_str().unwrap();
+    assert!(body.contains("Problem: Exporting failed. Dropping data."));
+    assert!(body.contains("Occurrences: 6"));
+    assert!(!body.contains("Signature:") && !body.contains("<n>"));
+    assert!(!body.contains("queue_sender.go"));
+}
+
+#[tokio::test]
+async fn delivery_formats_nested_json_and_json_encoded_strings() {
+    let payload = delivered_payload(r#"{"message":"Export failed","error":"{\"reason\":\"connection refused\"}","attempts":[1,2],"password":"do-not-deliver"}"#).await;
+    let body = payload["body"].as_str().unwrap();
+    assert!(body.contains("Export failed"));
+    assert!(body.contains("connection refused"));
+    assert!(
+        !body.contains("Cause: Cause:"),
+        "Nested error fields need one readable label"
+    );
+    assert!(!body.contains('{') && !body.contains('['));
+    assert!(!body.contains("do-not-deliver"));
+}
+
+#[tokio::test]
+async fn delivery_hides_malformed_structured_payloads() {
+    for message in [
+        "Export failed {\"resource\":{\"service.instance.id\":\"unfinished",
+        "Export failed [\"unfinished",
+        "Export failed [1e9999,2]",
+        "Export failed [01,2]",
+    ] {
+        let payload = delivered_payload(message).await;
+        let body = payload["body"].as_str().unwrap();
+        assert!(body.contains("Export failed"));
+        assert!(body.contains("Cortex"));
+        assert!(!body.contains('{') && !body.contains('['));
+        assert!(!body.contains("service.instance.id"));
+    }
+}
+
+#[tokio::test]
+async fn delivery_formats_or_omits_entire_multiline_structured_payloads() {
+    for (message, complete) in [
+        (
+            "Host: alpha\nProblem: {\n  \"message\": \"failed\",\n  \"password\": \"private-value\"\n}",
+            true,
+        ),
+        (
+            "Host: alpha\nProblem: {\n  \"message\": \"failed\",\n  \"password\": \"private-value\"",
+            false,
+        ),
+        (
+            "Signature: <n>\nSample: {\n  \"message\": \"failed\",\n  \"password\": \"private-value\"\n}\nOccurrences: 6",
+            true,
+        ),
+    ] {
+        let payload = delivered_payload(message).await;
+        let body = payload["body"].as_str().unwrap();
+        if complete {
+            assert!(body.contains("failed"));
+        } else {
+            assert!(body.contains("Additional details are available in Cortex."));
+        }
+        assert!(
+            !body.contains("\"message\"")
+                && !body.contains("password")
+                && !body.contains("private-value")
+        );
+        assert!(!body.contains('{') && !body.contains('}'));
+        assert!(!body.contains("Problem: Problem:"), "Use a single label");
+    }
+}
+
+#[tokio::test]
+async fn delivery_formats_inline_boolean_arrays_without_altering_ipv6_or_severity() {
+    let payload = delivered_payload("[WARNING] http://[::1]:3100 Flags: [true,false,null]").await;
+    let body = payload["body"].as_str().unwrap();
+    assert!(body.contains("[WARNING] http://[::1]:3100"));
+    assert!(body.contains("true") && body.contains("false"));
+    assert!(!body.contains("[true"));
+}
+
+#[tokio::test]
+async fn delivery_preserves_bracketed_ipv6_destinations_and_the_error_cause() {
+    let failure = "Post http://[2001:db8::1]:4318/v1/metrics: connection refused";
+    for message in [
+        failure.to_string(),
+        serde_json::json!({ "error": failure }).to_string(),
+    ] {
+        let payload = delivered_payload(&message).await;
+        let body = payload["body"].as_str().unwrap();
+        assert!(
+            body.contains(failure),
+            "IPv6 destination and cause lost: {body}"
+        );
+        assert!(!body.contains("Additional details are available in Cortex."));
+    }
+}
+
+#[tokio::test]
+async fn delivery_preserves_bracketed_timestamps_and_the_error_cause() {
+    for timestamp in [
+        "2026-11-08T10:00:00Z",
+        "2026-11-08 10:00:00",
+        "2026-11-08",
+        "10:00:00",
+    ] {
+        let failure = format!("[{timestamp}] database connection refused");
+        for message in [
+            failure.clone(),
+            serde_json::json!({ "error": failure }).to_string(),
+        ] {
+            let payload = delivered_payload(&message).await;
+            let body = payload["body"].as_str().unwrap();
+            assert!(body.contains(&failure), "Timestamp and cause lost: {body}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn delivery_parses_structured_logs_before_decoding_string_entities() {
+    let structured = serde_json::json!({
+        "message": "Invalid &quot;Authorization&quot; header",
+        "error": "unauthorized",
+    })
+    .to_string();
+    let legacy = structured.replace('&', "&amp;").replace('"', "&quot;");
+    for message in [
+        structured.clone(),
+        format!("Collector failed {structured}"),
+        legacy,
+    ] {
+        let payload = delivered_payload(&message).await;
+        let body = payload["body"].as_str().unwrap();
+        assert!(
+            body.contains("Problem: Invalid \"Authorization\" header"),
+            "Problem lost: {body}"
+        );
+        assert!(body.contains("Cause: unauthorized"), "Cause lost: {body}");
+        assert!(!body.contains("&quot;") && !body.contains("&amp;"));
+        assert!(!body.contains('{') && !body.contains('}'));
+    }
+}
+
+#[tokio::test]
+async fn delivery_does_not_expose_json_encoded_keys_or_escaped_fragments() {
+    for input in [
+        r#"{"{\"message\":\"encoded\"}":"failure"}"#,
+        r#"Export failed {\"error\":\"connection refused\"}"#,
+    ] {
+        let payload = delivered_payload(input).await;
+        let body = payload["body"].as_str().unwrap();
+        assert!(!body.contains('{') && !body.contains('}'));
+    }
+}
+
+#[tokio::test]
+async fn delivery_keeps_text_literal_without_double_encoding() {
+    let payload = delivered_payload("Host &amp;lt;nas&amp;gt; &amp;amp; admin@example.com").await;
+    assert_eq!(payload["format"], "text");
+    assert_eq!(payload["body"], "Host <nas> & admin＠example.com");
+}
+
+#[tokio::test]
+async fn delivery_bounds_unicode_and_omits_large_payload_tail() {
+    let body = format!("{}{{\"resource\":\"hidden\"}}", "🐙".repeat(3000));
+    let payload = delivered_payload(&body).await;
+    let text = payload["body"].as_str().unwrap();
+    assert!(text.chars().count() <= 1200);
+    assert!(text.ends_with('…'));
+    assert!(!text.contains('{'));
+}
+
 #[test]
 fn escape_replaces_at_sign() {
     assert_eq!(
@@ -9,22 +232,19 @@ fn escape_replaces_at_sign() {
 }
 
 #[test]
-fn escape_neutralizes_angle_brackets_without_dropping_content() {
-    // Markup is escaped (not executable) but the inner text is preserved,
-    // so HTML/markdown targets cannot be injected yet nothing is silently lost.
+fn text_preserves_angle_brackets_for_literal_delivery() {
     assert_eq!(
         escape_for_notification("<script>alert(1)</script>"),
-        "&lt;script&gt;alert(1)&lt;/script&gt;"
+        "<script>alert(1)</script>"
     );
 }
 
 #[test]
 fn escape_preserves_normalizer_placeholders() {
-    // Regression: signatures emit <n>, <hex>, <path> etc. Stripping the
-    // brackets collapsed them into unreadable runs; escaping keeps them.
+    // Text delivery preserves these as literal characters without entities.
     assert_eq!(
         escape_for_notification("<n>-<n>-<n>T<n>:<n>:<n> path=<path>"),
-        "&lt;n&gt;-&lt;n&gt;-&lt;n&gt;T&lt;n&gt;:&lt;n&gt;:&lt;n&gt; path=&lt;path&gt;"
+        "<n>-<n>-<n>T<n>:<n>:<n> path=<path>"
     );
 }
 
@@ -32,13 +252,13 @@ fn escape_preserves_normalizer_placeholders() {
 fn escape_combined() {
     assert_eq!(
         escape_for_notification("Out of memory: Killed process 1234 (nginx) <@root>"),
-        "Out of memory: Killed process 1234 (nginx) &lt;＠root&gt;"
+        "Out of memory: Killed process 1234 (nginx) <＠root>"
     );
 }
 
 #[test]
 fn escape_ampersand() {
-    assert_eq!(escape_for_notification("a & b"), "a &amp; b");
+    assert_eq!(escape_for_notification("a & b"), "a & b");
 }
 
 #[test]

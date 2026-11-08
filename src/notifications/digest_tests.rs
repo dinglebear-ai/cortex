@@ -34,6 +34,13 @@ fn build_digest_body_golden() {
     assert!(body.contains("1000"), "should contain log count");
     assert!(body.contains("2 hosts"), "should have host count summary");
     assert!(body.contains("5 errors"), "should have error count");
+    assert!(
+        body.contains("Host: server1\nLogs: 1000 · Errors: 5 · Warnings: 20\nMost active: nginx")
+    );
+    assert!(
+        !body.contains('|') && !body.contains("**"),
+        "Phone text needs no Markdown renderer"
+    );
 }
 
 #[test]

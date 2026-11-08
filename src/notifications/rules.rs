@@ -26,9 +26,9 @@ pub fn evaluate_oom_kill(rows: &[LogRow], apprise_urls_json: &str) -> Vec<Outbox
                 && r.message.contains("Out of memory: Killed process")
         })
         .map(|r| {
-            let title = escape_for_notification(&format!("[CRITICAL] OOM Kill on {}", r.hostname));
+            let title = escape_for_notification(&format!("🚨 Out of memory on {}", r.hostname));
             let body = escape_for_notification(&format!(
-                "Kernel OOM killer fired on **{}** at {}\n\n```\n{}\n```",
+                "Host: {}\nTime: {}\n\nProblem: {}",
                 r.hostname, r.timestamp, r.message
             ));
             OutboxInsertParams {
@@ -78,11 +78,11 @@ pub fn evaluate_container_die_nonzero(
                 .unwrap_or("unknown");
 
             let title = escape_for_notification(&format!(
-                "[WARNING] Container {} died (exit {}) on {}",
+                "⚠️ Container {} exited (code {}) on {}",
                 container, exit_code_str, r.hostname
             ));
             let body = escape_for_notification(&format!(
-                "Container **{}** exited with code `{}` on **{}** at {}",
+                "Container: {}\nExit code: {}\nHost: {}\nTime: {}",
                 container, exit_code_str, r.hostname, r.timestamp
             ));
             Some(OutboxInsertParams {
@@ -106,10 +106,9 @@ pub fn evaluate_fail2ban_ban(rows: &[LogRow], apprise_urls_json: &str) -> Vec<Ou
     rows.iter()
         .filter(|r| r.app_name.as_deref() == Some("fail2ban") && r.message.contains("Ban "))
         .map(|r| {
-            let title =
-                escape_for_notification(&format!("[NOTICE] fail2ban ban on {}", r.hostname));
+            let title = escape_for_notification(&format!("ℹ️ IP blocked on {}", r.hostname));
             let body = escape_for_notification(&format!(
-                "fail2ban banned an IP on **{}** at {}\n\n{}",
+                "Host: {}\nTime: {}\n\nEvent: {}",
                 r.hostname, r.timestamp, r.message
             ));
             OutboxInsertParams {
@@ -142,12 +141,10 @@ pub fn evaluate_authelia_mfa_fail(
                     || r.message.to_lowercase().contains("invalid"))
         })
         .map(|r| {
-            let title = escape_for_notification(&format!(
-                "[WARNING] Authelia MFA failure on {}",
-                r.hostname
-            ));
+            let title =
+                escape_for_notification(&format!("⚠️ Authelia sign-in failure on {}", r.hostname));
             let body = escape_for_notification(&format!(
-                "Authelia second factor event on **{}** at {}\n\n{}",
+                "Host: {}\nTime: {}\n\nProblem: {}",
                 r.hostname, r.timestamp, r.message
             ));
             OutboxInsertParams {
@@ -186,19 +183,20 @@ pub fn evaluate_disk_fill(
     warn_bytes: u64,
     apprise_urls_json: &str,
 ) -> Option<OutboxInsertParams> {
-    let (severity, label) = if critical_bytes > 0 && free_bytes < critical_bytes {
-        ("critical", "CRITICAL")
+    let severity = if critical_bytes > 0 && free_bytes < critical_bytes {
+        "critical"
     } else if warn_bytes > 0 && free_bytes < warn_bytes {
-        ("warning", "WARNING")
+        "warning"
     } else {
         return None;
     };
     let free_mib = free_bytes / (1024 * 1024);
     let title = escape_for_notification(&format!(
-        "[{label}] Disk fill on {hostname}: {free_mib} MiB free"
+        "{} Disk space low on {hostname}: {free_mib} MiB free",
+        crate::notifications::text::severity_icon(severity)
     ));
     let body = escape_for_notification(&format!(
-        "Host **{hostname}** has only {free_mib} MiB disk space remaining."
+        "Host: {hostname}\nFree space: {free_mib} MiB\n\nDisk space is below the configured {severity} threshold."
     ));
     Some(OutboxInsertParams {
         dedup_key: format!("disk_fill:{hostname}:{severity}"),
@@ -229,14 +227,12 @@ pub fn evaluate_ingest_queue_pressure(
         return None;
     }
 
-    let title = escape_for_notification(&format!(
-        "[WARNING] syslog ingest queue pressure on {hostname}"
-    ));
+    let title = escape_for_notification(&format!("⚠️ Log queue pressure on {hostname}"));
     let body = escape_for_notification(&format!(
-        "cortex observed queue pressure on **{hostname}** since the last check:\n\n\
-         - queue-full transitions: `{full_transitions_delta}`\n\
-         - UDP drops from full queue: `{udp_drops_delta}`\n\
-         - current queue depth: `{queue_depth}/{queue_capacity}`"
+        "Host: {hostname}\n\n\
+         Queue-full transitions: {full_transitions_delta}\n\
+         UDP drops from full queue: {udp_drops_delta}\n\
+         Current queue depth: {queue_depth}/{queue_capacity}"
     ));
 
     Some(OutboxInsertParams {
@@ -277,14 +273,12 @@ pub fn evaluate_ingest_silence(
     }
     let age_mins = age_secs / 60;
     let title = escape_for_notification(&format!(
-        "[CRITICAL] cortex ingest silent on {hostname}: no logs for {age_mins} min"
+        "🚨 No incoming logs on {hostname} for {age_mins} min"
     ));
     let body = escape_for_notification(&format!(
-        "cortex on **{hostname}** has not ingested any log rows for {age_mins} minutes \
-         (threshold: {} min).\n\n\
-         Likely causes: dead syslog listener, broken rsyslog forwarding, or a \
-         write-blocked database. Check `/health`, `cortex action=ingest_rate`, \
-         and `cortex action=silent_hosts`.",
+        "Host: {hostname}\nSilent for: {age_mins} minutes\nThreshold: {} min\n\n\
+         Check: syslog listener, log forwarding, and database writes.\n\
+         Investigate in Cortex: /health, ingest_rate, silent_hosts.",
         threshold_secs / 60
     ));
     Some(OutboxInsertParams {
@@ -319,16 +313,13 @@ pub fn evaluate_heartbeat_silence(
     apprise_urls_json: &str,
 ) -> OutboxInsertParams {
     let age_mins = age_secs / 60;
-    let title = escape_for_notification(&format!(
-        "[CRITICAL] cortex agent silent on {hostname}: no heartbeat for {age_mins} min"
-    ));
+    let title =
+        escape_for_notification(&format!("🚨 Agent silent on {hostname} for {age_mins} min"));
     let body = escape_for_notification(&format!(
-        "The cortex agent on **{hostname}** has not delivered a heartbeat for \
-         {age_mins} minutes (threshold: {} min). Last accepted heartbeat: \
-         {last_heartbeat_at}.\n\n\
-         Likely causes: agent process/container down, host offline or \
-         rebooting, or the heartbeat target unreachable from the host. Check \
-         `cortex action=fleet_state` and the agent service on the host.",
+        "Host: {hostname}\nSilent for: {age_mins} minutes\nThreshold: {} min\n\
+         Last heartbeat: {last_heartbeat_at}\n\n\
+         Check: host connectivity, the Cortex agent service, and its heartbeat destination.\n\
+         Investigate in Cortex: fleet_state.",
         threshold_secs / 60
     ));
     OutboxInsertParams {
@@ -363,16 +354,13 @@ pub fn evaluate_stream_silence(
 ) -> OutboxInsertParams {
     let age_mins = age_secs / 60;
     let title = escape_for_notification(&format!(
-        "[WARNING] cortex stream silent: {source_kind} from {hostname} stopped {age_mins} min ago"
+        "⚠️ {source_kind} logs stopped on {hostname} {age_mins} min ago"
     ));
     let body = escape_for_notification(&format!(
-        "**{hostname}** had been sending `{source_kind}` logs but none have \
-         arrived for {age_mins} minutes (threshold: {} min). Last row: \
-         {last_seen_at}.\n\n\
-         The host is otherwise reachable if its heartbeat is current — check \
-         the specific forwarder (docker socket access, tailed file rotation, \
-         syslog forwarding) on the host. `cortex action=filter` with \
-         host/source_kind narrows it down.",
+        "Host: {hostname}\nStream: {source_kind}\nSilent for: {age_mins} minutes\n\
+         Threshold: {} min\nLast received: {last_seen_at}\n\n\
+         Check: this stream's forwarder, Docker socket access, file rotation, or syslog forwarding.\n\
+         Investigate in Cortex: filter by this host and stream.",
         threshold_secs / 60
     ));
     OutboxInsertParams {

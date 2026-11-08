@@ -174,12 +174,11 @@ impl CortexService {
 
         // Send test notification asynchronously
         let client = crate::notifications::apprise::AppriseClient::new(apprise_url);
-        let escaped_body = crate::notifications::apprise::escape_for_notification(&body);
         let result = client
             .notify(
                 &apprise_urls,
-                "Test Notification",
-                &escaped_body,
+                "🧪 Cortex test notification",
+                &body,
                 crate::notifications::apprise::NotifyType::Info,
             )
             .await;

@@ -183,8 +183,8 @@ fn escaped_titles_in_rules() {
         "@ should be escaped in title"
     );
     assert!(
-        !results[0].body.contains('<'),
-        "< should be stripped from body"
+        results[0].body.contains("<nginx＠host>"),
+        "Text delivery preserves literal details while neutralizing mentions"
     );
 }
 
@@ -305,7 +305,7 @@ fn heartbeat_silence_builds_once_per_outage_dedup_key() {
     );
     assert!(params.title.contains("backuphost"));
     assert!(params.body.contains("2026-07-14T18:34:36.613Z"));
-    assert!(params.body.contains("threshold: 10 min"));
+    assert!(params.body.contains("Threshold: 10 min"));
 
     // A recovery followed by a new outage produces a different key.
     let next = evaluate_heartbeat_silence(
@@ -338,5 +338,5 @@ fn stream_silence_builds_once_per_outage_dedup_key() {
     );
     assert!(params.title.contains("agent-docker"));
     assert!(params.title.contains("nashost"));
-    assert!(params.body.contains("threshold: 60 min"));
+    assert!(params.body.contains("Threshold: 60 min"));
 }
