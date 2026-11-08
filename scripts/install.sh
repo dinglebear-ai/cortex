@@ -30,11 +30,7 @@ fi
 command -v curl >/dev/null || { printf 'curl is required\n' >&2; exit 1; }
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
-ref="$CORTEX_VERSION"
-if [[ "$ref" == latest ]]; then
-  ref=main
-elif [[ "$ref" != v* ]]; then
-  ref="v$ref"
-fi
-curl -fsSL "https://raw.githubusercontent.com/$CORTEX_INSTALL_REPO/$ref/install.sh" -o "$tmpdir/install.sh"
+# Bootstrap compatibility is maintained independently of the requested binary tag.
+# Historical root bootstraps do not implement this adapter's destination/ARM contract.
+curl -fsSL "https://raw.githubusercontent.com/$CORTEX_INSTALL_REPO/main/install.sh" -o "$tmpdir/install.sh"
 sh "$tmpdir/install.sh" "$@"

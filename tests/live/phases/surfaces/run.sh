@@ -49,7 +49,8 @@ LIVE_CANDIDATE_ID="$(live_ingest_candidate_id)"
 export LIVE_CLI_PATH LIVE_DOCKER_BIN LIVE_DOCKER_COMPOSE_BIN LIVE_CANDIDATE_ID
 [[ -n "$LIVE_CANDIDATE_ID" ]] || { live_die "surfaces candidate container was not discoverable"; exit 1; }
 live_event phase_progress '{"phase":"surfaces","stage":"candidate-ready"}'
-mkdir -p "$LIVE_RUN_HOME" "$LIVE_RUN_TMP"; chmod 700 "$LIVE_RUN_HOME" "$LIVE_RUN_TMP"
+mkdir -p "$LIVE_RUN_HOME" "$LIVE_RUN_TMP" "$LIVE_RUN_HOME/.cortex" "$LIVE_RUN_HOME/.codex"
+chmod 700 "$LIVE_RUN_HOME" "$LIVE_RUN_TMP" "$LIVE_RUN_HOME/.cortex" "$LIVE_RUN_HOME/.codex"
 mkdir -p "$LIVE_RUN_TMP/bin"
 cp "$binary" "$LIVE_RUN_TMP/bin/cortex"
 chmod 700 "$LIVE_RUN_TMP/bin/cortex"

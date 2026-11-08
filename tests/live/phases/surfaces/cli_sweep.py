@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _INCIDENT_ID: str | None = None
 
@@ -80,7 +81,13 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         command_key = hashlib.sha256(spelling.encode()).hexdigest()[:12]
         if spelling.startswith("setup") or spelling == "doctor":
             command_key = "setup-shared"
-        isolated_port = 43000 + int(hashlib.sha256(b"setup-port").hexdigest()[:3], 16) % 1000
+        # Setup now verifies HTTP/MCP/REST directly, rather than through curl.
+        # Its external Docker fixture does not start a listener. Verify against
+        # the already-running, run-owned candidate instead of a synthetic port.
+        setup_url = urlsplit(os.environ["LIVE_CORTEX_URL"])
+        if setup_url.scheme != "http" or setup_url.hostname != "127.0.0.1" or setup_url.port is None:
+            raise ValueError("LIVE_CORTEX_URL must identify the run-owned loopback candidate port")
+        isolated_port = setup_url.port
         docker_transport = {
             key: os.environ[key]
             for key in ("DOCKER_HOST", "DOCKER_API_VERSION", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
@@ -89,6 +96,8 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         process = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
                                  env={**docker_transport,
                                       "PATH": path, "HOME": os.environ["LIVE_RUN_HOME"],
+                                      "CORTEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cortex"),
+                                      "CODEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".codex"),
                                       "XDG_CONFIG_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".config"),
                                       "XDG_DATA_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".local", "share"),
                                       "XDG_CACHE_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cache"),
@@ -99,7 +108,9 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
                                       "CORTEX_DATA_VOLUME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cortex", "data"),
                                       "CORTEX_RUNTIME_CURRENT_ALLOW_LOCAL_IMAGE": "true",
                                       "CORTEX_PORT": str(isolated_port),
-                                      "CORTEX_RECEIVER_PORT": str(isolated_port + 1000),
+                                      # Fail readiness within the sweep's fixed 20s process budget.
+                                      "CORTEX_SETUP_READY_TIMEOUT_SECS": "5",
+                                      "CORTEX_RECEIVER_PORT": "44000",
                                       "LIVE_DOCKER_BIN": os.environ["LIVE_DOCKER_BIN"],
                                       # The Docker fixtures report the candidate's version from this
                                       # contract; the explicit env would otherwise drop it.
@@ -112,8 +123,12 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         return {"exit": process.returncode, "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
                 "mentions_usage": b"Usage:" in output or b"Usage" in output,
                 "terminal": output.decode("utf-8", "replace")[-4096:]}
-    except subprocess.TimeoutExpired:
-        return {"exit": 124, "bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "timeout": True}
+    except subprocess.TimeoutExpired as error:
+        output = ((error.stdout or b"") + (error.stderr or b""))[:65536]
+        return {"exit": 124, "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
+                "timeout": True, "mentions_usage": False,
+                "terminal": (output.decode("utf-8", "replace") +
+                             f"\n{spelling} exceeded the 20s CLI process budget")[-4096:]}
 
 
 def run_long_lived(binary: str, spelling: str) -> dict:
@@ -121,6 +136,8 @@ def run_long_lived(binary: str, spelling: str) -> dict:
     command_key = hashlib.sha256(spelling.encode()).hexdigest()[:12]
     port = 41000 + int(command_key[:3], 16) % 1000
     env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ["LIVE_RUN_HOME"],
+           "CORTEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cortex"),
+           "CODEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".codex"),
            "LIVE_CANDIDATE_VERSION": os.environ["LIVE_CANDIDATE_VERSION"],
            "TMPDIR": os.environ["LIVE_RUN_TMP"], "CORTEX_URL": os.environ["LIVE_CORTEX_URL"],
            "CORTEX_API_TOKEN": os.environ["LIVE_API_TOKEN"], "CORTEX_API_ADMIN_TOKEN": os.environ["LIVE_ADMIN_TOKEN"],

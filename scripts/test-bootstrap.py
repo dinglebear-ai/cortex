@@ -51,7 +51,7 @@ case "$2" in *.sha256) cp '{self.digest}' "$4";; *) cp '{self.archive}' "$4";; e
 
     def run_install(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(['sh', str(ROOT / 'install.sh'), *args], env=self.env,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, timeout=15)
 
     def test_supported_platforms_and_asset_names(self) -> None:
         for system, arch, asset in [('Linux', 'x86_64', 'cortex-linux-x86_64.tar.gz'),
@@ -115,7 +115,7 @@ case "$1" in metadata) printf '{{"target_directory":"{target}"}}';; build) exit 
         profile = self.root / '.zshrc'
         self.assertEqual(profile.read_text().count('# Cortex CLI'), 1)
         result = subprocess.run(['sh', '-c', '. "$1"; command -v cortex', 'sh', str(profile)],
-                                env=self.env, capture_output=True, text=True)
+                                env=self.env, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), self.env['CORTEX_INSTALL_PREFIX'] + '/bin/cortex')
 
@@ -124,7 +124,7 @@ case "$1" in metadata) printf '{{"target_directory":"{target}"}}';; build) exit 
         self.env['INSTALL_DIR'] = str(self.root / 'compat-bin')
         self.env['CORTEX_RMCP_VERSION'] = '9.9.9'
         result = subprocess.run(['bash', str(ROOT / 'scripts/install.sh')], env=self.env,
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / 'compat-bin/cortex').exists())
         self.assertIn('/v9.9.9/cortex-linux-x86_64.tar.gz', (self.root / 'urls').read_text())
@@ -144,14 +144,71 @@ esac
         args = ['--role', 'client', '--server', 'https://cortex.example', '--clients', 'none', '--json']
         result = subprocess.run(['bash', '-s', '--', *args],
                                 input=(ROOT / 'scripts/install.sh').read_text(), cwd=self.root,
-                                env=self.env, capture_output=True, text=True)
+                                env=self.env, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('unbound variable', result.stderr)
         self.assertTrue((self.root / 'compat-bin/cortex').exists())
         self.assertEqual(self.log.read_text().splitlines(), ['setup', 'start', *args])
         urls = (self.root / 'urls').read_text()
-        self.assertIn('/dinglebear-ai/cortex/v9.9.9/install.sh', urls)
+        self.assertIn('/dinglebear-ai/cortex/main/install.sh', urls)
         self.assertIn('/v9.9.9/cortex-linux-x86_64.tar.gz', urls)
+
+    def test_piped_pinned_release_uses_maintained_bootstrap(self) -> None:
+        # Preserve the actual historical root semantics, rather than returning the
+        # current root for every raw URL (which hid the regression).
+        historical = self.root / 'historical-install.sh'
+        historical.write_text(subprocess.run(
+            ['git', '-C', str(ROOT), 'show', 'v3.18.1:install.sh'],
+            check=True, capture_output=True, text=True, timeout=15).stdout)
+        self.assertNotIn('CORTEX_INSTALL_BIN_DIR', historical.read_text())
+        self.assertNotIn('linux:aarch64', historical.read_text())
+        self.env['CORTEX_RMCP_VERSION'] = 'v3.18.1'
+        self.env['INSTALL_DIR'] = str(self.root / 'compat-bin')
+        default = self.root / 'prefix/bin/cortex'
+        default.parent.mkdir(parents=True)
+        default.write_text('existing default binary')
+        for system, arch, asset in (
+            ('Linux', 'x86_64', 'cortex-linux-x86_64.tar.gz'),
+            ('Linux', 'aarch64', 'cortex-linux-aarch64.tar.gz'),
+            ('Darwin', 'arm64', 'cortex-macos-arm64'),
+        ):
+            with self.subTest(system=system, arch=arch):
+                self.write('uname', f'#!/bin/sh\ncase "$1" in -s) echo {system};; -m) echo {arch};; esac\n')
+                source = self.binary if system == 'Darwin' else self.archive
+                self.digest.write_text(hashlib.sha256(source.read_bytes()).hexdigest() + f'  {asset}\n')
+                self.write('curl', f'''#!/bin/sh
+printf '%s\\n' "$2" >> '{self.root}/urls'
+case "$2" in
+  https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.sh) cp '{ROOT / 'install.sh'}' "$4";;
+  https://raw.githubusercontent.com/dinglebear-ai/cortex/v3.18.1/install.sh) cp '{historical}' "$4";;
+  https://github.com/dinglebear-ai/cortex/releases/download/v3.18.1/{asset}.sha256) cp '{self.digest}' "$4";;
+  https://github.com/dinglebear-ai/cortex/releases/download/v3.18.1/{asset}) cp '{source}' "$4";;
+  *) exit 22;;
+esac
+''')
+                for broken in (False, True):
+                    self.env['CORTEX_INSTALL_SKIP_SETUP'] = '1'
+                    installed = self.root / 'compat-bin/cortex'
+                    installed.parent.mkdir(exist_ok=True)
+                    installed.write_text('existing selected binary')
+                    if broken:
+                        self.digest.write_text('0' * 64)
+                    (self.root / 'urls').unlink(missing_ok=True)
+                    result = subprocess.run(
+                        ['bash', '-s'], input=(ROOT / 'scripts/install.sh').read_text(),
+                        cwd=self.root, env=self.env, capture_output=True, text=True, timeout=15)
+                    self.assertEqual(result.returncode == 0, not broken, result.stderr)
+                    if broken:
+                        self.assertEqual(installed.read_text(), 'existing selected binary')
+                    else:
+                        self.assertEqual(installed.read_bytes(), self.binary.read_bytes())
+                    self.assertEqual(default.read_text(), 'existing default binary')
+                    self.assertFalse(self.log.exists())
+                    self.assertEqual((self.root / 'urls').read_text().splitlines(), [
+                        'https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.sh',
+                        f'https://github.com/dinglebear-ai/cortex/releases/download/v3.18.1/{asset}',
+                        f'https://github.com/dinglebear-ai/cortex/releases/download/v3.18.1/{asset}.sha256',
+                    ])
 
     def test_setup_failure_propagates(self) -> None:
         self.binary.write_text('#!/bin/sh\nexit 17\n')

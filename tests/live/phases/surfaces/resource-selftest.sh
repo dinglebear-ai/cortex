@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 export LIVE_PROJECT_ROOT="$root"
+python3 "$root/tests/live/phases/surfaces/cli_sweep_test.py"
 for lib in common lock redact events command report lease resources; do source "$root/tests/live/lib/$lib.sh"; done
 source "$root/tests/live/phases/surfaces/resources.sh"
 grep -q 'background integrity job did not finish before maintenance sweep' "$root/tests/live/phases/surfaces/rest_sweep.py" || {

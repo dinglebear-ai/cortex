@@ -19,8 +19,12 @@ class Finding:
 
 def check(repo, profile):
     findings = [Finding("symlink-convention", "AGENTS.md", "legacy CLAUDE.md ownership")]
+    if (repo / "install.sh").exists():
+        findings.append(Finding("no-arm-contract", "install.sh", "ARM outside fleet contract"))
     if (repo / "scripts/install.sh").exists():
         findings.append(Finding("no-arm-contract", "scripts/install.sh", "ARM outside fleet contract"))
+    if (repo / "nested/install.sh").exists():
+        findings.append(Finding("no-arm-contract", "nested/install.sh", "unknown carrier"))
     if (repo / "package.json").exists():
         findings.append(Finding("no-arm-contract", "package.json", "ARM outside fleet contract"))
     for name in ("docs-frontmatter", "future-contract-check"):
@@ -59,23 +63,43 @@ class ContractAdapterTests(unittest.TestCase):
         self.assertIn("Cortex instruction and native ARM rules", result.stdout)
 
     def test_qualified_arm_installer_exception(self):
-        (self.root / "scripts/install.sh").write_text("arm64\n")
-        release = self.root / ".github/workflows/release.yml"
-        release.parent.mkdir(parents=True)
-        release.write_text("\n".join((
-            "cortex-linux-arm64:", "cortex-macos-arm64:",
-            "macos-package-gate:", "runs-on: ubuntu-24.04-arm",
-            "runs-on: macos-15",
-            "needs: [cortex-linux, cortex-linux-arm64, cortex-macos-arm64,",
-            "cortex-linux-aarch64.tar.gz",
-            "cortex-macos-arm64",
-        )))
+        for name in ("install.sh", "scripts/install.sh", ".github/workflows/release.yml"):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (self.root / "nested").mkdir()
+        (self.root / "nested/install.sh").write_text("arm64\n")
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no-arm-contract: nested/install.sh", result.stdout)
+        (self.root / "nested/install.sh").unlink()
         (self.root / "package.json").write_text("arm64\n")
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no-arm-contract: package.json", result.stdout)
+
+    def test_rejects_carrier_and_qualification_drift(self):
+        for name in ("install.sh", "scripts/install.sh", ".github/workflows/release.yml"):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+        for name, old, new in (
+            ("install.sh", "dinglebear-ai/cortex", "foreign/cortex"),
+            ("install.sh", "cortex-macos-arm64", "cortex-macos-arm64.tar.gz"),
+            ("install.sh", "linux:aarch64|linux:arm64", "linux:riscv64"),
+            (".github/workflows/release.yml", "ubuntu-24.04-arm", "ubuntu-24.04"),
+            ("scripts/install.sh", "dinglebear-ai/cortex", "foreign/cortex"),
+            ("scripts/install.sh", 'exec sh "$script_dir/../install.sh" "$@"', 'exec sh other.sh'),
+        ):
+            with self.subTest(name=name, drift=new):
+                path = self.root / name
+                original = path.read_text()
+                self.assertIn(old, original)
+                path.write_text(original.replace(old, new))
+                self.assertNotEqual(self.invoke().returncode, 0)
+                path.write_text(original)
 
     def test_arm_installer_requires_release_qualification(self):
         (self.root / "scripts/install.sh").write_text("arm64\n")
