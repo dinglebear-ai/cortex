@@ -101,3 +101,28 @@ clients:
     assert!(!cached.contains("super-secret-hash"));
     assert!(!cached.contains("private-key-material"));
 }
+
+#[test]
+fn adguard_parser_preserves_aliases_and_rejects_ambiguous_documents() {
+    let service = normalize_service(
+        None,
+        "test.yaml",
+        "bind: &bind [127.0.0.1]\ndns: {bind_hosts: *bind, port: 53}\n",
+    )
+    .unwrap();
+    assert_eq!(service.details["dns"]["bind_hosts"][0], "127.0.0.1");
+    for body in [
+        "dns: {port: 53, port: 54}",
+        "[one, two]",
+        "dns: {}\n---\ndns: {}",
+    ] {
+        assert!(normalize_service(None, "test.yaml", body).is_err());
+    }
+}
+
+#[test]
+fn adguard_parser_errors_do_not_echo_secret_source_lines() {
+    let body = "dns: {port: [53} # secret-config-token";
+    let error = normalize_service(None, "test.yaml", body).unwrap_err();
+    assert!(!format!("{error:#}").contains("secret-config-token"));
+}

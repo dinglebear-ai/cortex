@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use serde_yaml_ng::Value;
+use serde_json::Value;
 
 const S3_ENV: [&str; 5] = [
     "KACHE_S3_ACCESS_KEY",
@@ -44,7 +44,7 @@ fn mode_for_present_fields(present: u8) -> String {
 }
 
 fn yaml(path: &str) -> Value {
-    serde_yaml_ng::from_str(
+    serde_saphyr::from_str(
         &std::fs::read_to_string(repo_path(path)).expect("YAML file must be readable"),
     )
     .expect("YAML file must parse")
@@ -111,7 +111,7 @@ fn release_and_action_have_exact_s3_wiring() {
     );
 
     let release_steps = release["jobs"]["cortex-linux"]["steps"]
-        .as_sequence()
+        .as_array()
         .expect("cortex-linux steps must be a sequence");
     let release_setup = release_steps
         .iter()
@@ -122,7 +122,7 @@ fn release_and_action_have_exact_s3_wiring() {
         Some("./.github/actions/setup-rust-kache")
     );
     let release_with = release_setup["with"]
-        .as_mapping()
+        .as_object()
         .expect("release Kache step must have inputs");
     assert_eq!(release_with.len(), 3, "release must rely on both defaults");
     for (name, expression) in [
@@ -138,14 +138,14 @@ fn release_and_action_have_exact_s3_wiring() {
     }
 
     let action_steps = action["runs"]["steps"]
-        .as_sequence()
+        .as_array()
         .expect("composite action steps must be a sequence");
     let configure = action_steps
         .iter()
         .find(|step| step["name"].as_str() == Some("Configure kache"))
         .expect("action must have a Configure kache step");
     let configure_env = configure["env"]
-        .as_mapping()
+        .as_object()
         .expect("Configure kache must map its inputs into env");
     assert_eq!(configure_env.len(), S3_ENV.len());
     for (env_name, input_name) in [
