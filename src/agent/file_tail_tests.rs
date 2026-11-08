@@ -208,7 +208,10 @@ async fn file_tail_state_replaces_existing_checkpoint_and_reopens_latest_state()
         pending: Some(record),
     };
     store.save(&pending).await.unwrap();
-    assert_ne!(std::fs::read(&config.checkpoint_path).unwrap(), initial_bytes);
+    assert_ne!(
+        std::fs::read(&config.checkpoint_path).unwrap(),
+        initial_bytes
+    );
     drop(store);
     let (store, restored) = Store::open(&config.checkpoint_path).await.unwrap();
     assert_eq!(
