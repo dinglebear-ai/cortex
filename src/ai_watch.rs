@@ -222,6 +222,7 @@ enum RescanStatus {
 
 #[derive(Debug, Default)]
 struct RescanCursor {
+    discovery: scanner::DiscoveryContinuation,
     start_after: Option<PathBuf>,
     discovery_start_after: BTreeMap<PathBuf, PathBuf>,
 }
@@ -240,17 +241,20 @@ async fn run_rescan(
     // the first attempted source establishes the continuation cursor.
     let since = rescan_since_for_cursor(since, cursor).map(system_time_to_rfc3339);
     match service
-        .index_ai_roots_with_scan_budget(
+        .index_ai_roots_with_discovery_continuation(
             path,
             false,
             since,
-            Some(scanner::ScanBudget {
-                per_source_max_bytes: RESCAN_PER_SOURCE_MAX_BYTES,
-                scan_max_bytes: RESCAN_MAX_BYTES,
-                per_source_deadline: RESCAN_PER_SOURCE_DEADLINE,
-            }),
-            cursor.start_after.clone(),
-            cursor.discovery_start_after.clone(),
+            scanner::DiscoveryScanState {
+                scan_budget: Some(scanner::ScanBudget {
+                    per_source_max_bytes: RESCAN_PER_SOURCE_MAX_BYTES,
+                    scan_max_bytes: RESCAN_MAX_BYTES,
+                    per_source_deadline: RESCAN_PER_SOURCE_DEADLINE,
+                }),
+                start_after: cursor.start_after.clone(),
+                discovery_start_after: cursor.discovery_start_after.clone(),
+                continuation: Some(cursor.discovery.clone()),
+            },
         )
         .await
     {
@@ -274,12 +278,16 @@ fn apply_rescan_result(cursor: &mut RescanCursor, result: &IndexResult) -> Resca
     if status == RescanStatus::Completed {
         cursor.start_after = None;
         cursor.discovery_start_after.clear();
+        cursor.discovery.clear();
     }
     status
 }
 
 fn rescan_since_for_cursor(since: Option<SystemTime>, cursor: &RescanCursor) -> Option<SystemTime> {
-    if cursor.start_after.is_some() || !cursor.discovery_start_after.is_empty() {
+    if cursor.start_after.is_some()
+        || !cursor.discovery_start_after.is_empty()
+        || cursor.discovery.is_pending()
+    {
         None
     } else {
         since

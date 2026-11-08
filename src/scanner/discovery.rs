@@ -9,7 +9,7 @@ pub(super) fn collect_supported_files_bounded(
     budget: &DiscoveryBudget,
     started: Instant,
 ) {
-    if result.capped || started.elapsed() >= budget.deadline {
+    if result.capped || exhausted(budget, started) {
         result.capped = true;
         return;
     }
@@ -56,6 +56,7 @@ pub(super) fn collect_supported_files_bounded(
         cursor = result.next_cursor.clone().or(cursor);
     }
     loop {
+        let identity = directory_identity(path);
         let read_dir = match fs::read_dir(path) {
             Ok(read_dir) => read_dir,
             Err(error) => {
@@ -73,13 +74,17 @@ pub(super) fn collect_supported_files_bounded(
         let remaining_entries = budget.max_entries.saturating_sub(*entries);
         let remaining_bytes = budget.max_path_bytes.saturating_sub(*path_bytes);
         for entry in read_dir {
-            if started.elapsed() >= budget.deadline {
+            if exhausted(budget, started) {
                 result.capped = true;
                 return; // No cursor advance for an incompletely ordered page.
             }
             match entry {
                 Ok(entry) => {
                     let child = entry.path();
+                    #[cfg(test)]
+                    if budget.cancel.is_some() {
+                        hold_snapshot_for_test(&child);
+                    }
                     if completed_directory.as_ref() == Some(&child)
                         || cursor.as_deref().is_some_and(|cursor| {
                             child <= cursor
@@ -109,10 +114,14 @@ pub(super) fn collect_supported_files_bounded(
                 }
             }
         }
+        if identity != directory_identity(path) {
+            result.capped = true;
+            return;
+        }
         let mut restart = false;
         while let Some(child) = children.pop_first() {
             if result.capped
-                || started.elapsed() >= budget.deadline
+                || exhausted(budget, started)
                 || *entries >= budget.max_entries
                 || child.as_os_str().len() > budget.max_path_bytes.saturating_sub(*path_bytes)
             {
@@ -153,5 +162,26 @@ pub(super) fn collect_supported_files_bounded(
         }
         result.capped |= more;
         return;
+    }
+}
+
+fn exhausted(budget: &DiscoveryBudget, started: Instant) -> bool {
+    if let Some(turn) = &budget.cancel {
+        turn.checkpoint()
+    } else {
+        started.elapsed() >= budget.deadline
+    }
+}
+
+pub(super) fn directory_identity(path: &Path) -> Option<(u64, u64, Option<std::time::SystemTime>)> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((metadata.dev(), metadata.ino(), metadata.modified().ok()))
+    }
+    #[cfg(not(unix))]
+    {
+        Some((metadata.len(), 0, metadata.modified().ok()))
     }
 }

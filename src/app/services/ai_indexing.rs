@@ -27,6 +27,33 @@ impl CortexService {
         start_after: Option<std::path::PathBuf>,
         discovery_start_after: std::collections::BTreeMap<std::path::PathBuf, std::path::PathBuf>,
     ) -> ServiceResult<scanner::IndexResult> {
+        self.index_ai_roots_with_discovery_continuation(
+            path,
+            force,
+            since,
+            scanner::DiscoveryScanState {
+                scan_budget,
+                start_after,
+                discovery_start_after,
+                continuation: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn index_ai_roots_with_discovery_continuation(
+        &self,
+        path: Option<String>,
+        force: bool,
+        since: Option<String>,
+        scan_state: scanner::DiscoveryScanState,
+    ) -> ServiceResult<scanner::IndexResult> {
+        let scanner::DiscoveryScanState {
+            scan_budget,
+            start_after,
+            discovery_start_after,
+            continuation,
+        } = scan_state;
         let storage = self.storage.clone();
         let since_mtime_nanos = since
             .as_deref()
@@ -41,7 +68,7 @@ impl CortexService {
             })
             .transpose()?;
         self.run_db("index_ai_roots", move |pool| {
-            scanner::index_roots_with_options(
+            scanner::index_roots_with_continuation(
                 pool,
                 scanner::IndexOptions {
                     root_override: path.map(std::path::PathBuf::from),
@@ -52,6 +79,7 @@ impl CortexService {
                     discovery_start_after,
                 },
                 Some(&storage),
+                continuation.as_ref(),
             )
         })
         .await
