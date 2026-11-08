@@ -140,9 +140,9 @@ EOF
     echo "live MCP fixture did not produce a persisted run-owned OOM firing" >&2
     return 1
   fi
-  notify_title="[CRITICAL] OOM Kill on $MCP_LIVE_NOTIFY_HOST"
-  notify_body="$(printf 'Kernel OOM killer fired on **%s** at %s\n\n```\n%s\n```' "$MCP_LIVE_NOTIFY_HOST" "$notify_timestamp" "$notify_message")"
-  notify_payload="$(jq -cS -n --arg title "$notify_title" --arg body "$notify_body" '{urls:["json://oracle.invalid"],title:$title,body:$body,type:"failure",format:"markdown"}')"
+  notify_title="🚨 Out of memory on $MCP_LIVE_NOTIFY_HOST"
+  notify_body="$(printf 'Host: %s\nTime: %s\n\nProblem: %s' "$MCP_LIVE_NOTIFY_HOST" "$notify_timestamp" "$notify_message")"
+  notify_payload="$(jq -cS -n --arg title "$notify_title" --arg body "$notify_body" '{urls:["json://oracle.invalid"],title:$title,body:$body,type:"failure",format:"text"}')"
   notify_sha="$(printf '%s' "$notify_payload" | shasum -a 256 | awk '{print $1}')"
   curl -fsS -H "Authorization: Bearer $LIVE_ORACLE_TOKEN" "http://127.0.0.1:$LIVE_ORACLE_PORT/capture" >"$dir/seed-notification-capture.json"
   jq -e --arg sha "$notify_sha" 'any(.records[]?;.path=="/notify/" and .sha256==$sha)' "$dir/seed-notification-capture.json" >/dev/null
@@ -260,10 +260,10 @@ mcp_phase_run() {
           for i in $(seq 1 10); do curl -fsS -H "Authorization: Bearer $LIVE_ORACLE_TOKEN" "http://127.0.0.1:$LIVE_ORACLE_PORT/capture" >"$dir/notification-capture.json"; [[ "$(jq '.records|length' "$dir/notification-capture.json")" -gt "$MCP_NOTIFY_BASE" ]] && break; sleep 1; done
           local test_body test_payload test_sha
           test_body="mcp-notify-$LIVE_RUN_ID"
-          test_payload="$(jq -cS -n --arg body "$test_body" '{urls:["json://oracle.invalid"],title:"Test Notification",body:$body,type:"info",format:"markdown"}')"
+          test_payload="$(jq -cS -n --arg body "$test_body" '{urls:["json://oracle.invalid"],title:"🧪 Cortex test notification",body:$body,type:"info",format:"text"}')"
           test_sha="$(printf '%s' "$test_payload" | shasum -a 256 | awk '{print $1}')"
           jq -e --argjson n "$MCP_NOTIFY_BASE" --arg sha "$test_sha" '(.records|length)>$n and any(.records[$n:][]?;.path=="/notify/" and .sha256==$sha)' "$dir/notification-capture.json" >/dev/null || result=fail
-          jq -cn --arg body "$test_body" --arg sha "$test_sha" '{title:"Test Notification",body:$body,body_sha256:$sha,status:"2xx"}' >"$dir/notifications-test-proof.json" ;;
+          jq -cn --arg body "$test_body" --arg sha "$test_sha" '{title:"🧪 Cortex test notification",body:$body,body_sha256:$sha,status:"2xx"}' >"$dir/notifications-test-proof.json" ;;
       esac
     fi
     normalized="$dir/semantic-$action.json"
