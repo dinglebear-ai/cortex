@@ -346,4 +346,4 @@ an rsync step after the timer fires (e.g. `rsync -a ~/.cortex/backups/
 backup-host:/backups/cortex/`), or
 point `BACKUP_DIR` at a mount that is itself replicated.
 
-Explicit `--binary PATH` on agent deployment or update uploads that artifact and checks it runs on the target before replacing the installed CLI. Without the override, deployment selects a release artifact for the target OS and architecture.
+On native Linux, macOS, and Windows agents, explicit `--binary PATH` on deployment or update uploads that artifact and checks it runs on the target before replacing the installed CLI. Without the override, deployment selects a release artifact for the target OS and architecture. Unraid agents use the published container image matching the deploying CLI version; `--binary` is rejected before changing the host or container.

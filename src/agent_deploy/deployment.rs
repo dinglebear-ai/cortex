@@ -97,6 +97,12 @@ pub(super) fn run_deploy_unraid(
     _local_binary: &Path,
     config: &AgentDeployConfig,
 ) -> io::Result<()> {
+    if config.binary_override {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--binary is unsupported for image-managed Unraid agents; deploy the published image matching this CLI version",
+        ));
+    }
     // Containerized agents run the published image with the binary baked in —
     // no host binary is staged or bind-mounted. Pin to this deploying binary's
     // version so server and agents stay in lockstep (the agent can still self-

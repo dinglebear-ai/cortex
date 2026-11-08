@@ -673,40 +673,61 @@ async fn validate_binary_rejects_excessive_output() {
 #[cfg(unix)]
 #[tokio::test]
 async fn cancelled_version_validation_terminates_descendants() {
+    assert_version_validation_cleans_descendants(true).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unpolled_version_validation_terminates_descendants() {
+    assert_version_validation_cleans_descendants(false).await;
+}
+
+#[cfg(unix)]
+async fn assert_version_validation_cleans_descendants(poll_before_cancel: bool) {
     use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
     let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("descendant-survived");
     let ready = dir.path().join("descendant-started");
+    // Both the shell and its descendant hold this socket. EOF proves every
+    // holder exited; no delayed marker or scheduler-dependent survival window.
+    let (peer, inherited) = std::os::unix::net::UnixStream::pair().unwrap();
+    peer.set_nonblocking(true).unwrap();
+    let mut peer = tokio::net::UnixStream::from_std(peer).unwrap();
+    let inherited: std::os::fd::OwnedFd = inherited.into();
     let mut command = tokio::process::Command::new("sh");
     command
         .arg("-c")
-        .arg("(sleep 0.3; touch \"$1\") & echo ready > \"$2\"; wait")
+        .arg("exec 3<&0; (echo ready > \"$1\"; exec cat <&3 >/dev/null) & wait")
         .arg("validation")
-        .arg(&marker)
         .arg(&ready)
         .process_group(0)
         .kill_on_drop(true)
+        .stdin(Stdio::from(inherited))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = command.spawn().unwrap();
+    drop(command); // Release the parent copy of the inherited socket.
     let group = child.id().unwrap() as i32;
-    let task = tokio::spawn(read_version_child(child, Duration::from_secs(30)));
-    tokio::time::timeout(Duration::from_secs(2), async {
+    let mut validation = Box::pin(read_version_child(child, Duration::from_secs(30)));
+    if poll_before_cancel {
+        assert!(futures_util::poll!(validation.as_mut()).is_pending());
+    }
+    let ready_result = tokio::time::timeout(Duration::from_secs(5), async {
         while !ready.exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .unwrap();
-    task.abort();
-    assert!(task.await.unwrap_err().is_cancelled());
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    // Always clean up the test group, including on the unfixed implementation.
+    .await;
+    drop(validation);
+    let eof = tokio::time::timeout(Duration::from_secs(5), peer.read(&mut [0u8])).await;
+    // Always clean up this owned group, including on the unfixed implementation.
     unsafe {
         libc::kill(-group, libc::SIGKILL);
     }
-    assert!(
-        !marker.exists(),
-        "cancelled validation left a descendant running"
+    ready_result.unwrap();
+    assert_eq!(
+        eof.expect("cancelled validation left a descendant holding stdin")
+            .unwrap(),
+        0
     );
 }

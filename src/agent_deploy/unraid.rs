@@ -119,6 +119,6 @@ printf '%s\n' 'agent version and sustained process health validated; delivery un
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "unraid_tests.rs"]
 mod tests;

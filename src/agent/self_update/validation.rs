@@ -33,54 +33,57 @@ async fn validate_binary_with_deadline(
     Ok(())
 }
 
-pub(super) async fn read_version_child(
+pub(super) fn read_version_child(
     mut child: tokio::process::Child,
     deadline: Duration,
-) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
-    use tokio::io::AsyncReadExt;
-    const OUTPUT_LIMIT: u64 = 16 * 1024;
+) -> impl std::future::Future<Output = Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)>> {
+    // Own group cleanup before the future can be dropped without being polled.
     #[cfg(unix)]
     let mut process_group = ProcessGroupGuard(child.id());
-    let stdout = child
-        .stdout
-        .take()
-        .context("capture staged binary stdout")?;
-    let stderr = child
-        .stderr
-        .take()
-        .context("capture staged binary stderr")?;
-    let bounded_read = |reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>| async move {
-        let mut bytes = Vec::new();
-        reader
-            .take(OUTPUT_LIMIT + 1)
-            .read_to_end(&mut bytes)
-            .await?;
-        if bytes.len() as u64 > OUTPUT_LIMIT {
-            return Err(std::io::Error::other(
-                "staged binary version output exceeded limit",
-            ));
+    async move {
+        use tokio::io::AsyncReadExt;
+        const OUTPUT_LIMIT: u64 = 16 * 1024;
+        let stdout = child
+            .stdout
+            .take()
+            .context("capture staged binary stdout")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("capture staged binary stderr")?;
+        let bounded_read = |reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>| async move {
+            let mut bytes = Vec::new();
+            reader
+                .take(OUTPUT_LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .await?;
+            if bytes.len() as u64 > OUTPUT_LIMIT {
+                return Err(std::io::Error::other(
+                    "staged binary version output exceeded limit",
+                ));
+            }
+            Ok(bytes)
+        };
+        let result = timeout(deadline, async {
+            tokio::try_join!(
+                child.wait(),
+                bounded_read(Box::new(stdout)),
+                bounded_read(Box::new(stderr))
+            )
+        })
+        .await;
+        if !matches!(result, Ok(Ok(_))) {
+            // Kill and reap explicitly. On cancellation, the Unix group guard
+            // terminates descendants and kill_on_drop terminates the direct child.
+            #[cfg(unix)]
+            process_group.terminate();
+            let _ = child.kill().await;
+            let _ = child.wait().await;
         }
-        Ok(bytes)
-    };
-    let result = timeout(deadline, async {
-        tokio::try_join!(
-            child.wait(),
-            bounded_read(Box::new(stdout)),
-            bounded_read(Box::new(stderr))
-        )
-    })
-    .await;
-    if !matches!(result, Ok(Ok(_))) {
-        // Kill and reap explicitly. On cancellation, the Unix group guard
-        // terminates descendants and kill_on_drop terminates the direct child.
-        #[cfg(unix)]
-        process_group.terminate();
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+        result
+            .with_context(|| format!("staged binary --version exceeded {deadline:?}"))?
+            .context("read staged binary version")
     }
-    result
-        .with_context(|| format!("staged binary --version exceeded {deadline:?}"))?
-        .context("read staged binary version")
 }
 
 // Cancellation drops this guard even while stdout/stderr or child.wait() is pending.

@@ -1139,3 +1139,40 @@ exit "${CORTEX_TEST_SCP_FAILURE:-0}"
     assert!(!commands.contains("mv -f"));
     assert!(!commands.contains("--version"));
 }
+
+#[test]
+#[serial]
+fn unraid_rejects_explicit_binary_before_any_remote_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log");
+    write_executable(
+        &dir.path().join("ssh"),
+        r#"#!/bin/sh
+printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
+case "$*" in
+  *'/etc/unraid-version'*) echo yes ;;
+esac
+"#,
+    );
+    write_logging_scp(dir.path());
+    let _path = prepend_path(dir.path());
+    let _log = EnvGuard::set("CORTEX_TEST_AGENT_DEPLOY_LOG", &log);
+    let error = run_deploy(
+        "fixture",
+        &write_local_binary(dir.path()),
+        &AgentDeployConfig {
+            binary_override: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("image-managed Unraid"));
+    let commands = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        commands.lines().count(),
+        1,
+        "only the read-only Unraid probe is allowed: {commands}"
+    );
+    assert!(commands.contains("test -f /etc/unraid-version"));
+}
