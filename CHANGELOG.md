@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.19.0](https://github.com/dinglebear-ai/cortex/compare/v3.18.1...v3.19.0) (2026-11-09)
+
+
+### Added
+
+* **cortex:** consolidate pending setup, reliability and telemetry work ([#290](https://github.com/dinglebear-ai/cortex/issues/290)) ([2cfc238](https://github.com/dinglebear-ai/cortex/commit/2cfc238b1285d43add29bec5dbeaabc1d9c523b1))
+
 ## [3.18.1](https://github.com/dinglebear-ai/cortex/compare/v3.18.0...v3.18.1) (2026-10-01)
 
 
