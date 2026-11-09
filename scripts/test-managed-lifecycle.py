@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Owned-target recovery/scheduler fixtures. Never contact a Docker daemon."""
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -27,9 +28,12 @@ if args[0] == 'inspect':
     if '-f' not in args: sys.exit(0)
     template = args[args.index('-f') + 1]
     if '{{if .RW}}' in template:
-        print('/data|bind|' + str(data))
-        print('/backups|bind|' + str(root))
-        print('/cortex-home|bind|' + str(home))
+        inspections = sum('{{if .RW}}' in ' '.join(json.loads(line))
+                          for line in (home / 'docker-calls.jsonl').read_text().splitlines())
+        if os.environ.get('FAIL_WRITABLE_INSPECT_AT') == str(inspections): sys.exit(72)
+        mounts = json.loads(os.environ['WRITABLE_MOUNTS_JSON']) if 'WRITABLE_MOUNTS_JSON' in os.environ else [
+            '/data|bind|' + str(data), '/backups|bind|' + str(root), '/cortex-home|bind|' + str(home)]
+        for mount in mounts: print(mount)
         if os.environ.get('EXTRA_WRITABLE_MOUNT'): print('/external-auth|bind|/external/auth')
     elif 'config_files' in template:
         print('/foreign/docker-compose.yml' if os.environ.get('FOREIGN_CONTAINER') else home / 'compose/docker-compose.yml')
@@ -123,6 +127,79 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(any('stop' in call for call in operations))
         self.assertTrue(any('start' in call for call in operations))
         self.assertEqual((bundle / 'data-mount').read_text().strip(), 'bind|' + str(self.home / 'data'))
+
+    def writable_mounts(self) -> list[str]:
+        return ['/data|bind|' + str(self.home / 'data'),
+                '/backups|bind|' + str(self.home / 'backups'),
+                '/cortex-home|bind|' + str(self.home)]
+
+    def legacy_mount_metadata(self, bundle: Path) -> tuple[bytes, bytes]:
+        # Simulate an already-issued unsorted bundle with its original valid
+        # checksum. Production restore must leave these exact bytes untouched.
+        metadata = bundle / 'writable-mounts'
+        metadata.write_text('\n'.join(self.writable_mounts()) + '\n')
+        manifest = bundle / 'SHA256SUMS'
+        digest = hashlib.sha256(metadata.read_bytes()).hexdigest()
+        manifest.write_text(''.join(
+            digest + '  writable-mounts\n' if line.endswith('  writable-mounts\n') else line
+            for line in manifest.read_text().splitlines(keepends=True)))
+        return metadata.read_bytes(), manifest.read_bytes()
+
+    def test_snapshot_writable_mounts_use_canonical_order(self) -> None:
+        bundle, _ = self.snapshot()
+        self.assertEqual((bundle / 'writable-mounts').read_text().splitlines(), sorted(self.writable_mounts()))
+
+    def test_legacy_unsorted_bundle_accepts_all_mount_permutations_without_rewriting(self) -> None:
+        bundle, stamp = self.snapshot()
+        metadata, manifest = self.legacy_mount_metadata(bundle)
+        for action in ['restore', 'rollback']:
+            for permutation in itertools.permutations(self.writable_mounts()):
+                with self.subTest(action=action, mounts=permutation):
+                    result = self.run_helper(action, stamp, WRITABLE_MOUNTS_JSON=json.dumps(permutation))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('restored verified snapshot', result.stdout)
+                    self.assertEqual((bundle / 'writable-mounts').read_bytes(), metadata)
+                    self.assertEqual((bundle / 'SHA256SUMS').read_bytes(), manifest)
+
+    def test_writable_mount_identity_and_multiplicity_changes_fail_before_stop(self) -> None:
+        bundle, stamp = self.snapshot()
+        metadata, manifest = self.legacy_mount_metadata(bundle)
+        mounts = self.writable_mounts()
+        changed = {
+            'destination': [mounts[0].replace('/data|', '/other-data|'), *mounts[1:]],
+            'kind': [mounts[0].replace('|bind|', '|volume|'), *mounts[1:]],
+            'source': [mounts[0] + '-different', *mounts[1:]],
+            'addition': [*mounts, '/external-auth|bind|/external/auth'],
+            'removal': mounts[:-1],
+            'duplicate': [*mounts, mounts[1]],
+        }
+        for action in ['restore', 'rollback']:
+            for name, current in changed.items():
+                with self.subTest(action=action, change=name):
+                    (self.home / 'docker-calls.jsonl').unlink(missing_ok=True)
+                    result = self.run_helper(action, stamp, WRITABLE_MOUNTS_JSON=json.dumps(current))
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('writable mount identities differ', result.stderr)
+                    self.assertFalse(any('stop' in call for call in self.calls()))
+                    self.assertEqual((bundle / 'writable-mounts').read_bytes(), metadata)
+                    self.assertEqual((bundle / 'SHA256SUMS').read_bytes(), manifest)
+
+    def test_writable_mount_inspection_failures_do_not_stop_or_verify_snapshot(self) -> None:
+        # First capture validates layout; the second writes snapshot metadata.
+        for inspection in ['1', '2']:
+            with self.subTest(inspection=inspection):
+                (self.home / 'docker-calls.jsonl').unlink(missing_ok=True)
+                result = self.run_helper('create', FAIL_WRITABLE_INSPECT_AT=inspection)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any('stop' in call for call in self.calls()))
+                self.assertFalse(list((self.home / 'backups').glob('recovery-*')))
+        bundle, stamp = self.snapshot()
+        for action in ['restore', 'rollback']:
+            (self.home / 'docker-calls.jsonl').unlink(missing_ok=True)
+            result = self.run_helper(action, stamp, FAIL_WRITABLE_INSPECT_AT='1')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(any('stop' in call for call in self.calls()))
+            self.assertTrue((bundle / 'VERIFIED').exists())
 
     def test_foreign_target_and_unavailable_daemon_fail_before_stop(self) -> None:
         for extra in [{'FOREIGN_CONTAINER': '1'}, {'FAIL_DAEMON': '1'}]:

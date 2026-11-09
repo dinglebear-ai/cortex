@@ -75,7 +75,10 @@ backup_root() {
   docker inspect -f '{{range .Mounts}}{{if eq .Destination "/backups"}}{{.Source}}{{end}}{{end}}' cortex
 }
 writable_mounts() {
-  docker inspect -f '{{range .Mounts}}{{if .RW}}{{.Destination}}|{{.Type}}|{{.Source}}{{println}}{{end}}{{end}}' cortex
+  mounts=$(docker inspect -f '{{range .Mounts}}{{if .RW}}{{.Destination}}|{{.Type}}|{{.Source}}{{println}}{{end}}{{end}}' cortex) || return
+  # Docker mount enumeration order is not part of mount identity. Keep every
+  # exact tuple, including duplicate records, in a deterministic byte order.
+  printf '%s\n' "$mounts" | LC_ALL=C sort
 }
 verify_layout() {
   mounts=$(writable_mounts)
@@ -177,7 +180,8 @@ case "$action" in
     printf '%s\n' "$image" > "$bundle/image"
     printf '%s\n' "$home" > "$bundle/managed-home"
     docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}|{{.Source}}{{end}}{{end}}' cortex > "$bundle/data-mount"
-    printf '%s\n' "$(writable_mounts)" > "$bundle/writable-mounts"
+    snapshot_mounts=$(writable_mounts)
+    printf '%s\n' "$snapshot_mounts" > "$bundle/writable-mounts"
     test -s "$bundle/data-mount" || { echo 'managed container has no /data mount' >&2; exit 65; }
     running=$(docker inspect -f '{{.State.Running}}' cortex)
     restart_original() {
@@ -259,7 +263,11 @@ SNAPSHOT
     test "$(cat "$bundle/managed-home")" = "$home" || { echo 'snapshot belongs to another managed home' >&2; exit 65; }
     current_mount=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}|{{.Source}}{{end}}{{end}}' cortex)
     test -n "$current_mount" && test "$(cat "$bundle/data-mount")" = "$current_mount" || { echo 'snapshot belongs to a different data mount; refusing restore' >&2; exit 65; }
-    test "$(cat "$bundle/writable-mounts")" = "$(writable_mounts)" || { echo 'snapshot writable mount identities differ from the current deployment; refusing restore' >&2; exit 65; }
+    # Older verified bundles retain their original unsorted, checksummed file.
+    # Compare canonical views without changing any saved metadata bytes.
+    saved_writable_mounts=$(LC_ALL=C sort "$bundle/writable-mounts")
+    current_writable_mounts=$(writable_mounts)
+    test "$saved_writable_mounts" = "$current_writable_mounts" || { echo 'snapshot writable mount identities differ from the current deployment; refusing restore' >&2; exit 65; }
     # Verify archive shape before changing any active data or configuration.
     tar -tf "$bundle/config.tar" | while IFS= read -r name; do
       case "$name" in .env|compose|compose/|compose/*|config.toml) ;; *) echo 'unexpected recovery config archive entry' >&2; exit 65;; esac
