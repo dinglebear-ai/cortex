@@ -10,7 +10,9 @@ import subprocess
 import sqlite3
 import sys
 import time
+import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _INCIDENT_ID: str | None = None
 
@@ -80,7 +82,13 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         command_key = hashlib.sha256(spelling.encode()).hexdigest()[:12]
         if spelling.startswith("setup") or spelling == "doctor":
             command_key = "setup-shared"
-        isolated_port = 43000 + int(hashlib.sha256(b"setup-port").hexdigest()[:3], 16) % 1000
+        # Setup now verifies HTTP/MCP/REST directly, rather than through curl.
+        # Its external Docker fixture does not start a listener. Verify against
+        # the already-running, run-owned candidate instead of a synthetic port.
+        setup_url = urlsplit(os.environ["LIVE_CORTEX_URL"])
+        if setup_url.scheme != "http" or setup_url.hostname != "127.0.0.1" or setup_url.port is None:
+            raise ValueError("LIVE_CORTEX_URL must identify the run-owned loopback candidate port")
+        isolated_port = setup_url.port
         docker_transport = {
             key: os.environ[key]
             for key in ("DOCKER_HOST", "DOCKER_API_VERSION", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
@@ -89,6 +97,8 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         process = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
                                  env={**docker_transport,
                                       "PATH": path, "HOME": os.environ["LIVE_RUN_HOME"],
+                                      "CORTEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cortex"),
+                                      "CODEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".codex"),
                                       "XDG_CONFIG_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".config"),
                                       "XDG_DATA_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".local", "share"),
                                       "XDG_CACHE_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cache"),
@@ -99,7 +109,9 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
                                       "CORTEX_DATA_VOLUME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cortex", "data"),
                                       "CORTEX_RUNTIME_CURRENT_ALLOW_LOCAL_IMAGE": "true",
                                       "CORTEX_PORT": str(isolated_port),
-                                      "CORTEX_RECEIVER_PORT": str(isolated_port + 1000),
+                                      # Fail readiness within the sweep's fixed 20s process budget.
+                                      "CORTEX_SETUP_READY_TIMEOUT_SECS": "5",
+                                      "CORTEX_RECEIVER_PORT": "44000",
                                       "LIVE_DOCKER_BIN": os.environ["LIVE_DOCKER_BIN"],
                                       # The Docker fixtures report the candidate's version from this
                                       # contract; the explicit env would otherwise drop it.
@@ -112,15 +124,25 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
         return {"exit": process.returncode, "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
                 "mentions_usage": b"Usage:" in output or b"Usage" in output,
                 "terminal": output.decode("utf-8", "replace")[-4096:]}
-    except subprocess.TimeoutExpired:
-        return {"exit": 124, "bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "timeout": True}
+    except subprocess.TimeoutExpired as error:
+        output = ((error.stdout or b"") + (error.stderr or b""))[:65536]
+        return {"exit": 124, "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
+                "timeout": True, "mentions_usage": False,
+                "terminal": (output.decode("utf-8", "replace") +
+                             f"\n{spelling} exceeded the 20s CLI process budget")[-4096:]}
 
 
 def run_long_lived(binary: str, spelling: str) -> dict:
     """Prove a daemon leaf starts, then terminate it as part of case cleanup."""
     command_key = hashlib.sha256(spelling.encode()).hexdigest()[:12]
     port = 41000 + int(command_key[:3], 16) % 1000
-    env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ["LIVE_RUN_HOME"],
+    env = {"PATH": os.environ["LIVE_CLI_PATH"], "HOME": os.environ["LIVE_RUN_HOME"],
+           "CORTEX_USE_HTTP": "false",
+           "XDG_CONFIG_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".config"),
+           "XDG_DATA_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".local", "share"),
+           "XDG_CACHE_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cache"),
+           "CORTEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".cortex"),
+           "CODEX_HOME": os.path.join(os.environ["LIVE_RUN_HOME"], ".codex"),
            "LIVE_CANDIDATE_VERSION": os.environ["LIVE_CANDIDATE_VERSION"],
            "TMPDIR": os.environ["LIVE_RUN_TMP"], "CORTEX_URL": os.environ["LIVE_CORTEX_URL"],
            "CORTEX_API_TOKEN": os.environ["LIVE_API_TOKEN"], "CORTEX_API_ADMIN_TOKEN": os.environ["LIVE_ADMIN_TOKEN"],
@@ -138,37 +160,62 @@ def run_long_lived(binary: str, spelling: str) -> dict:
             return {"exit": initialized.returncode, "launched": False, "terminated_for_cleanup": True,
                     "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
                     "mentions_usage": False, "terminal": output.decode("utf-8", "replace")[-4096:]}
-        smoke_process = subprocess.Popen(
-            [binary, "sessions", "smokewatch", "--json"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
-        )
-        # Start the real watcher after the probe has created its transcript.
-        # Its real initial scan deterministically exercises ingestion on macOS,
-        # where FSEvents delivery can otherwise coincide with the probe timeout.
-        time.sleep(1)
-        watcher = subprocess.Popen(
-            [binary, "sessions", "watch", "--json"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
-        )
-        try:
-            smoke_stdout, smoke_stderr = smoke_process.communicate(timeout=140)
-            output = (smoke_stdout + smoke_stderr)[:65536]
-            result = {"exit": smoke_process.returncode, "launched": True, "terminated_for_cleanup": True,
-                    "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
-                    "mentions_usage": False, "terminal": output.decode("utf-8", "replace")[-4096:]}
-            return result
-        except subprocess.TimeoutExpired:
-            smoke_process.kill(); smoke_process.communicate()
-            return {"exit": 124, "launched": True, "terminated_for_cleanup": True,
-                    "bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "mentions_usage": False}
-        finally:
-            watcher.terminate()
-            try: watcher_stdout, watcher_stderr = watcher.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                watcher.kill(); watcher_stdout, watcher_stderr = watcher.communicate()
-            if 'result' in locals() and watcher.returncode not in (0, -15):
-                watcher_output = (watcher_stdout + watcher_stderr).decode("utf-8", "replace")[-2048:]
-                result["terminal"] = (result["terminal"] + "\nwatcher:\n" + watcher_output)[-4096:]
+        # The initial bounded discovery can defer its asynchronous snapshot.
+        # Register the real listeners before creating the smoke transcript so
+        # delivery exercises the file event without racing the rescan interval.
+        with tempfile.TemporaryFile(dir=os.environ["LIVE_RUN_TMP"]) as watcher_log:
+            watcher = subprocess.Popen(
+                [binary, "sessions", "watch", "--json"], stdin=subprocess.DEVNULL,
+                stdout=watcher_log, stderr=watcher_log, env=env,
+            )
+            result = None
+            try:
+                ready = False
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline and watcher.poll() is None:
+                    watcher_log.seek(0)
+                    output = watcher_log.read(65536)
+                    for line in output.splitlines():
+                        try:
+                            ready = json.loads(line).get("stage") == "initial"
+                        except (ValueError, AttributeError):
+                            continue
+                        if ready:
+                            break
+                    if ready:
+                        break
+                    time.sleep(0.05)
+                if not ready:
+                    watcher_log.seek(0)
+                    output = watcher_log.read(65536)
+                    return {"exit": 1, "launched": False, "terminated_for_cleanup": True,
+                            "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
+                            "mentions_usage": False, "terminal":
+                            "watcher did not register listeners within 8s\n" + output.decode("utf-8", "replace")[-3000:]}
+                smoke = subprocess.run(
+                    [binary, "sessions", "smokewatch", "--json"], stdin=subprocess.DEVNULL,
+                    capture_output=True, timeout=140, env=env,
+                )
+                output = (smoke.stdout + smoke.stderr)[:65536]
+                result = {"exit": smoke.returncode, "launched": True, "terminated_for_cleanup": True,
+                          "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
+                          "mentions_usage": False, "terminal": output.decode("utf-8", "replace")[-4096:]}
+                if smoke.returncode != 0:
+                    watcher_log.seek(0)
+                    result["watcher_terminal"] = watcher_log.read(65536).decode("utf-8", "replace")[-4096:]
+                return result
+            except subprocess.TimeoutExpired as error:
+                output = ((error.stdout or b"") + (error.stderr or b""))[:65536]
+                return {"exit": 124, "timeout": True, "launched": True, "terminated_for_cleanup": True,
+                        "bytes": len(output), "sha256": hashlib.sha256(output).hexdigest(),
+                        "mentions_usage": False, "terminal": output.decode("utf-8", "replace")[-4096:]}
+            finally:
+                watcher.terminate()
+                try:
+                    watcher.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    watcher.kill()
+                    watcher.wait(timeout=5)
     daemon_tail = ["mcp"] if spelling == "serve" else (["--path", str(Path(os.environ["LIVE_RUN_HOME"]) / ".claude" / "projects"), "--no-initial-scan", "--json"] if spelling == "sessions watch" else [])
     daemon_argv = [binary, *spelling.split(), *daemon_tail]
     process = subprocess.Popen(daemon_argv, stdin=subprocess.PIPE if spelling == "mcp" else subprocess.DEVNULL,
@@ -237,6 +284,7 @@ ARGS = {
     "assess mcp": ["mcp-live-server", "--no-llm", "--limit", "1", "--json"],
     "assess skill": ["mcp-live-skill", "--no-llm", "--limit", "1", "--json"],
     "assess hooks": ["mcp-live-hook", "--no-llm", "--limit", "1", "--json"],
+    "setup start": ["--role", "client", "--server", "{server-url}", "--clients", "none", "--capabilities", "none", "--json"],
     "completions": ["zsh"],
 }
 
@@ -378,8 +426,17 @@ def main() -> int:
             raise RuntimeError(f"failed to seed isolated update profile: {spelling}: {seeded.get('terminal', '')}")
     entries = [entry for entry in contract["entries"] if entry["kind"] == "cli"]
     spellings = {entry["spelling"] for entry in entries}
-    failures, results = [], []
+    backup = json.loads(Path(os.environ["LIVE_BACKUP_RESULTS"]).read_text())
+    backup_entries = {entry["id"] for entry in entries if entry["spelling"].startswith("setup backup")}
+    expected_cases = {(identifier, case) for identifier in backup_entries
+                      for case in ("help", "semantic-positive", "validation-negative")}
+    observed_cases = {(record["surface_id"], record["case_kind"]) for record in backup["results"]}
+    if observed_cases != expected_cases or len(backup["results"]) != len(expected_cases):
+        raise RuntimeError("managed backup sweep does not cover every compiled backup surface")
+    failures, results = list(backup["failures"]), list(backup["results"])
     for entry in entries:
+        if entry["id"] in backup_entries:
+            continue  # Already executed against the dedicated managed recovery target.
         help_result = run(binary_path, entry["spelling"], ["--help"], prepare_compose=False)
         help_ok = help_result["exit"] == 0 and help_result["mentions_usage"]
         if not help_ok: failures.append(f"{entry['id']}: help")
@@ -388,6 +445,7 @@ def main() -> int:
         is_parent = any(other.startswith(entry["spelling"] + " ") for other in spellings)
         tail, execution_mode, execute = semantic_args(entry, is_parent)
         replacements = {
+            "{server-url}": os.environ["LIVE_CORTEX_URL"],
             "{config}": os.path.join(os.environ["LIVE_RUN_TMP"], "cli-config.toml"),
             "{tail-file}": os.path.join(os.environ["LIVE_RUN_TMP"], "cli-tail.log"),
             "{agent-log}": os.path.join(os.environ["LIVE_RUN_TMP"], "agent-events.jsonl"),

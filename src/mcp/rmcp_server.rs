@@ -8,8 +8,8 @@ use lab_auth::AuthContext;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        Annotations, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-        EmbeddedResource, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
+        Annotations, CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult,
+        ContentBlock, EmbeddedResource, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
         Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, MetaObject,
         PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
         ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
@@ -27,6 +27,11 @@ use crate::config::McpConfig;
 use super::actions;
 use super::prompts::{get_prompt, prompt_definitions};
 use super::{AppState, AuthPolicy, schemas::tool_definitions, tools::execute_tool};
+
+/// Freshness advertised on tools/resources/prompts lists. The 2026-07-28 MCP
+/// spec makes `ttlMs` and `cacheScope` mandatory; the lists only change when
+/// the server binary does, and are auth-gated, so clients cache them privately.
+const LIST_CACHE_TTL_MS: u64 = 60_000;
 
 #[derive(Clone)]
 pub struct CortexRmcpServer {
@@ -55,10 +60,9 @@ impl ServerHandler for CortexRmcpServer {
 
         let tools = rmcp_tool_definitions()?;
         tracing::info!(tool_count = tools.len(), "MCP tools listed");
-        Ok(ListToolsResult {
-            tools,
-            ..Default::default()
-        })
+        Ok(ListToolsResult::with_all_items(tools)
+            .with_ttl_ms(LIST_CACHE_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(
@@ -180,14 +184,13 @@ impl ServerHandler for CortexRmcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         require_auth_context(&self.state, &context)?;
-        Ok(ListResourcesResult {
-            resources: vec![
-                schema_resource(),
-                prompt_output_schema_resource(),
-                query_widget_resource(),
-            ],
-            ..Default::default()
-        })
+        Ok(ListResourcesResult::with_all_items(vec![
+            schema_resource(),
+            prompt_output_schema_resource(),
+            query_widget_resource(),
+        ])
+        .with_ttl_ms(LIST_CACHE_TTL_MS)
+        .with_cache_scope(CacheScope::Private))
     }
 
     async fn read_resource(
@@ -237,10 +240,9 @@ impl ServerHandler for CortexRmcpServer {
         require_auth_context(&self.state, &context)?;
         let prompts = prompt_definitions();
         tracing::info!(prompt_count = prompts.len(), "MCP prompts listed");
-        Ok(ListPromptsResult {
-            prompts,
-            ..Default::default()
-        })
+        Ok(ListPromptsResult::with_all_items(prompts)
+            .with_ttl_ms(LIST_CACHE_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn get_prompt(

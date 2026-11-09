@@ -113,6 +113,45 @@ fn test_process_chunk_notifies_above_threshold() {
 }
 
 #[test]
+fn recurring_collector_alert_has_readable_problem_and_cause() {
+    let (pool, _dir) = test_pool();
+    let message = r#"2026-11-07T18:32:27.504Z	error	internal/queue_sender.go:62	Exporting failed. Dropping data.	{"resource":{"service.instance.id":"private-instance"},"error":"connection refused","dropped_items":32}"#;
+    {
+        let conn = pool.get().unwrap();
+        for _ in 0..6 {
+            let id = insert_log(&conn, message, "err", "host-01");
+            conn.execute("UPDATE logs SET app_name='collector' WHERE id=?1", [id])
+                .unwrap();
+        }
+    }
+    process_chunk(&pool, 0, 200, 5, &[], u8::MAX).unwrap();
+    let conn = pool.get().unwrap();
+    let (title, body): (String, String) = conn.query_row(
+        "SELECT title, body FROM notifications_outbox WHERE rule_id='unaddressed_error_signature'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert!(title.contains('🚨'));
+    assert!(body.contains("Host: host-01"));
+    assert!(body.contains("Service: collector"));
+    assert!(body.contains("Problem: Exporting failed. Dropping data."));
+    assert!(body.contains("Cause: connection refused"));
+    assert!(body.contains("Occurrences: 6"));
+    assert!(!body.contains("Signature:") && !body.contains("Sample:"));
+    assert!(!body.contains('{') && !body.contains("service.instance.id"));
+    let original: String = conn
+        .query_row(
+            "SELECT sample_message FROM error_signatures LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        original.contains("dropped_items"),
+        "Full evidence remains in Cortex"
+    );
+}
+
+#[test]
 fn test_default_excludes_do_not_drop_warning_healthcheck_rows() {
     let (pool, _dir) = test_pool();
     {

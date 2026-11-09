@@ -209,9 +209,50 @@ fn metadata_field_budget_keeps_server_proof() {
             metadata[format!("a-optional-{n}")] = json!("small");
         }
         let encoded = bounded_metadata_json(metadata, key);
+        let bounded: Value = serde_json::from_str(&encoded).unwrap();
+        // Workspace feature unification can preserve insertion order, retaining
+        // the proof. Field omission still has the sanitizer's omission marker.
+        assert!(
+            bounded["metadata_truncated"] == true
+                || bounded["_omitted_fields"]
+                    .as_u64()
+                    .is_some_and(|count| count > 0)
+        );
+        let source = if key == "provenance" {
+            "agent-ai-transcript://10.1.0.8"
+        } else {
+            "agent-syslog://10.1.0.8"
+        };
         assert_eq!(
-            serde_json::from_str::<Value>(&encoded).unwrap()["metadata_truncated"],
-            true
+            subject_hostname("agent-shared_bearer", source, Some(&encoded)),
+            Some("SERVERHOST".to_string())
+        );
+    }
+}
+
+#[test]
+fn top_level_field_omission_marks_metadata_even_when_proof_survives() {
+    for key in ["provenance", "forwarded_provenance"] {
+        let mut metadata = proof(key, "shared_bearer", "SERVERHOST");
+        for n in 0..160 {
+            // Both sorted maps and insertion-ordered maps retain the earlier proof.
+            metadata[format!("z-optional-{n}")] = json!("small");
+        }
+        let sanitized = crate::ingest_metadata::bounded_metadata_json(metadata.clone());
+        let parsed: Value = serde_json::from_str(&sanitized).unwrap();
+        assert!(parsed.get(key).is_some());
+        assert!(parsed["_omitted_fields"].as_u64().unwrap() > 0);
+
+        let encoded = bounded_metadata_json(metadata, key);
+        let compact: Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(compact["metadata_truncated"], true);
+        assert!(compact.get(key).is_some());
+        assert!(
+            !compact
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|key| key.starts_with("z-optional-"))
         );
         let source = if key == "provenance" {
             "agent-ai-transcript://10.1.0.8"

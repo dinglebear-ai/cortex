@@ -410,8 +410,8 @@ async fn download_binary_times_out_when_stream_stalls() {
 }
 
 #[cfg(unix)]
-#[test]
-fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
+#[tokio::test]
+async fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let fake = dir.path().join("fake-cortex");
@@ -420,8 +420,8 @@ fn validate_binary_accepts_matching_version_and_rejects_mismatch() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&fake, perms).unwrap();
 
-    assert!(validate_binary(&fake, "9.9.9").is_ok());
-    assert!(validate_binary(&fake, "1.2.3").is_err());
+    assert!(validate_binary(&fake, "9.9.9").await.is_ok());
+    assert!(validate_binary(&fake, "1.2.3").await.is_err());
 }
 
 #[test]
@@ -628,4 +628,106 @@ async fn maybe_update_refuses_a_rejected_version_without_downloading() {
         })
         .count();
     assert_eq!(backups, 3);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn validate_binary_kills_and_reaps_hung_version_child() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("hung-cortex");
+    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = tokio::process::Command::new(&fake);
+    command
+        .process_group(0)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = command.spawn().unwrap();
+    // Capture the OS-owned PID at spawn. A short deadline may legitimately kill
+    // the process before a script gets scheduled to write its own PID file.
+    let pid = child.id().unwrap() as i32;
+    let started = std::time::Instant::now();
+    let error = read_version_child(child, Duration::from_millis(150))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("exceeded"));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    // A reaped child has no PID left to signal.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn validate_binary_rejects_excessive_output() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("noisy-cortex");
+    std::fs::write(&fake, "#!/bin/sh\nexec head -c 32768 /dev/zero\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = validate_binary(&fake, "9.9.9").await.unwrap_err();
+    assert!(format!("{error:#}").contains("output exceeded limit"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelled_version_validation_terminates_descendants() {
+    assert_version_validation_cleans_descendants(true).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unpolled_version_validation_terminates_descendants() {
+    assert_version_validation_cleans_descendants(false).await;
+}
+
+#[cfg(unix)]
+async fn assert_version_validation_cleans_descendants(poll_before_cancel: bool) {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("descendant-started");
+    // Both the shell and its descendant hold this socket. EOF proves every
+    // holder exited; no delayed marker or scheduler-dependent survival window.
+    let (peer, inherited) = std::os::unix::net::UnixStream::pair().unwrap();
+    peer.set_nonblocking(true).unwrap();
+    let mut peer = tokio::net::UnixStream::from_std(peer).unwrap();
+    let inherited: std::os::fd::OwnedFd = inherited.into();
+    let mut command = tokio::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg("exec 3<&0; (echo ready > \"$1\"; exec cat <&3 >/dev/null) & wait")
+        .arg("validation")
+        .arg(&ready)
+        .process_group(0)
+        .kill_on_drop(true)
+        .stdin(Stdio::from(inherited))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = command.spawn().unwrap();
+    drop(command); // Release the parent copy of the inherited socket.
+    let group = child.id().unwrap() as i32;
+    let mut validation = Box::pin(read_version_child(child, Duration::from_secs(30)));
+    if poll_before_cancel {
+        assert!(futures_util::poll!(validation.as_mut()).is_pending());
+    }
+    let ready_result = tokio::time::timeout(Duration::from_secs(5), async {
+        while !ready.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    drop(validation);
+    let eof = tokio::time::timeout(Duration::from_secs(5), peer.read(&mut [0u8])).await;
+    // Always clean up this owned group, including on the unfixed implementation.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
+    ready_result.unwrap();
+    assert_eq!(
+        eof.expect("cancelled validation left a descendant holding stdin")
+            .unwrap(),
+        0
+    );
 }

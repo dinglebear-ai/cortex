@@ -22,6 +22,11 @@
 //!
 //! Gated by `CORTEX_AGENT_AUTO_UPDATE` (default on) in the caller.
 
+mod validation;
+#[cfg(test)]
+use validation::read_version_child;
+use validation::validate_binary;
+
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -427,7 +432,7 @@ async fn maybe_update_for_exe(
 
     // 4. Pre-swap validation: the new binary must run and self-report the
     //    advertised version. Guards against corrupt/incompatible downloads.
-    if let Err(error) = validate_binary(&tmp, &directive.version) {
+    if let Err(error) = validate_binary(&tmp, &directive.version).await {
         let _ = std::fs::remove_file(&tmp);
         return Err(error.context("staged agent binary failed validation; not installed"));
     }
@@ -697,24 +702,6 @@ pub fn confirm_update_success() -> bool {
             false
         }
     }
-}
-
-fn validate_binary(path: &Path, expected_version: &str) -> Result<()> {
-    let output = crate::env::command(path)
-        .arg("--version")
-        .output()
-        .context("run --version on staged binary")?;
-    if !output.status.success() {
-        bail!("staged binary --version exited with {}", output.status);
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.split_whitespace().last() != Some(expected_version) {
-        bail!(
-            "staged binary reported '{}', expected version {expected_version}",
-            stdout.trim()
-        );
-    }
-    Ok(())
 }
 
 #[cfg(unix)]

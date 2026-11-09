@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -905,6 +906,7 @@ async fn reconcile_surfaces_dirty_checkpoint_failure_before_replacement() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn open_tail_file_resumes_matching_checkpoint_before_start_at_end() {
     let temp = tempfile::tempdir().unwrap();
     let file_path = temp.path().join("app.log");
@@ -945,6 +947,7 @@ async fn open_tail_file_restarts_at_beginning_when_checkpoint_identity_mismatche
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn open_tail_file_rejects_symlink_paths() {
     let temp = tempfile::tempdir().unwrap();
     let target_path = temp.path().join("target.log");

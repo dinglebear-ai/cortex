@@ -105,3 +105,132 @@ async fn oversized_unterminated_record_is_diagnosed_on_rotation() {
         Some("new record")
     );
 }
+
+#[tokio::test]
+async fn durable_cursor_resumes_partial_line_and_appends_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.log");
+    std::fs::write(&path, "initial history\n").unwrap();
+    let mut reader = TailReader::open_durable(&path).await.unwrap();
+    append(&path, b"partial ");
+    assert_eq!(reader.next_line().await.unwrap(), None);
+    let saved = reader.cursor().await.unwrap();
+    drop(reader);
+    append(&path, b"completed\nnext\n");
+    let mut resumed = TailReader::restore(&path, saved).await.unwrap();
+    assert_eq!(
+        resumed.next_line().await.unwrap().as_deref(),
+        Some("partial completed")
+    );
+    assert_eq!(resumed.next_line().await.unwrap().as_deref(), Some("next"));
+}
+
+#[tokio::test]
+async fn durable_cursor_drains_rotated_inode_then_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.log");
+    std::fs::write(&path, "initial history\n").unwrap();
+    let mut reader = TailReader::open_durable(&path).await.unwrap();
+    let saved = reader.cursor().await.unwrap();
+    drop(reader);
+    append(&path, b"old inode offline backlog\n");
+    std::fs::rename(&path, dir.path().join("app.log.1")).unwrap();
+    std::fs::write(&path, "replacement backlog\n").unwrap();
+    let mut resumed = TailReader::restore(&path, saved).await.unwrap();
+    assert_eq!(
+        resumed.next_line().await.unwrap().as_deref(),
+        Some("old inode offline backlog")
+    );
+    assert_eq!(resumed.next_line().await.unwrap(), None);
+    assert_eq!(
+        resumed.next_line().await.unwrap().as_deref(),
+        Some("replacement backlog")
+    );
+}
+
+#[tokio::test]
+async fn durable_cursor_reports_lost_rotation_and_copytruncate_as_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.log");
+    std::fs::write(&path, "initial history\n").unwrap();
+    let mut reader = TailReader::open_durable(&path).await.unwrap();
+    let saved = reader.cursor().await.unwrap();
+    drop(reader);
+    std::fs::rename(&path, dir.path().join("app.log.1")).unwrap();
+    std::fs::remove_file(dir.path().join("app.log.1")).unwrap();
+    std::fs::write(&path, "replacement\n").unwrap();
+    let mut resumed = TailReader::restore(&path, saved).await.unwrap();
+    assert!(
+        resumed
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("file-tail gap")
+    );
+    assert_eq!(
+        resumed.next_line().await.unwrap().as_deref(),
+        Some("replacement")
+    );
+    std::fs::write(&path, "new\n").unwrap();
+    assert!(
+        resumed
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("file-tail gap")
+    );
+    assert_eq!(resumed.next_line().await.unwrap().as_deref(), Some("new"));
+}
+
+#[tokio::test]
+async fn durable_cursor_detects_regrown_rewrite_with_unchanged_initial_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.log");
+    let prefix = "p".repeat(512);
+    std::fs::write(&path, format!("{prefix}old suffix\n")).unwrap();
+    let mut reader = TailReader::open_durable(&path).await.unwrap();
+    let saved = reader.cursor().await.unwrap();
+    let replacement = format!("{prefix}new longer rewritten suffix\n");
+    std::fs::write(&path, &replacement).unwrap();
+    assert!(
+        reader
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("file-tail gap")
+    );
+    assert_eq!(
+        reader.next_line().await.unwrap().unwrap(),
+        replacement.trim_end()
+    );
+    drop(reader);
+    let mut resumed = TailReader::restore(&path, saved).await.unwrap();
+    assert!(
+        resumed
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("file-tail gap")
+    );
+    assert_eq!(
+        resumed.next_line().await.unwrap().unwrap(),
+        replacement.trim_end()
+    );
+}
+
+#[test]
+fn boundary_snapshot_preserves_shared_file_position() {
+    use std::io::{Seek, SeekFrom};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.log");
+    std::fs::write(&path, b"first\nsecond\nthird\n").unwrap();
+    let mut file = std::fs::File::open(path).unwrap();
+    file.seek(SeekFrom::Start(19)).unwrap();
+    let clone = file.try_clone().unwrap();
+    assert_eq!(read_boundary(&clone, 6).unwrap(), b"first\n");
+    assert_eq!(file.stream_position().unwrap(), 19);
+}

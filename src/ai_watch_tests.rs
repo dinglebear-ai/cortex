@@ -361,3 +361,122 @@ fn test_watch_options(path: PathBuf) -> WatchOptions {
         json: false,
     }
 }
+
+struct RescanTestHome(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl RescanTestHome {
+    fn set(home: &Path) -> Self {
+        let previous = ["HOME", "CODEX_HOME"]
+            .into_iter()
+            .map(|name| (name, crate::env::var_os(name)))
+            .collect();
+        crate::env::set_test_var("HOME", home);
+        crate::env::set_test_var("CODEX_HOME", home.join(".codex"));
+        Self(previous)
+    }
+}
+
+impl Drop for RescanTestHome {
+    fn drop(&mut self) {
+        for (name, value) in &self.0 {
+            if let Some(value) = value {
+                crate::env::set_test_var(name, value);
+            } else {
+                crate::env::remove_test_var(name);
+            }
+        }
+    }
+}
+
+async fn ready_page_budget_regression(multiple_roots: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = RescanTestHome::set(dir.path());
+    let storage = crate::config::StorageConfig::for_test(dir.path().join("ready.db"));
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let service = CortexService::new(pool.clone(), storage);
+    let root = dir.path().join(".claude/projects");
+    std::fs::create_dir_all(&root).unwrap();
+    for source in ["first", "second", "third"] {
+        let rows = (0..8).map(|row| {
+            if multiple_roots && source == "third" {
+                serde_json::json!({"type":"response_item","payload":{
+                    "type":"message", "role":"user", "content":format!("{source} ready page row {row}")}})
+            } else {
+                serde_json::json!({"sessionId":source,"content":format!("{source} ready page row {row}")})
+            }
+        }).map(|row| row.to_string() + "\n").collect::<String>();
+        let file = if multiple_roots && source == "third" {
+            let codex = dir.path().join(".codex/sessions");
+            std::fs::create_dir_all(&codex).unwrap();
+            codex.join("third.jsonl")
+        } else {
+            root.join(format!("{source}.jsonl"))
+        };
+        std::fs::write(file, rows).unwrap();
+    }
+    let mut cursor = RescanCursor::default();
+    let mut saw_source_cap = false;
+    let mut completed = false;
+    for _ in 0..160 {
+        let result = service
+            .index_ai_roots_with_discovery_continuation(
+                (!multiple_roots).then(|| root.display().to_string()),
+                false,
+                None,
+                scanner::DiscoveryScanState {
+                    scan_budget: Some(scanner::ScanBudget {
+                        per_source_max_bytes: 128,
+                        scan_max_bytes: 192,
+                        per_source_deadline: Duration::from_secs(1),
+                    }),
+                    start_after: cursor.start_after.clone(),
+                    discovery_start_after: cursor.discovery_start_after.clone(),
+                    continuation: Some(cursor.discovery.clone()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.parse_errors, 0);
+        assert!(result.file_errors.is_empty());
+        saw_source_cap |= result.source_budget_cap_hits > 0;
+        if apply_rescan_result(&mut cursor, &result) == RescanStatus::Completed {
+            completed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(
+        saw_source_cap,
+        "fixture must cross source byte budget turns"
+    );
+    assert!(
+        completed,
+        "ready pages must eventually drain and complete their cycle"
+    );
+    let count: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message LIKE '%ready page row%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 24,
+        "all chunks and globally deferred files must be imported exactly once"
+    );
+    assert!(!cursor.discovery.is_pending());
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn completed_discovery_page_reoffers_source_and_scan_budget_deferrals() {
+    ready_page_budget_regression(false).await;
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn staggered_roots_drain_ready_pages_before_watcher_cycle_completes() {
+    ready_page_budget_regression(true).await;
+}

@@ -5,12 +5,15 @@ use std::time::Instant;
 use serde::Serialize;
 
 use super::remote_support::{
-    RemoteRunner, SshRemoteRunner, append_skipped, phases_have_errors, remote_identity_phase,
-    remote_phase, shell_quote, skip_phase,
+    LocalRemoteRunner, RemoteRunner, SshRemoteRunner, append_skipped, phases_have_errors,
+    remote_identity_phase, remote_phase, shell_quote, skip_phase,
 };
-use crate::setup::{
-    SetupPhase, SetupStatus, default_env_for_data_dir, dockerfile_asset, installed_compose_asset,
-    parse_env, render_env,
+use crate::setup::{SetupPhase, SetupStatus, default_env_for_data_dir, parse_env};
+
+use super::remote_assets::{
+    compose_command, managed_lifecycle_script, read_existing_remote_env,
+    validate_remote_absolute_path, validate_remote_home, write_remote_assets_phase,
+    write_remote_env_phase,
 };
 
 const REMOTE_HOME_SUFFIX: &str = ".cortex";
@@ -19,6 +22,8 @@ const REMOTE_HOME_SUFFIX: &str = ".cortex";
 pub struct RemoteDeployOptions {
     pub dry_run: bool,
     pub home: Option<String>,
+    /// Used by `cortex update`; setup/repair keep their shipped baseline.
+    pub update_latest: bool,
 }
 
 impl From<bool> for RemoteDeployOptions {
@@ -26,6 +31,7 @@ impl From<bool> for RemoteDeployOptions {
         Self {
             dry_run,
             home: None,
+            update_latest: false,
         }
     }
 }
@@ -50,7 +56,26 @@ pub fn run_remote_deploy(
     options: impl Into<RemoteDeployOptions>,
 ) -> io::Result<RemoteDeployReport> {
     let mut runner = SshRemoteRunner;
-    run_remote_deploy_with_runner(host, options, &mut runner)
+    let report = run_remote_deploy_with_runner(host, options, &mut runner)?;
+    if !report.has_errors && report.mode != "remote dry-run" {
+        crate::update::configure_server_profile(None, host, &report.home)?;
+    }
+    Ok(report)
+}
+
+pub fn run_local_deploy(
+    home: &str,
+    mut options: RemoteDeployOptions,
+) -> io::Result<RemoteDeployReport> {
+    options.home = Some(home.to_string());
+    let mut runner = LocalRemoteRunner;
+    let mut report = run_remote_deploy_with_runner("localhost", options, &mut runner)?;
+    report.mode = if report.mode == "remote dry-run" {
+        "local dry-run"
+    } else {
+        "local"
+    };
+    Ok(report)
 }
 
 fn run_remote_deploy_with_runner(
@@ -107,6 +132,9 @@ fn run_remote_deploy_with_runner(
     };
     let remote_home = remote_home_override
         .unwrap_or_else(|| format!("{}/{}", identity_values.home, REMOTE_HOME_SUFFIX));
+    let mut lifecycle =
+        super::lifecycle_lock::LockedRunner::acquire(runner, host, &remote_home, !dry_run)?;
+    let runner: &mut dyn RemoteRunner = &mut lifecycle;
     let remote_data_dir = format!("{remote_home}/data");
     let mut env = default_env_for_data_dir(Path::new(&remote_data_dir))?;
     env.insert("CORTEX_DATA_VOLUME".to_string(), remote_data_dir.clone());
@@ -116,14 +144,26 @@ fn run_remote_deploy_with_runner(
     );
     env.insert("CORTEX_UID".to_string(), identity_values.uid.clone());
     env.insert("CORTEX_GID".to_string(), identity_values.gid.clone());
-    if !dry_run {
-        let existing_env = read_existing_remote_env(runner, host, &remote_home)?;
-        for (key, value) in parse_env(&existing_env) {
-            if key == "CORTEX_VERSION" {
-                continue;
-            }
-            env.insert(key, value);
-        }
+    // Dry runs inspect the same saved configuration and version pin as an
+    // actual deployment. Reading a file never executes its contents.
+    let existing_env = read_existing_remote_env(runner, host, &remote_home)?;
+    for (key, value) in parse_env(&existing_env) {
+        env.insert(key, value);
+    }
+    let selected_version = if options.update_latest
+        && !env
+            .get("CORTEX_VERSION")
+            .is_some_and(|value| !value.is_empty())
+    {
+        Some(runner.latest_stable_version()?)
+    } else {
+        None
+    };
+    if let Some(version) = &selected_version {
+        phases.push(crate::setup::PhaseTimer::start("release-target").finish(
+            SetupStatus::Ok,
+            format!("latest stable release {version}; no explicit version pin changed"),
+        ));
     }
     let docker_network = env
         .get("DOCKER_NETWORK")
@@ -189,6 +229,35 @@ fn run_remote_deploy_with_runner(
     phases.push(remote_phase(
         runner,
         host,
+        "remote-recovery-snapshot",
+        &managed_lifecycle_script("prepare", &remote_home, &env),
+        None,
+    )?);
+    if phases_have_errors(&phases) {
+        append_skipped(
+            &mut phases,
+            &[
+                "remote-env",
+                "remote-compose-assets",
+                "remote-compose-up",
+                "remote-health",
+            ],
+            "skipped because the owned deployment recovery snapshot failed",
+        );
+        return Ok(report(
+            host,
+            dry_run,
+            &remote_home,
+            &remote_data_dir,
+            &mcp_port,
+            phases,
+            started.elapsed().as_millis(),
+        ));
+    }
+
+    phases.push(remote_phase(
+        runner,
+        host,
         "remote-filesystem",
         &format!(
             "mkdir -p {compose_config} {data_dir} {backup_dir} && chmod 700 {backup_dir}",
@@ -229,8 +298,19 @@ fn run_remote_deploy_with_runner(
         ));
     }
 
-    phases.push(write_remote_env_phase(runner, host, &remote_home, &env)?);
-    phases.push(write_remote_assets_phase(runner, host, &remote_home)?);
+    phases.push(write_remote_env_phase(
+        runner,
+        host,
+        &remote_home,
+        &env,
+        &existing_env,
+    )?);
+    phases.push(write_remote_assets_phase(
+        runner,
+        host,
+        &remote_home,
+        selected_version.as_deref(),
+    )?);
     if phases_have_errors(&phases) {
         append_skipped(
             &mut phases,
@@ -285,9 +365,8 @@ fn run_remote_deploy_with_runner(
         host,
         "remote-compose-pull",
         &format!(
-            "docker compose --env-file {env_path} -f {compose_path} pull --ignore-buildable",
-            env_path = shell_quote(&format!("{remote_home}/.env")),
-            compose_path = shell_quote(&format!("{remote_home}/compose/docker-compose.yml")),
+            "{}\ncompose pull --ignore-buildable",
+            compose_command(&remote_home),
         ),
         None,
     )?);
@@ -312,11 +391,7 @@ fn run_remote_deploy_with_runner(
         runner,
         host,
         "remote-compose-up",
-        &format!(
-            "docker compose --env-file {env_path} -f {compose_path} up -d",
-            env_path = shell_quote(&format!("{remote_home}/.env")),
-            compose_path = shell_quote(&format!("{remote_home}/compose/docker-compose.yml")),
-        ),
+        &format!("{}\ncompose up -d cortex", compose_command(&remote_home),),
         None,
     )?);
     if phases_have_errors(&phases) {
@@ -336,16 +411,25 @@ fn run_remote_deploy_with_runner(
         ));
     }
 
-    phases.push(remote_phase(
+    let ready_seconds = env
+        .get("CORTEX_SETUP_READY_TIMEOUT_SECS")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(300)
+        .clamp(1, 600);
+    phases.push(super::verification::readiness_phase(
         runner,
         host,
-        "remote-health",
-        &format!(
-            "attempt=0\nwhile [ \"$attempt\" -lt 30 ]; do\n  if curl -fsS {health_url}; then\n    exit 0\n  fi\n  attempt=$((attempt + 1))\n  if [ \"$attempt\" -lt 30 ]; then\n    sleep 1\n  fi\ndone\nexit 1",
-            health_url = shell_quote(&format!("http://127.0.0.1:{mcp_port}/health"))
-        ),
-        None,
+        &remote_home,
+        ready_seconds,
     )?);
+    if !phases_have_errors(&phases) {
+        phases.extend(super::verification::verify_remote_server(
+            runner,
+            host,
+            &remote_home,
+            &env,
+        )?);
+    }
     Ok(report(
         host,
         dry_run,
@@ -355,27 +439,6 @@ fn run_remote_deploy_with_runner(
         phases,
         started.elapsed().as_millis(),
     ))
-}
-
-fn write_remote_env_phase(
-    runner: &mut dyn RemoteRunner,
-    host: &str,
-    remote_home: &str,
-    env: &std::collections::BTreeMap<String, String>,
-) -> io::Result<SetupPhase> {
-    let rendered = render_env(env);
-    let env_path = format!("{remote_home}/.env");
-    let tmp_path = format!("{env_path}.tmp");
-    let legacy_env_path = format!("{remote_home}/compose/.env");
-    let legacy_archive_path = format!("{remote_home}/compose/.env.legacy");
-    let script = format!(
-        "set -eu\numask 077\ncat > {tmp_path} <<'__CORTEX_ENV__'\n{rendered}__CORTEX_ENV__\nchmod 600 {tmp_path}\nmv {tmp_path} {env_path}\nif test -f {legacy_env_path}; then rm -f {legacy_archive_path}; mv {legacy_env_path} {legacy_archive_path}; chmod 600 {legacy_archive_path}; fi",
-        tmp_path = shell_quote(&tmp_path),
-        env_path = shell_quote(&env_path),
-        legacy_env_path = shell_quote(&legacy_env_path),
-        legacy_archive_path = shell_quote(&legacy_archive_path),
-    );
-    remote_phase(runner, host, "remote-env", &script, None)
 }
 
 fn report(
@@ -403,80 +466,6 @@ fn report(
         has_errors,
         elapsed_ms,
     }
-}
-
-fn write_remote_assets_phase(
-    runner: &mut dyn RemoteRunner,
-    host: &str,
-    remote_home: &str,
-) -> io::Result<SetupPhase> {
-    let compose_path = format!("{remote_home}/compose/docker-compose.yml");
-    let compose_tmp = format!("{compose_path}.tmp");
-    let dockerfile_path = format!("{remote_home}/compose/config/Dockerfile");
-    let dockerfile_tmp = format!("{dockerfile_path}.tmp");
-    let script = format!(
-        "set -eu\ncat > {compose_tmp} <<'__CORTEX_COMPOSE__'\n{}__CORTEX_COMPOSE__\ncat > {dockerfile_tmp} <<'__CORTEX_DOCKERFILE__'\n{}__CORTEX_DOCKERFILE__\nmv {compose_tmp} {compose_path}\nmv {dockerfile_tmp} {dockerfile_path}",
-        installed_compose_asset(),
-        dockerfile_asset(),
-        compose_tmp = shell_quote(&compose_tmp),
-        compose_path = shell_quote(&compose_path),
-        dockerfile_tmp = shell_quote(&dockerfile_tmp),
-        dockerfile_path = shell_quote(&dockerfile_path),
-    );
-    remote_phase(runner, host, "remote-compose-assets", &script, None)
-}
-
-fn read_existing_remote_env(
-    runner: &mut dyn RemoteRunner,
-    host: &str,
-    remote_home: &str,
-) -> io::Result<String> {
-    let env_path = format!("{remote_home}/.env");
-    let legacy_env_path = format!("{remote_home}/compose/.env");
-    let script = format!(
-        "if test -f {env_path}; then cat {env_path}; elif test -f {legacy_env_path}; then cat {legacy_env_path}; fi",
-        env_path = shell_quote(&env_path),
-        legacy_env_path = shell_quote(&legacy_env_path),
-    );
-    let output = runner.run(host, &script, None)?;
-    if !output.status_success {
-        return Err(io::Error::other(
-            "failed to read existing remote environment",
-        ));
-    }
-    Ok(output.stdout)
-}
-
-fn validate_remote_home(home: &str) -> io::Result<String> {
-    let trimmed = home.trim();
-    if trimmed.is_empty() || trimmed.contains(['\0', '\n', '\r']) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "remote deploy --home must be a non-empty single-line absolute path",
-        ));
-    }
-    if !Path::new(trimmed).is_absolute() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "remote deploy --home must be an absolute path",
-        ));
-    }
-    Ok(trimmed.to_string())
-}
-
-fn validate_remote_absolute_path(path: &str, name: &str) -> io::Result<()> {
-    let trimmed = path.trim();
-    if trimmed.is_empty()
-        || trimmed.contains(['\0', '\n', '\r'])
-        || !Path::new(trimmed).is_absolute()
-        || trimmed == "/"
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("remote deploy {name} must be a safe single-line absolute path"),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -927,6 +927,7 @@ fn agent_spool_malformed_line_with_multibyte_at_preview_boundary_no_panic() {
 
 #[test]
 #[serial]
+#[cfg(unix)]
 fn wrapper_preserves_command_exit_when_spool_append_fails() {
     use std::os::unix::fs::PermissionsExt;
 

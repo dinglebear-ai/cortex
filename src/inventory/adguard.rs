@@ -73,8 +73,13 @@ fn normalize_service(
     source_path: &str,
     body: &str,
 ) -> Result<InventoryService> {
-    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(body)?;
-    let json = serde_json::to_value(yaml)?;
+    // Do not include raw configuration snippets in parse errors: they can contain secrets.
+    // Keep merge keys literal, matching the previous parser's Value conversion.
+    let options = serde_saphyr::options! {
+        with_snippet: false,
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+    };
+    let json: Value = serde_saphyr::from_str_with_options(body, options)?;
     let root = json
         .as_object()
         .context("AdGuard Home config root is not a mapping")?;

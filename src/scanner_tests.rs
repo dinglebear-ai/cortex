@@ -272,6 +272,7 @@ fn prune_checkpoints_dry_run_and_delete_only_missing_sources() {
 }
 
 #[test]
+#[cfg(unix)]
 fn validate_path_rejects_symlinks() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("target");
@@ -2237,7 +2238,25 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
         },
     )
     .unwrap();
-    assert!(checkpoint[0].last_offset.unwrap_or_default() > 0);
+    assert_eq!(
+        checkpoint[0].last_offset,
+        Some(104),
+        "retry begins at the fourth physical row"
+    );
+    assert_eq!(
+        checkpoint[0].parse_errors, 0,
+        "a residual budget is not an oversized row"
+    );
+    let revision: String = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT source_revision FROM transcript_sources WHERE canonical_path = ?1",
+            [file.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(partial_source_line_no(&revision), Some(3));
     assert!(
         checkpoint[0].last_offset.unwrap_or_default() < checkpoint[0].file_size.unwrap_or_default(),
         "partial checkpoints retain full source metadata plus a separate cursor: {checkpoint:#?}"
@@ -2257,23 +2276,15 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
     .unwrap();
 
     let mut pass_results = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..12 {
         let pass =
             index_file_with_options(&pool, &file, "explicit_file", options.clone(), None).unwrap();
-        let found: i64 = pool
-            .get()
-            .unwrap()
-            .query_row(
-                "SELECT COUNT(*) FROM logs WHERE message = 'second bounded chunk becomes visible later'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        if found == 1 {
+        assert!(pass.scanned_bytes <= 132);
+        assert_eq!(pass.parse_errors, 0);
+        pass_results.push(pass.clone());
+        if pass.source_budget_cap_hits == 0 {
             break;
         }
-        pass_results.push(pass.clone());
-        assert_eq!(pass.source_budget_cap_hits, 1, "result={pass:#?}");
     }
     let later_rows: i64 = pool
         .get()
@@ -2320,6 +2331,26 @@ fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
     assert_eq!(
         recovered_line_no, 5,
         "metadata retains physical line numbers"
+    );
+    let actual = conn.prepare("SELECT message, json_extract(metadata_json, '$.line_no') FROM logs ORDER BY json_extract(metadata_json, '$.line_no')")
+        .unwrap().query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+    let expected = [
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "second bounded chunk becomes visible later",
+        "appended while continuation is pending",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(line, message)| (message.to_string(), line as i64))
+    .collect::<Vec<_>>();
+    assert_eq!(
+        actual, expected,
+        "every normal row and appended row survives byte-turn boundaries"
     );
 }
 
@@ -2379,19 +2410,28 @@ fn set_mtime(path: &std::path::Path, secs: u64, nanos: u32) {
         .unwrap();
 }
 
-struct HomeOverride(Option<std::ffi::OsString>);
+// Default discovery also honors CODEX_HOME independently of HOME. Every
+// temporary-home fixture must isolate both, including scans without an explicit
+// root, so tests never discover the developer's transcript directories.
+struct HomeOverride {
+    previous_home: Option<std::ffi::OsString>,
+    _codex_home: EnvOverride,
+}
 
 impl HomeOverride {
     fn set(path: &std::path::Path) -> Self {
         let previous = crate::env::var_os("HOME");
         crate::env::set_test_var("HOME", path);
-        Self(previous)
+        Self {
+            previous_home: previous,
+            _codex_home: EnvOverride::remove("CODEX_HOME"),
+        }
     }
 }
 
 impl Drop for HomeOverride {
     fn drop(&mut self) {
-        if let Some(home) = &self.0 {
+        if let Some(home) = &self.previous_home {
             crate::env::set_test_var("HOME", home);
         } else {
             crate::env::remove_test_var("HOME");
@@ -2439,6 +2479,7 @@ impl Drop for CurrentDirGuard {
 }
 
 #[test]
+#[cfg(unix)]
 fn index_roots_reports_file_errors_with_paths() {
     let (pool, dir) = test_pool();
     let target = dir.path().join("target.jsonl");
@@ -2455,6 +2496,7 @@ fn index_roots_reports_file_errors_with_paths() {
 }
 
 #[test]
+#[cfg(unix)]
 fn index_roots_skips_unreadable_directories_and_continues() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -2953,4 +2995,166 @@ fn session_metadata_scrubbing_drops_control_only_labels() {
 
     assert!(metadata.title.is_none());
     assert!(metadata.title_provenance.is_none());
+}
+
+#[test]
+fn bounded_discovery_keeps_lexical_pages_and_nested_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    // Creation order deliberately opposes traversal order. Include an empty
+    // directory between nested sources so resumption cannot loop on it.
+    for name in ["z/session.jsonl", "m/session.jsonl", "a/session.jsonl"] {
+        let path = dir.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    std::fs::create_dir(dir.path().join("b-empty")).unwrap();
+    let mut cursor = None;
+    let mut found = std::collections::BTreeSet::new();
+    for _ in 0..12 {
+        let pass = discover_root_bounded(
+            dir.path().to_path_buf(),
+            cursor.as_deref(),
+            DiscoveryBudget {
+                cancel: None,
+                max_entries: 3,
+                max_path_bytes: 4096,
+                deadline: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        found.extend(pass.files);
+        if !pass.capped {
+            break;
+        }
+        cursor = pass.next_cursor;
+    }
+    assert_eq!(
+        found.len(),
+        3,
+        "every nested source must survive page boundaries"
+    );
+}
+
+#[test]
+fn bounded_discovery_single_entry_pages_resume_through_ancestors() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a/b/c/session.jsonl");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{}\n").unwrap();
+    let mut cursor = None;
+    let mut found = Vec::new();
+    for _ in 0..8 {
+        let pass = discover_root_bounded(
+            dir.path().to_path_buf(),
+            cursor.as_deref(),
+            DiscoveryBudget {
+                cancel: None,
+                max_entries: 1,
+                max_path_bytes: 4096,
+                deadline: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        found.extend(pass.files);
+        if !pass.capped {
+            break;
+        }
+        cursor = pass.next_cursor;
+    }
+    assert_eq!(found, vec![file]);
+}
+
+#[test]
+#[serial]
+fn temporary_home_discovery_excludes_ambient_codex_home_and_restores_it() {
+    let home = tempfile::tempdir().unwrap();
+    let unrelated = tempfile::tempdir().unwrap();
+    let _previous = EnvOverride::remove("CODEX_HOME");
+    crate::env::set_test_var("CODEX_HOME", unrelated.path());
+    {
+        let _home = HomeOverride::set(home.path());
+        let roots = providers::transcript_roots();
+        assert!(!roots.is_empty());
+        assert!(roots.iter().all(|root| root.starts_with(home.path())));
+        assert!(crate::env::var_os("CODEX_HOME").is_none());
+    }
+    assert_eq!(
+        crate::env::var_os("CODEX_HOME").as_deref(),
+        Some(unrelated.path().as_os_str())
+    );
+}
+
+#[test]
+fn revision_two_completed_source_replays_missing_normal_rows_with_bounded_turns() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("revision-two.jsonl");
+    let messages = [
+        "before old residual boundary",
+        "normal row lost at old boundary",
+        "after old residual boundary",
+    ];
+    let rows = messages
+        .iter()
+        .map(|message| {
+            serde_json::json!({"sessionId":"revision-two",
+        "content":message})
+            .to_string()
+                + "\n"
+        })
+        .collect::<String>();
+    std::fs::write(&file, rows).unwrap();
+    assert_eq!(
+        index_file(&pool, &file, "claude_session").unwrap().ingested,
+        3
+    );
+    {
+        let conn = pool.get().unwrap();
+        // Model a completed v2 checkpoint from the old reader: one ordinary
+        // physical row never produced either an import receipt or a log.
+        conn.execute("DELETE FROM logs WHERE message = ?1", [messages[1]])
+            .unwrap();
+        conn.execute("DELETE FROM transcript_import_records", [])
+            .unwrap();
+        conn.execute("UPDATE hosts SET log_count = (SELECT COUNT(*) FROM logs WHERE logs.hostname = hosts.hostname)", []).unwrap();
+        conn.execute("UPDATE transcript_sources SET extractor_revision = 2", [])
+            .unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM logs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+    let options = IndexFileOptions {
+        scan_budget: Some(ScanBudget {
+            per_source_max_bytes: 128,
+            scan_max_bytes: 256,
+            per_source_deadline: Duration::from_secs(1),
+        }),
+        ..Default::default()
+    };
+    let mut completed = false;
+    for _ in 0..12 {
+        let result =
+            index_file_with_options(&pool, &file, "claude_session", options.clone(), None).unwrap();
+        assert!(result.scanned_bytes <= 128);
+        assert_eq!(result.parse_errors, 0);
+        if result.source_budget_cap_hits == 0 {
+            completed = true;
+            break;
+        }
+    }
+    assert!(completed);
+    let conn = pool.get().unwrap();
+    let (count, revision, state): (i64, i64, String) = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM logs), extractor_revision, scan_state FROM transcript_sources", [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!((count, revision, state.as_str()), (3, 3, "complete"));
+    let recovered: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = ?1",
+            [messages[1]],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(recovered, 1);
 }

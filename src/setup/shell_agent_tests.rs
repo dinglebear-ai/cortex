@@ -53,6 +53,7 @@ fn install_agent_command_files_hardens_existing_spool_permissions() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     std::fs::create_dir(&state_dir).unwrap();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let spool = state_dir.join("agent-command.jsonl");
     std::fs::write(&spool, "keep\n").unwrap();
     std::fs::set_permissions(&spool, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -65,6 +66,98 @@ fn install_agent_command_files_hardens_existing_spool_permissions() {
     assert_eq!(std::fs::read_to_string(&spool).unwrap(), "keep\n");
     let mode = std::fs::metadata(&spool).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn install_agent_command_files_rejects_shared_parent_without_mutation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for mode in [0o755, 0o1777] {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("shared");
+        std::fs::create_dir(&state_dir).unwrap();
+        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        let spool = state_dir.join("events.jsonl");
+        let wrapper = dir.path().join("bin/wrapper");
+
+        let result =
+            install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh"));
+
+        assert!(result.is_err(), "shared parent {mode:o} must be rejected");
+        assert_eq!(
+            std::fs::metadata(&state_dir).unwrap().permissions().mode() & 0o7777,
+            mode
+        );
+        assert!(!spool.exists());
+        assert!(!wrapper.parent().unwrap().exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn install_agent_command_files_rejects_symlink_parent_without_mutation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let state_dir = dir.path().join("linked");
+    std::os::unix::fs::symlink(&target, &state_dir).unwrap();
+    let spool = state_dir.join("events.jsonl");
+    let wrapper = dir.path().join("bin/wrapper");
+
+    assert!(
+        install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh")).is_err()
+    );
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert!(!spool.exists());
+    assert!(!wrapper.parent().unwrap().exists());
+}
+
+#[test]
+fn install_agent_command_files_rejects_non_directory_parent_without_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("file");
+    std::fs::write(&state_dir, "keep").unwrap();
+    let spool = state_dir.join("events.jsonl");
+    let wrapper = dir.path().join("bin/wrapper");
+
+    assert!(
+        install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh")).is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&state_dir).unwrap(), "keep");
+    assert!(!wrapper.parent().unwrap().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn install_agent_command_files_creates_private_parent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("new/nested/state");
+    let spool = state_dir.join("events.jsonl");
+    let wrapper = dir.path().join("bin/wrapper");
+
+    install_agent_command_files(&wrapper, &spool, &state_dir, Path::new("/bin/sh")).unwrap();
+
+    assert_eq!(
+        std::fs::metadata(&state_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(&spool).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        agent_command_state_phase(&state_dir, &spool).status,
+        SetupStatus::Ok
+    );
 }
 
 #[cfg(unix)]
@@ -312,5 +405,112 @@ async fn run_shell_agent_setup_rejects_stale_cortex_binary_before_writing() {
         !home
             .join(".local/bin/cortex-agent-command-wrapper")
             .exists()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn custom_spool_install_and_check_use_the_configured_producer_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let cortex_home = home.join(".cortex");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("cortex");
+    write_executable(
+        &fake,
+        &format!(
+            "#!/bin/sh\nprintf 'cortex {}\\n'\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
+    let _home = EnvGuard::set("HOME", &home);
+    let _cortex_home = EnvGuard::set("CORTEX_HOME", &cortex_home);
+    let _path = EnvGuard::set("PATH", path_with_prepended(&bin));
+    let spool = dir.path().join("private custom/state/events.jsonl");
+    super::super::heartbeat_agent_env::write_private_agent_env(
+        &cortex_home.join("heartbeat-agent.env"),
+        &[(
+            "CORTEX_AGENT_COMMAND_SPOOL".into(),
+            spool.display().to_string(),
+        )]
+        .into(),
+    )
+    .unwrap();
+    let _configured = EnvGuard::set("CORTEX_AGENT_COMMAND_SPOOL", &spool);
+    run_shell_agent_setup(ShellAgentAction::Install)
+        .await
+        .unwrap();
+    assert!(spool.is_file());
+    assert!(
+        !home
+            .join(".local/state/cortex/agent-command.jsonl")
+            .exists()
+    );
+    let wrapper = home.join(".local/bin/cortex-agent-command-wrapper");
+    assert_eq!(
+        std::fs::read_to_string(&wrapper).unwrap(),
+        agent_command_wrapper_script(&std::fs::canonicalize(&fake).unwrap(), &spool)
+    );
+    let check = run_shell_agent_setup(ShellAgentAction::Check)
+        .await
+        .unwrap();
+    assert!(
+        check
+            .phases
+            .iter()
+            .any(|p| p.name == "agent-command-content" && p.status == SetupStatus::Ok)
+    );
+}
+
+#[test]
+#[serial]
+fn invalid_custom_spool_fails_before_creating_wrapper() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = EnvGuard::set("HOME", dir.path());
+    let _spool = EnvGuard::set("CORTEX_AGENT_COMMAND_SPOOL", "relative/events.jsonl");
+    assert!(resolved_agent_command_spool_path().is_err());
+    assert!(!dir.path().join(".local/bin").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_executes_with_exact_spool_path_containing_shell_metacharacters() {
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().join("cortex command");
+    let wrapper = temp.path().join("wrapper");
+    let capture = temp.path().join("arguments");
+    let spool = temp
+        .path()
+        .join("custom 'spool $literal; untouched/events.jsonl");
+    write_executable(
+        &bin,
+        "#!/bin/sh\nfor arg do if [ \"$arg\" = --probe ]; then exit 0; fi; done\nprintf '%s\\n' \"$@\" > \"$CORTEX_TEST_WRAPPER_ARGS\"\n",
+    );
+    write_executable(&wrapper, &agent_command_wrapper_script(&bin, &spool));
+    assert!(
+        std::process::Command::new(&wrapper)
+            .args(["printf", "%s", "hello world"])
+            .env("CORTEX_TEST_WRAPPER_ARGS", &capture)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let args = std::fs::read_to_string(capture).unwrap();
+    assert_eq!(
+        args.lines().collect::<Vec<_>>(),
+        vec![
+            "ingest",
+            "shell",
+            "agent",
+            "wrap",
+            "--spool",
+            spool.to_str().unwrap(),
+            "--",
+            "printf",
+            "%s",
+            "hello world"
+        ]
     );
 }

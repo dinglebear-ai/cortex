@@ -7,6 +7,9 @@ use rmcp::{ServiceExt, transport::stdio};
 use tracing::info;
 
 mod cli;
+mod main_report;
+mod onboarding_cli;
+use main_report::print_update_report;
 
 #[tokio::main]
 async fn main() {
@@ -254,7 +257,11 @@ async fn run_deploy(command: DeployCommand) -> Result<()> {
         } => {
             let report = cortex::deploy::run_remote_deploy(
                 &host,
-                cortex::deploy::RemoteDeployOptions { dry_run, home },
+                cortex::deploy::RemoteDeployOptions {
+                    dry_run,
+                    home,
+                    ..Default::default()
+                },
             )?;
             if command.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -363,6 +370,7 @@ fn run_deploy_agent(
     }
 
     let config = AgentDeployConfig {
+        binary_override: binary.is_some(),
         target,
         token,
         require_token: false,
@@ -456,37 +464,9 @@ async fn run_update(command: UpdateCommand) -> Result<()> {
     Ok(())
 }
 
-fn print_update_report(report: &cortex::update::UpdateReport) {
-    println!("cortex update {}", report.mode);
-    println!("profile: {}", report.profile_path.display());
-    if let Some(server) = &report.server {
-        println!("server: {} {}", server.host, server.home);
-        for phase in &server.phases {
-            println!(
-                "server\t{:?}\t{}\t{}ms\t{}",
-                phase.status, phase.name, phase.elapsed_ms, phase.detail
-            );
-        }
-    }
-    for client in &report.clients {
-        println!(
-            "client\t{}\t{}\t{}ms\t{}",
-            if client.ok { "ok" } else { "error" },
-            client.host,
-            client.elapsed_ms,
-            client.detail
-        );
-    }
-    for phase in &report.skipped {
-        println!(
-            "skip\t{:?}\t{}\t{}ms\t{}",
-            phase.status, phase.name, phase.elapsed_ms, phase.detail
-        );
-    }
-}
-
 async fn run_setup(command: SetupCommand) -> Result<()> {
     let report = match command.kind {
+        SetupCommandKind::Lifecycle(command) => return onboarding_cli::run(command).await,
         SetupCommandKind::Main(mode) => cortex::setup::run_setup(mode).await?,
         SetupCommandKind::SessionsIndexTimer(action) => {
             cortex::setup::run_sessions_index_timer_setup(action).await?
@@ -806,6 +786,7 @@ enum DeployCommandKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SetupCommandKind {
+    Lifecycle(onboarding_cli::Command),
     Main(cortex::setup::SetupMode),
     SessionsIndexTimer(cortex::setup::SessionsIndexTimerAction),
     SessionsWatchService(cortex::setup::SessionsWatchServiceAction),
@@ -839,6 +820,16 @@ impl Mode {
             if first == "--version" || first == "-V" || first == "version" {
                 return Ok(Self::Version);
             }
+        }
+
+        // Lifecycle owns --server; query-global extraction must not steal it.
+        if args.first().map(String::as_str) == Some("setup")
+            && matches!(
+                args.get(1).map(String::as_str),
+                Some("start" | "effective" | "verify" | "backup")
+            )
+        {
+            return Ok(Self::Setup(parse_setup_command(&args[1..])?));
         }
 
         // Strip CLI-only global flags (`--http`, `--server`, `--token`) from
@@ -938,6 +929,15 @@ impl Mode {
 }
 
 fn parse_setup_command(args: &[String]) -> Result<SetupCommand> {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("start" | "effective" | "verify" | "backup")
+    ) {
+        return Ok(SetupCommand {
+            kind: SetupCommandKind::Lifecycle(onboarding_cli::parse(args)?),
+            json: false,
+        });
+    }
     let mut mode = cortex::setup::SetupMode::FirstRun;
     let mut json = false;
     let mut iter = args.iter();

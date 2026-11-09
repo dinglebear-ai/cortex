@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 export LIVE_PROJECT_ROOT="$root"
+python3 "$root/tests/live/phases/surfaces/cli_sweep_test.py"
 for lib in common lock redact events command report lease resources; do source "$root/tests/live/lib/$lib.sh"; done
 source "$root/tests/live/phases/surfaces/resources.sh"
 grep -q 'background integrity job did not finish before maintenance sweep' "$root/tests/live/phases/surfaces/rest_sweep.py" || {
@@ -51,4 +52,24 @@ for _ in $(seq 1 50); do [[ -e "$ready" ]] && break; sleep 0.1; done
 [[ -e "$ready" ]]; kill -TERM "$trapped_pid"; wait "$trapped_pid" || [[ "$?" == 143 ]]
 [[ ! -e "$state" ]]
 jq -e '.state=="CLEAN"' "$trapped_run/cleanup-audit.json" >/dev/null
+# Credential cleanup is limited to the exact run HOME after both resources
+# are terminal. Preserve unrelated run evidence and refuse foreign paths.
+export LIVE_RUN_HOME="$LIVE_RUN_ROOT/home" LIVE_RUN_TMP="$LIVE_RUN_ROOT/tmp"
+mkdir -p "$LIVE_RUN_HOME/.cortex" "$LIVE_RUN_TMP"
+printf 'private credential\n' >"$LIVE_RUN_HOME/.cortex/.env"
+printf 'private observation\n' >"$LIVE_RUN_TMP/cli-backup.json"
+printf 'retained evidence\n' >"$LIVE_RUN_ROOT/receipt.txt"
+if surface_cli_runtime_cleanup; then echo 'cleanup accepted a missing backup teardown' >&2; exit 1; fi
+[[ -e "$LIVE_RUN_HOME/.cortex/.env" ]]
+jq -cn '{key:"surface-backup-topology",state:"VERIFIED"}' >>"$LIVE_RUN_ROOT/resources.jsonl"
+surface_cli_runtime_cleanup
+[[ ! -e "$LIVE_RUN_HOME" && ! -e "$LIVE_RUN_TMP/cli-backup.json" && -e "$LIVE_RUN_ROOT/receipt.txt" ]]
+export LIVE_RUN_HOME="$tmp/foreign-home"
+mkdir -p "$LIVE_RUN_HOME"; touch "$LIVE_RUN_HOME/preserve"
+if surface_cli_runtime_cleanup; then echo 'cleanup accepted a foreign HOME' >&2; exit 1; fi
+[[ -e "$LIVE_RUN_HOME/preserve" ]]
+export LIVE_RUN_HOME="$LIVE_RUN_ROOT/home"
+ln -s "$tmp/foreign-home" "$LIVE_RUN_HOME"
+if surface_cli_runtime_cleanup; then echo 'cleanup accepted a symlink HOME' >&2; exit 1; fi
+[[ -e "$tmp/foreign-home/preserve" ]]
 printf 'surface resource cancellation selftest: PASS\n'

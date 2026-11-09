@@ -116,7 +116,7 @@ bytes = "1"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml_ng = "0.10"
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
 
 # Query-string serializer/deserializer that handles `Vec<String>` from repeated
 # `?terms[]=a&terms[]=b` params (and `terms=a&terms=b`), unlike the default
@@ -134,7 +134,7 @@ toml = "0.8"
 toml_edit = "0.22"
 
 # OAuth + JWT (shared with lab via parameterizable lab-auth crate)
-lab-auth = { git = "https://github.com/dinglebear-ai/labby.git", rev = "87cec3241f9baef22335de9cc8629ebbcd8ba047", package = "lab-auth" }
+lab-auth = { git = "https://github.com/dinglebear-ai/labby.git", rev = "0e9ce745db47afaa26e948abe2a9e70a72b8a7e7", package = "lab-auth" }
 url = "2"
 
 # Errors
@@ -190,6 +190,9 @@ rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "disk", "network"] }
 
 [lints]
 workspace = true

@@ -78,13 +78,13 @@ selects one of the actions below. The mechanically generated current count is in
 | `artifact_evidence` | `cortex:read` | cheap | Query bounded source-attributed artifact ecosystem evidence |
 | `artifact_evidence_record` | `cortex:admin` | write | Append one bounded source-attributed artifact ecosystem evidence event |
 | `skill_events` | `cortex:read` | cheap | List extracted AI skill-invocation events |
-| `skill_incidents` | `cortex:read` | moderate | Grouped skill-usage incident candidates |
+| `skill_incidents` | `cortex:read` | expensive | Grouped skill-usage incident candidates |
 | `skill_investigate` | `cortex:read` | expensive | Evidence bundles for skill-usage incidents, skill-first |
 | `mcp_events` | `cortex:read` | cheap | List extracted AI MCP tool-call events |
-| `mcp_incidents` | `cortex:read` | moderate | Grouped MCP-usage incident candidates |
+| `mcp_incidents` | `cortex:read` | expensive | Grouped MCP-usage incident candidates |
 | `mcp_investigate` | `cortex:read` | expensive | Evidence bundles for MCP-usage incidents, server/tool-first |
 | `hook_events` | `cortex:read` | cheap | List extracted/collected AI hook events (runtime + config inventory) |
-| `hook_incidents` | `cortex:read` | moderate | Grouped hook-usage incident candidates |
+| `hook_incidents` | `cortex:read` | expensive | Grouped hook-usage incident candidates |
 | `hook_investigate` | `cortex:read` | expensive | Evidence bundles for hook-usage incidents, hook-first |
 | `ack_error` | `cortex:admin` | write | Acknowledge an error signature |
 | `unack_error` | `cortex:admin` | write | Revoke an error acknowledgement |

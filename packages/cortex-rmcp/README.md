@@ -49,74 +49,71 @@ Cortex began as a syslog receiver. It now covers network logs, Docker, managed f
 
 ## Quick start
 
-### Install the CLI
+### Install and choose a role
 
-The first-class guided path is:
+```sh
+curl -fsSL https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.sh | sh
+```
+
+On Windows x64:
+
+```powershell
+irm https://raw.githubusercontent.com/dinglebear-ai/cortex/main/install.ps1 | iex
+```
+
+The checksum-verified bootstrap supports Linux x64/ARM64, macOS ARM64, and
+Windows x64. It runs `cortex setup start`, which asks whether this machine is a
+server, a client, or a host agent. Server setup prepares configuration, distinct
+MCP/REST credentials, storage and managed Compose. Client setup connects selected
+MCP clients. Agent setup detects local collection prerequisites and enables only
+the capabilities you explicitly select. First server setup also asks for
+authentication mode, exposure, and an optional six-hour backup schedule.
+
+Already have the CLI, or automating installation? Select the role explicitly:
+
+```sh
+cortex setup start --role server --clients codex,claude,gemini
+cortex setup start --role client --server https://cortex.example.com \
+  --token-file /private/mcp-token --api-token-file /private/rest-token
+cortex setup start --role agent --server https://cortex.example.com \
+  --token-file /private/ingest-token --capabilities docker,transcripts
+```
+
+First-time noninteractive setup requires `--role`; subsequent setup reuses the
+saved choice. `--dry-run --json` previews configuration and capabilities without
+installing services. All advanced settings remain available through `--set` and
+`--secret-file`; sensitive collection requires explicit selection.
+`--backup-schedule` and `--no-backup-schedule` save the backup scheduling choice.
+
+```sh
+cortex setup effective --json
+cortex setup verify --json
+cortex update
+```
+
+Verification proves authenticated MCP access and REST access when configured;
+source delivery still needs its own evidence. Updates use saved deployment
+settings and respect version pins. See the [setup guide](docs/SETUP.md) for
+capability selection, OAuth, prerequisites, source builds, manual native
+operation, and installer environment controls; see the
+[deployment runbook](docs/runbooks/deploy.md) for backup and recovery.
+
+For guided agent assistance:
 
 ```sh
 npx skills add dinglebear-ai/cortex --skill install-cortex
 ```
 
-Start a fresh agent task and invoke `$install-cortex`. It chooses server or client-only role, delegates to the canonical installer/setup engine, configures auth/network/storage, and verifies the live client connection.
+Start a fresh task and invoke `$install-cortex`.
 
-The npm launcher remains the fastest manual path for local CLI and stdio MCP use:
+The npm launcher remains available for local CLI and stdio MCP use with Node.js
+18 or newer:
 
-```bash
+```sh
 npx -y @dinglebear/cortex --help
 npx -y @dinglebear/cortex mcp
-```
-
-Install it permanently with:
-
-```bash
 npm install --global @dinglebear/cortex
-cortex --version
 ```
-
-The launcher requires Node.js 18 or newer. It downloads a checksum-verified native release binary for Linux x64, Linux ARM64, macOS ARM64, or Windows x64.
-
-Build from source with the current stable Rust toolchain:
-
-```bash
-git clone https://github.com/dinglebear-ai/cortex.git
-cd cortex
-mise install       # optional, but pins the repository tools
-just build
-./.cache/cargo/debug/cortex --version
-```
-
-### Start a local server
-
-The full daemon starts UDP and TCP syslog receivers plus the shared HTTP server. Use separate MCP and REST tokens:
-
-```bash
-mkdir -p "$HOME/.cortex/data"
-export CORTEX_DB_PATH="$HOME/.cortex/data/cortex.db"
-export CORTEX_TOKEN="$(openssl rand -hex 32)"
-export CORTEX_API_TOKEN="$(openssl rand -hex 32)"
-
-cortex serve mcp
-```
-
-Defaults:
-
-- Syslog: `0.0.0.0:1514` over UDP and TCP
-- HTTP: `127.0.0.1:3100`
-- MCP: `http://127.0.0.1:3100/mcp`
-- REST: `http://127.0.0.1:3100/api/*`
-- Investigation workspace: `http://127.0.0.1:3100/app`
-
-Verify it from another terminal:
-
-```bash
-curl -fsS http://127.0.0.1:3100/health
-logger -n 127.0.0.1 -P 1514 --tcp "cortex quickstart from $(hostname)"
-
-export CORTEX_API_TOKEN="the-same-api-token"
-cortex tail --limit 10
-```
-
-For a managed local deployment, `cortex setup repair` creates or repairs the Cortex home, Compose assets, data paths, and missing 64-character MCP and REST tokens without replacing existing token values.
 
 ### Connect an MCP client
 

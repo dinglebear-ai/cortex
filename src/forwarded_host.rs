@@ -107,10 +107,16 @@ pub(crate) fn bounded_metadata_json(metadata: Value, provenance_key: &str) -> St
         "metadata_truncated": true,
     });
     let encoded = crate::ingest_metadata::bounded_metadata_json(metadata);
-    let lost_proof = serde_json::from_str::<Value>(&encoded)
+    let incomplete = serde_json::from_str::<Value>(&encoded)
         .ok()
-        .is_none_or(|value| value.get(provenance_key).is_none_or(Value::is_null));
-    if lost_proof {
+        .is_none_or(|value| {
+            value.get(provenance_key).is_none_or(Value::is_null)
+                || value
+                    .get("_omitted_fields")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|omitted| omitted > 0)
+        });
+    if incomplete {
         crate::ingest_metadata::bounded_metadata_json(fallback)
     } else {
         encoded

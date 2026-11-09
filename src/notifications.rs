@@ -5,3 +5,4 @@ pub mod digest;
 pub mod dispatcher;
 pub mod evaluator;
 pub mod rules;
+pub(crate) mod text;

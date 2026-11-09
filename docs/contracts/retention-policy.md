@@ -22,6 +22,8 @@ updated: 2026-08-24
 Epic F incident/Qdrant rows below remain historical design targets until the
 semantic incident pipeline lands.
 
+
+The storage-pressure error floor partitions native socket sources by host: IPv4 ephemeral ports share a bucket, while bracketed IPv6 addresses retain the full address. Forwarded source URI identities remain distinct across hosts. The floor does not merge every `agent-syslog://` source or IPv6 network prefix into one shared allowance.
 ---
 
 ## 1. Scope

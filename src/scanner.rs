@@ -32,6 +32,12 @@ use crate::scanner::skill_events::{
 
 pub(crate) mod antigravity;
 mod checkpoint;
+mod discovery;
+use discovery::collect_supported_files_bounded;
+mod discovery_continuation;
+mod line_reader;
+pub(crate) use discovery_continuation::{DiscoveryContinuation, DiscoveryScanState};
+use line_reader::{ReadLineOutcome, read_bounded_line};
 mod claude;
 pub(crate) mod codex;
 pub(crate) mod gemini;
@@ -51,7 +57,8 @@ const MAX_INDEX_CHUNK_RECORDS: usize = 500;
 const MAX_INDEX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_AI_PROJECT_CHARS: usize = 512;
 const MAX_AI_SESSION_ID_CHARS: usize = 128;
-pub(crate) const TRANSCRIPT_EXTRACTOR_REVISION: i64 = 2;
+// Revision 3 replays sources that older residual-budget handling could complete with missing rows.
+pub(crate) const TRANSCRIPT_EXTRACTOR_REVISION: i64 = 3;
 const MAX_TRANSCRIPT_PATH_CHARS: usize = 1024;
 const MAX_SESSION_METADATA_CHARS: usize = 512;
 const MAX_ABANDONED_SNAPSHOT_WORKERS: usize = 2;
@@ -105,7 +112,7 @@ enum SnapshotOutcome {
     Capacity,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct DiscoveryResult {
     files: Vec<PathBuf>,
     diagnostics: IndexResult,
@@ -119,6 +126,7 @@ struct DiscoveryBudget {
     max_entries: usize,
     max_path_bytes: usize,
     deadline: Duration,
+    cancel: Option<std::sync::Arc<discovery_continuation::DiscoveryTurn>>,
 }
 
 /// Acquire a JSONL source before touching its checkpoint or imports. The
@@ -681,6 +689,15 @@ pub fn index_roots_with_options(
     options: IndexOptions,
     storage: Option<&StorageConfig>,
 ) -> Result<IndexResult> {
+    index_roots_with_continuation(pool, options, storage, None)
+}
+
+pub(crate) fn index_roots_with_continuation(
+    pool: &DbPool,
+    options: IndexOptions,
+    storage: Option<&StorageConfig>,
+    continuation: Option<&DiscoveryContinuation>,
+) -> Result<IndexResult> {
     let mut roots = match options.root_override.as_deref() {
         Some(path) => {
             let mut result = IndexResult::default();
@@ -689,6 +706,9 @@ pub fn index_roots_with_options(
                 Err(error) => {
                     classify_path_error(&error, &mut result);
                     record_file_error(&mut result, path, &error);
+                    if let Some(state) = continuation {
+                        state.cancel_all();
+                    }
                     return Ok(result);
                 }
             }
@@ -707,10 +727,16 @@ pub fn index_roots_with_options(
         .collect();
     roots.sort();
     roots.dedup();
+    if let Some(state) = continuation {
+        state.retain_roots(&roots);
+    }
     let mut result = IndexResult::default();
     let mut files = Vec::new();
     for root in roots {
         if !root.exists() {
+            if let Some(state) = continuation {
+                state.forget_root(&root);
+            }
             continue;
         }
         if let Some(scan_budget) = options.scan_budget {
@@ -718,15 +744,17 @@ pub fn index_roots_with_options(
                 .discovery_start_after
                 .get(&root)
                 .map(PathBuf::as_path);
-            let discovery = discover_root_bounded(
-                root.clone(),
-                start_after,
-                DiscoveryBudget {
-                    max_entries: MAX_DISCOVERY_ENTRIES_PER_ROOT,
-                    max_path_bytes: MAX_DISCOVERY_PATH_BYTES_PER_ROOT,
-                    deadline: scan_budget.per_source_deadline,
-                },
-            )?;
+            let budget = DiscoveryBudget {
+                max_entries: MAX_DISCOVERY_ENTRIES_PER_ROOT,
+                max_path_bytes: MAX_DISCOVERY_PATH_BYTES_PER_ROOT,
+                deadline: scan_budget.per_source_deadline,
+                cancel: None,
+            };
+            let discovery = if let Some(continuation) = continuation {
+                continuation.discover(root.clone(), start_after, budget)?
+            } else {
+                discover_root_bounded(root.clone(), start_after, budget)?
+            };
             files.extend(discovery.files);
             merge_result(&mut result, &discovery.diagnostics);
             if discovery.capped {
@@ -735,9 +763,13 @@ pub fn index_roots_with_options(
                 // A root-level marker merely rotates roots. Retaining the
                 // last visited entry is what makes the capped root itself
                 // eventually complete on a later pass.
-                result
-                    .next_discovery_cursors
-                    .insert(root.clone(), discovery.next_cursor.unwrap_or(root));
+                result.next_discovery_cursors.insert(
+                    root.clone(),
+                    discovery
+                        .next_cursor
+                        .or_else(|| start_after.map(Path::to_path_buf))
+                        .unwrap_or(root),
+                );
             }
         } else {
             collect_supported_files(&root, &mut files, &mut result);
@@ -770,24 +802,34 @@ pub fn index_roots_with_options(
             scan_max_bytes: budget.scan_max_bytes,
             per_source_deadline: budget.per_source_deadline,
         });
-        if options
-            .scan_budget
-            .is_some_and(|budget| result.scanned_bytes >= budget.scan_max_bytes)
-        {
+        if options.scan_budget.is_some_and(|budget| {
+            let quantum = budget.per_source_max_bytes.min(budget.scan_max_bytes);
+            result.scanned_bytes >= budget.scan_max_bytes
+                || (result.scanned_bytes > 0
+                    && global_remaining.is_some_and(|remaining| remaining < quantum))
+        }) {
+            // Give each attempted source a complete turn. A smaller residual
+            // scan allowance must not misclassify its first normal row as oversized.
             result.scan_budget_cap_hit = true;
-            result.deferred_sources += 1;
-            continue;
+            result.deferred_sources += files.len().saturating_sub(position);
+            break;
         }
         if let Some(since_mtime_nanos) = options.since_mtime_nanos {
             let metadata = match fs::metadata(file) {
                 Ok(metadata) => metadata,
                 Err(error) => {
+                    if let Some(state) = continuation {
+                        state.source_finished(file);
+                    }
                     record_file_error(&mut result, file, &error.into());
                     continue;
                 }
             };
             if metadata_mtime_nanos(&metadata).is_some_and(|mtime| mtime < since_mtime_nanos) {
                 result.skipped_files += 1;
+                if let Some(state) = continuation {
+                    state.source_finished(file);
+                }
                 continue;
             }
         }
@@ -802,6 +844,9 @@ pub fn index_roots_with_options(
             storage,
         ) {
             Ok(file_result) => {
+                if let Some(state) = continuation {
+                    state.acknowledge_source(file, &file_result);
+                }
                 // A capacity deferral never began source acquisition, so do
                 // not advance the fairness cursor past it. The next pass can
                 // revisit it after an abandoned reader releases its slot.
@@ -821,12 +866,18 @@ pub fn index_roots_with_options(
                 }
             }
             Err(error) => {
+                if let Some(state) = continuation {
+                    state.source_finished(file);
+                }
                 result.next_scan_cursor = Some(file.clone());
                 classify_path_error(&error, &mut result);
                 tracing::warn!(path = %file.display(), error = %error, "Transcript file indexing failed");
                 record_file_error(&mut result, file, &error);
             }
         }
+    }
+    if let Some(state) = continuation {
+        state.finish_pass(&mut result);
     }
     Ok(result)
 }
@@ -1167,6 +1218,8 @@ pub fn index_file_with_options(
         } else {
             None
         };
+        let hasher_before_line = bounded_stream.then(|| hasher.clone());
+        let bytes_before_line = result.scanned_bytes;
         let read_line = match read_bounded_line(&mut reader, Some(&mut hasher), physical_limit)? {
             ReadLineOutcome::EndOfFile => break,
             ReadLineOutcome::Line(read_line) => read_line,
@@ -1178,17 +1231,28 @@ pub fn index_file_with_options(
                 result.source_budget_cap_hits += 1;
                 source_complete = false;
                 partial_metadata = Some(current_metadata.clone());
-                partial_scan_state = Some(checkpoint::SourceScanState::DiscardUntilNewline);
-                partial_offset = Some(reader.stream_position()?);
-                // Persist a recoverable diagnostic but keep this source
-                // resumable: a huge physical record must never turn into a
-                // terminal error or block the valid records after it.
-                checkpoint_store.record_parse_error(
-                    source_id,
-                    line_no as i64,
-                    "transcript record exceeds bounded scan allowance",
-                    None,
-                )?;
+                if !discard_until_newline && bytes_before_line > 0 {
+                    // The row only exceeded this turn's residual allowance.
+                    // Retry it from its boundary with a full turn next time.
+                    let start = reader
+                        .stream_position()?
+                        .saturating_sub(bytes_consumed as u64);
+                    reader.seek(SeekFrom::Start(start))?;
+                    hasher = hasher_before_line.expect("bounded read has a saved digest");
+                    partial_scan_state = Some(checkpoint::SourceScanState::Boundary);
+                    partial_offset = Some(start);
+                } else {
+                    partial_scan_state = Some(checkpoint::SourceScanState::DiscardUntilNewline);
+                    partial_offset = Some(reader.stream_position()?);
+                    // A record exceeding a complete turn retains the existing
+                    // bounded discard policy, including continuation fragments.
+                    checkpoint_store.record_parse_error(
+                        source_id,
+                        line_no as i64,
+                        "transcript record exceeds bounded scan allowance",
+                        None,
+                    )?;
+                }
                 break;
             }
         };
@@ -1846,155 +1910,7 @@ fn collect_supported_files(path: &Path, files: &mut Vec<PathBuf>, result: &mut I
     }
 }
 
-/// Discover one provider root without granting the worker any persistence
-/// capability. A root that blocks in filesystem discovery can be abandoned at
-/// the deadline; a later provider root still receives its own bounded turn.
-fn discover_root_bounded(
-    path: PathBuf,
-    start_after: Option<&Path>,
-    budget: DiscoveryBudget,
-) -> Result<DiscoveryResult> {
-    let Some(worker_slot) = WorkerSlot::acquire(&DISCOVERY_WORKERS_IN_FLIGHT) else {
-        return Ok(DiscoveryResult {
-            capped: true,
-            ..Default::default()
-        });
-    };
-    let deadline = budget.deadline;
-    let start_after = start_after.map(Path::to_path_buf);
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let worker = std::thread::Builder::new()
-        .name("cortex-transcript-discovery".to_string())
-        .spawn(move || {
-            let _worker_slot = worker_slot;
-            #[cfg(test)]
-            hold_snapshot_for_test(&path);
-            let mut result = DiscoveryResult::default();
-            let started = Instant::now();
-            let mut entries = 0usize;
-            let mut path_bytes = 0usize;
-            collect_supported_files_bounded(
-                &path,
-                &mut result,
-                &mut entries,
-                &mut path_bytes,
-                start_after.as_deref(),
-                &budget,
-                started,
-            );
-            let _ = sender.send(result);
-        });
-    #[cfg(test)]
-    let worker = worker.map(|handle| {
-        if SNAPSHOT_TEST_HOLDS.lock().unwrap().is_some() {
-            SNAPSHOT_TEST_WORKERS.lock().unwrap().push(handle);
-        }
-    });
-    if worker.is_err() {
-        return Err(anyhow::anyhow!(
-            "could not start bounded transcript discovery"
-        ));
-    }
-    match receiver.recv_timeout(deadline) {
-        Ok(result) => Ok(result),
-        Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
-            Ok(DiscoveryResult {
-                capped: true,
-                ..Default::default()
-            })
-        }
-    }
-}
-
-fn collect_supported_files_bounded(
-    path: &Path,
-    result: &mut DiscoveryResult,
-    entries: &mut usize,
-    path_bytes: &mut usize,
-    start_after: Option<&Path>,
-    budget: &DiscoveryBudget,
-    started: Instant,
-) {
-    if result.capped || started.elapsed() >= budget.deadline {
-        result.capped = true;
-        return;
-    }
-    if let Err(error) = validate_path(path) {
-        classify_path_error(&error, &mut result.diagnostics);
-        record_file_error(&mut result.diagnostics, path, &error);
-        return;
-    }
-    if path.is_file() {
-        if supported_discovered_file(path) {
-            result.files.push(path.to_path_buf());
-        } else {
-            result.diagnostics.unsupported_files += 1;
-        }
-        return;
-    }
-    if !should_descend_transcript_dir(path) {
-        return;
-    }
-    let read_dir = match fs::read_dir(path) {
-        Ok(read_dir) => read_dir,
-        Err(error) => {
-            record_discovered_path_error(&mut result.diagnostics, path, &error.into());
-            return;
-        }
-    };
-    let mut children = Vec::new();
-    for entry in read_dir {
-        if result.capped || started.elapsed() >= budget.deadline {
-            result.capped = true;
-            break;
-        }
-        if *entries >= budget.max_entries || *path_bytes >= budget.max_path_bytes {
-            result.capped = true;
-            break;
-        }
-        match entry {
-            Ok(entry) => {
-                let child = entry.path();
-                if start_after.is_some_and(|cursor| child <= cursor && !cursor.starts_with(&child))
-                {
-                    continue;
-                }
-                *entries += 1;
-                *path_bytes = path_bytes.saturating_add(child.as_os_str().len());
-                if *path_bytes > budget.max_path_bytes {
-                    result.capped = true;
-                    break;
-                }
-                result.next_cursor = Some(child.clone());
-                children.push(child);
-            }
-            Err(error) => {
-                record_discovered_path_error(&mut result.diagnostics, path, &error.into())
-            }
-        }
-    }
-    children.sort();
-    for child in children {
-        if result.capped {
-            break;
-        }
-        if child.is_dir() {
-            collect_supported_files_bounded(
-                &child,
-                result,
-                entries,
-                path_bytes,
-                start_after,
-                budget,
-                started,
-            );
-        } else if supported_discovered_file(&child) {
-            result.files.push(child);
-        } else {
-            result.diagnostics.unsupported_files += 1;
-        }
-    }
-}
+use discovery_continuation::discover_root_bounded;
 
 fn supported_discovered_file(path: &Path) -> bool {
     // Antigravity's brain tree contains user-authored and generated JSONL
@@ -2515,93 +2431,6 @@ fn log_entry_string_bytes(entry: &LogBatchEntry) -> usize {
         .saturating_add(entry.ai_session_id.as_ref().map_or(0, String::len))
         .saturating_add(entry.ai_transcript_path.as_ref().map_or(0, String::len))
         .saturating_add(entry.metadata_json.as_ref().map_or(0, String::len))
-}
-
-struct ReadLine {
-    text: String,
-    oversized: bool,
-    bytes_consumed: usize,
-}
-
-enum ReadLineOutcome {
-    EndOfFile,
-    Line(ReadLine),
-    /// A bounded pass ended in the middle of a physical record. The reader is
-    /// positioned at that exact byte so the next pass can discard only a
-    /// bounded fragment rather than searching unboundedly for a newline.
-    LimitReached {
-        bytes_consumed: usize,
-    },
-}
-
-/// Read one newline-delimited record, capping it at `MAX_RECORD_SIZE_BYTES`.
-///
-/// `hasher` is optional: the ingest/checkpoint path passes `Some(..)` to fold
-/// each byte into the source-file digest, while callers that only need the
-/// text (e.g. `read_transcript_lines`, the skill-event backfill's historical
-/// recovery) pass `None` to skip the SHA-256 work entirely.
-fn read_bounded_line<R: BufRead>(
-    reader: &mut R,
-    mut hasher: Option<&mut Sha256>,
-    physical_limit: Option<usize>,
-) -> Result<ReadLineOutcome> {
-    let mut line = Vec::new();
-    let mut oversized = false;
-    let mut consumed = 0usize;
-    loop {
-        if physical_limit.is_some_and(|limit| consumed >= limit) {
-            return Ok(ReadLineOutcome::LimitReached {
-                bytes_consumed: consumed,
-            });
-        }
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            if line.is_empty() && !oversized {
-                return Ok(ReadLineOutcome::EndOfFile);
-            }
-            break;
-        }
-        let permitted = physical_limit.map_or(available.len(), |limit| {
-            available.len().min(limit.saturating_sub(consumed))
-        });
-        let available = &available[..permitted];
-        let newline_pos = available.iter().position(|byte| *byte == b'\n');
-        let take_len = newline_pos.map_or(available.len(), |pos| pos + 1);
-        if let Some(hasher) = hasher.as_deref_mut() {
-            hasher.update(&available[..take_len]);
-        }
-        if !oversized {
-            // Copy one sentinel byte past the inclusive record limit so we can
-            // detect oversized records while still accepting exactly-limit rows.
-            let remaining = MAX_RECORD_SIZE_BYTES
-                .saturating_add(1)
-                .saturating_sub(line.len());
-            let copy_len = take_len.min(remaining);
-            line.extend_from_slice(&available[..copy_len]);
-            if line.len() > MAX_RECORD_SIZE_BYTES {
-                oversized = true;
-                line.clear();
-            }
-        }
-        reader.consume(take_len);
-        consumed = consumed.saturating_add(take_len);
-        if newline_pos.is_some() {
-            break;
-        }
-    }
-    if oversized {
-        return Ok(ReadLineOutcome::Line(ReadLine {
-            text: String::new(),
-            oversized: true,
-            bytes_consumed: consumed,
-        }));
-    }
-    let text = String::from_utf8(line).context("transcript record is not valid UTF-8")?;
-    Ok(ReadLineOutcome::Line(ReadLine {
-        text,
-        oversized: false,
-        bytes_consumed: consumed,
-    }))
 }
 
 /// Recover specific 0-based lines from a transcript file, using the same

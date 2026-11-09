@@ -3,6 +3,10 @@
 # agent credential probe required by update planning; mutations acknowledge
 # success inside the disposable model. Consume the complete stdin script before
 # exiting so the caller cannot race an early close into a spurious broken pipe.
+case "$*" in
+  *"uname -s && uname -m"*) printf 'Linux\nx86_64\n'; exit 0 ;;
+  *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
+esac
 script="$(cat)"
 case "$script" in
   *"id -u"*) printf '%s\n' '/tmp/cortex-live-remote' '1000' '1000' ;;

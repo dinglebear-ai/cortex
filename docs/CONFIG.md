@@ -1,7 +1,7 @@
 ---
 title: "Configuration Reference -- cortex"
 created: 2026-04-04
-updated: 2026-07-30
+updated: 2026-11-07
 ---
 
 # Configuration Reference -- cortex
@@ -144,6 +144,42 @@ POST=0
 
 Docker log ingest is tested by path: host-local agent parity tests cover deployed-agent Docker streaming, while the legacy central pull path has a mocked Docker HTTP fixture. For a full legacy integration run, set `CORTEX_DOCKER_INGEST_ENABLED=true` against a disposable Docker-compatible HTTP fixture, emit a unique container stdout/stderr line, and verify it with `search` or `tail`. Container stream rows identify their source as `docker://<host>/<container>/<stream>`. Container lifecycle events such as `create`, `start`, `restart`, `die`, `stop`, `destroy`, `rename`, and `oom` identify their source as `docker-event://<host>/<container>/<action>` and use `facility=docker`.
 
+## Push notification text
+
+Cortex sends alerts, daily digests, health checks, and test notifications through
+Apprise as literal text. Messages use short labeled sections and one status emoji.
+They do not require a Markdown or HTML renderer.
+
+Structured log fields become readable details such as the problem, cause,
+component, and dropped-item count. Telemetry bookkeeping and normalized error
+signatures stay out of the push message. Full log evidence remains in Cortex.
+Malformed or truncated structured payloads direct the reader to Cortex instead of
+showing raw JSON.
+
+For example, a recurring exporter failure produces this text:
+
+```text
+🚨 Recurring error on host-01
+
+Host: host-01
+Service: collector
+
+Problem: Exporting failed. Dropping data.
+Cause: connection refused
+Dropped items: 32
+
+Occurrences: 6
+Last seen: 2026-11-07T18:32:27.504Z
+```
+
+Push bodies are limited to 1,200 characters and titles to 120 characters.
+Long text ends with an ellipsis. Digests summarize up to five hosts and indicate
+when more hosts are available in Cortex. Mention neutralization is preserved;
+literal punctuation does not become visible HTML entities.
+
+This changes presentation only. Notification routing, severity thresholds,
+deduplication, acknowledgements, and delivery retries retain their existing rules.
+
 ## Managed File-Tail Sources
 
 Cortex can tail local log files directly and ingest appended lines through the
@@ -204,6 +240,31 @@ by `CORTEX_MAX_MESSAGE_SIZE`. Per-row metadata stores `file_tail_id`, `tag`,
 and `path_basename`; full paths are visible only through the admin management
 surface. The runtime reconciles enabled sources periodically and after
 CLI/REST/MCP mutations.
+
+### Host-agent file tails
+
+`CORTEX_AGENT_FILE_TAILS` configures host-agent HTTP forwarding separately from
+managed server file tails. Each `PATH:TAG` source starts at EOF on its first
+installation. Subsequent restarts restore a durable cursor and a bounded
+one-record outbox from `file-tail-<source-hash>.json`, beside the configured
+syslog-forward spool. Preserve that directory across agent redeployments.
+The source hash includes the hostname, target URL, source path, and tag;
+changing those values creates a separate delivery identity and state file.
+
+The agent persists pending evidence before POSTing it and preserves its
+idempotency key until a durable acknowledgement is received. It retries
+transient failures, recovers an available rotated inode from a bounded sibling
+search, and forwards an explicit gap record when the previous source cannot be
+recovered or truncation is detected. Prefix and cursor-boundary guards detect
+common rewrites; they do not hash the entire historical file.
+
+Invalid identities are rejected before forwarding. Permanent HTTP rejections
+stop that source with `file_tail_delivery_operator_action_required`, retaining
+its pending evidence. Repair the source or server configuration and restart
+the agent to resume. Corrupt checkpoints are preserved for operator recovery
+rather than being treated as a fresh installation. File-tail records and
+partial-line buffers are bounded at 64 KiB; oversized records become an explicit
+omission record.
 
 ### MCP server (`CORTEX_*`)
 

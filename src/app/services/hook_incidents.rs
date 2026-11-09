@@ -11,7 +11,7 @@ impl CortexService {
         let from = parse_optional_timestamp(req.since.as_deref(), "since")?;
         let to = parse_optional_timestamp(req.until.as_deref(), "until")?;
         let result = self
-            .run_db("list_ai_hook_incidents", move |pool| {
+            .run_heavy_db("list_ai_hook_incidents", move |pool| {
                 db::search_ai_hook_incidents(
                     pool,
                     &db::AiHookIncidentParams {
@@ -111,7 +111,7 @@ impl CortexService {
             return Ok(AiHookInvestigateResponse {
                 evidence: Vec::new(),
                 total_incidents: 0,
-                truncated: false,
+                truncated: result.truncated,
                 other_matching_incidents: Vec::new(),
                 no_incident_low_severity_summary: false,
                 no_data: true,
