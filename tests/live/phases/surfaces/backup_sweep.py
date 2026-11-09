@@ -285,6 +285,9 @@ def main():
             raise RuntimeError(f"backup alias requires an explicit recovery case: {alias}")
     Path(destination).write_text(json.dumps({"results": records, "failures": failures}, indent=2) + "\n")
     os.chmod(destination, 0o600)
+    # Remove only the task fixture after observations are complete, while its
+    # owned container is available. Exceptions retain recovery state instead.
+    remove_auth_fixture()
     # cli_sweep merges these observations and emits redacted failure diagnostics.
     return 0
 

@@ -219,7 +219,7 @@ time.sleep(60)
             with self.assertRaises(subprocess.CalledProcessError):
                 backup.verify_auth_fixture()
 
-    def test_nested_auth_fixture_is_snapshotted_removed_and_verified_for_both_actions(self):
+    def test_nested_auth_fixture_cleanup_follows_completed_observations_and_preserves_exceptions(self):
         contract = self.home / "contract.json"
         contract.write_text(json.dumps({"entries": [
             {"kind": "cli", "spelling": f"setup backup {action}", "id": action, "aliases": []}
@@ -227,34 +227,70 @@ time.sleep(60)
         output = self.home / "backup-results.json"
         os.environ.update(LIVE_BACKUP_HOME=str(self.home / ".cortex"), LIVE_BACKUP_PORT="32123",
                           LIVE_BACKUP_CLI_PATH="/usr/bin:/bin")
-        events = []
-        def execute(_binary, tail, _env):
-            events.append(("cli", tuple(tail)))
-            if "--help" in tail:
-                return {"exit": 0, "mentions_usage": True, "terminal": "Usage: backup"}
-            if "--cortex-live-invalid-option" in tail:
-                return {"exit": 2, "terminal": "unknown backup argument"}
-            terminal = ("verified recovery snapshot: /backups/recovery-saved-1 (restore)"
-                        if tail == ["create"] else "authenticated server verification passed")
-            return {"exit": 0, "terminal": terminal}
-        with patch.object(backup.sys, "argv", ["backup_sweep.py", str(contract), "/fixture/cortex", str(output)]), \
-                patch.object(backup, "_DEADLINE", None), \
-                patch.object(backup, "run", side_effect=execute), \
-                patch.object(backup, "marker", return_value=1), \
-                patch.object(backup, "verify_bundle"), \
-                patch.object(backup, "prepare_auth_fixture", side_effect=lambda: events.append("seed")), \
-                patch.object(backup, "remove_auth_fixture", side_effect=lambda: events.append("remove")), \
-                patch.object(backup, "verify_auth_fixture", side_effect=lambda: events.append("verify")):
-            self.assertEqual(backup.main(), 0)
-        self.assertEqual(events[:3], ["seed", "verify", ("cli", ("create",))])
-        for action in ("restore", "rollback"):
-            index = events.index(("cli", (action, "saved-1", "--yes")))
-            self.assertEqual(events[index - 1], "remove")
-            self.assertEqual(events[index + 1], "verify")
-        positives = [record for record in json.loads(output.read_text())["results"]
-                     if record["case_kind"] == "semantic-positive"]
-        self.assertEqual(len(positives), 2)
-        self.assertTrue(all(record["observation"]["restored_nested_auth"] for record in positives))
+        for scenario in ("success", "aggregate-failure", "exception"):
+            with self.subTest(scenario=scenario):
+                output.unlink(missing_ok=True)
+                events = []
+                fixture = {"exists": False}
+                def seed():
+                    fixture["exists"] = True
+                    events.append("seed")
+                def remove():
+                    if output.exists():
+                        self.assertEqual(len(json.loads(output.read_text())["results"]), 6)
+                        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                        events.append("completed-cleanup")
+                    else:
+                        events.append("remove")
+                    fixture["exists"] = False
+                def verify():
+                    events.append("verify")
+                    if scenario == "exception" and ("cli", ("restore", "saved-1", "--yes")) in events:
+                        raise RuntimeError("restored auth fixture verification failed")
+                def execute(_binary, tail, _env):
+                    events.append(("cli", tuple(tail)))
+                    if "--help" in tail:
+                        return {"exit": 0, "mentions_usage": True, "terminal": "Usage: backup"}
+                    if "--cortex-live-invalid-option" in tail:
+                        return {"exit": 2, "terminal": "unknown backup argument"}
+                    if tail[0] in ("restore", "rollback"):
+                        fixture["exists"] = True
+                    terminal = ("verified recovery snapshot: /backups/recovery-saved-1 (restore)"
+                                if tail == ["create"] else "authenticated server verification passed")
+                    if scenario == "aggregate-failure" and tail[0] == "rollback":
+                        terminal = "authenticated verification missing"
+                    return {"exit": 0, "terminal": terminal}
+                with patch.object(backup.sys, "argv", ["backup_sweep.py", str(contract), "/fixture/cortex", str(output)]), \
+                        patch.object(backup, "_DEADLINE", None), \
+                        patch.object(backup, "run", side_effect=execute), \
+                        patch.object(backup, "marker", return_value=1), \
+                        patch.object(backup, "verify_bundle"), \
+                        patch.object(backup, "prepare_auth_fixture", side_effect=seed), \
+                        patch.object(backup, "remove_auth_fixture", side_effect=remove), \
+                        patch.object(backup, "verify_auth_fixture", side_effect=verify):
+                    if scenario == "exception":
+                        with self.assertRaisesRegex(RuntimeError, "restored auth fixture verification failed"):
+                            backup.main()
+                    else:
+                        self.assertEqual(backup.main(), 0)
+                self.assertEqual(events[:3], ["seed", "verify", ("cli", ("create",))])
+                if scenario == "exception":
+                    self.assertTrue(fixture["exists"])
+                    self.assertNotIn("completed-cleanup", events)
+                    self.assertEqual(events.count("remove"), 1)
+                    self.assertFalse(output.exists())
+                    continue
+                self.assertFalse(fixture["exists"])
+                self.assertEqual(events[-1], "completed-cleanup")
+                for action in ("restore", "rollback"):
+                    index = events.index(("cli", (action, "saved-1", "--yes")))
+                    self.assertEqual(events[index - 1], "remove")
+                    self.assertEqual(events[index + 1], "verify")
+                payload = json.loads(output.read_text())
+                positives = [record for record in payload["results"] if record["case_kind"] == "semantic-positive"]
+                self.assertEqual(len(positives), 2)
+                self.assertTrue(all(record["observation"]["restored_nested_auth"] for record in positives))
+                self.assertEqual(bool(payload["failures"]), scenario == "aggregate-failure")
 
     def test_owned_container_failure_retains_bounded_redacted_stderr_without_arguments(self):
         os.environ.update(LIVE_DOCKER_BIN="/fixture/docker", LIVE_RUN_ID="owned-run")
