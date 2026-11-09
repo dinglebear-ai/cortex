@@ -177,6 +177,98 @@ time.sleep(60)
                 backup.marker()
             self.assertEqual(observed.call_count, 1)
 
+    def test_nested_auth_fixture_uses_exact_disposable_paths_and_permissions(self):
+        with patch.object(backup, "container_command", return_value="") as command:
+            backup.prepare_auth_fixture()
+        script = command.call_args.args[0][-1]
+        self.assertIn("/cortex-home/recovery-auth-check/nested/auth.key", script)
+        self.assertIn("chown 1000:1000", script)
+        self.assertIn("chmod 0750", script)
+        self.assertIn("chmod 0600", script)
+        self.assertNotIn("chmod 0750 /cortex-home\n", script)
+        with patch.object(backup, "container_command", return_value="") as command:
+            backup.remove_auth_fixture()
+        self.assertEqual(command.call_args.args[0], ["rm", "-rf", "--", "/cortex-home/recovery-auth-check"])
+
+    def test_nested_auth_fixture_requires_exact_metadata_and_user_read_write(self):
+        expected = "1000:1000:750\n1000:1000:750\n1000:1000:600\ncortex-live-nested-auth-fixture\n"
+        with patch.object(backup, "container_command", side_effect=[expected, ""]) as command:
+            backup.verify_auth_fixture()
+        self.assertEqual(command.call_count, 2)
+        user_call = command.call_args
+        self.assertEqual(user_call.kwargs, {})
+        script = user_call.args[0][-1]
+        self.assertIn("cd '/cortex-home/recovery-auth-check'", script)
+        self.assertIn("/bin/su -s /bin/sh cortex -c", script)
+        self.assertIn('test "$(id -u)" = 1000', script)
+        self.assertIn('test "$(id -g)" = 1000', script)
+        self.assertLess(script.index("cd '/cortex-home/recovery-auth-check'"), script.index("/bin/su"))
+        self.assertIn("cd nested", script)
+        self.assertIn("cat auth.key", script)
+        self.assertIn("> auth.key", script)
+        for observed in [expected.replace("1000:1000:750", "0:0:750", 1),
+                         expected.replace("1000:1000:750", "1000:1000:755", 1),
+                         expected.replace("1000:1000:600", "0:0:600"),
+                         expected.replace("nested-auth-fixture", "wrong-content")]:
+            with self.subTest(observed=observed):
+                with patch.object(backup, "container_command", return_value=observed) as command:
+                    with self.assertRaisesRegex(RuntimeError, "nested auth fixture"):
+                        backup.verify_auth_fixture()
+                self.assertEqual(command.call_count, 1)
+        with patch.object(backup, "container_command", side_effect=[expected, subprocess.CalledProcessError(1, ["docker", "exec"])]):
+            with self.assertRaises(subprocess.CalledProcessError):
+                backup.verify_auth_fixture()
+
+    def test_nested_auth_fixture_is_snapshotted_removed_and_verified_for_both_actions(self):
+        contract = self.home / "contract.json"
+        contract.write_text(json.dumps({"entries": [
+            {"kind": "cli", "spelling": f"setup backup {action}", "id": action, "aliases": []}
+            for action in ("restore", "rollback")]}))
+        output = self.home / "backup-results.json"
+        os.environ.update(LIVE_BACKUP_HOME=str(self.home / ".cortex"), LIVE_BACKUP_PORT="32123",
+                          LIVE_BACKUP_CLI_PATH="/usr/bin:/bin")
+        events = []
+        def execute(_binary, tail, _env):
+            events.append(("cli", tuple(tail)))
+            if "--help" in tail:
+                return {"exit": 0, "mentions_usage": True, "terminal": "Usage: backup"}
+            if "--cortex-live-invalid-option" in tail:
+                return {"exit": 2, "terminal": "unknown backup argument"}
+            terminal = ("verified recovery snapshot: /backups/recovery-saved-1 (restore)"
+                        if tail == ["create"] else "authenticated server verification passed")
+            return {"exit": 0, "terminal": terminal}
+        with patch.object(backup.sys, "argv", ["backup_sweep.py", str(contract), "/fixture/cortex", str(output)]), \
+                patch.object(backup, "_DEADLINE", None), \
+                patch.object(backup, "run", side_effect=execute), \
+                patch.object(backup, "marker", return_value=1), \
+                patch.object(backup, "verify_bundle"), \
+                patch.object(backup, "prepare_auth_fixture", side_effect=lambda: events.append("seed")), \
+                patch.object(backup, "remove_auth_fixture", side_effect=lambda: events.append("remove")), \
+                patch.object(backup, "verify_auth_fixture", side_effect=lambda: events.append("verify")):
+            self.assertEqual(backup.main(), 0)
+        self.assertEqual(events[:3], ["seed", "verify", ("cli", ("create",))])
+        for action in ("restore", "rollback"):
+            index = events.index(("cli", (action, "saved-1", "--yes")))
+            self.assertEqual(events[index - 1], "remove")
+            self.assertEqual(events[index + 1], "verify")
+        positives = [record for record in json.loads(output.read_text())["results"]
+                     if record["case_kind"] == "semantic-positive"]
+        self.assertEqual(len(positives), 2)
+        self.assertTrue(all(record["observation"]["restored_nested_auth"] for record in positives))
+
+    def test_owned_container_auth_execution_retains_ten_second_limits(self):
+        os.environ.update(LIVE_DOCKER_BIN="/fixture/docker", LIVE_RUN_ID="owned-run")
+        replies = [subprocess.CompletedProcess([], 0, "owned-run\n", ""),
+                   subprocess.CompletedProcess([], 0, "", "")]
+        with patch.object(backup.subprocess, "run", side_effect=replies) as command:
+            backup.container_command(["sh", "-c", "cd /cortex-home/recovery-auth-check; /bin/su -s /bin/sh cortex -c id"])
+        self.assertEqual(command.call_args.args[0], ["/fixture/docker", "exec", "--user", "0:0", "cortex", "sh", "-c",
+                                                   "cd /cortex-home/recovery-auth-check; /bin/su -s /bin/sh cortex -c id"])
+        for call in command.call_args_list:
+            self.assertGreater(call.kwargs["timeout"], 0)
+            self.assertLessEqual(call.kwargs["timeout"], 10)
+            self.assertTrue(call.kwargs["check"])
+
     def test_backup_topology_renders_owned_managed_contract_without_starting_services(self):
         tools = self.home / "tools"
         tools.mkdir()

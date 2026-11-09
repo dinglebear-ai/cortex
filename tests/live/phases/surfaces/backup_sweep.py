@@ -11,6 +11,8 @@ import sys
 import time
 
 _DEADLINE = None
+AUTH_FIXTURE_ROOT = "/cortex-home/recovery-auth-check"
+AUTH_FIXTURE_CONTENT = "cortex-live-nested-auth-fixture"
 
 
 def bounded_timeout(limit):
@@ -51,6 +53,45 @@ def container_command(arguments):
         raise RuntimeError("managed backup container ownership changed")
     return subprocess.run([docker, "exec", "--user", "0:0", "cortex", *arguments],
                           capture_output=True, check=True, timeout=bounded_timeout(10), text=True).stdout
+
+
+def prepare_auth_fixture():
+    container_command(["sh", "-c", f"""set -eu
+mkdir -p '{AUTH_FIXTURE_ROOT}/nested'
+chown 1000:1000 '{AUTH_FIXTURE_ROOT}' '{AUTH_FIXTURE_ROOT}/nested'
+chmod 0750 '{AUTH_FIXTURE_ROOT}' '{AUTH_FIXTURE_ROOT}/nested'
+printf '%s\n' '{AUTH_FIXTURE_CONTENT}' > '{AUTH_FIXTURE_ROOT}/nested/auth.key'
+chown 1000:1000 '{AUTH_FIXTURE_ROOT}/nested/auth.key'
+chmod 0600 '{AUTH_FIXTURE_ROOT}/nested/auth.key'
+"""])
+
+
+def remove_auth_fixture():
+    container_command(["rm", "-rf", "--", AUTH_FIXTURE_ROOT])
+
+
+def verify_auth_fixture():
+    observed = container_command(["sh", "-c", f"""set -eu
+stat -c '%u:%g:%a' '{AUTH_FIXTURE_ROOT}' '{AUTH_FIXTURE_ROOT}/nested' '{AUTH_FIXTURE_ROOT}/nested/auth.key'
+cat '{AUTH_FIXTURE_ROOT}/nested/auth.key'
+"""])
+    expected = ["1000:1000:750", "1000:1000:750", "1000:1000:600", AUTH_FIXTURE_CONTENT]
+    if observed.splitlines() != expected:
+        raise RuntimeError(f"nested auth fixture metadata/content mismatch: {observed[:1024]!r}")
+    # Enter only this fixture as root, then preserve cwd through non-login su.
+    # The uid-specific shell traverses nested and rewrites the key while the
+    # managed home's restrictive ancestor permissions remain unchanged.
+    container_command(["sh", "-c", f"""set -eu
+cd '{AUTH_FIXTURE_ROOT}'
+/bin/su -s /bin/sh cortex -c 'set -eu
+test "$(id -u)" = 1000
+test "$(id -g)" = 1000
+cd nested
+test "$(cat auth.key)" = "{AUTH_FIXTURE_CONTENT}"
+printf "%s\n" "{AUTH_FIXTURE_CONTENT}" > auth.key
+test "$(cat auth.key)" = "{AUTH_FIXTURE_CONTENT}"
+'
+"""])
 
 
 def marker(value=None):
@@ -175,6 +216,8 @@ def main():
                 "LIVE_DOCKER_COMPOSE_BIN": os.environ["LIVE_DOCKER_COMPOSE_BIN"],
                 "NO_COLOR": "1"})
     marker(1)
+    prepare_auth_fixture()
+    verify_auth_fixture()
     records, failures = [], []
     created = run(binary, ["create"], env)
     if created["exit"] != 0:
@@ -194,6 +237,7 @@ def main():
                 raise RuntimeError(f"schedule prerequisite failed: {prerequisite['terminal']}")
         if tail[0] in ("restore", "rollback"):
             marker(2)
+            remove_auth_fixture()
         positive = run(binary, tail, env)
         ok = positive["exit"] == 0
         if ok and tail[0] == "create":
@@ -202,6 +246,8 @@ def main():
         if ok and tail[0] in ("restore", "rollback"):
             observed = marker()
             positive["restored_marker"] = observed
+            verify_auth_fixture()
+            positive["restored_nested_auth"] = True
             ok = observed == 1 and "authenticated server verification passed" in positive["terminal"]
         if ok and tail[0] == "schedule":
             scheduled = (run_tmp / "backup-crontab").read_text()

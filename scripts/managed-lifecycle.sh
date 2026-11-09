@@ -210,11 +210,11 @@ find /cortex-home -samefile /data -prune -o -samefile /backups -prune -o -path /
   case "$header" in '-----BEGIN '*) selected=true;; esac
   if test "$selected" = true; then
     relative=${file#/cortex-home/}
-    mkdir -p "$home_auth/$(dirname "$relative")"
-    cp -p "$file" "$home_auth/$relative"
+    # Preserve parent metadata without copying the managed-home root itself.
+    (cd /cortex-home && cp -a --parents -- "$relative" "$home_auth")
     # Include SQLite sidecars from the same stopped instant.
     for suffix in -wal -shm; do
-      if test -f "$file$suffix"; then cp -p "$file$suffix" "$home_auth/$relative$suffix"; fi
+      if test -f "$file$suffix"; then (cd /cortex-home && cp -a --parents -- "$relative$suffix" "$home_auth"); fi
     done
   fi
 done
@@ -291,7 +291,8 @@ SNAPSHOT
     recovery_compose run --rm --no-deps --pull never --user 0:0 --entrypoint sh cortex -c 'cd "$1"; sha256sum -c SHA256SUMS' sh "/backups/recovery-$stamp" >/dev/null
     # Retain a fresh snapshot of current data under the same lifecycle lock.
     acquire_lock
-    touch "$bundle/PROTECTED"
+    # An existing operator pin is presence-only and may belong to another UID.
+    test -e "$bundle/PROTECTED" || test -L "$bundle/PROTECTED" || touch "$bundle/PROTECTED"
     CORTEX_LIFECYCLE_PARENT=$$ sh "$home/managed-lifecycle.sh" create "$home"
     running=$(docker inspect -f '{{.State.Running}}' cortex)
     restart_needed=true
@@ -318,7 +319,7 @@ case "$primary" in ../*|*/../*|*/..|/*|'') echo 'unsafe primary DB path' >&2; ex
 test -s "$stage/$primary"
 test "$(sqlite3 "$stage/$primary" 'PRAGMA integrity_check;')" = ok || exit 65
 home_stage=$(mktemp -d /cortex-home/.restore-auth.XXXXXX)
-tar -xf "$bundle/home-auth.tar" -C "$home_stage"
+tar -xpf "$bundle/home-auth.tar" -C "$home_stage"
 find "$home_stage" -type f -exec sh -c 'for db do case "$db" in *.db) ;; *) test "$(head -c 15 "$db")" = "SQLite format 3" || continue;; esac; test "$(sqlite3 "$db" "PRAGMA integrity_check;")" = ok || exit 1; done' sh {} +
 # Keep the old data on the same volume for recovery from a filesystem error.
 previous=$(mktemp -d /data/.before-restore.XXXXXX)
@@ -383,9 +384,9 @@ done
 # Host-home auth stores share the same verified recovery point. Retain a
 # private copy of existing stores before replacing them; no schema runs yet.
 while IFS= read -r relative; do
-  mkdir -p "/cortex-home/$(dirname "$relative")"
   if test -f "$home_stage/$relative"; then
-    cp -p "$home_stage/$relative" "/cortex-home/$relative"
+    # New parents inherit saved metadata; existing parents keep their metadata.
+    (cd "$home_stage" && cp -a --parents -- "$relative" /cortex-home/)
   else
     rm -f "/cortex-home/$relative"
   fi

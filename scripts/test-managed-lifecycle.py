@@ -128,6 +128,82 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(any('start' in call for call in operations))
         self.assertEqual((bundle / 'data-mount').read_text().strip(), 'bind|' + str(self.home / 'data'))
 
+    def refuse_existing_pin_touch(self) -> None:
+        touch = self.home / 'bin/touch'
+        touch.write_text("""#!/usr/bin/env python3
+import os, pathlib, sys
+pin = pathlib.Path(sys.argv[-1])
+with (pathlib.Path(os.environ['TEST_HOME']) / 'touch-calls').open('a') as log:
+    log.write(str(pin) + '\\n')
+if os.path.lexists(pin):
+    print('permission model: existing operator pin cannot be touched', file=sys.stderr)
+    raise SystemExit(77)
+os.execv('/usr/bin/touch', ['touch', *sys.argv[1:]])
+""")
+        touch.chmod(0o700)
+
+    def pin_identity(self, path: Path) -> tuple[int, ...]:
+        identity = path.lstat()
+        return (identity.st_ino, identity.st_mode, identity.st_uid, identity.st_gid,
+                identity.st_size, identity.st_mtime_ns, identity.st_ctime_ns)
+
+    def test_restore_and_rollback_preserve_existing_readonly_operator_pin(self) -> None:
+        bundle, stamp = self.snapshot()
+        pin = bundle / 'PROTECTED'
+        pin.write_text('operator pin content must remain intact\n')
+        pin.chmod(0o400)
+        os.utime(pin, (1, 1))
+        before = self.pin_identity(pin)
+        self.refuse_existing_pin_touch()
+        for action in ['restore', 'rollback']:
+            with self.subTest(action=action):
+                result = self.run_helper(action, stamp)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.pin_identity(pin), before)
+                self.assertEqual(pin.read_text(), 'operator pin content must remain intact\n')
+                self.assertFalse((self.home / 'touch-calls').exists())
+
+    def test_restore_and_rollback_preserve_valid_and_broken_symlink_pins(self) -> None:
+        bundle, stamp = self.snapshot()
+        pin = bundle / 'PROTECTED'
+        self.refuse_existing_pin_touch()
+        for broken in [False, True]:
+            target = self.home / ('missing-operator-pin' if broken else 'operator-pin')
+            if not broken:
+                target.write_text('operator target must remain intact\n')
+                target.chmod(0o400)
+                os.utime(target, (1, 1))
+            pin.unlink(missing_ok=True)
+            pin.symlink_to(target)
+            before = self.pin_identity(pin)
+            target_before = None if broken else self.pin_identity(target)
+            for action in ['restore', 'rollback']:
+                with self.subTest(broken=broken, action=action):
+                    result = self.run_helper(action, stamp)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(self.pin_identity(pin), before)
+                    self.assertEqual(os.readlink(pin), str(target))
+                    if broken:
+                        self.assertFalse(target.exists())
+                    else:
+                        self.assertEqual(self.pin_identity(target), target_before)
+                        self.assertEqual(target.read_text(), 'operator target must remain intact\n')
+                    self.assertFalse((self.home / 'touch-calls').exists())
+
+    def test_restore_and_rollback_create_an_absent_pin(self) -> None:
+        bundle, stamp = self.snapshot()
+        pin = bundle / 'PROTECTED'
+        self.refuse_existing_pin_touch()
+        for action in ['restore', 'rollback']:
+            with self.subTest(action=action):
+                pin.unlink(missing_ok=True)
+                result = self.run_helper(action, stamp)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(pin.is_file())
+                self.assertFalse(pin.is_symlink())
+                self.assertEqual(pin.read_bytes(), b'')
+        self.assertEqual((self.home / 'touch-calls').read_text().splitlines(), [str(pin), str(pin)])
+
     def writable_mounts(self) -> list[str]:
         return ['/data|bind|' + str(self.home / 'data'),
                 '/backups|bind|' + str(self.home / 'backups'),
@@ -371,7 +447,24 @@ class LifecycleTests(unittest.TestCase):
     def test_configuration_recovery_compensates_failed_commit(self) -> None:
         self.assert_configuration_replacement(True)
 
-    def assert_real_restore_contract(self, failure: str) -> None:
+    def test_snapshot_preserves_nested_auth_parent_metadata(self) -> None:
+        source = self.home / 'secrets'
+        source.mkdir(mode=0o750)
+        (source / 'nested.key').write_text('nested-private-key')
+        block = HELPER.read_text().split('home_auth=$(mktemp', 1)[1].split('# Capture stopped data', 1)[0]
+        block = 'home_auth=$(mktemp' + block
+        block = block.replace('/cortex-home', str(self.home)).replace('/data', str(self.home / 'data')).replace('/backups', str(self.home / 'backups'))
+        bundle = self.home / 'backups/nested-fixture'
+        bundle.mkdir()
+        result = subprocess.run(['sh', '-s'], input='set -eu\numask 077\nbundle="' + str(bundle) + '"\n' + block,
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with tarfile.open(bundle / 'home-auth.tar') as archive:
+            parent = archive.getmember('./secrets')
+            self.assertEqual(parent.mode, 0o750)
+            self.assertEqual((parent.uid, parent.gid), (source.stat().st_uid, source.stat().st_gid))
+
+    def assert_real_restore_contract(self, failure: str, existing_parent: bool = False) -> None:
         """Execute the exact container restore body on disposable host paths.
 
         This verifies real SQLite files and compensation after filesystem errors,
@@ -392,11 +485,16 @@ class LifecycleTests(unittest.TestCase):
 
             database(data / 'cortex.db', 'current')
             (home / 'auth-jwt.pem').write_text('current-key')
+            home.chmod(0o755)
+            if existing_parent:
+                (home / 'secrets').mkdir(mode=0o754)
             before = (data / 'cortex.db').read_bytes()
             staging = root / 'archive'
             staging.mkdir()
             database(staging / 'cortex.db', 'backup')
             (staging / 'auth-jwt.pem').write_text('backup-key')
+            (staging / 'secrets').mkdir(mode=0o750)
+            (staging / 'secrets/nested.key').write_text('nested-key')
             database(staging / 'auth.db', 'backup-auth')
             # Model committed WAL left after a crash/forced stop. The snapshot
             # predates these writes and intentionally contains no sidecars.
@@ -414,6 +512,7 @@ class LifecycleTests(unittest.TestCase):
                 with tarfile.open(bundle / archive, 'w') as tar:
                     tar.add(staging / name, arcname='./' + name)
                     if archive == 'home-auth.tar':
+                        tar.add(staging / 'secrets', arcname='./secrets')
                         tar.add(staging / 'auth.db', arcname='./auth.db')
             (bundle / 'primary-db').write_text('cortex.db\n')
             (bundle / 'SHA256SUMS').write_text(''.join(
@@ -422,10 +521,12 @@ class LifecycleTests(unittest.TestCase):
             if failure != 'none':
                 program = bin_dir / failure
                 needle = '.restore-auth.' if failure == 'cp' else '.restore.'
-                target = home / 'auth-jwt.pem' if failure == 'cp' else data
+                target = home if failure == 'cp' else data
+                source_match = ('(' + repr(needle) + ' in os.getcwd() and \"auth-jwt.pem\" in a)'
+                    if failure == 'cp' else 'any(' + repr(needle) + ' in v for v in a[:-1])')
                 program.write_text(
                     '#!/usr/bin/env python3\nimport os,sys\na=sys.argv[1:]\n'
-                    + 'if any(' + repr(needle) + ' in v for v in a[:-1]) and a[-1].rstrip("/") == '
+                    + 'if ' + source_match + ' and a[-1].rstrip("/") == '
                     + repr(str(target)) + ': sys.exit(73)\n'
                     + 'os.execv(' + repr('/bin/' + failure) + ', [' + repr(failure) + ']+a)\n')
                 program.chmod(0o700)
@@ -439,6 +540,10 @@ class LifecycleTests(unittest.TestCase):
                 with sqlite3.connect(data / 'cortex.db') as connection:
                     self.assertEqual(connection.execute('SELECT value FROM proof').fetchone()[0], 'backup')
                 self.assertEqual((home / 'auth-jwt.pem').read_text(), 'backup-key')
+                self.assertEqual((home / 'secrets/nested.key').read_text(), 'nested-key')
+                self.assertEqual((home / 'secrets').stat().st_mode & 0o777, 0o754 if existing_parent else 0o750)
+                self.assertEqual(home.stat().st_mode & 0o777, 0o755)
+                self.assertEqual((home / 'secrets').stat().st_uid, staging.stat().st_uid)
                 self.assertFalse((home / 'auth.db-wal').exists())
                 with sqlite3.connect(home / 'auth.db') as connection:
                     self.assertEqual(connection.execute('SELECT value FROM proof').fetchone()[0], 'backup-auth')
@@ -451,6 +556,9 @@ class LifecycleTests(unittest.TestCase):
 
     def test_real_restore_applies_sqlite_and_auth_key_snapshot(self) -> None:
         self.assert_real_restore_contract('none')
+
+    def test_real_restore_preserves_existing_auth_parent_metadata(self) -> None:
+        self.assert_real_restore_contract('none', existing_parent=True)
 
     def test_real_restore_compensates_primary_database_move_failure(self) -> None:
         self.assert_real_restore_contract('mv')
