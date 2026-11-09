@@ -46,13 +46,29 @@ def recovery_stamp(output):
 
 def container_command(arguments):
     docker = os.environ["LIVE_DOCKER_BIN"]
-    identity = subprocess.run([docker, "inspect", "-f",
-                              '{{ index .Config.Labels "cortex.live.run_id" }}', "cortex"],
-                             capture_output=True, check=True, timeout=bounded_timeout(10), text=True)
-    if identity.stdout.strip() != os.environ["LIVE_RUN_ID"]:
-        raise RuntimeError("managed backup container ownership changed")
-    return subprocess.run([docker, "exec", "--user", "0:0", "cortex", *arguments],
-                          capture_output=True, check=True, timeout=bounded_timeout(10), text=True).stdout
+    stage = "ownership inspection"
+    try:
+        identity = subprocess.run([docker, "inspect", "-f",
+                                  '{{ index .Config.Labels "cortex.live.run_id" }}', "cortex"],
+                                 capture_output=True, check=True, timeout=bounded_timeout(10), text=True)
+        if identity.stdout.strip() != os.environ["LIVE_RUN_ID"]:
+            raise RuntimeError("managed backup container ownership changed")
+        stage = "exec"
+        return subprocess.run([docker, "exec", "--user", "0:0", "cortex", *arguments],
+                              capture_output=True, check=True, timeout=bounded_timeout(10), text=True).stdout
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        diagnostic = error.stderr or "no stderr"
+        if isinstance(diagnostic, bytes):
+            diagnostic = diagnostic.decode("utf-8", "replace")
+        status = (f"exit {error.returncode}" if isinstance(error, subprocess.CalledProcessError)
+                  else f"timeout after {error.timeout}s")
+        for name in ("LIVE_API_TOKEN", "LIVE_ADMIN_TOKEN", "LIVE_CORTEX_TOKEN", "LIVE_CURSOR_SIGNING_KEY"):
+            secret = os.environ.get(name)
+            if secret:
+                diagnostic = diagnostic.replace(secret, "<redacted>")
+        # The exception's command can contain private shell arguments. Retain
+        # only the bounded stderr and status, without chaining its argv repr.
+        raise RuntimeError(f"managed backup container {stage} failed ({status}); stderr={diagnostic[:1024]}") from None
 
 
 def prepare_auth_fixture():
@@ -86,7 +102,7 @@ cd '{AUTH_FIXTURE_ROOT}'
 /bin/su -s /bin/sh cortex -c 'set -eu
 test "$(id -u)" = 1000
 test "$(id -g)" = 1000
-cd nested
+cd -P nested
 test "$(cat auth.key)" = "{AUTH_FIXTURE_CONTENT}"
 printf "%s\n" "{AUTH_FIXTURE_CONTENT}" > auth.key
 test "$(cat auth.key)" = "{AUTH_FIXTURE_CONTENT}"

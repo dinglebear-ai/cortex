@@ -203,7 +203,7 @@ time.sleep(60)
         self.assertIn('test "$(id -u)" = 1000', script)
         self.assertIn('test "$(id -g)" = 1000', script)
         self.assertLess(script.index("cd '/cortex-home/recovery-auth-check'"), script.index("/bin/su"))
-        self.assertIn("cd nested", script)
+        self.assertIn("cd -P nested", script)
         self.assertIn("cat auth.key", script)
         self.assertIn("> auth.key", script)
         for observed in [expected.replace("1000:1000:750", "0:0:750", 1),
@@ -255,6 +255,25 @@ time.sleep(60)
                      if record["case_kind"] == "semantic-positive"]
         self.assertEqual(len(positives), 2)
         self.assertTrue(all(record["observation"]["restored_nested_auth"] for record in positives))
+
+    def test_owned_container_failure_retains_bounded_redacted_stderr_without_arguments(self):
+        os.environ.update(LIVE_DOCKER_BIN="/fixture/docker", LIVE_RUN_ID="owned-run")
+        stderr = "Permission denied errno=13 fixture-rest-token " + "x" * 2048
+        errors = [(subprocess.CalledProcessError(13, ["docker", "exec", "private-argument"], stderr=stderr), "exit 13"),
+                  (subprocess.TimeoutExpired(["docker", "exec", "private-argument"], 10, stderr=stderr.encode()), "timeout after 10s")]
+        for error, status in errors:
+            with self.subTest(status=status):
+                replies = [subprocess.CompletedProcess([], 0, "owned-run\n", ""), error]
+                with patch.object(backup.subprocess, "run", side_effect=replies):
+                    with self.assertRaises(RuntimeError) as raised:
+                        backup.container_command(["sh", "-c", "private-argument"])
+                diagnostic = str(raised.exception)
+                self.assertIn("Permission denied errno=13", diagnostic)
+                self.assertIn(status, diagnostic)
+                self.assertNotIn("private-argument", diagnostic)
+                self.assertNotIn("fixture-rest-token", diagnostic)
+                self.assertLessEqual(len(diagnostic.split("stderr=", 1)[1]), 1024)
+                self.assertTrue(raised.exception.__suppress_context__)
 
     def test_owned_container_auth_execution_retains_ten_second_limits(self):
         os.environ.update(LIVE_DOCKER_BIN="/fixture/docker", LIVE_RUN_ID="owned-run")
