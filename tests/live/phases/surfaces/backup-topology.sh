@@ -70,6 +70,7 @@ PY
   # permissions, then leave the immutable Compose file available to the ledger.
   live_timeout_process_tree 30 docker exec --user 0:0 "$container" sh -c '
     find /backups -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    find /data -mindepth 1 -maxdepth 1 -type d -name ".before-restore.*" -exec rm -rf -- {} +
     find /cortex-home -mindepth 1 -maxdepth 1 -type d -name ".before-restore-*" -exec rm -rf -- {} +
   '
   live_timeout_process_tree 60 docker compose -f "$compose" -p "$project" down -v --remove-orphans

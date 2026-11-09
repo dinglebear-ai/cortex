@@ -352,6 +352,83 @@ time.sleep(60)
         self.assertEqual(service["env_file"], [str(home / ".env")])
         self.assertNotIn("fixture-rest-token", json.dumps(config))
 
+    def test_backup_topology_success_removes_only_prior_data_directories_before_down(self):
+        tools = self.home / "tools"
+        tools.mkdir()
+        project_root = self.home / "fixture-project"
+        runner = project_root / "tests/live/phases/surfaces/backup_sweep.py"
+        runner.parent.mkdir(parents=True)
+        runner.write_text("raise SystemExit(0)\n")
+        home = self.home / "backup-home/.cortex"
+        data = home / "data"
+        data.mkdir(parents=True)
+        (data / "cortex.db").write_text("primary database fixture")
+        sentinel = data / "sentinel"
+        sentinel.mkdir()
+        (sentinel / "preserve").write_text("unrelated fixture")
+        (sentinel / ".before-restore.nested").mkdir()
+        (data / ".before-restore.file").write_text("matching file must remain")
+        (data / ".before-restore.link").symlink_to(sentinel, target_is_directory=True)
+        (data / ".before-restore-lookalike").mkdir()
+        prior = [data / ".before-restore.one", data / ".before-restore.two"]
+        for directory in prior:
+            directory.mkdir(mode=0o700)
+            (directory / "old.db").write_text("prior data")
+        docker = tools / "docker"
+        docker.write_text("""#!/usr/bin/python3
+import os, pathlib, subprocess, sys
+root = pathlib.Path(os.environ['LIVE_RUN_ROOT'])
+home = root / 'backup-home/.cortex'
+data = home / 'data'
+args = sys.argv[1:]
+def record(operation):
+    with (root / 'operations').open('a') as output: output.write(operation + '\\n')
+if args[0] in ('info', 'ps'): raise SystemExit(0)
+if args[0] == 'inspect':
+    template = args[args.index('-f') + 1]
+    if 'project.config_files' in template: print(home / 'compose/docker-compose.yml')
+    elif 'compose.project' in template: print('owned-live-surface-backup')
+    elif 'cortex.live.run_id' in template: print('owned-run')
+    else: raise SystemExit(64)
+elif args[0] == 'compose':
+    if args[-3:] == ['ps', '-q', 'cortex']: print('owned-container')
+    elif args[-3:] == ['port', 'cortex', '3100']: print('127.0.0.1:32123')
+    elif 'down' in args:
+        assert not (data / '.before-restore.one').exists(), 'prior data survived until down'
+        assert not (data / '.before-restore.two').exists(), 'prior data survived until down'
+        record('down')
+elif args[0] == 'exec':
+    assert args[:6] == ['exec', '--user', '0:0', 'owned-container', 'sh', '-c']
+    # Execute the actual cleanup shell with its three absolute container roots
+    # mapped exclusively into this test's private filesystem.
+    script = args[6].replace('/cortex-home', str(home)).replace('/backups', str(home / 'backups')).replace('/data', str(data))
+    record('cleanup')
+    subprocess.run(['sh', '-c', script], check=True, timeout=3)
+else: raise SystemExit(64)
+""")
+        docker.chmod(0o700)
+        os.environ.update(PATH=f"{tools}:/usr/bin:/bin", LIVE_PROJECT_ROOT=str(project_root),
+                          LIVE_RUN_ROOT=str(self.home), LIVE_COMPOSE_PROJECT="owned-live",
+                          LIVE_RUN_ID="owned-run", LIVE_SURFACE_CONTRACT="/unused/contract",
+                          LIVE_CURSOR_SIGNING_KEY="fixture-key", LIVE_SERVER_INSTANCE_ID="fixture-server",
+                          LIVE_CLI_FIXTURE_BIN=str(ROOT / "tests/live/fixtures/surfaces/bin"))
+        script = ('set -eu; source "$1"; surface_cli_resource_register() { :; }; '
+                  'surface_cli_resource_created() { :; }; '
+                  'surface_cli_resource_verified_removed() { echo verified >> "$LIVE_RUN_ROOT/operations"; }; '
+                  'live_timeout_process_tree() { shift; "$@"; }; '
+                  'surface_backup_topology_run /unused/cortex cortex:fixture')
+        result = subprocess.run(["/bin/bash", "-c", script, "_", str(ROOT / "tests/live/phases/surfaces/backup-topology.sh")],
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(not directory.exists() for directory in prior))
+        self.assertEqual((data / "cortex.db").read_text(), "primary database fixture")
+        self.assertEqual((sentinel / "preserve").read_text(), "unrelated fixture")
+        self.assertTrue((sentinel / ".before-restore.nested").is_dir())
+        self.assertEqual((data / ".before-restore.file").read_text(), "matching file must remain")
+        self.assertTrue((data / ".before-restore.link").is_symlink())
+        self.assertTrue((data / ".before-restore-lookalike").is_dir())
+        self.assertEqual((self.home / "operations").read_text().splitlines(), ["cleanup", "down", "verified"])
+
     def test_backup_topology_failure_stops_target_and_retains_recovery_files(self):
         tools = self.home / "tools"
         tools.mkdir()
